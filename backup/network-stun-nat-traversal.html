@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>STUN 与 NAT 穿透:UDP 打洞的原理</title>
+<meta name="description" content="解码真实 STUN 报文(请求 20 字节,XOR-MAPPED-ADDRESS 端口异或 0x2112 还原出本地端口);用 RFC 5780 测出本机 NAT 是与目的无关的映射,但过滤行为公共服务器测不出;STUN 重传按 RFC 共 39.5 秒;UDP 打洞模拟矩阵 16 种组合 13 种能通。">
+<link rel="canonical" href="https://bigywater.tech/network-stun-nat-traversal.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="STUN 与 NAT 穿透:UDP 打洞的原理">
+<meta property="og:description" content="解码真实 STUN 报文(请求 20 字节,XOR-MAPPED-ADDRESS 端口异或 0x2112 还原出本地端口);用 RFC 5780 测出本机 NAT 是与目的无关的映射,但过滤行为公共服务器测不出;STUN 重传按 RFC 共 39.5 秒;UDP 打洞模拟矩阵 16 种组合 13 种能通。">
+<meta property="og:url" content="https://bigywater.tech/network-stun-nat-traversal.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="STUN 与 NAT 穿透:UDP 打洞的原理">
+<meta name="twitter:description" content="解码真实 STUN 报文(请求 20 字节,XOR-MAPPED-ADDRESS 端口异或 0x2112 还原出本地端口);用 RFC 5780 测出本机 NAT 是与目的无关的映射,但过滤行为公共服务器测不出;STUN 重传按 RFC 共 39.5 秒;UDP 打洞模拟矩阵 16 种组合 13 种能通。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">2698</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">70</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">97</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">56</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">78</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">114</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">111</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">88</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#40678F; --series-c-soft:#DDE7F2;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#86B1DC; --series-c-soft:#16263A;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#86B1DC; --series-c-soft:#16263A;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>网络协议 · 36</div>
+  <h1>STUN 与 NAT 穿透:UDP 打洞的原理</h1>
+  <p>STUN 到底是个什么协议?为什么两个都躲在 NAT 后面的设备还能直连?哪些情况打不通?这篇解码真实的 STUN 请求和应答,用 RFC 5780 的方法测本机 NAT 的映射行为,并用一个小模拟推演打洞在四种 NAT 之间的成败。</p>
+  <div class="hero-fact">
+<div><div class="num">20 字节</div><div class="lbl">STUN 请求的大小:类型、长度、magic cookie、96 位事务编号</div></div><div><div class="num">13 / 16</div><div class="lbl">模拟里四种 NAT 两两组合 UDP 打洞能成功的组合数(失败的 3 种都涉及对称 NAT)</div></div><div><div class="num">EIM</div><div class="lbl">本机出口 NAT 的映射行为:发往 4 个不同目的的外部端口都不变,打洞的前提</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="network-mdns.html">mDNS 与 Bonjour:.local 名字是怎么被组播解析的</a></div>
+<section>
+  <h2>STUN 报文</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  请求(20 字节):00010000 2112a442 67292517 02fbd130 9a8cf24a
+    = 类型 0x0001(Binding Request)、长度 0、magic cookie 0x2112a442、事务编号 12 字节(随机)
+  服务器 2的应答 68 字节:类型 0x0101(Binding Success Response)、长度 48、事务编号与请求相同;属性:XOR-MAPPED-ADDRESS(8 字节);MAPPED-ADDRESS(8 字节);SOFTWARE(20 字节)
+  服务器 3的应答 68 字节:类型 0x0101(Binding Success Response)、长度 48、事务编号与请求相同;属性:MAPPED-ADDRESS(8 字节);RESPONSE-ORIGIN(8 字节);OTHER-ADDRESS(8 字节);XOR-MAPPED-ADDRESS(8 字节)
+  XOR-MAPPED-ADDRESS 的值 8 字节:保留 1 + 地址族 1(1 = IPv4)+ 端口 2 字节 + 地址 4 字节;线上的端口字段 0xe418,与 0x2112(cookie 的高 16 位)异或得 50442,我的本地端口是 50442,相同(NAT 没改端口);地址 4 个字节与 cookie 异或还原(公网地址不写出)
+  同一个应答里还有旧式的 MAPPED-ADDRESS(不异或):与 XOR 还原的地址 / 端口一致——旧版 STUN 直接写明文地址,会被某些改写载荷里 IP 地址的 NAT/ALG 破坏,异或就是为了避开它们
+  抓包:4 个 IP 包,请求 IP 总长 48 字节(20 IP + 8 UDP + 20 STUN),两个应答的 IP 总长 [48, 96] 字节;往返 RTT:服务器 2 207 ms、服务器 3 8 ms</pre></div>
+  <p>20 字节头加属性。应答里的 XOR-MAPPED-ADDRESS 把端口和地址与 magic cookie 异或,避免被改写载荷的 NAT 破坏;还原后得到 NAT 为这次连接分配的外部地址和端口。</p>
+</section>
+<section>
+  <h2>映射行为</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  服务器 1:不通告 OTHER-ADDRESS,没法做 RFC 5780 的映射测试
+  服务器 2:不通告 OTHER-ADDRESS,没法做 RFC 5780 的映射测试
+  服务器 3(本地端口 52182):主 IP:主端口 → 外部端口 52182;主 IP:另一个端口 → 外部端口 52182;另一个 IP:主端口 → 外部端口 52182;另一个 IP:另一个端口 → 外部端口 52182;公网地址是否一致:True;结论:与目的无关的映射(EIM)
+  服务器 4(本地端口 55093):主 IP:主端口 → 外部端口 55093;主 IP:另一个端口 → 外部端口 55093;另一个 IP:主端口 → 外部端口 55093;另一个 IP:另一个端口 → 外部端口 55093;公网地址是否一致:True;结论:与目的无关的映射(EIM)</pre></div>
+  <p>用 OTHER-ADDRESS 向同一服务器的另一个 IP / 端口发请求,外部端口不变就是与目的无关的映射(EIM)。本机测出来是 EIM。</p>
+</section>
+<section>
+  <h2>过滤行为</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  服务器 1:不通告 OTHER-ADDRESS,没法做过滤测试
+  服务器 2:不通告 OTHER-ADDRESS,没法做过滤测试
+  服务器 3:CHANGE-REQUEST 换 IP 和端口 → 没收到;只换端口 → 没收到;结论:两种都没收到——既可能是 NAT 的过滤,也可能是服务器根本没实现 CHANGE-REQUEST,这里无法区分
+  服务器 4:CHANGE-REQUEST 换 IP 和端口 → 没收到;只换端口 → 没收到;结论:两种都没收到——既可能是 NAT 的过滤,也可能是服务器根本没实现 CHANGE-REQUEST,这里无法区分
+  本机的 NAT:映射行为测出来是与目的无关(第二节);过滤行为没有测出来——公共 STUN 服务器大多不再实现 CHANGE-REQUEST(RFC 5780 已把这套测试标成可选),所以两种都没收到不能说明是端口受限。若收到了换 IP 的应答才能确定是全锥</pre></div>
+  <p>要靠 CHANGE-REQUEST 让服务器换 IP / 端口回应。实测公共服务器没有回应,分不清是 NAT 过滤还是服务器没实现,所以本机的过滤行为没有确定。</p>
+</section>
+<section>
+  <h2>可靠性</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  重传时刻(计算,秒):[0, 0.5, 1.5, 3.5, 7.5, 15.5, 31.5];第 7 次发出后再等 16 × 500 ms = 8 秒才放弃,总共 39.5 秒
+  服务器 1:8 个请求收到 8 个应答,RTT 最小 203 / 中位 204 / 最大 206 ms
+  服务器 2:8 个请求收到 8 个应答,RTT 最小 185 / 中位 187 / 最大 233 ms
+  服务器 3:8 个请求收到 8 个应答,RTT 最小 5 / 中位 6 / 最大 13 ms
+  服务器 4:8 个请求收到 8 个应答,RTT 最小 94 / 中位 101 / 最大 103 ms</pre></div>
+  <p>STUN 在 UDP 上用 500 ms 起翻倍的 RTO 重传,最多 7 次,总共 39.5 秒。</p>
+</section>
+<section>
+  <h2>打洞</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">    A \\ B      全锥        地址受限      端口受限      对称        
+    全锥        通         通         通         通         
+    地址受限      通         通         通         通         
+    端口受限      通         通         通         不通        
+    对称        通         通         不通        不通        
+  16 种组合里 13 种能打通;打不通的是“对称 + 端口受限”和“对称 + 对称”(对称 NAT 给每个目的分配不同的外部端口,对方按 S 看到的端口去发,过滤规则不认)。这类情况只能走中继服务器(TURN)</pre></div>
+  <p>两边各向会合服务器报到,交换外部地址后同时发包。除了涉及对称 NAT 的几种组合外都能打通,打不通就要走 TURN 中继。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">STUN 与 NAT 穿透</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "b", "kind": "bars", "label": "数字对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "STUN 报文:请求只有 20 字节的头——类型 0x0001(Binding Request)、长度 0、magic cookie 0x2112a442、12 字节的随机事务编号。应答 68 字节:类型 0x0101(Binding Success Response)、长度 48、事务编号与请求相同。服务器 2 的应答属性是 XOR-MAPPED-ADDRESS(8 字节)、旧式的 MAPPED-ADDRESS(8 字节)、SOFTWARE(20 字节);服务器 3 的是 MAPPED-ADDRESS、RESPONSE-ORIGIN、OTHER-ADDRESS(各 8 字节)和 XOR-MAPPED-ADDRESS。XOR-MAPPED-ADDRESS 的值 8 字节:保留 1 + 地址族 1(IPv4)+ 端口 2 + 地址 4。线上的端口字段 0xe418 与 cookie 高 16 位 0x2112 异或得 50442,正是我的本地端口 50442(NAT 没改端口);旧式 MAPPED-ADDRESS(不异或)与异或还原出来的地址和端口一致——异或是为了躲开会改写载荷里 IP 地址的 NAT。抓包:4 个 IP 包,请求 IP 总长 48 字节(20 IP + 8 UDP + 20 STUN),应答 48 和 96 字节;RTT 服务器 2 是 207 ms,服务器 3 是 8 ms。", "s": {"t": {"lines": ["  请求(20 字节):00010000 2112a442 67292517 02fbd130 9a8cf24a", "    = 类型 0x0001(Binding Request)、长度 0、magic cookie 0x2112a442、事务编号 12 字节(随机)", "  服务器 2的应答 68 字节:类型 0x0101(Binding Success Response)、长度 48、事务编号与请求相同;属性:XOR-MAPPED-ADDRESS(8 字节);MAPPED-ADDRESS(8 字节);SOFTWARE(20 字节)", "  服务器 3的应答 68 字节:类型 0x0101(Binding Success Response)、长度 48、事务编号与请求相同;属性:MAPPED-ADDRESS(8 字节);RESPONSE-ORIGIN(8 字节);OTHER-ADDRESS(8 字节);XOR-MAPPED-ADDRESS(8 字节)", "  XOR-MAPPED-ADDRESS 的值 8 字节:保留 1 + 地址族 1(1 = IPv4)+ 端口 2 字节 + 地址 4 字节;线上的端口字段 0xe418,与 0x2112(cookie 的高 16 位)异或得 50442,我的本地端口是 50442,相同(NAT 没改端口);地址 4 个字节与 cookie 异或还原(公网地址不写出)", "  同一个应答里还有旧式的 MAPPED-ADDRESS(不异或):与 XOR 还原的地址 / 端口一致——旧版 STUN 直接写明文地址,会被某些改写载荷里 IP 地址的 NAT/ALG 破坏,异或就是为了避开它们", "  抓包:4 个 IP 包,请求 IP 总长 48 字节(20 IP + 8 UDP + 20 STUN),两个应答的 IP 总长 [48, 96] 字节;往返 RTT:服务器 2 207 ms、服务器 3 8 ms"], "cur": [], "mark": [], "done": []}, "mark": [0, 4, 5], "done": [2, 3, 6], "b": {"items": [["请求 STUN 部分", 20, "20 字节"], ["应答 STUN 部分", 68, "68 字节"], ["XOR-MAPPED-ADDRESS 值", 8, "8 字节"]], "max": 68, "cur": [], "mark": [2], "done": [0, 1]}, "kv": {"items": [["请求", "20 字节:类型 · 长度 · cookie · 事务编号"], ["应答", "68 字节,带 XOR-MAPPED-ADDRESS 等属性"], ["XOR", "端口 ^ 0x2112,地址 ^ cookie"], ["本机端口", "50442 = 外部端口(NAT 没改)"]], "hl": ["XOR"]}}}, {"note": "映射行为(RFC 5780):同一个本地套接字依次发往服务器的 4 个“目的”——主 IP:主端口、主 IP:另一个端口、另一个 IP:主端口、另一个 IP:另一个端口。能做这个测试的服务器要通告 OTHER-ADDRESS,4 个服务器里只有服务器 3 和 4 通告了(服务器 1、2 不通告)。服务器 3 的测试:本地端口 52182,4 个目的看到的外部端口都是 52182,公网地址一致;服务器 4:本地端口 55093,4 个外部端口都是 55093,公网地址一致。结论:本机出口的 NAT 是“与目的无关的映射”(EIM),无论发给哪个 IP 或端口,外部地址和端口都不变——这是 UDP 打洞能成功的前提(第 19 篇用 3 个服务器和 40 个套接字得到过类似结论)。", "s": {"t": {"lines": ["  服务器 1:不通告 OTHER-ADDRESS,没法做 RFC 5780 的映射测试", "  服务器 2:不通告 OTHER-ADDRESS,没法做 RFC 5780 的映射测试", "  服务器 3(本地端口 52182):主 IP:主端口 → 外部端口 52182;主 IP:另一个端口 → 外部端口 52182;另一个 IP:主端口 → 外部端口 52182;另一个 IP:另一个端口 → 外部端口 52182;公网地址是否一致:True;结论:与目的无关的映射(EIM)", "  服务器 4(本地端口 55093):主 IP:主端口 → 外部端口 55093;主 IP:另一个端口 → 外部端口 55093;另一个 IP:主端口 → 外部端口 55093;另一个 IP:另一个端口 → 外部端口 55093;公网地址是否一致:True;结论:与目的无关的映射(EIM)"], "cur": [], "mark": [], "done": []}, "mark": [2, 3], "done": [0, 1], "b": {"items": [["服务器 3 · 4 个目的的外部端口都是", 52182, "52182"], ["服务器 4 · 4 个目的的外部端口都是", 55093, "55093"]], "max": 55093, "cur": [], "mark": [0, 1], "done": []}, "kv": {"items": [["测试", "同一个套接字发往 4 个不同的目的"], ["服务器 3 / 4", "外部端口始终等于本地端口"], ["结论", "与目的无关的映射(EIM)"]], "hl": ["结论"]}}}, {"note": "过滤行为(RFC 5780):先向服务器发一个请求(给服务器开个洞),再让服务器用“另一个 IP 和端口”(CHANGE-REQUEST 0x06)或“同 IP 另一个端口”(0x02)回应,看能不能收到。服务器 3 和 4 两种都没收到——既可能是本机 NAT 的过滤规则挡住了,也可能是这些服务器根本没实现 CHANGE-REQUEST,这里无法区分。公共 STUN 服务器大多不再实现 CHANGE-REQUEST(RFC 5780 把这套测试标成可选)。所以本机 NAT 的映射行为测出来了(与目的无关),过滤行为没有测出来;不能因为“两种都没收到”就说是端口受限,只有收到了换 IP 的应答才能确定是全锥。", "s": {"t": {"lines": ["  服务器 1:不通告 OTHER-ADDRESS,没法做过滤测试", "  服务器 2:不通告 OTHER-ADDRESS,没法做过滤测试", "  服务器 3:CHANGE-REQUEST 换 IP 和端口 → 没收到;只换端口 → 没收到;结论:两种都没收到——既可能是 NAT 的过滤,也可能是服务器根本没实现 CHANGE-REQUEST,这里无法区分", "  服务器 4:CHANGE-REQUEST 换 IP 和端口 → 没收到;只换端口 → 没收到;结论:两种都没收到——既可能是 NAT 的过滤,也可能是服务器根本没实现 CHANGE-REQUEST,这里无法区分", "  本机的 NAT:映射行为测出来是与目的无关(第二节);过滤行为没有测出来——公共 STUN 服务器大多不再实现 CHANGE-REQUEST(RFC 5780 已把这套测试标成可选),所以两种都没收到不能说明是端口受限。若收到了换 IP 的应答才能确定是全锥"], "cur": [], "mark": [], "done": []}, "mark": [2, 3, 4], "done": [0, 1], "kv": {"items": [["CHANGE-REQUEST 0x06 / 0x02", "两种都没收到"], ["原因", "NAT 挡住?服务器没实现?无法区分"], ["结论", "过滤行为本次没测出"]], "hl": ["结论"]}}}, {"note": "STUN 自己的可靠性:跑在 UDP 上,客户端按 RFC 5389 重传(这是计算):初始 RTO 500 ms,每次翻倍,最多发 7 次,发出时刻是 0、0.5、1.5、3.5、7.5、15.5、31.5 秒,第 7 次发出后再等 16 × 500 ms = 8 秒才放弃,总共 39.5 秒。实测 4 个服务器各发 8 个请求都全部收到应答:服务器 1 的 RTT 中位 204 ms(最小 203、最大 206),服务器 2 是 187 ms(185~233),服务器 3 是 6 ms(5~13),服务器 4 是 101 ms(94~103)——RTT 差别主要来自服务器离本机有多远。", "s": {"t": {"lines": ["  重传时刻(计算,秒):[0, 0.5, 1.5, 3.5, 7.5, 15.5, 31.5];第 7 次发出后再等 16 × 500 ms = 8 秒才放弃,总共 39.5 秒", "  服务器 1:8 个请求收到 8 个应答,RTT 最小 203 / 中位 204 / 最大 206 ms", "  服务器 2:8 个请求收到 8 个应答,RTT 最小 185 / 中位 187 / 最大 233 ms", "  服务器 3:8 个请求收到 8 个应答,RTT 最小 5 / 中位 6 / 最大 13 ms", "  服务器 4:8 个请求收到 8 个应答,RTT 最小 94 / 中位 101 / 最大 103 ms"], "cur": [], "mark": [], "done": []}, "mark": [0], "done": [1, 2, 3, 4], "b": {"items": [["服务器 1 · RTT 中位", 204, "204 ms"], ["服务器 2 · RTT 中位", 187, "187 ms"], ["服务器 3 · RTT 中位", 6, "6 ms"], ["服务器 4 · RTT 中位", 101, "101 ms"]], "max": 204, "cur": [], "mark": [2], "done": [0, 1, 3]}, "kv": {"items": [["重传", "0、0.5、1.5、3.5、7.5、15.5、31.5 秒"], ["放弃", "最后再等 8 秒,共 39.5 秒"], ["实测", "4 个服务器 8 / 8 都有应答"]], "hl": ["重传"]}}}, {"note": "UDP 打洞的原理(模拟,不是实测):两个内网主机 A、B 各在一个 NAT 后面,都先向公网的会合服务器 S 发 UDP,S 把各自观察到的外部地址告诉对方,然后两边同时向对方的外部地址发包。我把 NAT 按“映射 + 过滤”分成四种:全锥(EIM / 无过滤)、地址受限、端口受限、对称(每个目的分配不同外部端口 + 严格过滤),两两组合模拟。结果:16 种组合里 13 种能打通,打不通的是“对称 + 端口受限”(两个方向)和“对称 + 对称”——对称 NAT 给发往对方的包分配了和发往 S 时不同的外部端口,对方按 S 看到的端口去发,过滤规则不认。这类情况只能走中继服务器(TURN)。本机实测的映射行为是与目的无关,所以至少在映射这一点上不是对称 NAT。", "s": {"t": {"lines": ["    A \\\\ B      全锥        地址受限      端口受限      对称        ", "    全锥        通         通         通         通         ", "    地址受限      通         通         通         通         ", "    端口受限      通         通         通         不通        ", "    对称        通         通         不通        不通        ", "  16 种组合里 13 种能打通;打不通的是“对称 + 端口受限”和“对称 + 对称”(对称 NAT 给每个目的分配不同的外部端口,对方按 S 看到的端口去发,过滤规则不认)。这类情况只能走中继服务器(TURN)"], "cur": [], "mark": [], "done": []}, "mark": [3, 4], "done": [0, 1, 2, 5], "b": {"items": [["能打通的组合", 13, "13 / 16"], ["打不通的组合", 3, "3 / 16"]], "max": 16, "cur": [], "mark": [1], "done": [0]}, "kv": {"items": [["全锥 · 地址受限", "与任何类型都能打通"], ["端口受限 ↔ 对称", "打不通"], ["对称 ↔ 对称", "打不通,走 TURN 中继"], ["依据", "纸面模拟,不是实测"]], "hl": ["依据"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64(Apple 芯片)/ Python 3.14.8 / tcpdump(libpcap)/ scapy 2.8 / dpkt / dnspython / h2 / aioquic / OpenSSL / curl 8.7.1;抓包在 lo0(环回)上做,少数实验用真实网卡 en0(这台机器上 en0 是 Wi-Fi,tcpdump 看到的是系统转成以太网格式的帧,所以文中的“以太网头”都指这个 14 字节的头)或访问公网(会在文章里注明);需要丢包 / 延迟 / 限速时,用一个只作用于 lo0 端口 9400-9499 的 dummynet 辅助脚本(netlab);所有服务端都是本机自己起的进程;时间戳取自 tcpdump 的 -tt,数字每次运行会有小幅抖动。第一至四节是真实的公网 STUN 服务器(Cloudflare、Twilio、小米、sipgate),本机出口的公网地址不写出,只比较是否相同;第五节是纸面模拟,地址为文档地址</li><li>没有验证:本机 NAT 的过滤行为(服务器不支持 CHANGE-REQUEST);真实的 UDP 打洞(需要第二台 NAT 后面的主机和会合服务器);TURN / ICE 的完整流程;对称 NAT 下端口预测的可行性;映射的超时时间</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="network-tcp-header.html">
+    <div>
+      <div class="t1">下一篇 · 网络协议 37</div>
+      <div class="t2">TCP 头部逐字段:序号、确认号、标志位与选项</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>网络协议 · STUN 与 NAT 穿透:UDP 打洞的原理 · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

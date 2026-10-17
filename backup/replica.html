@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>主分片和副本分片怎么保证不丢数据</title>
+<meta name="description" content="真实写入链路里主副分片的同步确认与故障切换。">
+<link rel="canonical" href="https://bigywater.tech/replica.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="主分片和副本分片怎么保证不丢数据">
+<meta property="og:description" content="真实写入链路里主副分片的同步确认与故障切换。">
+<meta property="og:url" content="https://bigywater.tech/replica.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="主分片和副本分片怎么保证不丢数据">
+<meta name="twitter:description" content="真实写入链路里主副分片的同步确认与故障切换。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F6F7F9; --paper:#FFFFFF; --ink:#1C2230; --ink-dim:#5F6B7C; --line:#DEE3EA;
+  --term-c:#3B4C9E; --term-c-soft:#E7E9F7;
+  --match-c:#B8891A; --match-c-soft:#F6EDD9;
+  --postings-c:#12807E; --postings-c-soft:#DCF0EF;
+  --code-bg:#1C2230; --code-ink:#E7EAF0;
+  --shadow: 0 1px 2px rgba(20,25,40,.05), 0 8px 24px -12px rgba(20,25,40,.14);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#14171F; --paper:#1B1F2A; --ink:#E7EAF0; --ink-dim:#9AA3B5; --line:#2C3242;
+    --term-c:#8B9AE8; --term-c-soft:#232A46;
+    --match-c:#E0B75C; --match-c-soft:#332B18;
+    --postings-c:#5FC9C6; --postings-c-soft:#193232;
+    --code-bg:#10131A; --code-ink:#DCE1E6;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#14171F; --paper:#1B1F2A; --ink:#E7EAF0; --ink-dim:#9AA3B5; --line:#2C3242;
+  --term-c:#8B9AE8; --term-c-soft:#232A46;
+  --match-c:#E0B75C; --match-c-soft:#332B18;
+  --postings-c:#5FC9C6; --postings-c-soft:#193232;
+  --code-bg:#10131A; --code-ink:#DCE1E6;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",Helvetica,Arial,sans-serif; line-height:1.7;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+.wrap{max-width:880px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--term-c);}
+
+.hero{padding:68px 24px 36px;}
+.hero-inner{max-width:880px; margin:0 auto;}
+.eyebrow{font-size:.8rem; letter-spacing:.06em; text-transform:uppercase; color:var(--term-c); display:flex; align-items:center; gap:8px; margin-bottom:16px; font-weight:600;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--term-c);}
+h1{font-size:2.1rem; line-height:1.32; margin:0 0 18px; text-wrap:balance; letter-spacing:-.01em; font-weight:700;}
+.hero p{font-size:1.05rem; color:var(--ink-dim); max-width:680px; margin:0 0 14px;}
+.hero-fact{margin-top:26px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:700; color:var(--term-c);}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:40px 24px;}
+h2{font-size:1.4rem; margin:0 0 6px; letter-spacing:-.01em; font-weight:700;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 24px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:22px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.7rem; letter-spacing:.05em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.a .tag{background:var(--term-c-soft); color:var(--term-c);}
+.card.b .tag{background:var(--match-c-soft); color:var(--match-c);}
+.card.c .tag{background:var(--postings-c-soft); color:var(--postings-c);}
+.card h3{margin:0 0 8px; font-size:1.02rem;}
+.card p{font-size:.9rem; color:var(--ink-dim); margin:0;}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:16px 18px; margin:14px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--term-c-soft); color:var(--term-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#9DB4F0;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88A8A;}
+.term .cm{color:#8B95A1;}
+
+.sim-badge{display:inline-block; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.66rem; letter-spacing:.04em; text-transform:uppercase; background:var(--term-c-soft); color:var(--term-c); padding:2px 7px; border-radius:5px; margin-left:8px; vertical-align:middle;}
+
+.callout{border-left:3px solid var(--term-c); background:var(--term-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:18px 0; font-size:.94rem;}
+.callout.b{border-color:var(--match-c); background:var(--match-c-soft);}
+.callout.c{border-color:var(--postings-c); background:var(--postings-c-soft);}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:22px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:700; font-size:.92rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.9rem; border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--match-c-soft); color:var(--match-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:20px;}
+.shardrow{display:flex; gap:10px; margin-bottom:14px; flex-wrap:wrap;}
+.shardcard{flex:1; min-width:140px; border:1.5px solid var(--line); border-radius:10px; padding:12px; background:var(--bg); text-align:center;}
+.shardcard.primary{border-color:var(--term-c);}
+.shardcard.acked{background:var(--postings-c-soft); border-color:var(--postings-c);}
+.shardcard.dropped{background:var(--match-c-soft); border-color:var(--match-c); opacity:.7;}
+.shardcard h5{margin:0 0 6px; font-size:.72rem; letter-spacing:.04em; text-transform:uppercase; color:var(--ink-dim); font-weight:700;}
+.shardcard .v{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem;}
+.demo-controls{padding:12px 20px; display:flex; gap:10px; align-items:center; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn.primary{background:var(--term-c); border-color:var(--term-c); color:#fff;}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px 22px; margin-top:18px;}
+.refs h3{margin:0 0 10px; font-size:.98rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.86rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{display:flex; align-items:center; gap:10px; margin-bottom:22px; font-size:.86rem; color:var(--ink-dim); flex-wrap:wrap;}
+.prev-post a{font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--term-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:36px 24px 56px; text-align:center; color:var(--ink-dim); font-size:.82rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Elasticsearch 系列 · 第六篇</div>
+    <h1>写入一份数据要求"成功",到底是谁跟谁说了"成功"?</h1>
+    <p>一个分片默认不只一份——主分片(primary)之外还有副本分片(replica)。写入一条文档的时候,数据什么时候才算真正安全?是主分片写完就算,还是要等副本也写完?如果这时候正好有个副本掉线了呢?这篇讲清楚 Elasticsearch 的主副本同步机制。</p>
+    <p>这篇的核心机制用可验证的 Python 模型复现和验证,并用本机真实集群返回的字段作为直接佐证。</p>
+    <div class="hero-fact">
+      <div><div class="num">同步复制</div><div class="lbl">默认行为:主分片必须等所有在线副本都确认,才会告诉客户端"写成功"</div></div>
+      <div><div class="num">_primary_term</div><div class="lbl">本机真实写入返回的字段,防止"裂脑"写入的关键机制</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <div class="prev-post">← 接上篇 <a href="agg.html" target="_blank" rel="noopener">聚合为什么和搜索是两回事</a></div>
+  <h2>写入的真实路径</h2>
+  <p class="h2-sub">一条写入请求到达之后,不是"哪个分片先写完就算数",是严格按顺序走的。</p>
+  <div class="cards">
+    <div class="card a">
+      <span class="tag">第一步</span>
+      <h3>先写主分片</h3>
+      <p>写入请求先被路由到主分片(上一篇讲过路由规则),主分片本地写完,分配一个本分片内递增的序号(<span class="mono">_seq_no</span>)。</p>
+    </div>
+    <div class="card b">
+      <span class="tag">第二步</span>
+      <h3>同步复制给所有副本</h3>
+      <p>主分片把这次写入<b>同步</b>转发给所有当前在线、状态正常的副本,等它们都确认写完。</p>
+    </div>
+    <div class="card c">
+      <span class="tag">第三步</span>
+      <h3>全部确认,才返回成功</h3>
+      <p>只有主分片和当前所有在线副本都写完了,客户端才会收到"写入成功"的响应——这是默认行为,不需要额外配置。</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>真实证据:每次写入都带着这两个字段</h2>
+  <p class="h2-sub">在本机真实运行的 Elasticsearch 上写两条数据,看返回结果。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cmd">POST /orders/_doc  { "order_id": 9999 }</span>
+<span class="ok">→ {"result":"created", "_seq_no":202, "_primary_term":3, ...}</span>
+
+<span class="cmd">POST /orders/_doc  { "order_id": 9998 }</span>
+<span class="ok">→ {"result":"created", "_seq_no":193, "_primary_term":3, ...}</span>
+  </div>
+  <p>每次写入的响应里都带着 <span class="mono">_seq_no</span>(这个分片内部的写入序号,单调递增)和 <span class="mono">_primary_term</span>(当前主分片的"任期号")。<span class="mono">_primary_term</span> 现在是 3,是因为这台机器在准备这个系列的过程中,这个分片对应的主分片经历过几次真实的重启/重新选主——每一次,这个数字都会真实地往上跳一格,不会退回去。</p>
+</section>
+
+<section>
+  <h2>演示:一次正常写入,一次副本掉线,一次主分片故障切换</h2>
+  <p class="h2-sub">用一个可验证的最小模型(1 主 + 2 副本)复现完整流程。</p>
+  <div class="demo" id="rsDemo">
+    <div class="demo-head">主副本同步写入</div>
+    <div class="demo-narration" id="rsNarration"></div>
+    <div class="demo-body">
+      <div class="shardrow" id="rsShards"></div>
+      <div id="rsSummary" style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; color:var(--ink-dim);"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="rsReset">⏮ 重来</button>
+      <button class="btn" id="rsPrev">‹ 上一步</button>
+      <button class="btn primary" id="rsNext">下一步 ›</button>
+      <span class="step-counter" id="rsCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);"><span class="sim-badge">verified simulation</span> 这个演示的场景是:第一条写入一切正常;第二条写入时 replica-B 恰好掉线——不阻塞写入,但被移出"in-sync 集合";第三条写入延续这个状态;接着模拟主分片彻底失效,replica-A(还在 in-sync 集合里)被提升为新主分片,<span class="mono">primary_term</span> 从 1 跳到 2;最后验证一次带着"旧任期号"的写入会被拒绝,带着"新任期号"的会被接受——这是防止网络分区导致的旧主分片继续对外提供服务("裂脑")的核心机制。</p>
+</section>
+
+<section>
+  <h2>副本掉线之后呢</h2>
+  <p class="h2-sub">被移出 in-sync 集合的副本,不代表被永久放弃。</p>
+  <div class="callout">
+    副本节点恢复连接后,主分片会尝试把它重新拉回 in-sync 集合——如果掉线时间短、主分片还留着足够的操作历史(translog),可以直接把缺的那部分操作重放过去(增量恢复);如果掉线太久、历史记录已经被清理,就只能做一次完整的数据拷贝(全量恢复)。恢复完成之前,这个副本不参与新写入的同步确认,也不会被路由到用来提供读请求。
+  </div>
+  <p>这套设计的核心权衡是:宁可让"确认过的写入"数量变少(容忍副本暂时掉线,不因为一个副本卡住就让所有写入超时失败),也不让"确认过的写入"变得不可靠(掉线的副本绝不会被当成"已经确认"的一员)。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文开头的 <span class="mono">_seq_no</span>/<span class="mono">_primary_term</span> 数值来自本机真实运行的 Elasticsearch 8.15.0 真实写入结果,未做删改。</li>
+      <li>本篇的核心场景(1 主 + 2 副本的同步写入、副本掉线、主分片故障切换、旧任期号写入被拒绝)是<b>验证过的 Python 仿真</b>,不是在真实多节点集群上跑出来的——这台机器当前的可用内存不足以稳定运行第二个 Elasticsearch 节点(尝试过,新节点在完成启动前就会被系统直接终止,推测是内存分配失败),所以没有强行拼凑一次不可靠的多节点实验。仿真实现的规则(同步复制、in-sync 集合、primary_term 递增与陈旧写入拒绝)来自 Elasticsearch 官方文档描述的真实机制,用一套独立的暴力回放算法额外交叉验证过最终状态,不是凭空编的流程。</li>
+      <li>没有涉及:<span class="mono">wait_for_active_shards</span> 参数如何调整"写入前至少要有多少份可用副本才允许尝试"这道门槛、translog 在副本恢复中的具体作用(概念上和第四篇 InnoDB 系列的 redo log 类似,但不是本文重点)、真实的主分片选举算法(基于 Raft 类似的共识协议,由集群协调层完成,是系列下一篇的话题)。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="master.html" target="_blank" rel="noopener" style="text-decoration:none; color:inherit;">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">集群协调:多个节点怎么就谁是 master 达成一致</div>
+    </div>
+    <div style="font-size:1.5rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Elasticsearch 系列 · 第六篇 · 写入一致性与主副本同步 · 核心机制经 Python 仿真验证,字段证据来自本机真实运行的 Elasticsearch 8.15.0</footer>
+
+<script>
+const DATA = {"events": [{"doc": "doc1", "seqNo": 0, "primaryTerm": 1, "type": "primary-apply"}, {"replica": "replica-A", "doc": "doc1", "seqNo": 0, "type": "replica-ack"}, {"replica": "replica-B", "doc": "doc1", "seqNo": 0, "type": "replica-ack"}, {"doc": "doc1", "seqNo": 0, "acked": ["primary", "replica-A", "replica-B"], "inSyncSet": ["primary", "replica-A", "replica-B"], "success": true, "type": "write-result"}, {"doc": "doc2", "seqNo": 1, "primaryTerm": 1, "type": "primary-apply"}, {"replica": "replica-A", "doc": "doc2", "seqNo": 1, "type": "replica-ack"}, {"replica": "replica-B", "doc": "doc2", "reason": "副本不可达,被移出 in-sync 集合,不阻塞这次写入", "type": "replica-dropped"}, {"doc": "doc2", "seqNo": 1, "acked": ["primary", "replica-A"], "inSyncSet": ["primary", "replica-A"], "success": true, "type": "write-result"}, {"doc": "doc3", "seqNo": 2, "primaryTerm": 1, "type": "primary-apply"}, {"replica": "replica-A", "doc": "doc3", "seqNo": 2, "type": "replica-ack"}, {"doc": "doc3", "seqNo": 2, "acked": ["primary", "replica-A"], "inSyncSet": ["primary", "replica-A"], "success": true, "type": "write-result"}, {"newPrimary": "replica-A", "newPrimaryTerm": 2, "oldPrimaryTerm": 1, "type": "failover"}, {"doc": "doc4", "attemptedTerm": 1, "currentTerm": 2, "accepted": false, "reason": "term 落后于当前 term,被拒绝(防止裂脑写入)", "type": "stale-write-check"}, {"doc": "doc5", "attemptedTerm": 2, "currentTerm": 2, "accepted": true, "reason": "term 匹配,接受", "type": "stale-write-check"}]};
+
+(function(){
+  const events = DATA.events;
+  const shardsBox = document.getElementById('rsShards');
+  const summaryBox = document.getElementById('rsSummary');
+  const narration = document.getElementById('rsNarration');
+  const counter = document.getElementById('rsCounter');
+  let idx = 0;
+
+  function describe(e){
+    switch(e.type){
+      case 'primary-apply': return `主分片写入 <span class="k">${e.doc}</span>,分配 seq_no=${e.seqNo}(当前 primary_term=${e.primaryTerm})。`;
+      case 'replica-ack': return `副本 <span class="k">${e.replica}</span> 确认写入 <span class="k">${e.doc}</span>(seq_no=${e.seqNo})。`;
+      case 'replica-dropped': return `副本 <span class="k">${e.replica}</span>:${e.reason}。`;
+      case 'write-result': return `写入 <span class="k">${e.doc}</span> 结果:${e.success?'成功':'失败'}——已确认:[${e.acked.join(', ')}],当前 in-sync 集合:[${e.inSyncSet.join(', ')}]。`;
+      case 'failover': return `💥 主分片失效!<span class="k">${e.newPrimary}</span> 被提升为新主分片,primary_term 从 ${e.oldPrimaryTerm} 跳到 ${e.newPrimaryTerm}。`;
+      case 'stale-write-check': return `事务尝试用 primary_term=${e.attemptedTerm} 写入 <span class="k">${e.doc}</span>(当前真实 term=${e.currentTerm})——${e.reason}。`;
+      default: return e.type;
+    }
+  }
+
+  function render(){
+    idx = Math.max(0, Math.min(events.length-1, idx));
+    const e = events[idx];
+    narration.innerHTML = describe(e);
+
+    const inSync = new Set(['primary','replica-A','replica-B']);
+    const acked = new Set();
+    let currentPrimary = 'primary';
+    let currentTerm = 1;
+    for (let i=0;i<=idx;i++){
+      const ev = events[i];
+      if (ev.type==='replica-dropped') inSync.delete(ev.replica);
+      if (ev.type==='write-result'){ acked.clear(); ev.acked.forEach(a=>acked.add(a)); }
+      if (ev.type==='failover'){ currentPrimary = ev.newPrimary; currentTerm = ev.newPrimaryTerm; }
+    }
+    const names = ['primary','replica-A','replica-B'];
+    let html = '';
+    names.forEach(n=>{
+      const isPrimaryNow = (n===currentPrimary) || (n==='primary' && currentPrimary==='primary');
+      const dropped = !inSync.has(n);
+      const isAcked = acked.has(n) && (e.type==='write-result');
+      let cls = 'shardcard';
+      if (n===currentPrimary) cls += ' primary';
+      if (dropped) cls += ' dropped';
+      if (isAcked) cls += ' acked';
+      html += `<div class="${cls}"><h5>${n}${n===currentPrimary?' (当前主)':''}</h5><div class="v">${dropped?'已掉出 in-sync':'in-sync'}</div></div>`;
+    });
+    shardsBox.innerHTML = html;
+    summaryBox.textContent = `当前 primary_term = ${currentTerm}`;
+
+    counter.textContent = `${idx+1} / ${events.length}`;
+    document.getElementById('rsPrev').disabled = idx===0;
+    document.getElementById('rsNext').disabled = idx===events.length-1;
+  }
+  document.getElementById('rsPrev').onclick=()=>{idx--;render();};
+  document.getElementById('rsNext').onclick=()=>{idx++;render();};
+  document.getElementById('rsReset').onclick=()=>{idx=0;render();};
+  render();
+})();
+</script>
+
+</body>
+</html>

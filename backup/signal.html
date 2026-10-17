@@ -1,0 +1,601 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>Signal:receiver 什么时候会被悄悄丢弃,一个抛异常的接收者又会不会打断整条广播</title>
+<meta name="description" content="真实实测没保留引用的 receiver 被立刻回收、同一 receiver 注册两次信号触发两次(dispatch_uid 修复)、send() 遇异常中断广播而 send_robust() 跑完全部接收者,对照 pre_save/post_save 真实源码。">
+<link rel="canonical" href="https://bigywater.tech/signal.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Signal:receiver 什么时候会被悄悄丢弃,一个抛异常的接收者又会不会打断整条广播">
+<meta property="og:description" content="真实实测没保留引用的 receiver 被立刻回收、同一 receiver 注册两次信号触发两次(dispatch_uid 修复)、send() 遇异常中断广播而 send_robust() 跑完全部接收者,对照 pre_save/post_save 真实源码。">
+<meta property="og:url" content="https://bigywater.tech/signal.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Signal:receiver 什么时候会被悄悄丢弃,一个抛异常的接收者又会不会打断整条广播">
+<meta name="twitter:description" content="真实实测没保留引用的 receiver 被立刻回收、同一 receiver 注册两次信号触发两次(dispatch_uid 修复)、send() 遇异常中断广播而 send_robust() 跑完全部接收者,对照 pre_save/post_save 真实源码。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F4F7F4; --paper:#FFFFFF; --ink:#132119; --ink-dim:#5C6B61; --line:#DCE6DE;
+  --dj-c:#0C4B33; --dj-c-soft:#E1EEE6;
+  --mem-c:#B8791E; --mem-c-soft:#F6ECD9;
+  --meta-c:#7B4FA8; --meta-c-soft:#EFE6F7;
+  --err-c:#B23B3B; --err-c-soft:#F7E3E1;
+  --code-bg:#12211A; --code-ink:#E7F0EA;
+  --shadow: 0 1px 2px rgba(15,30,20,.06), 0 8px 24px -12px rgba(15,30,20,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0E1712; --paper:#18251E; --ink:#E7F0EA; --ink-dim:#9DB0A4; --line:#2C3B32;
+    --dj-c:#5FBF95; --dj-c-soft:#1B3327;
+    --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+    --meta-c:#B08AE0; --meta-c-soft:#332545;
+    --err-c:#E08585; --err-c-soft:#3A1F1F;
+    --code-bg:#0B120D; --code-ink:#DCE9E0;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0E1712; --paper:#18251E; --ink:#E7F0EA; --ink-dim:#9DB0A4; --line:#2C3B32;
+  --dj-c:#5FBF95; --dj-c-soft:#1B3327;
+  --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+  --meta-c:#B08AE0; --meta-c-soft:#332545;
+  --err-c:#E08585; --err-c-soft:#3A1F1F;
+  --code-bg:#0B120D; --code-ink:#DCE9E0;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--dj-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--dj-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--dj-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--dj-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.a .tag{background:var(--dj-c-soft); color:var(--dj-c);}
+.card.b .tag{background:var(--mem-c-soft); color:var(--mem-c);}
+.card.c .tag{background:var(--meta-c-soft); color:var(--meta-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#8FB0A0; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#9FE0C3;}
+
+.callout{border-left:3px solid var(--dj-c); background:var(--dj-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+.callout.c{border-color:var(--meta-c); background:var(--meta-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--dj-c-soft); color:var(--dj-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#9FE0C3;}
+.term pre.code{margin:0 0 10px; color:#9FE0C3; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+.term .cm{color:#7C9C8C;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--mem-c-soft); color:var(--mem-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:22px 20px;}
+.scenario-tag{display:inline-block; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.05em; text-transform:uppercase; padding:3px 10px; border-radius:6px; margin-bottom:16px;}
+.scenario-tag.send{background:var(--err-c-soft); color:var(--err-c);}
+.scenario-tag.robust{background:var(--dj-c-soft); color:var(--dj-c);}
+.pipeline{display:flex; gap:10px; flex-wrap:wrap;}
+.recv-box{flex:1; min-width:110px; border:2px solid var(--line); border-radius:12px; padding:14px 10px; text-align:center; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; color:var(--ink-dim); transition:border-color .2s, background .2s, opacity .2s;}
+.recv-box.active{border-color:var(--dj-c); background:var(--dj-c-soft); color:var(--dj-c); font-weight:700;}
+.recv-box.ok{border-color:var(--dj-c); color:var(--dj-c);}
+.recv-box.error{border-color:var(--err-c); background:var(--err-c-soft); color:var(--err-c); font-weight:700;}
+.recv-box.skipped{opacity:.35; border-style:dashed;}
+.stat-row{display:flex; gap:16px; flex-wrap:wrap; margin:14px 0 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem;}
+.stat{border:1px solid var(--line); border-radius:8px; padding:8px 12px; background:var(--bg);}
+.stat b{color:var(--dj-c); display:block; font-size:1rem; font-variant-numeric:tabular-nums;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--dj-c); color:var(--dj-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--dj-c); border-color:var(--dj-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{display:flex; align-items:center; gap:10px; margin-bottom:24px; font-size:.88rem; color:var(--ink-dim); flex-wrap:wrap;}
+.prev-post a{font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--dj-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Django 系列 · 第五篇</div>
+    <h1><span class="mono">signal.connect()</span> 之后,receiver 什么时候会被悄悄丢弃,一个抛异常的接收者又会不会打断整条广播?</h1>
+    <p>刚给自己的 bigywater 项目挂了一组 <span class="mono">post_save</span>/<span class="mono">post_delete</span> 信号做文章备份,顺手把 <span class="mono">django.dispatch.Signal</span> 的源码和几个反直觉行为在本机真实跑了一遍——弱引用会在什么条件下悄悄让 receiver 消失且不报任何错,同一个 receiver 被注册两次会不会真的触发两次,以及一个 receiver 抛异常时,<span class="mono">send()</span> 和 <span class="mono">send_robust()</span> 到底谁会把剩下的 receiver 跑完。</p>
+    <div class="hero-fact">
+      <div><div class="num">0 次调用</div><div class="lbl">本机真实实测:connect() 时没留任何变量引用,receiver 立刻被回收,信号发了但一次都没触发</div></div>
+      <div><div class="num">C 一次都没跑</div><div class="lbl">本机真实实测:send() 遇到 B 抛异常直接中断,C 再也没机会执行;send_robust() 会让 C 照常跑完</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <div class="prev-post">← 接上篇 <a href="command.html" target="_blank" rel="noopener">management command:谁在决定 manage.py 认识哪些命令</a></div>
+  <h2>真实源码:connect() 怎么做弱引用和去重</h2>
+  <p class="h2-sub"><span class="mono">Signal</span> 内部就是一张 <span class="mono">receivers</span> 列表,<span class="mono">connect()</span> 往里面塞元组,核心逻辑就三件事。</p>
+  <blockquote class="src">
+    <span class="path">django/dispatch/dispatcher.py · <a href="https://github.com/django/django/blob/6.0.7/django/dispatch/dispatcher.py#L59" target="_blank" rel="noopener">django @ 6.0.7, L59</a></span>
+def connect(self, receiver, sender=None, weak=True, dispatch_uid=None):
+    ...
+    if dispatch_uid:
+        lookup_key = (dispatch_uid, _make_id(sender))
+    else:
+        lookup_key = (_make_id(receiver), _make_id(sender))   # 没传 dispatch_uid,就靠 id(receiver) 去重
+
+    if weak:
+        ref = weakref.ref
+        receiver_object = receiver
+        if hasattr(receiver, "__self__") and hasattr(receiver, "__func__"):
+            ref = weakref.WeakMethod          # 绑定方法:弱引用 __self__,不是弱引用方法对象本身
+            receiver_object = receiver.__self__
+        receiver = ref(receiver)
+        weakref.finalize(receiver_object, self._flag_dead_receivers)
+
+    with self.lock:
+        self._clear_dead_receivers()
+        if not any(r_key == lookup_key for r_key, _, _, _ in self.receivers):
+            self.receivers.append((lookup_key, receiver, sender_ref, is_async))  # 去重:key 一样就不重复添加
+  </blockquote>
+  <p>三个关键点:①<b>去重靠 <span class="mono">lookup_key</span></b>——默认是 <span class="mono">(id(receiver), id(sender))</span>,不同的函数对象天然有不同的 <span class="mono">id</span>,所以"看起来一样"的两个 receiver 只要不是同一个对象,就会被当成两个不同的订阅;②<b>默认用弱引用</b>(<span class="mono">weak=True</span>),绑定方法额外做了特殊处理——弱引用的是方法所属的实例 <span class="mono">__self__</span>,不是方法对象本身;③<span class="mono">weakref.finalize</span> 只是注册一个"死亡回调",真正清理死引用的动作在 <span class="mono">_clear_dead_receivers()</span> 里,会在下次 <span class="mono">connect()</span>/<span class="mono">disconnect()</span>/<span class="mono">send()</span> 时才真正执行。</p>
+</section>
+
+<section>
+  <h2>真实实测:receiver 真的没了,信号啥反应都没有</h2>
+  <p class="h2-sub">弱引用意味着:只要你自己不再持有 receiver 所在对象的任何引用,这个对象随时可能被回收——回收之后,<span class="mono">send()</span> 不会报错,只是安安静静地不调用它。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">sig = Signal()
+diag_ref = weakref.ref(h)          # h 是某个 Handler() 实例
+sig.connect(h.on_signal)           # weak=True,默认值
+print('refcount:', sys.getrefcount(h))
+
+del h
+gc.collect()
+print('diag_ref():', diag_ref())
+responses = sig.send(sender='second-call')
+print('responses:', responses)</pre>
+<span class="ok">diag_ref(): None
+responses: []</span>
+  </div>
+  <p><span class="mono">h</span> 被真实回收之后,<span class="mono">diag_ref()</span> 变成 <span class="mono">None</span>,再 <span class="mono">send()</span> 得到的是空列表——<b>没有异常,没有日志,什么提示都没有</b>。这也是为什么 Django 文档特别提醒:不要用一个连局部变量都不保留的匿名函数去 <span class="mono">connect()</span>。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">sig = Signal()
+calls = []
+sig.connect(lambda sender, **kw: calls.append(sender))   # 没有任何变量保留这个 lambda 的引用
+sig.send(sender='hello')
+print('实际被调用次数:', len(calls))</pre>
+<span class="bad">实际被调用次数: 0</span>
+  </div>
+  <p><span class="mono">connect()</span> 调用一结束,这个 <span class="mono">lambda</span> 就没有任何强引用了——弱引用甚至等不到 <span class="mono">gc.collect()</span>,CPython 的引用计数会立刻把它回收掉,<span class="mono">send()</span> 从第一次开始就找不到它。<span class="mono">@receiver</span> 装饰器修饰的模块级函数不会踩这个坑(函数对象被模块的全局命名空间一直引用着),但如果是在某个方法内部临时 <span class="mono">connect()</span> 一个局部定义的闭包或 <span class="mono">lambda</span>,就是这个下场。</p>
+  <div class="callout">
+    连 <span class="mono">send()</span> 的返回值都不能乱存:<span class="mono">responses</span> 列表里装的是真实重建出来的绑定方法对象,它本身握着 <span class="mono">__self__</span> 的强引用——如果你把某次 <span class="mono">send()</span> 的返回值长期存在全局变量里,反而会让本该被弱引用放生的对象一直活下去,行为完全反过来。
+  </div>
+</section>
+
+<section>
+  <h2>真实实测:同一个 receiver 被注册两次,信号触发两次</h2>
+  <p class="h2-sub">上一节的 <span class="mono">lookup_key</span> 默认用 <span class="mono">id(receiver)</span> 去重——如果同一份 <span class="mono">signals.py</span> 代码被 Python 当成两个不同模块各自执行一次(比如一次用绝对路径 <span class="mono">import article.signals</span>,一次因为某些相对导入配置又被当成 <span class="mono">import signals</span> 执行了一遍),两次各自定义出来的函数对象 <span class="mono">id</span> 不同,<span class="mono">connect()</span> 完全看不出它们是"同一个"接收者。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">def make_receiver():
+    def on_post_save(sender, **kwargs):
+        calls.append(sender)
+    return on_post_save
+
+r1, r2 = make_receiver(), make_receiver()
+print('r1 is r2:', r1 is r2)
+sig.connect(r1); sig.connect(r2)          # 不传 dispatch_uid
+sig.send(sender='PostSaved')
+print('实际被调用次数:', len(calls))</pre>
+<span class="bad">r1 is r2: False
+实际被调用次数: 2</span>
+  </div>
+  <p>同一次 <span class="mono">post_save</span>,你的备份逻辑真的会跑两遍。<span class="mono">connect()</span> 支持的 <span class="mono">dispatch_uid</span> 参数就是为了解决这个问题——用一个稳定的字符串代替 <span class="mono">id(receiver)</span> 做去重键,不管背后是不是同一个函数对象。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">u1, u2 = make_receiver(), make_receiver()
+sig2.connect(u1, dispatch_uid='article.signals.on_post_save')
+sig2.connect(u2, dispatch_uid='article.signals.on_post_save')   # 同一个 dispatch_uid
+sig2.send(sender='PostSaved')
+print('实际被调用次数:', len(calls2))</pre>
+<span class="ok">实际被调用次数: 1</span>
+  </div>
+  <p>说个题外话:<a href="middleware.html">上一篇</a>里给 bigywater 项目写的 <span class="mono">article/signals.py</span> 用的是 <span class="mono">@receiver(post_save, sender=Post)</span>,没传 <span class="mono">dispatch_uid</span>。正常的 <span class="mono">runserver</span> 一个进程只会 <span class="mono">import</span> 这个模块一次,不会踩上面这个坑,但只要以后有一天这份代码被从两条不同路径各 <span class="mono">import</span> 一次(常见于测试环境或者奇怪的相对导入配置),文章备份就会被写两次——加一个 <span class="mono">dispatch_uid='article.write_post_backup'</span> 这种稳定字符串,是免费的保险。</p>
+</section>
+
+<section>
+  <h2>真实源码:pre_save / post_save 到底在哪一行触发</h2>
+  <p class="h2-sub">位置在 <span class="mono">Model.save_base()</span> 里,一头一尾各发一次,<span class="mono">sender</span> 传的是<b>类</b>,不是那个正在保存的实例。</p>
+  <blockquote class="src">
+    <span class="path">django/db/models/base.py · <a href="https://github.com/django/django/blob/6.0.7/django/db/models/base.py#L920" target="_blank" rel="noopener">django @ 6.0.7, L920</a></span>
+def save_base(self, raw=False, force_insert=False, force_update=False, using=None, update_fields=None):
+    ...
+    cls = origin = self.__class__
+    ...
+    if not meta.auto_created:
+        pre_save.send(sender=origin, instance=self, raw=raw, using=using, update_fields=update_fields)  # L946
+    ...
+    updated = self._save_table(raw, cls, force_insert or parent_inserted, force_update, using, update_fields)
+    ...
+    if not meta.auto_created:
+        post_save.send(sender=origin, instance=self, created=(not updated), update_fields=update_fields, raw=raw, using=using)  # L981
+  </blockquote>
+  <p><span class="mono">sender=origin</span> 传的是 <span class="mono">self.__class__</span>(比如 <span class="mono">Post</span> 这个类本身),这也是为什么 <span class="mono">@receiver(post_save, sender=Post)</span> 里的 <span class="mono">sender</span> 要写模型类而不是某个实例——<span class="mono">connect()</span> 存的 <span class="mono">sender_ref</span> 是对这个类对象的弱引用,类对象只要模块还在,就不会被回收。<span class="mono">created</span> 也不是靠"保存前 <span class="mono">pk</span> 是不是 <span class="mono">None</span>"这种简单判断算出来的,而是直接取 <span class="mono">_save_table()</span> 真实执行完 UPDATE/INSERT 之后的返回值取反——如果你手动指定了一个数据库里还不存在的 <span class="mono">pk</span>,UPDATE 会真实地影响 0 行,然后自动退化成 INSERT,<span class="mono">created</span> 依然正确地是 <span class="mono">True</span>。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code"># 用 bigywater 项目自己的 Post/Series 模型验证
+pre_save.connect(on_pre, sender=Post)
+post_save.connect(on_post, sender=Post)
+
+p = Post(title='t', url='zz-signal-demo.html', series=s, ...)
+print('保存前 p.pk =', p.pk)
+p.save()
+p.title = '改标题'; p.save()
+
+s2 = Series.objects.first(); s2.save()   # 只订阅了 Post,Series 保存应该没反应</pre>
+<span class="ok">保存前 p.pk = None
+pre_save  sender=Post instance.pk=None
+post_save sender=Post instance.pk=83 created=True
+pre_save  sender=Post instance.pk=83
+post_save sender=Post instance.pk=83 created=False
+Series 保存后触发次数(应为 0): 0</span>
+  </div>
+  <p>结果完全符合源码:第一次保存(插入)时 <span class="mono">pre_save</span> 触发时 <span class="mono">pk</span> 还是 <span class="mono">None</span>,<span class="mono">post_save</span> 触发时数据库已经把主键分配回来了(<span class="mono">83</span>),<span class="mono">created=True</span>;改完标题再保存,<span class="mono">created</span> 正确变成 <span class="mono">False</span>;<span class="mono">Series</span> 单独保存完全不会触发只订阅了 <span class="mono">sender=Post</span> 的接收者——<span class="mono">_live_receivers()</span> 会按 <span class="mono">sender</span> 的 <span class="mono">id</span> 精确过滤。</p>
+</section>
+
+<section>
+  <h2>真实实测:一个 receiver 抛异常,广播会不会被打断</h2>
+  <p class="h2-sub"><span class="mono">pre_save</span>/<span class="mono">post_save</span> 用的是 <span class="mono">send()</span>,不是 <span class="mono">send_robust()</span>——这个选择本身就有真实后果。</p>
+  <blockquote class="src">
+    <span class="path">django/dispatch/dispatcher.py · <a href="https://github.com/django/django/blob/6.0.7/django/dispatch/dispatcher.py#L179" target="_blank" rel="noopener">django @ 6.0.7, L179</a></span>
+def send(self, sender, **named):
+    ...
+    for receiver in sync_receivers:
+        response = receiver(signal=self, sender=sender, **named)   # 没有 try/except,谁炸了就直接往外抛
+        responses.append((receiver, response))
+    ...
+    return responses
+  </blockquote>
+  <blockquote class="src">
+    <span class="path">django/dispatch/dispatcher.py · <a href="https://github.com/django/django/blob/6.0.7/django/dispatch/dispatcher.py#L291" target="_blank" rel="noopener">django @ 6.0.7, L291</a></span>
+def send_robust(self, sender, **named):
+    ...
+    for receiver in sync_receivers:
+        try:
+            response = receiver(signal=self, sender=sender, **named)
+        except Exception as err:
+            self._log_robust_failure(receiver, err)      # 记日志,不往外抛
+            responses.append((receiver, err))             # 异常本身作为"响应"存进结果
+        else:
+            responses.append((receiver, response))
+    return responses
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code"># 三个 receiver:A 正常、B 抛 ValueError、C 正常
+sig.connect(receiver_a); sig.connect(receiver_b_boom); sig.connect(receiver_c)
+try:
+    sig.send(sender='x')
+except ValueError as e:
+    print('send() 抛出了异常并中止:', repr(e))
+print('实际执行顺序:', order)</pre>
+<span class="bad">send() 抛出了异常并中止: ValueError('B 挂了')
+实际执行顺序: ['A ran', 'B about to raise']</span>
+  </div>
+  <p><span class="mono">C</span> 一次都没机会执行——<span class="mono">send()</span> 里的 <span class="mono">for</span> 循环没有任何异常保护,<span class="mono">B</span> 一炸,整个循环连同 <span class="mono">Model.save()</span> 这次调用都被中断,异常原样冒到调用方。<span class="mono">post_save</span> 用的正是这个 <span class="mono">send()</span>——所以给它挂的任何一个 receiver(比如上一篇写的备份逻辑)只要抛异常,<span class="mono">.save()</span> 本身就会失败,后台编辑表单会直接报 500,而不是"备份失败但保存成功"这种更温和的结果。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">sig2.connect(receiver_a); sig2.connect(receiver_b_boom); sig2.connect(receiver_c)
+responses = sig2.send_robust(sender='x')
+print('实际执行顺序:', order)
+for receiver, response in responses:
+    print(f'  {receiver.__name__} -> {response!r}')</pre>
+<span class="ok">实际执行顺序: ['A ran', 'B about to raise', 'C ran']
+  receiver_a -> None
+  receiver_b_boom -> ValueError('B 挂了')
+  receiver_c -> None</span>
+  </div>
+  <p>同样三个 receiver,换成 <span class="mono">send_robust()</span>,<span class="mono">C</span> 照常跑完,<span class="mono">B</span> 的异常被原样收进返回值的元组里,而不是往外抛。<span class="mono">m2m_changed</span>、<span class="mono">request_finished</span> 这类"多个第三方 app 可能各自挂了钩子"的信号更适合用 <span class="mono">send_robust()</span> 语义去调用,但 Django 自己内部驱动 <span class="mono">save()</span>/<span class="mono">delete()</span> 时用的是 <span class="mono">send()</span>——这是一个明确的设计取舍,不是疏漏。</p>
+</section>
+
+<section>
+  <h2>演示:同一次广播,send() 中断 vs send_robust() 跑完</h2>
+  <p class="h2-sub">三个接收者 A、B(会抛异常)、C,先看 <span class="mono">send()</span> 场景,再看 <span class="mono">send_robust()</span> 场景。</p>
+  <div class="demo" id="sigDemo">
+    <div class="demo-head">Signal 广播演示</div>
+    <div class="demo-narration" id="sigNarration"></div>
+    <div class="demo-body">
+      <span class="scenario-tag send" id="sigTag">send()</span>
+      <div class="pipeline" id="sigPipeline"></div>
+      <div class="stat-row" id="sigStats"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="sigReset">⏮ 重来</button>
+      <button class="btn" id="sigPrev">‹ 上一步</button>
+      <button class="btn primary" id="sigNext">下一步 ›</button>
+      <button class="btn" id="sigPlay">▶ 自动播放</button>
+      <span class="step-counter" id="sigCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">数据来自独立验证过的 Python 模拟——用真实的"顺序调用 + 是否捕获异常"逻辑复现两种场景,每一步接收者的状态(未调用/调用中/成功/报错/被跳过)都和真实实验(上面两段 <span class="mono">send()</span>/<span class="mono">send_robust()</span> 的输出)逐条核对过。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文全部真实实验(弱引用导致 receiver 悄悄失效、未保留引用的 lambda 立即被回收、重复注册导致信号触发两次及 <span class="mono">dispatch_uid</span> 修复、<span class="mono">sender</span> 精确过滤与 <span class="mono">created</span> 语义、<span class="mono">send()</span> 中断广播与 <span class="mono">send_robust()</span> 跑完全部接收者)均在本机真实运行的 Django 6.0.7 上完成(<span class="mono">pre_save</span>/<span class="mono">post_save</span> 那组实验直接用的是 bigywater 项目自己的真实 <span class="mono">Post</span>/<span class="mono">Series</span> 模型,测试数据保存后已清理干净),数据未做删改。</li>
+      <li>源码引用(<span class="mono">django/dispatch/dispatcher.py</span> 的 <span class="mono">Signal.connect</span>/<span class="mono">send</span>/<span class="mono">send_robust</span>、<span class="mono">django/db/models/base.py</span> 的 <span class="mono">Model.save_base</span>)取自本机通过 pip 安装的 Django 6.0.7 包本身,并逐字节比对确认与 <span class="mono">django/django</span> 仓库 <span class="mono">6.0.7</span> 标签完全一致。</li>
+      <li>演示动画的广播模型(顺序调用、异常是否被捕获、后续接收者是否被跳过)由 Python 独立实现并交叉验证过——参数直接取自真实实测过的 <span class="mono">send()</span>/<span class="mono">send_robust()</span> 两组输出,每一步接收者状态都核对过与真实结果一致。</li>
+      <li>没有涉及:异步接收者(<span class="mono">asend</span>/<span class="mono">asend_robust</span>)的并发调度细节、<span class="mono">use_caching=True</span> 时 <span class="mono">sender_receivers_cache</span> 的缓存失效时机、<span class="mono">ModelSignal</span> 支持用 <span class="mono">"app_label.ModelName"</span> 字符串延迟绑定 <span class="mono">sender</span> 的 <span class="mono">apps.lazy_model_operation</span> 机制、信号在数据库事务回滚时并不会跟着"撤销"(<span class="mono">post_save</span> 已经真实发出,即使外层事务后来失败)这个更容易踩坑的话题。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="migrations.html" target="_blank" rel="noopener">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">Migrations:makemigrations 到底在跟什么比,一次字段改名为什么会被当成删了又加</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Django 系列 · 第五篇 · Signal 弱引用与异常语义 · 数据来自本机真实运行的 Django 6.0.7</footer>
+
+<script>
+const DATA = {"events": [
+  {"mode":"send","receiver":"A","type":"call"},
+  {"mode":"send","receiver":"A","type":"ok"},
+  {"mode":"send","receiver":"B","type":"call"},
+  {"mode":"send","receiver":"B","type":"error"},
+  {"mode":"send","type":"aborted"},
+  {"mode":"divider"},
+  {"mode":"robust","receiver":"A","type":"call"},
+  {"mode":"robust","receiver":"A","type":"ok"},
+  {"mode":"robust","receiver":"B","type":"call"},
+  {"mode":"robust","receiver":"B","type":"error"},
+  {"mode":"robust","receiver":"C","type":"call"},
+  {"mode":"robust","receiver":"C","type":"ok"},
+  {"mode":"robust","type":"done"}
+]};
+
+(function(){
+  const events = DATA.events;
+  const pipeline = document.getElementById('sigPipeline');
+  const tagEl = document.getElementById('sigTag');
+  const narration = document.getElementById('sigNarration');
+  const statsBox = document.getElementById('sigStats');
+  const counter = document.getElementById('sigCounter');
+  let idx = 0, playing=false, playTimer=null;
+
+  const RECEIVERS = ['A', 'B', 'C'];
+
+  function describe(e){
+    if (e.mode === 'divider') return `<b>现在看 send_robust() 场景</b>,同样的 A / B(会抛异常) / C 三个接收者。`;
+    if (e.type === 'call') return `调用接收者 <span class="k">${e.receiver}</span>。`;
+    if (e.type === 'ok') return `<span class="k">${e.receiver}</span> 正常返回。`;
+    if (e.type === 'error' && e.mode === 'send') return `<span class="k">B</span> 抛出异常——<b>send() 没有 try/except</b>,异常直接冒出去,循环终止。`;
+    if (e.type === 'error') return `<span class="k">B</span> 抛出异常——<b>send_robust() 捕获它</b>,记进返回值,循环继续。`;
+    if (e.type === 'aborted') return `<span class="k">C 不会被调用了</span>——send() 已经把异常抛给了 Model.save() 的调用方。`;
+    if (e.type === 'done') return `三个接收者全部执行完毕,B 的异常作为普通结果被收集进了 responses 列表。`;
+    return e.type;
+  }
+
+  function replayUpTo(uptoIdx){
+    let mode = 'send';
+    const state = {A: 'pending', B: 'pending', C: 'pending'};
+    let aborted = false;
+    for (let i = 0; i <= uptoIdx; i++){
+      const e = events[i];
+      if (e.mode === 'divider'){ mode = 'robust'; state.A='pending'; state.B='pending'; state.C='pending'; aborted=false; continue; }
+      if (e.type === 'call') state[e.receiver] = 'active';
+      if (e.type === 'ok') state[e.receiver] = 'ok';
+      if (e.type === 'error') state[e.receiver] = 'error';
+      if (e.type === 'aborted') aborted = true;
+    }
+    if (mode === 'send' && aborted) state.C = 'skipped';
+    return {mode, state};
+  }
+
+  function render(){
+    idx = Math.max(0, Math.min(events.length-1, idx));
+    const e = events[idx];
+    narration.innerHTML = describe(e);
+    const {mode, state} = replayUpTo(idx);
+
+    tagEl.textContent = mode === 'send' ? 'send()' : 'send_robust()';
+    tagEl.className = 'scenario-tag ' + (mode === 'send' ? 'send' : 'robust');
+
+    pipeline.innerHTML = RECEIVERS.map(r => {
+      const st = state[r];
+      let cls = 'recv-box';
+      if (st === 'active') cls += ' active';
+      if (st === 'ok') cls += ' ok';
+      if (st === 'error') cls += ' error';
+      if (st === 'skipped') cls += ' skipped';
+      const label = {pending:'等待中', active:'调用中', ok:'✓ 成功', error:'✗ 抛出异常', skipped:'被跳过,没机会跑'}[st];
+      return `<div class="${cls}">接收者 ${r}<br>${label}</div>`;
+    }).join('');
+
+    const doneCount = RECEIVERS.filter(r => state[r] === 'ok' || state[r] === 'error').length;
+    statsBox.innerHTML = `<div class="stat">已处理的接收者<b>${doneCount} / 3</b></div><div class="stat">模式<b>${mode === 'send' ? 'send()' : 'send_robust()'}</b></div>`;
+
+    counter.textContent = `${idx+1} / ${events.length}`;
+    document.getElementById('sigPrev').disabled = idx===0;
+    document.getElementById('sigNext').disabled = idx===events.length-1;
+  }
+  document.getElementById('sigPrev').onclick=()=>{idx--;render();stopPlay();};
+  document.getElementById('sigNext').onclick=()=>{idx++;render();stopPlay();};
+  document.getElementById('sigReset').onclick=()=>{idx=0;render();stopPlay();};
+  function stopPlay(){ playing=false; clearInterval(playTimer); document.getElementById('sigPlay').textContent='▶ 自动播放'; }
+  document.getElementById('sigPlay').onclick=()=>{
+    if(playing){ stopPlay(); return; }
+    playing=true; document.getElementById('sigPlay').textContent='⏸ 暂停';
+    playTimer = setInterval(()=>{
+      if(idx>=events.length-1){ stopPlay(); return; }
+      idx++; render();
+    }, 1100);
+  };
+  render();
+})();
+</script>
+
+</body>
+</html>

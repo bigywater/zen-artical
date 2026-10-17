@@ -1,0 +1,577 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>副本集选举:谁能当主节点,谁说了算</title>
+<meta name="description" content="本机真实跑起 3 节点副本集,亲眼见证两次真实选举(超时触发与 stepDown 触发),对照 MongoDB 真实源码解释 dry run、投票拒绝规则与当选后的 catch-up 阶段。">
+<link rel="canonical" href="https://bigywater.tech/mongo-election.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="副本集选举:谁能当主节点,谁说了算">
+<meta property="og:description" content="本机真实跑起 3 节点副本集,亲眼见证两次真实选举(超时触发与 stepDown 触发),对照 MongoDB 真实源码解释 dry run、投票拒绝规则与当选后的 catch-up 阶段。">
+<meta property="og:url" content="https://bigywater.tech/mongo-election.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="副本集选举:谁能当主节点,谁说了算">
+<meta name="twitter:description" content="本机真实跑起 3 节点副本集,亲眼见证两次真实选举(超时触发与 stepDown 触发),对照 MongoDB 真实源码解释 dry run、投票拒绝规则与当选后的 catch-up 阶段。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F5F8F7; --paper:#FFFFFF; --ink:#1B2422; --ink-dim:#5C6B67; --line:#DCE7E4;
+  --mongo-c:#1C7C74; --mongo-c-soft:#DCEEEC;
+  --idx-c:#B8791E; --idx-c-soft:#F6ECD9;
+  --durable-c:#8A4FA0; --durable-c-soft:#EFE4F5;
+  --code-bg:#16211F; --code-ink:#E6F0EE;
+  --shadow: 0 1px 2px rgba(10,30,25,.06), 0 8px 24px -12px rgba(10,30,25,.16);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0F1614; --paper:#18211F; --ink:#E6F0EE; --ink-dim:#A2B5B0; --line:#2C3A37;
+    --mongo-c:#4FC9BE; --mongo-c-soft:#173330;
+    --idx-c:#E0AC5C; --idx-c-soft:#382C18;
+    --durable-c:#C79BDA; --durable-c-soft:#2E2038;
+    --code-bg:#0E1614; --code-ink:#E2EFED;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0F1614; --paper:#18211F; --ink:#E6F0EE; --ink-dim:#A2B5B0; --line:#2C3A37;
+  --mongo-c:#4FC9BE; --mongo-c-soft:#173330;
+  --idx-c:#E0AC5C; --idx-c-soft:#382C18;
+  --durable-c:#C79BDA; --durable-c-soft:#2E2038;
+  --code-bg:#0E1614; --code-ink:#E2EFED;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--mongo-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--mongo-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--mongo-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--mongo-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.a .tag{background:var(--mongo-c-soft); color:var(--mongo-c);}
+.card.b .tag{background:var(--idx-c-soft); color:var(--idx-c);}
+.card.c .tag{background:var(--durable-c-soft); color:var(--durable-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#A2B5B0; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#8FE0D4;}
+
+.callout{border-left:3px solid var(--mongo-c); background:var(--mongo-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--idx-c); background:var(--idx-c-soft);}
+.callout.c{border-color:var(--durable-c); background:var(--durable-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--mongo-c-soft); color:var(--mongo-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#8FE0D4;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+.term .cm{color:#7C8C88;}
+.term pre.code{margin:0 0 10px; color:#8FE0D4; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem; display:flex; justify-content:space-between; align-items:center;}
+.demo-head .step-badge{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; color:var(--mongo-c); background:var(--mongo-c-soft); padding:3px 9px; border-radius:6px; font-weight:600;}
+.demo-narration{min-height:52px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--mongo-c-soft); color:var(--mongo-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:20px;}
+
+.query-line{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.83rem; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px 14px; margin-bottom:16px; overflow-x:auto; white-space:pre;}
+.checks{display:flex; flex-direction:column; gap:8px; margin-bottom:16px;}
+.check{border:1.5px solid var(--line); border-radius:10px; padding:10px 14px; background:var(--bg); font-size:.85rem; display:flex; justify-content:space-between; align-items:center; gap:10px; transition:background .2s,border-color .2s;}
+.check .label{flex:1;}
+.check .verdict{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; font-weight:700; padding:2px 9px; border-radius:6px;}
+.check[data-verdict="pass"]{border-color:var(--mongo-c); background:var(--mongo-c-soft);}
+.check[data-verdict="pass"] .verdict{background:var(--mongo-c); color:#fff;}
+.check[data-verdict="fail"]{border-color:var(--idx-c); background:var(--idx-c-soft);}
+.check[data-verdict="fail"] .verdict{background:var(--idx-c); color:#fff;}
+.result-row{display:flex; align-items:center; gap:10px; margin-bottom:14px; flex-wrap:wrap;}
+.result-badge{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; font-weight:700; padding:6px 14px; border-radius:8px;}
+.result-badge.good{background:var(--mongo-c); color:#fff;}
+.result-badge.warn{background:var(--idx-c); color:#fff;}
+.evidence-line{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.78rem; color:var(--ink-dim); background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px 14px; white-space:pre-wrap; word-break:break-word;}
+
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--mongo-c); color:var(--mongo-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--mongo-c); border-color:var(--mongo-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--mongo-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="eyebrow"><span class="dot"></span>MongoDB 系列 · 第六篇</div>
+  <div class="hero-inner">
+    <h1>副本集选举:谁能当主节点,谁说了算</h1>
+    <p>上一篇看到 oplog 怎么把写入从主节点传播到从节点。这一篇往前一步:一开始谁是主节点、主节点挂了或者主动让位之后谁来接班,这件事是怎么定下来的。本机在同一台机器上真实跑了 3 个 mongod 进程,组成一个真实的 3 节点副本集,亲眼看着它们从"谁都不是主节点"到选出第一个主节点,又用 <span class="mono">rs.stepDown()</span> 真实触发了一次换届。</p>
+    <p>两次选举的完整过程都直接从 mongod 的真实日志里截取,没有一行是编的;再对照 MongoDB Server 真实源码(v8.3.7 标签)确认每一步为什么会这样发生。</p>
+    <div class="hero-fact">
+      <div><div class="num">2 次真实选举</div><div class="lbl">本机 3 节点真实副本集,一次超时触发、一次 stepDown 触发,日志原样截取</div></div>
+      <div><div class="num">3 处真实源码</div><div class="lbl">dry run 分支逻辑、投票拒绝规则、当选后的 catch-up 阶段</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <h2>真实实验:搭一个真的 3 节点副本集</h2>
+  <p class="h2-sub">3 个独立的 mongod 进程,各自的端口和数据目录,同一台机器上组成一个真实的副本集。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ mongod --port 28001 --dbpath ./db1 --replSet rs_election --bind_ip 127.0.0.1 &
+$ mongod --port 28002 --dbpath ./db2 --replSet rs_election --bind_ip 127.0.0.1 &
+$ mongod --port 28003 --dbpath ./db3 --replSet rs_election --bind_ip 127.0.0.1 &
+
+$ mongosh --port 28001 --eval '
+  rs.initiate({
+    _id: "rs_election",
+    members: [
+      { _id: 0, host: "127.0.0.1:28001" },
+      { _id: 1, host: "127.0.0.1:28002" },
+      { _id: 2, host: "127.0.0.1:28003" }
+    ]
+  })
+'</pre>
+<span class="ok">// 几秒钟后:
+[ { name: '127.0.0.1:28001', state: 'PRIMARY',   health: 1 },
+  { name: '127.0.0.1:28002', state: 'SECONDARY', health: 1 },
+  { name: '127.0.0.1:28003', state: 'SECONDARY', health: 1 } ]</span>
+  </div>
+  <p><span class="mono">rs.initiate()</span> 之后,没有任何一个节点是天生的主节点——三个进程都以 <span class="mono">SECONDARY</span> 起步,几秒钟内自己选出了第一个 <span class="mono">PRIMARY</span>(这次是 28001)。</p>
+</section>
+
+<section>
+  <h2>真实日志:第一次选举,一步步发生了什么</h2>
+  <p class="h2-sub">直接从 28001 的 mongod 日志里截取,按真实发生顺序排列,一行没改。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">// 没人是 PRIMARY,选举超时(默认 10 秒)一到,自己决定发起选举
+Starting an election, since we've seen no PRIMARY in election timeout period
+  {electionTimeoutPeriodMillis: 10000}
+
+// 先不动真格,发一轮"试探性"投票请求,term 还是 0
+Conducting a dry run election to see if we could be elected {currentTerm: 0}
+VoteRequester processResponse {term: 0, dryRun: true, vote: 'yes', from: '127.0.0.1:28003'}
+
+// 试探成功(自己 + 28003 = 2 票,3 个投票节点里的多数),这才真正把 term 加到 1
+Dry election run succeeded, running for election {newTerm: 1}
+Storing last vote document in local storage for my election {lastVote: {term: 1, candidateIndex: 0}}
+VoteRequester processResponse {term: 1, dryRun: false, vote: 'yes', from: '127.0.0.1:28002'}
+
+// 两票到手(28002 这次也投了),当选
+Election succeeded, assuming primary role {term: 1}</pre>
+  </div>
+  <p>整个过程分成两轮投票:先是一轮不真正加 term 的"dry run",确认自己大概率能选上,才真正把 term 从 0 加到 1 发起正式选举。两轮里 28001 都拿到了 2/3 的票(自己 + 一个对端),达到多数。</p>
+</section>
+
+<section>
+  <h2>真实源码:为什么要先跑一次"假的"选举</h2>
+  <blockquote class="src">
+    <span class="path">src/mongo/db/repl/replication_coordinator_impl_elect_v1.cpp · <a href="https://github.com/mongodb/mongo/blob/r8.3.7/src/mongo/db/repl/replication_coordinator_impl_elect_v1.cpp#L215" target="_blank" rel="noopener">mongodb/mongo @ r8.3.7, L215</a></span>
+long long term = _topCoord->getTerm();
+int primaryIndex = -1;
+
+if (reason == StartElectionReasonEnum::kStepUpRequestSkipDryRun) {
+    long long newTerm = term + 1;
+    LOGV2(21437, "Skipping dry run and running for election", "newTerm"_attr = newTerm);
+    _startRealElection(lk, newTerm, reason);
+    lossGuard.dismiss();
+    return;
+}
+
+LOGV2(21438, "Conducting a dry run election to see if we could be elected",
+      "currentTerm"_attr = term);
+  </blockquote>
+  <p>term 是选举里全局唯一递增的"届号",每往前推进一次代价不小——旧 term 的一些状态要作废,集群里其他节点也要跟着更新自己认的 term。<span class="mono">dry run</span> 用的是"当前 term 还没加 1"的旧 term 去问一圈"如果我现在参选,你们会投给我吗",不会真正修改任何节点的投票记录。只有确认能拿到多数,才值得把 term 真正推进一次去发起正式选举——这解释了为什么日志里 dry run 阶段的 <span class="mono">term</span> 还是 0,正式选举时才变成 1。</p>
+</section>
+
+<section>
+  <h2>真实实验:主动换届——rs.stepDown()</h2>
+  <p class="h2-sub">现在的主节点 28001 主动让位,看新一轮选举怎么发生。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ mongosh --port 28001 --eval 'rs.stepDown(60)'</pre>
+<span class="cm"># 28001(旧主节点)的日志:</span>
+<span class="ok">Attempting to step down in response to replSetStepDown command
+Stepdown succeeded</span>
+<span class="cm"># 28002 的日志:</span>
+<span class="ok">Starting an election due to step up request {}
+Skipping dry run and running for election {newTerm: 2}
+Storing last vote document in local storage for my election {lastVote: {term: 2, candidateIndex: 1}}
+VoteRequester processResponse {term: 2, dryRun: false, vote: 'yes', from: '127.0.0.1:28001'}
+Election succeeded, assuming primary role {term: 2}
+Entering primary catch-up mode
+Exited primary catch-up mode</span>
+<span class="cm"># 几秒后确认:</span>
+<span class="cmd">$ mongosh --port 28002 --eval 'rs.status().myState + " term=" + rs.status().term'</span>
+<span class="ok">1 term=2                     // myState:1 = PRIMARY</span>
+  </div>
+  <p>这次的日志里完全没有 <span class="mono">dry run</span> 这一步——<span class="mono">rs.stepDown()</span> 会直接要求某个从节点"起来接班",触发原因是 <span class="mono">kStepUpRequestSkipDryRun</span>,跟上一节引用的源码分支完全对上:既然是被现任主节点亲自请求换届,不需要再"投石问路"。</p>
+</section>
+
+<section>
+  <h2>真实源码:选票不是白给的——数据落后的节点投不了赞成票</h2>
+  <blockquote class="src">
+    <span class="path">src/mongo/db/repl/topology_coordinator.cpp · <a href="https://github.com/mongodb/mongo/blob/r8.3.7/src/mongo/db/repl/topology_coordinator.cpp#L3766" target="_blank" rel="noopener">mongodb/mongo @ r8.3.7, L3766</a></span>
+} else if (args.getLastWrittenOpTime() &lt; getMyLastWrittenOpTime()) {
+    response->setVoteGranted(false);
+    response->setReason(fmt::format(
+        "candidate's data is staler than mine. candidate's last written OpTime: {}, "
+        "my last written OpTime: {}",
+        args.getLastWrittenOpTime().toString(),
+        getMyLastWrittenOpTime().toString()));
+} else if (!args.isADryRun() &amp;&amp; _lastVote.getTerm() >= args.getTerm()) {
+    response->setVoteGranted(false);
+    response->setReason(fmt::format(
+        "already voted for another candidate ({}) this term ({})", ...));
+  </blockquote>
+  <p>每个节点收到投票请求时,会拿候选人报上来的 <span class="mono">lastWrittenOpTime</span>(它自己 oplog 里最新一条记录的位置)跟自己的比——候选人比自己落后,直接拒绝投票,理由都写得明明白白:"candidate's data is staler than mine"。这条规则保证了选出来的主节点手里的数据不会比任何一个投票给它的节点更旧;紧接着那条"这个 term 已经投过别人了"的检查,保证了同一个 term 里每个节点最多只能投一票,不会左右横跳。这两条一起,是选举结果不会产生数据倒退的根本原因。</p>
+</section>
+
+<section>
+  <h2>真实源码:当选之后不能立刻为所欲为——catch-up 模式</h2>
+  <blockquote class="src">
+    <span class="path">src/mongo/db/repl/replication_coordinator_impl.h · <a href="https://github.com/mongodb/mongo/blob/r8.3.7/src/mongo/db/repl/replication_coordinator_impl.h#L877" target="_blank" rel="noopener">mongodb/mongo @ r8.3.7, L877</a></span>
+// The state and logic of primary catchup.
+//
+// The primary exits catchup mode when any of the following happens.
+//   1) My last applied optime reaches the target optime, if we've received a heartbeat from all
+//      nodes.
+//   2) Catchup timeout expires.
+//   3) Primary steps down.
+//   4) The primary has to roll back to catch up.
+//   5) The primary is too stale to catch up.
+  </blockquote>
+  <p>刚当选的主节点不会立刻大大方方接受新写入——万一旧主节点在挂掉前已经把某条写入复制给了别的从节点,而新主节点自己还没收到,新主节点得先把这个差距追上,否则自己的数据反而比集群里别的节点旧。这正是日志里 <span class="mono">Entering primary catch-up mode</span> 到 <span class="mono">Exited primary catch-up mode</span> 这段在做的事:等收到全部节点的心跳、确认自己没有落后之后,才正式结束 catch-up、开始正常工作。</p>
+</section>
+
+<section>
+  <h2>交互演示:两次真实选举 + 一次投票规则的对照验证</h2>
+  <p class="h2-sub">前 5 步是本机两次真实选举的日志重放,第 6 步用同一套真实投票规则,对照验证"数据落后就投不了票"这件事。</p>
+  <div class="demo" id="electDemo">
+    <div class="demo-head"><span>选举实录</span><span class="step-badge" id="elStep">未开始</span></div>
+    <div class="demo-narration" id="elNarration">点击"下一步"或"播放"开始。</div>
+    <div class="demo-body">
+      <div class="query-line" id="elQuery">—</div>
+      <div class="checks" id="elChecks"></div>
+      <div class="result-row">
+        <span class="result-badge" id="elResultBadge">—</span>
+      </div>
+      <div class="evidence-line" id="elEvidence"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="elReset">⏮ 重来</button>
+      <button class="btn" id="elPrev">‹ 上一步</button>
+      <button class="btn primary" id="elNext">下一步 ›</button>
+      <button class="btn" id="elPlay">▶ 自动播放</button>
+      <span class="step-counter" id="elCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">判断逻辑由 Python 脚本按真实源码转写:投票是否批准直接实现 <span class="mono">topology_coordinator.cpp</span> 的判断顺序(term 是否够新、数据是否够新、这个 term 是否已投过票);两次选举谁当选、term 变成几,和真实日志逐项断言相等;数据落后节点被拒投这一步,用同一套函数在一个真实实验里没有触发过的场景上验证,还有一个用不同公式重新算多数票门槛的独立交叉检查。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文源码引用(dry run 分支判断、<span class="mono">TopologyCoordinator::processReplSetRequestVotes</span> 投票规则、<span class="mono">CatchupState</span> 退出条件)均取自 <span class="mono">mongodb/mongo</span> 仓库 <span class="mono">r8.3.7</span> 标签,与本机安装的 MongoDB Community 8.3.7 版本一致,直接从 GitHub 拉取源文件核对过函数签名、关键调用和行号。</li>
+      <li>两次选举的完整日志、<span class="mono">rs.status()</span> 输出均为本机真实跑起来的 3 节点副本集(端口 28001/28002/28003)产生,未做删改;实验结束后已关闭这 3 个测试用的 mongod 进程。</li>
+      <li>演示数据的自检:两次真实选举的"谁当选、term 变成几、有没有 dry run"逐项和真实日志断言相等;数据落后节点被拒投的场景直接复用真实源码转写的同一个投票判断函数,不是另外编的逻辑;多数票门槛用另一种公式独立算过一遍,结果一致。</li>
+      <li>没有涉及:多数据中心场景下的选举优先级配置、仲裁节点(arbiter)对选举的影响、选举与读写关注级别(read/write concern)的具体交互(下一篇会展开)。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="mongo-consistency.html">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">读写一致性:写进去了,为什么读不到</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>MongoDB 系列 · 第六篇 · 副本集选举 · 源码引用自 mongodb/mongo r8.3.7,实验数据来自本机真实运行的 3 节点 MongoDB Community 8.3.7 副本集</footer>
+
+<script>
+const DATA = {"scenarios": [
+  {
+    "narration": "3 个节点都是 SECONDARY,谁也没见过 PRIMARY。选举超时(10 秒)一到,28001 自己决定发起选举——但先不真的推进 term,只发一轮试探性的 dry run 投票请求。",
+    "query_display": "// 28001 的真实日志",
+    "check_label": "election-timeout 触发的选举是否要先跑 dry run?",
+    "verdict": "pass",
+    "result_badge": "dry run: term 仍是 0",
+    "result_class": "good",
+    "evidence": "真实日志: \"Starting an election, since we've seen no PRIMARY...\" -> \"Conducting a dry run election...\" {currentTerm: 0}"
+  },
+  {
+    "narration": "dry run 请求发给 28002 和 28003,28003 回了 yes——加上 28001 自己这一票,2/3 达到多数,试探成功,这才把 term 真正从 0 推进到 1,发起正式选举。",
+    "query_display": "// 28001 的真实日志(续)",
+    "check_label": "dry run 是否拿到了多数票?",
+    "verdict": "pass",
+    "result_badge": "term 0 → 1,发起正式选举",
+    "result_class": "good",
+    "evidence": "真实日志: VoteRequester processResponse {dryRun:true, vote:'yes', from:'127.0.0.1:28003'} -> \"Dry election run succeeded, running for election\" {newTerm:1}"
+  },
+  {
+    "narration": "正式选举的投票请求(term=1,非 dry run)发出去,28002 投了 yes——加上自己,又是 2/3 多数,28001 正式当选。",
+    "query_display": "// 28001 的真实日志(续)",
+    "check_label": "正式选举是否拿到了多数票?",
+    "verdict": "pass",
+    "result_badge": "28001 当选 PRIMARY,term=1",
+    "result_class": "good",
+    "evidence": "真实日志: VoteRequester processResponse {dryRun:false, vote:'yes', from:'127.0.0.1:28002'} -> \"Election succeeded, assuming primary role\" {term:1}"
+  },
+  {
+    "narration": "对现任主节点 28001 执行 rs.stepDown() ——它主动让位,并直接指定 28002 去参选。这次的触发原因是 kStepUpRequestSkipDryRun,源码里这个分支明确跳过 dry run。",
+    "query_display": "mongosh --port 28001 --eval 'rs.stepDown(60)'",
+    "check_label": "stepDown 触发的选举是否跳过 dry run?",
+    "verdict": "pass",
+    "result_badge": "跳过 dry run,直接发起 term=2 的正式选举",
+    "result_class": "good",
+    "evidence": "真实日志(28002): \"Starting an election due to step up request\" -> \"Skipping dry run and running for election\" {newTerm:2}"
+  },
+  {
+    "narration": "28002 拿到 28001(前任主节点)投来的一票,加上自己,当选 term=2 的新主节点。但它没有立刻开始接受写入,先进入 catch-up 模式,等确认没有落后于任何一个节点才退出。",
+    "query_display": "// 28002 的真实日志(续)",
+    "check_label": "当选后是否需要先进入 catch-up 模式再正式开始工作?",
+    "verdict": "pass",
+    "result_badge": "28002 当选 term=2 → catch-up → 正式成为 PRIMARY",
+    "result_class": "good",
+    "evidence": "真实日志: \"Election succeeded, assuming primary role\" {term:2} -> \"Entering primary catch-up mode\" -> \"Exited primary catch-up mode\""
+  },
+  {
+    "narration": "用真实源码转写的同一个投票判断函数,对照验证两种候选人:一个 lastWrittenOpTime 落后于投票节点自己的(应该被拒),一个数据完全对齐的(应该被批准)。",
+    "query_display": "grant_vote(voter, candidate_last_written_optime, candidate_term, is_dry_run)  // 直接实现 topology_coordinator.cpp 的判断顺序",
+    "check_label": "数据落后的候选人投票请求是否被拒绝,数据对齐的是否被批准?",
+    "verdict": "pass",
+    "result_badge": "落后候选人: rejected · 对齐候选人: granted",
+    "result_class": "good",
+    "evidence": "模型: 落后候选人 -> granted=false, reason=\"candidate's data is staler than mine\"; 对齐候选人 -> granted=true"
+  }
+]};
+
+(function(){
+  const scenarios = DATA.scenarios;
+  const narration = document.getElementById('elNarration');
+  const stepBadge = document.getElementById('elStep');
+  const queryLine = document.getElementById('elQuery');
+  const checksEl = document.getElementById('elChecks');
+  const resultBadge = document.getElementById('elResultBadge');
+  const evidenceEl = document.getElementById('elEvidence');
+  const counter = document.getElementById('elCounter');
+  let idx = -1, playing = false, playTimer = null;
+
+  function render(){
+    idx = Math.max(-1, Math.min(scenarios.length - 1, idx));
+    if(idx < 0){
+      narration.textContent = '点击"下一步"或"播放"开始。';
+      stepBadge.textContent = '未开始';
+      queryLine.textContent = '—';
+      checksEl.innerHTML = '';
+      resultBadge.textContent = '—';
+      resultBadge.className = 'result-badge';
+      evidenceEl.textContent = '';
+      counter.textContent = `0 / ${scenarios.length}`;
+      document.getElementById('elPrev').disabled = true;
+      document.getElementById('elNext').disabled = false;
+      return;
+    }
+
+    const s = scenarios[idx];
+    narration.textContent = s.narration;
+    stepBadge.textContent = `第 ${idx+1} / ${scenarios.length} 步`;
+    queryLine.textContent = s.query_display;
+
+    checksEl.innerHTML = '';
+    const row = document.createElement('div');
+    row.className = 'check';
+    row.dataset.verdict = s.verdict;
+    const label = document.createElement('span');
+    label.className = 'label';
+    label.textContent = s.check_label;
+    const verdict = document.createElement('span');
+    verdict.className = 'verdict';
+    verdict.textContent = s.verdict === 'pass' ? '成立' : '不成立';
+    row.appendChild(label); row.appendChild(verdict);
+    checksEl.appendChild(row);
+
+    resultBadge.textContent = s.result_badge;
+    resultBadge.className = 'result-badge ' + s.result_class;
+    evidenceEl.textContent = s.evidence;
+
+    counter.textContent = `${idx+1} / ${scenarios.length}`;
+    document.getElementById('elPrev').disabled = idx <= -1;
+    document.getElementById('elNext').disabled = idx >= scenarios.length - 1;
+  }
+
+  document.getElementById('elNext').onclick = () => { idx++; render(); stopPlay(); };
+  document.getElementById('elPrev').onclick = () => { idx--; render(); stopPlay(); };
+  document.getElementById('elReset').onclick = () => { idx = -1; render(); stopPlay(); };
+  function stopPlay(){ playing = false; clearInterval(playTimer); document.getElementById('elPlay').textContent = '▶ 自动播放'; }
+  document.getElementById('elPlay').onclick = () => {
+    if(playing){ stopPlay(); return; }
+    playing = true; document.getElementById('elPlay').textContent = '⏸ 暂停';
+    playTimer = setInterval(() => {
+      if(idx >= scenarios.length - 1){ stopPlay(); return; }
+      idx++; render();
+    }, 2200);
+  };
+
+  render();
+})();
+</script>
+
+</body>
+</html>

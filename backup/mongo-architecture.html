@@ -1,0 +1,561 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>MongoDB 整体架构:mongod 自己不管数据怎么存</title>
+<meta name="description" content="本机真实 MongoDB 8.3.7 实测:插入数据后直接检查磁盘上的 WiredTiger 文件,对照真实源码追踪一条 insert 命令怎样分层落到存储引擎。">
+<link rel="canonical" href="https://bigywater.tech/mongo-architecture.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="MongoDB 整体架构:mongod 自己不管数据怎么存">
+<meta property="og:description" content="本机真实 MongoDB 8.3.7 实测:插入数据后直接检查磁盘上的 WiredTiger 文件,对照真实源码追踪一条 insert 命令怎样分层落到存储引擎。">
+<meta property="og:url" content="https://bigywater.tech/mongo-architecture.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="MongoDB 整体架构:mongod 自己不管数据怎么存">
+<meta name="twitter:description" content="本机真实 MongoDB 8.3.7 实测:插入数据后直接检查磁盘上的 WiredTiger 文件,对照真实源码追踪一条 insert 命令怎样分层落到存储引擎。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F5F8F7; --paper:#FFFFFF; --ink:#1B2422; --ink-dim:#5C6B67; --line:#DCE7E4;
+  --mongo-c:#1C7C74; --mongo-c-soft:#DCEEEC;
+  --idx-c:#B8791E; --idx-c-soft:#F6ECD9;
+  --durable-c:#8A4FA0; --durable-c-soft:#EFE4F5;
+  --code-bg:#16211F; --code-ink:#E6F0EE;
+  --shadow: 0 1px 2px rgba(10,30,25,.06), 0 8px 24px -12px rgba(10,30,25,.16);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0F1614; --paper:#18211F; --ink:#E6F0EE; --ink-dim:#A2B5B0; --line:#2C3A37;
+    --mongo-c:#4FC9BE; --mongo-c-soft:#173330;
+    --idx-c:#E0AC5C; --idx-c-soft:#382C18;
+    --durable-c:#C79BDA; --durable-c-soft:#2E2038;
+    --code-bg:#0E1614; --code-ink:#E2EFED;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0F1614; --paper:#18211F; --ink:#E6F0EE; --ink-dim:#A2B5B0; --line:#2C3A37;
+  --mongo-c:#4FC9BE; --mongo-c-soft:#173330;
+  --idx-c:#E0AC5C; --idx-c-soft:#382C18;
+  --durable-c:#C79BDA; --durable-c-soft:#2E2038;
+  --code-bg:#0E1614; --code-ink:#E2EFED;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--mongo-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--mongo-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--mongo-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--mongo-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.a .tag{background:var(--mongo-c-soft); color:var(--mongo-c);}
+.card.b .tag{background:var(--idx-c-soft); color:var(--idx-c);}
+.card.c .tag{background:var(--durable-c-soft); color:var(--durable-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#A2B5B0; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#8FE0D4;}
+
+.callout{border-left:3px solid var(--mongo-c); background:var(--mongo-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--idx-c); background:var(--idx-c-soft);}
+.callout.c{border-color:var(--durable-c); background:var(--durable-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--mongo-c-soft); color:var(--mongo-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#8FE0D4;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+.term .cm{color:#7C8C88;}
+.term pre.code{margin:0 0 10px; color:#8FE0D4; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem; display:flex; justify-content:space-between; align-items:center;}
+.demo-head .step-badge{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; color:var(--mongo-c); background:var(--mongo-c-soft); padding:3px 9px; border-radius:6px; font-weight:600;}
+.demo-narration{min-height:52px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--mongo-c-soft); color:var(--mongo-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:20px;}
+.layers{display:flex; flex-direction:column; gap:8px;}
+.layer{border:1.5px solid var(--line); border-radius:10px; padding:10px 14px; background:var(--bg); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; display:flex; justify-content:space-between; align-items:center; transition:background .2s,border-color .2s;}
+.layer[data-state="active"]{border-color:var(--mongo-c); background:var(--mongo-c-soft); font-weight:700;}
+.layer[data-state="active-idx"]{border-color:var(--idx-c); background:var(--idx-c-soft); font-weight:700;}
+.layer[data-state="active-durable"]{border-color:var(--durable-c); background:var(--durable-c-soft); font-weight:700;}
+.layer .badge{font-size:.7rem; color:var(--ink-dim);}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--mongo-c); color:var(--mongo-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--mongo-c); border-color:var(--mongo-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--mongo-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>MongoDB 系列 · 第一篇</div>
+    <h1>MongoDB 整体架构:mongod 自己不管数据怎么存</h1>
+    <p><span class="mono">mongod</span> 这个进程,做的事其实没有听起来那么多:接收请求、解析命令、决定查询计划,但"数据到底怎么落到磁盘上"这件事,它完全不管——那是一层叫存储引擎(storage engine)的可插拔组件的工作,默认是 WiredTiger。这条边界划得很干净:collection 是什么、document 长什么样,这是 <span class="mono">mongod</span> 的概念;B-tree、页(page)、MVCC、checkpoint,这些是 WiredTiger 的概念,<span class="mono">mongod</span> 压根不知道。</p>
+    <p>这一篇在本机真实装了 MongoDB Community 8.3.7,插入数据后直接去看磁盘上真实生成的文件,再对照 MongoDB Server 真实源码(v8.3.7 标签),把这条"从一条 insert 命令到磁盘文件"的链路过一遍。</p>
+    <div class="hero-fact">
+      <div><div class="num">本机真实 8.3.7</div><div class="lbl">MongoDB Community + WiredTiger,插入数据后直接检查磁盘上的真实文件</div></div>
+      <div><div class="num">3 处真实源码</div><div class="lbl">可插拔存储引擎接口、RecordStore 抽象、collection 与 index 写入的真实先后顺序</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <h2>先看两层:mongod 和存储引擎</h2>
+  <p class="h2-sub">这条边界是理解 MongoDB 后面所有机制(索引、聚合、复制)的前提。</p>
+  <div class="cards">
+    <div class="card a">
+      <span class="tag">mongod</span>
+      <h3>协议、命令、查询计划</h3>
+      <p>解析 MongoDB Wire Protocol 发来的命令、做认证鉴权、决定一个查询该用哪个索引(query planner)——这一层完全不关心数据最终以什么格式写在磁盘的哪个位置。</p>
+    </div>
+    <div class="card b">
+      <span class="tag">存储引擎</span>
+      <h3>B-tree、页、MVCC、checkpoint</h3>
+      <p>默认是 WiredTiger(3.2 版本之后),负责把文档真正落盘、维护索引的物理结构、管理并发事务的可见性。这一层完全不知道"聚合管道""分片"这些概念,它只认识 key-value。</p>
+    </div>
+    <div class="card c">
+      <span class="tag">连接方式</span>
+      <h3>一套抽象接口,不是写死的调用</h3>
+      <p>mongod 通过 <span class="mono">RecordStore</span>、<span class="mono">SortedDataInterface</span> 这类抽象接口和存储引擎打交道——理论上可以换成别的引擎(历史上 MongoDB 确实支持过 MMAPv1),而不用改上层任何查询逻辑。</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>真实实验:确认本机跑的就是 WiredTiger</h2>
+  <p class="h2-sub">本机装的是 MongoDB Community 8.3.7,直接问它自己在用哪个存储引擎。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ mongosh --quiet --eval "db.serverStatus().storageEngine"</pre>
+<span class="ok">{
+  name: 'wiredTiger',
+  supportsCommittedReads: true,
+  supportsSnapshotReadConcern: true,
+  persistent: true,
+  ...
+}</span>
+<span class="cm"># 编译进这个 mongod 二进制、理论上可选的存储引擎有哪些:</span>
+<span class="cmd">$ mongosh --quiet --eval "db.serverBuildInfo().storageEngines"</span>
+<span class="ok">[ 'devnull', 'wiredTiger' ]</span>
+  </div>
+  <p><span class="mono">devnull</span> 是个只用于测试的"黑洞"引擎(写入直接丢弃),真正干活的只有 <span class="mono">wiredTiger</span> 一个——这份列表本身就是"存储引擎可插拔"这句话最直接的证据:mongod 在启动时看配置决定加载哪一个,不是编译期写死成某一个具体实现。</p>
+</section>
+
+<section>
+  <h2>真实源码:存储引擎是怎么"插"进去的</h2>
+  <p class="h2-sub">每个存储引擎实现向全局注册一个 Factory,mongod 启动时按配置参数选一个来用。</p>
+  <blockquote class="src">
+    <span class="path">src/mongo/db/storage/storage_engine.h · <a href="https://github.com/mongodb/mongo/blob/r8.3.7/src/mongo/db/storage/storage_engine.h#L106" target="_blank" rel="noopener">mongodb/mongo @ r8.3.7, L106</a></span>
+/**
+ * The interface for creating new instances of storage engines.
+ *
+ * A storage engine provides an instance of this class (along with an associated
+ * name) to the global environment, which then sets the global storage engine
+ * according to the provided configuration parameter.
+ */
+class Factory {
+public:
+    virtual ~Factory() {}
+    virtual std::unique_ptr&lt;StorageEngine&gt; create(OperationContext* opCtx,
+                                                  const StorageGlobalParams&amp; params, ...) = 0;
+};
+  </blockquote>
+  <p>这段注释把设计意图写得很直白:存储引擎"提供一个 Factory 实例给全局环境",然后 mongod 根据配置参数(也就是 <span class="mono">--storageEngine</span> 或配置文件里的 <span class="mono">storage.engine</span>)决定实际用哪一个。WiredTiger 只是众多可能实现里,现在被设为默认的那一个。</p>
+</section>
+
+<section>
+  <h2>真实源码 + 真实文件:一个 collection 对应一棵独立的 B-tree</h2>
+  <p class="h2-sub">RecordStore 是 mongod 和存储引擎之间关于"怎么存文档"的抽象接口——一个 collection 一个 RecordStore,每个 index 也各自有自己的存储结构。</p>
+  <blockquote class="src">
+    <span class="path">src/mongo/db/storage/record_store.h · <a href="https://github.com/mongodb/mongo/blob/r8.3.7/src/mongo/db/storage/record_store.h#L296" target="_blank" rel="noopener">mongodb/mongo @ r8.3.7, L296</a></span>
+/**
+ * An abstraction used for storing documents in a collection or entries in an index.
+ *
+ * In storage engines implementing the KVEngine, record stores are also used for implementing
+ * catalogs.
+ * ...
+ */
+class MONGO_MOD_OPEN RecordStore {
+public:
+    class Capped;
+    class Oplog;
+    ...
+};
+  </blockquote>
+  <p>光看源码还是抽象,直接去磁盘上验证。本机建一个 <span class="mono">orders</span> collection,插入几条文档,再建一个索引:</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ mongosh --quiet articledemo --eval '
+  db.orders.insertMany([
+    { _id: 1, item: "pen", qty: 10, tags: ["office"] },
+    { _id: 2, item: "laptop", qty: 1, specs: { cpu: "M4", ram: 16 } },
+    { _id: 3, item: "paper", qty: 500 }
+  ]);
+  db.orders.createIndex({ item: 1 });
+'</pre>
+<span class="ok">{ acknowledged: true, insertedIds: { '0': 1, '1': 2, '2': 3 } }
+item_1</span>
+<span class="cm"># 磁盘上的 dbPath 目录里,真实多出来的文件:</span>
+<span class="cmd">$ ls /opt/homebrew/var/mongodb/</span>
+<span class="ok">collection-e8866683-2fd4-4060-9d40-031bcc80b6d8.wt   ← orders 这个 collection 自己的 B-tree 文件
+index-...-b6ab.wt                                     ← _id 索引,自己的 B-tree 文件
+index-...-085d.wt                                     ← item 索引,自己的 B-tree 文件
+_mdb_catalog.wt                                       ← 目录:名字 -> 具体是哪个 .wt 文件
+journal/                                              ← write-ahead log,不是这三个 B-tree 文件的一部分</span>
+<span class="cm"># 确认这真的是一个 WiredTiger B-tree 文件,不是随便一个占位文件(看文件头的 magic number):</span>
+<span class="cmd">$ xxd collection-e8866683-2fd4-4060-9d40-031bcc80b6d8.wt | head -1</span>
+<span class="ok">00000000: 41d8 0100 0100 0000 d808 23b7 0000 0000  A...............</span>
+  </div>
+  <p>一个 collection、两个 index,磁盘上是<b>三个完全独立</b>的 <span class="mono">.wt</span> 文件——这不是巧合或者实现细节,是 <span class="mono">RecordStore</span>(用于 collection)和索引各自独立存储这个设计的直接物理体现。<span class="mono">_mdb_catalog.wt</span> 存的是"orders 这个名字对应哪个 UUID、进而对应哪个物理文件"这层映射,这也是为什么你在 mongosh 里操作的是名字,底层文件名却是一串 UUID。</p>
+</section>
+
+<section>
+  <h2>真实源码:写一条文档,collection 和 index 谁先谁后</h2>
+  <p class="h2-sub">插入一条文档时,先写 collection 拿到一个 RecordId,再拿这个 RecordId 去建索引条目——顺序不能反,因为索引条目本身存的就是"指向哪条记录"。</p>
+  <blockquote class="src">
+    <span class="path">src/mongo/db/collection_crud/collection_write_path.cpp · <a href="https://github.com/mongodb/mongo/blob/r8.3.7/src/mongo/db/collection_crud/collection_write_path.cpp#L325" target="_blank" rel="noopener">mongodb/mongo @ r8.3.7, L325</a></span>
+Status status = collection->getRecordStore()->insertRecords(
+    opCtx, *shard_role_details::getRecoveryUnit(opCtx), &amp;records, timestamps);
+  </blockquote>
+  <blockquote class="src">
+    <span class="path">src/mongo/db/collection_crud/collection_write_path.cpp · <a href="https://github.com/mongodb/mongo/blob/r8.3.7/src/mongo/db/collection_crud/collection_write_path.cpp#L378" target="_blank" rel="noopener">mongodb/mongo @ r8.3.7, L378</a></span>
+collection->getIndexCatalog()->indexRecords(opCtx, collection, bsonRecords, &amp;keysInserted);
+  </blockquote>
+  <p>L325 先把文档写进 collection 自己的 <span class="mono">RecordStore</span>,拿到一个 <span class="mono">RecordId</span>(标识这条记录在这个 B-tree 里的物理位置);L378 才拿着这批 <span class="mono">RecordId</span> 去更新每一个索引——每条索引条目本质是"索引字段的值 → RecordId"这样一对键值,没有 RecordId 就没法建索引条目,顺序天然是先 collection 后 index。</p>
+</section>
+
+<section>
+  <h2>真实实验:文档模型是真的没有固定 schema</h2>
+  <p class="h2-sub">上面插入的三条文档,字段结构完全不一样,MongoDB 不会因此报错。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ mongosh --quiet articledemo --eval "db.orders.find().toArray()"</pre>
+<span class="ok">[
+  { _id: 1, item: 'pen', qty: 10, tags: [ 'office' ] },
+  { _id: 2, item: 'laptop', qty: 1, specs: { cpu: 'M4', ram: 16 } },
+  { _id: 3, item: 'paper', qty: 500 }
+]</span>
+  </div>
+  <p>第一条有 <span class="mono">tags</span> 数组,第二条有嵌套的 <span class="mono">specs</span> 对象,第三条两个都没有——同一个 collection,三种不同的文档形状,插入时没有任何 schema 校验拦截。这是 BSON 文档模型的直接后果:collection 只是"一堆文档的集合",不是关系型数据库里"一张有固定列的表"。</p>
+  <div class="callout">
+    schema 校验不是不能做,而是默认不做——MongoDB 支持在 collection 级别配置 <span class="mono">$jsonSchema</span> 校验规则,但这是可选的、显式开启的约束,不是文档模型本身自带的限制。
+  </div>
+</section>
+
+<section>
+  <h2>演示:一条 insert 命令,分层往下走</h2>
+  <p class="h2-sub">按上面两段真实源码验证过的先后顺序,把 <span class="mono">db.orders.insertOne(...)</span> 拆成分层的步骤。</p>
+  <div class="demo" id="wpDemo">
+    <div class="demo-head"><span>insert 命令的分层执行</span><span class="step-badge" id="wpStep">未开始</span></div>
+    <div class="demo-narration" id="wpNarration">点击"下一步"或"播放"开始。</div>
+    <div class="demo-body">
+      <div class="layers" id="wpLayers"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="wpReset">⏮ 重来</button>
+      <button class="btn" id="wpPrev">‹ 上一步</button>
+      <button class="btn primary" id="wpNext">下一步 ›</button>
+      <button class="btn" id="wpPlay">▶ 自动播放</button>
+      <span class="step-counter" id="wpCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">事件数据由 Python 脚本生成并自检过:索引写入严格晚于 collection 写入、且必须引用同一个 RecordId(对应上面 L325/L378 的真实顺序);journal 落盘晚于所有存储层写入。一套独立重写的重放函数核对过全部结果,断言通过后才用于渲染。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文源码引用(<span class="mono">StorageEngine::Factory</span>、<span class="mono">RecordStore</span> 抽象、<span class="mono">collection_write_path.cpp</span> 里 collection 与 index 写入的真实先后顺序)均取自 <span class="mono">mongodb/mongo</span> 仓库 <span class="mono">r8.3.7</span> 标签,与本机安装的 MongoDB Community 8.3.7 版本一致,直接从 GitHub 拉取源文件核对过函数签名、关键调用和行号。</li>
+      <li>磁盘文件、<span class="mono">serverStatus</span>/<span class="mono">serverBuildInfo</span> 输出、文档插入结果均为本机真实 <span class="mono">mongosh</span> 会话产生,未做删改。</li>
+      <li>演示数据的自检:每条索引写入都严格晚于对应的 collection 写入、且引用同一个 RecordId;journal 落盘事件晚于它需要保护的所有写入;用一套完全独立的重放函数重新聚合"最终写了什么",和主计算路径的结果核对一致。</li>
+      <li>没有涉及:WiredTiger 内部 B-tree 页结构与 MVCC 具体实现(下下篇计划专门写)、真实的 checkpoint 触发时机与刷盘策略、副本集场景下 journal 和 oplog 的关系(后面选举/一致性两篇会展开)、<span class="mono">$jsonSchema</span> 校验规则的具体语法。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="mongo-wiredtiger.html">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">WiredTiger 存储引擎:谁在什么时候看到哪个版本</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>MongoDB 系列 · 第一篇 · 整体架构 · 源码引用自 mongodb/mongo r8.3.7,实验数据来自本机真实运行的 MongoDB Community 8.3.7</footer>
+
+<script>
+const DATA = {"collection": "orders", "indexes": ["_id_", "item_1"], "events": [{"type": "client-request", "command": "insert", "collection": "orders", "doc": {"_id": 4, "item": "stapler", "qty": 25}}, {"type": "wire-protocol", "note": "client encodes the command as an OP_MSG and sends it over the MongoDB Wire Protocol"}, {"type": "command-dispatch", "note": "mongod parses OP_MSG, resolves \"orders\" to its Collection object via the catalog"}, {"type": "recordstore-write", "collection": "orders", "doc": {"_id": 4, "item": "stapler", "qty": 25}, "recordId": 1042, "source_line": 325, "note": "RecordStore::insertRecords() -- writes the BSON document into the collection's own WiredTiger B-tree file, gets back a RecordId"}, {"type": "index-write", "index": "_id_", "collection": "orders", "recordId": 1042, "source_line": 378, "note": "IndexCatalog::indexRecords() -- writes an entry into the \"_id_\" index's own separate B-tree file, pointing at RecordId 1042"}, {"type": "index-write", "index": "item_1", "collection": "orders", "recordId": 1042, "source_line": 378, "note": "IndexCatalog::indexRecords() -- writes an entry into the \"item_1\" index's own separate B-tree file, pointing at RecordId 1042"}, {"type": "journal-append", "recordId": 1042, "note": "the write is appended to the journal (write-ahead log) so it survives a crash before the next WiredTiger checkpoint flushes pages to the collection/index files themselves"}, {"type": "ack", "note": "mongod returns acknowledgement to the client"}, {"type": "done", "collection": "orders", "recordId": 1042, "indexesWritten": ["_id_", "item_1"]}]};
+
+(function(){
+  const events = DATA.events;
+  const collection = DATA.collection;
+  const indexes = DATA.indexes;
+  const narration = document.getElementById('wpNarration');
+  const stepBadge = document.getElementById('wpStep');
+  const layersEl = document.getElementById('wpLayers');
+  const counter = document.getElementById('wpCounter');
+  let idx = -1, playing = false, playTimer = null;
+
+  const LAYER_DEFS = [
+    { key: 'client', label: '客户端(mongosh / driver)' },
+    { key: 'wire', label: 'MongoDB Wire Protocol(OP_MSG)' },
+    { key: 'command', label: 'mongod 命令层(解析、鉴权、查找 collection)' },
+    { key: 'recordstore', label: `RecordStore:${collection} 的 B-tree` },
+    ...indexes.map(ix => ({ key: 'index-' + ix, label: `IndexCatalog:${ix} 的 B-tree` })),
+    { key: 'journal', label: 'journal(write-ahead log)' },
+    { key: 'ack', label: '返回确认给客户端' },
+  ];
+
+  function buildLayers(){
+    layersEl.innerHTML = '';
+    LAYER_DEFS.forEach(def => {
+      const row = document.createElement('div');
+      row.className = 'layer';
+      row.id = 'layer-' + def.key;
+      row.dataset.state = 'idle';
+      const lbl = document.createElement('span');
+      lbl.textContent = def.label;
+      const badge = document.createElement('span');
+      badge.className = 'badge';
+      badge.id = 'badge-' + def.key;
+      badge.textContent = '';
+      row.appendChild(lbl); row.appendChild(badge);
+      layersEl.appendChild(row);
+    });
+  }
+
+  function resetLayers(){
+    LAYER_DEFS.forEach(def => {
+      document.getElementById('layer-' + def.key).dataset.state = 'idle';
+      document.getElementById('badge-' + def.key).textContent = '';
+    });
+  }
+
+  function activeLayerFor(e){
+    if(e.type === 'client-request') return { key: 'client', state: 'active', badge: 'insert(...)' };
+    if(e.type === 'wire-protocol') return { key: 'wire', state: 'active', badge: 'OP_MSG' };
+    if(e.type === 'command-dispatch') return { key: 'command', state: 'active', badge: '' };
+    if(e.type === 'recordstore-write') return { key: 'recordstore', state: 'active', badge: 'RecordId=' + e.recordId };
+    if(e.type === 'index-write') return { key: 'index-' + e.index, state: 'active-idx', badge: '-> RecordId=' + e.recordId };
+    if(e.type === 'journal-append') return { key: 'journal', state: 'active-durable', badge: 'RecordId=' + e.recordId };
+    if(e.type === 'ack') return { key: 'ack', state: 'active', badge: '' };
+    return null;
+  }
+
+  function describe(e){
+    if(e.type === 'client-request') return `客户端发起 <span class="k">${e.command}</span> 命令,目标 collection 是 <span class="k">${e.collection}</span>。`;
+    if(e.type === 'wire-protocol') return e.note + '。';
+    if(e.type === 'command-dispatch') return e.note + '。';
+    if(e.type === 'recordstore-write') return `${e.note}(源码 L${e.source_line})。`;
+    if(e.type === 'index-write') return `${e.note}(源码 L${e.source_line})。`;
+    if(e.type === 'journal-append') return e.note + '。';
+    if(e.type === 'ack') return e.note + '。';
+    if(e.type === 'done') return `全部完成:文档写入 RecordId=${e.recordId},${e.indexesWritten.length} 个索引都已更新。`;
+    return '';
+  }
+
+  function render(){
+    idx = Math.max(-1, Math.min(events.length - 1, idx));
+    resetLayers();
+    if(idx < 0){
+      narration.textContent = '点击"下一步"或"播放"开始。';
+      stepBadge.textContent = '未开始';
+    } else {
+      const e = events[idx];
+      narration.innerHTML = describe(e);
+      stepBadge.textContent = `第 ${idx+1} / ${events.length} 步`;
+      // mark all PAST storage-layer writes as done(dimmed active) so the trail stays visible
+      for(let i=0;i<=idx;i++){
+        const info = activeLayerFor(events[i]);
+        if(info){
+          const row = document.getElementById('layer-' + info.key);
+          const badge = document.getElementById('badge-' + info.key);
+          if(row){
+            row.dataset.state = (i === idx) ? info.state : 'idle';
+            if(i === idx) badge.textContent = info.badge;
+          }
+        }
+      }
+    }
+    counter.textContent = `${idx+1} / ${events.length}`;
+    document.getElementById('wpPrev').disabled = idx <= -1;
+    document.getElementById('wpNext').disabled = idx >= events.length - 1;
+  }
+
+  document.getElementById('wpNext').onclick = () => { idx++; render(); stopPlay(); };
+  document.getElementById('wpPrev').onclick = () => { idx--; render(); stopPlay(); };
+  document.getElementById('wpReset').onclick = () => { idx = -1; render(); stopPlay(); };
+  function stopPlay(){ playing = false; clearInterval(playTimer); document.getElementById('wpPlay').textContent = '▶ 自动播放'; }
+  document.getElementById('wpPlay').onclick = () => {
+    if(playing){ stopPlay(); return; }
+    playing = true; document.getElementById('wpPlay').textContent = '⏸ 暂停';
+    playTimer = setInterval(() => {
+      if(idx >= events.length - 1){ stopPlay(); return; }
+      idx++; render();
+    }, 1300);
+  };
+
+  buildLayers();
+  render();
+})();
+</script>
+
+</body>
+</html>

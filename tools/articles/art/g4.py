@@ -1,0 +1,18 @@
+from lib import *
+S = SS('g4')
+steps = [
+    step("先测一条基线:调用一个 //go:noinline 的空函数是 1.95 ns/op,后面的数字都要和它比。具体类型断言 x.(A) 命中 2.02、v, ok := x.(A) 命中 1.97、未命中 1.98 ns/op——和基线在同一个量级;接口类型断言 x.(Mer) 命中 2.33、m, ok := x.(Mer) 命中 2.40、m, ok := x.(Other) 未命中 2.10 ns/op,比基线多出大约 0.15–0.45 ns;类型开关 2 个具体类型命中第 1 个是 1.98,8 个具体类型命中第 1 个与第 8 个分别是 1.98 与 1.99,2 个接口类型的开关命中第 2 个是 2.36 ns/op。断言命中与未命中都是 0 次分配。", t=tl(S(1)), done=lidx(S(1), '基线', 'x.(A) 命中', 'v, ok := x.(A)', 'switch 2 个具体', 'switch 8 个具体'), mark=lidx(S(1), 'x.(Mer)', 'm, ok := x.(Mer)', 'x.(Other)', 'switch 2 个接口类型', 'AllocsPerRun'), b=bars([['基线(空函数)', 1.95, '1.95'], ['x.(A) 命中', 2.02, '2.02'], ['switch8 命中第 8 个', 1.99, '1.99'], ['x.(Mer) 命中', 2.33, '2.33'], ['m, ok := x.(Mer)', 2.40, '2.40'], ['switch 2 个接口类型', 2.36, '2.36']], 2.4, done=[0, 1, 2], mark=[3, 4, 5]), kv=KV([['基线', '1.95 ns/op'], ['具体类型断言', '1.97–2.02 ns/op'], ['接口类型断言', '2.10–2.40 ns/op'], ['类型开关(具体类型)', '1.98–1.99 ns/op,位置无关'], ['分配', '0 次']], ['接口类型断言'])),
+    step("看汇编(-gcflags=-S)。具体类型断言 x.(A):取 $type:main.A 的地址与接口的类型字比较,不等就 CALL runtime.panicdottypeE;v, ok := x.(A) 只剩比较,没有调用;接口类型断言 m, ok := x.(Mer):CALL runtime.typeAssert(运行时),调用前还有几条比较跳转;类型开关 switch2:先 CMPW 比较类型的 hash,再 CMP 比较类型地址;含接口类型 case 的 switchIface:CALL runtime.interfaceSwitch。", t=tl(S(2)), done=lidx(S(2), 'main.assertConcrete:', 'main.assertConcreteOK:'), mark=lidx(S(2), 'runtime.typeAssert', 'runtime.interfaceSwitch', 'CMPW'), kv=KV([['x.(A)', 'CMP 类型字;失败 CALL runtime.panicdottypeE'], ['v, ok := x.(A)', '只比较,没有 CALL'], ['x.(Mer) / m, ok := x.(Mer)', 'CALL runtime.typeAssert'], ['switch 具体类型', 'CMPW hash,再 CMP 类型地址'], ['switch 含接口 case', 'CALL runtime.interfaceSwitch']], ['x.(Mer) / m, ok := x.(Mer)'])),
+    step("同一个 8 个具体类型的 switch:装 A 到 H 逐个命中,耗时都是 1.96–1.97 ns/op,第 1 个和第 8 个没有区别;装 int(没有任何 case 命中)是 2.01 ns/op。耗时不随 case 的位置增长。", t=tl(S(3)), done=lidx(S(3), '命中第 1 个', '命中第 2 个', '命中第 3 个', '命中第 4 个'), mark=lidx(S(3), '命中第 8 个', '全部未命中'), b=bars([['命中第 1 个', 1.96, '1.96'], ['命中第 4 个', 1.97, '1.97'], ['命中第 8 个', 1.97, '1.97'], ['全部未命中', 2.01, '2.01']], 2.01, done=[0, 1, 2], mark=[3]), kv=KV([['命中 A 到 H', '1.96–1.97 ns/op'], ['没有命中', '2.01 ns/op']], ['没有命中'])),
+]
+A = mkartg('g4', 4, 'Go,类型断言,类型开关,接口,汇编,真实验证,动画演示',
+    '用 Go 1.27.1 的基准测试与汇编量一次类型断言的成本:具体类型断言只是比较类型字,耗时与 1.95 ns 的空函数调用基线几乎相同;接口类型断言调用 runtime.typeAssert,多约 0.15–0.45 ns;类型开关先比 hash 再比类型地址,8 个 case 命中第 1 个与第 8 个没有差别;断言不分配内存。',
+    '“类型断言很慢”是一个流传很广的说法。这篇先给一条基线,再分别量具体类型断言、接口类型断言和类型开关,用汇编看它们各自做了什么,最后看 case 数量与位置对耗时有没有影响。',
+    [('≈ 基线', '具体类型断言 1.97–2.02 ns/op,空函数调用基线 1.95 ns/op'), ('+0.15~0.45 ns', '接口类型断言(CALL runtime.typeAssert)比基线多出的量'), ('位置无关', '8 个具体类型的 switch,命中第 1 个与第 8 个都是 1.96–1.97 ns/op')],
+    [('先量基线,再量断言', '<p>单次断言的耗时已经小到和调用本身的开销混在一起,所以没有基线的“xx 纳秒”没有意义。这里每个函数都是 <code>//go:noinline</code>,基线就是调用一个空函数。需要诚实地说明的是:这些数字是紧循环里装在 <code>any</code> 里的固定值,分支预测与缓存都很理想,真实程序里的值会更分散(上一篇看到类型随机时接口调用从约 2 ns 变成 7 ns)。</p>'),
+     ('汇编里的差别', '<p>具体类型断言在汇编里就是一次比较:把类型字与 <code>type:main.A</code> 的地址比较,<code>v, ok :=</code> 形式甚至没有任何调用。接口类型断言则要判断一个动态类型是否实现了某个接口,这件事交给 <code>runtime.typeAssert</code>(调用之前还有几条比较和跳转,我没有逐条核对它们在做什么)。类型开关在汇编里先比较类型的 hash(<code>CMPW</code>),命中再比较类型地址确认;含接口类型的 case 走 <code>runtime.interfaceSwitch</code>。</p>'),
+     ('case 的数量与顺序', '<p>8 个具体类型的 switch 命中每一个都是同样的耗时,说明编译器没有把它编译成从上到下逐个比较;汇编里能看到的是 hash 比较(<code>CMPW</code>),至于具体用二分还是跳转表,我没有逐条核对。结论只限于这个实验:在 8 个 case 内,case 的位置不影响耗时。</p>')],
+    steps,
+    [ENV_G + '。每个函数 //go:noinline,装在 any 里的值固定;每个变体 7 轮 testing.Benchmark 取中位数;汇编取自 go build -gcflags=-S(arm64)',
+     '没有验证:amd64 上的汇编与耗时、case 数远多于 8 个时的行为、值在多种类型间随机变化时的断言成本、runtime.typeAssert 的内部实现、泛型代码中的类型断言'],
+    '类型断言与类型开关')

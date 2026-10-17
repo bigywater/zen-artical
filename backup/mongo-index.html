@@ -1,0 +1,589 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>索引优化:为什么这个查询没走索引</title>
+<meta name="description" content="本机 5000 篇真实文档,建索引前后对照真实 explain() 数字,逐条验证复合索引前缀规则、覆盖查询、排序优化——每条规则都对应查询规划器源码里一个具体函数。">
+<link rel="canonical" href="https://bigywater.tech/mongo-index.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="索引优化:为什么这个查询没走索引">
+<meta property="og:description" content="本机 5000 篇真实文档,建索引前后对照真实 explain() 数字,逐条验证复合索引前缀规则、覆盖查询、排序优化——每条规则都对应查询规划器源码里一个具体函数。">
+<meta property="og:url" content="https://bigywater.tech/mongo-index.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="索引优化:为什么这个查询没走索引">
+<meta name="twitter:description" content="本机 5000 篇真实文档,建索引前后对照真实 explain() 数字,逐条验证复合索引前缀规则、覆盖查询、排序优化——每条规则都对应查询规划器源码里一个具体函数。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F5F8F7; --paper:#FFFFFF; --ink:#1B2422; --ink-dim:#5C6B67; --line:#DCE7E4;
+  --mongo-c:#1C7C74; --mongo-c-soft:#DCEEEC;
+  --idx-c:#B8791E; --idx-c-soft:#F6ECD9;
+  --durable-c:#8A4FA0; --durable-c-soft:#EFE4F5;
+  --code-bg:#16211F; --code-ink:#E6F0EE;
+  --shadow: 0 1px 2px rgba(10,30,25,.06), 0 8px 24px -12px rgba(10,30,25,.16);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0F1614; --paper:#18211F; --ink:#E6F0EE; --ink-dim:#A2B5B0; --line:#2C3A37;
+    --mongo-c:#4FC9BE; --mongo-c-soft:#173330;
+    --idx-c:#E0AC5C; --idx-c-soft:#382C18;
+    --durable-c:#C79BDA; --durable-c-soft:#2E2038;
+    --code-bg:#0E1614; --code-ink:#E2EFED;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0F1614; --paper:#18211F; --ink:#E6F0EE; --ink-dim:#A2B5B0; --line:#2C3A37;
+  --mongo-c:#4FC9BE; --mongo-c-soft:#173330;
+  --idx-c:#E0AC5C; --idx-c-soft:#382C18;
+  --durable-c:#C79BDA; --durable-c-soft:#2E2038;
+  --code-bg:#0E1614; --code-ink:#E2EFED;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--mongo-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--mongo-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--mongo-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--mongo-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.a .tag{background:var(--mongo-c-soft); color:var(--mongo-c);}
+.card.b .tag{background:var(--idx-c-soft); color:var(--idx-c);}
+.card.c .tag{background:var(--durable-c-soft); color:var(--durable-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#A2B5B0; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#8FE0D4;}
+
+.callout{border-left:3px solid var(--mongo-c); background:var(--mongo-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--idx-c); background:var(--idx-c-soft);}
+.callout.c{border-color:var(--durable-c); background:var(--durable-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--mongo-c-soft); color:var(--mongo-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#8FE0D4;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+.term .cm{color:#7C8C88;}
+.term pre.code{margin:0 0 10px; color:#8FE0D4; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+
+
+.stat-table{width:100%; border-collapse:collapse; margin:16px 0; font-size:.85rem;}
+.stat-table th,.stat-table td{border:1px solid var(--line); padding:8px 12px; text-align:left;}
+.stat-table th{background:var(--paper); font-weight:600; color:var(--ink-dim); font-size:.78rem; text-transform:uppercase; letter-spacing:.04em;}
+.stat-table td.mono, .stat-table th.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+.stat-table tr:last-child td{font-weight:700;}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem; display:flex; justify-content:space-between; align-items:center;}
+.demo-head .step-badge{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; color:var(--mongo-c); background:var(--mongo-c-soft); padding:3px 9px; border-radius:6px; font-weight:600;}
+.demo-narration{min-height:52px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--mongo-c-soft); color:var(--mongo-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:20px;}
+
+.query-line{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px 14px; margin-bottom:16px; overflow-x:auto; white-space:pre;}
+.checks{display:flex; flex-direction:column; gap:8px; margin-bottom:16px;}
+.check{border:1.5px solid var(--line); border-radius:10px; padding:10px 14px; background:var(--bg); font-size:.85rem; display:flex; justify-content:space-between; align-items:center; gap:10px; transition:background .2s,border-color .2s;}
+.check .label{flex:1;}
+.check .verdict{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; font-weight:700; padding:2px 9px; border-radius:6px;}
+.check[data-verdict="pass"]{border-color:var(--mongo-c); background:var(--mongo-c-soft);}
+.check[data-verdict="pass"] .verdict{background:var(--mongo-c); color:#fff;}
+.check[data-verdict="fail"]{border-color:var(--idx-c); background:var(--idx-c-soft);}
+.check[data-verdict="fail"] .verdict{background:var(--idx-c); color:#fff;}
+.check[data-verdict="skip"]{opacity:.55;}
+.check[data-verdict="skip"] .verdict{background:var(--line); color:var(--ink-dim);}
+.result-row{display:flex; align-items:center; gap:10px; margin-bottom:14px;}
+.result-badge{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; font-weight:700; padding:6px 14px; border-radius:8px;}
+.result-badge.good{background:var(--mongo-c); color:#fff;}
+.result-badge.warn{background:var(--idx-c); color:#fff;}
+.result-badge.best{background:var(--durable-c); color:#fff;}
+.result-stats{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim);}
+
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--mongo-c); color:var(--mongo-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--mongo-c); border-color:var(--mongo-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--mongo-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="eyebrow"><span class="dot"></span>MongoDB 系列 · 第三篇</div>
+  <div class="hero-inner">
+    <h1>索引优化:为什么这个查询没走索引</h1>
+    <p>前两篇看到了索引在磁盘上是什么(每个 index 自己一棵独立 B-tree)、内部是什么形状(internal page 存指针,leaf page 存数据)。这一篇回答一个更实际的问题:建了索引,查询就一定会用吗?不一定——查询规划器有一套具体的、可以在源码里读到的规则,决定一个索引到底"相不相关",以及即使用了索引,还要不要多一次"回表"、要不要额外排序。</p>
+    <p>本机建了一个 5000 篇文档的真实 collection,在建索引前后跑同一批查询,拿真实 <span class="mono">explain()</span> 输出说话;每条结论都能在 MongoDB Server 真实源码(v8.3.7 标签)里找到对应的判断逻辑。</p>
+    <div class="hero-fact">
+      <div><div class="num">5000 篇真实文档</div><div class="lbl">本机 articledemo.inventory,建索引前后各跑一遍同一批查询,记录真实 explain() 数字</div></div>
+      <div><div class="num">3 处真实源码</div><div class="lbl">复合索引前缀规则、覆盖查询判定、排序是否需要额外阶段——都直接对应真实源码里的一个函数</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <h2>真实实验:先看没有索引时有多差</h2>
+  <p class="h2-sub">5000 篇文档,只有默认的 <span class="mono">_id</span> 索引,查 <span class="mono">category="electronics"</span> 且 <span class="mono">qty</span> 在某个区间的文档。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ mongosh --quiet articledemo --eval '
+  db.inventory.find(
+    { category: "electronics", qty: { $gte: 100, $lte: 150 } }
+  ).explain("executionStats")
+'</pre>
+<span class="ok">winning stage: COLLSCAN
+nReturned: 100
+totalKeysExamined: 0
+totalDocsExamined: 5000
+executionTimeMillis: 7</span>
+  </div>
+  <p>只想要 100 篇文档,规划器却把全部 5000 篇都扫了一遍——没有别的办法,唯一的索引是 <span class="mono">_id</span>,跟这条查询的字段完全无关,只能退化成全表扫描。</p>
+</section>
+
+<section>
+  <h2>索引不是"建了就会被用"——三条真实存在的规则</h2>
+  <p class="h2-sub">下面三节逐条验证,每一条都对应 MongoDB 查询规划器源码里一个具体的函数。</p>
+  <div class="cards">
+    <div class="card a">
+      <span class="tag">规则一 · 前缀</span>
+      <h3>只看复合索引的第一个字段</h3>
+      <p>判断一个索引跟查询"相不相关",规划器只检查这个索引 key pattern 的第一个字段是否出现在查询条件里——不是任意字段,是第一个。</p>
+    </div>
+    <div class="card b">
+      <span class="tag">规则二 · 覆盖</span>
+      <h3>投影字段必须都在索引里</h3>
+      <p>想跳过"回表"(FETCH)这一步,查询要的每一个字段都必须已经在索引条目里——少一个字段都不行。</p>
+    </div>
+    <div class="card c">
+      <span class="tag">规则三 · 排序</span>
+      <h3>索引自身顺序要能对上排序要求</h3>
+      <p>去掉等值条件锁定的字段之后,剩下的索引字段顺序如果正好等于排序字段,就不需要额外的内存排序;对不上就得加一个阻塞式 SORT 阶段。</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>真实源码:规则一——只检查索引的第一个字段</h2>
+  <p class="h2-sub">这条函数决定一个索引够不够"相关",进而决定它有没有资格成为候选执行计划——不合格的索引,规划器压根不会为它生成一个执行计划去比较。</p>
+  <blockquote class="src">
+    <span class="path">src/mongo/db/query/planner_ixselect.cpp · <a href="https://github.com/mongodb/mongo/blob/r8.3.7/src/mongo/db/query/planner_ixselect.cpp#L315" target="_blank" rel="noopener">mongodb/mongo @ r8.3.7, L315</a></span>
+// static
+std::vector&lt;IndexEntry&gt; QueryPlannerIXSelect::findRelevantIndices(
+    const RelevantFieldIndexMap&amp; fields, const std::vector&lt;IndexEntry&gt;&amp; allIndices) {
+
+    std::vector&lt;IndexEntry&gt; out;
+    for (auto&amp;&amp; index : allIndices) {
+        BSONObjIterator it(index.keyPattern);
+        BSONElement elt = it.next();
+        const std::string fieldName = std::string{elt.fieldNameStringData()};
+
+        if (fields.contains(fieldName) &amp;&amp;
+            (!index.sparse || fields.find(fieldName)-&gt;second.isSparse)) {
+            out.push_back(index);
+        }
+    }
+  </blockquote>
+  <p>注意 <span class="mono">it.next()</span> 只调用了一次——只取出 key pattern 的第一个字段 <span class="mono">elt</span>,然后检查查询条件里有没有覆盖这个字段名。索引后面还有几个字段,这个函数根本不关心。这就是"复合索引前缀规则"的全部真相:不是"用了非前缀字段效率低",是这个索引在候选阶段就直接被排除,从来没有机会被规划器考虑。</p>
+</section>
+
+<section>
+  <h2>真实实验:建索引,同一条查询,数字变了多少</h2>
+  <p class="h2-sub">建一个复合索引 <span class="mono">{category:1, qty:1}</span>,重新跑上面那条查询。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ mongosh --quiet articledemo --eval '
+  db.inventory.createIndex({ category: 1, qty: 1 });
+  db.inventory.find(
+    { category: "electronics", qty: { $gte: 100, $lte: 150 } }
+  ).explain("executionStats")
+'</pre>
+<span class="ok">winning stage: FETCH
+input stage: IXSCAN
+index used: {"category":1,"qty":1}
+nReturned: 100
+totalKeysExamined: 100
+totalDocsExamined: 100
+executionTimeMillis: 3</span>
+  </div>
+  <table class="stat-table">
+    <tr><th></th><th class="mono">totalDocsExamined</th><th class="mono">totalKeysExamined</th><th class="mono">nReturned</th></tr>
+    <tr><td>建索引前</td><td class="mono">5000</td><td class="mono">0</td><td class="mono">100</td></tr>
+    <tr><td>建索引后</td><td class="mono">100</td><td class="mono">100</td><td class="mono">100</td></tr>
+  </table>
+  <p><span class="mono">docsExamined</span> 从 5000 降到 100——因为查询条件覆盖了索引的第一个字段(<span class="mono">category</span>),索引边界（index bounds）能同时收窄到 <span class="mono">category="electronics"</span> 且 <span class="mono">100≤qty≤150</span> 这个精确范围,<span class="mono">keysExamined</span> 和 <span class="mono">nReturned</span> 完全相等,说明索引扫描没有一条"白扫"的记录。</p>
+</section>
+
+<section>
+  <h2>真实实验:验证前缀规则——同一个索引,换个字段结果天差地别</h2>
+  <p class="h2-sub">还是这个 <span class="mono">{category:1, qty:1}</span> 索引,分别只用 <span class="mono">qty</span>(第二个字段)和只用 <span class="mono">category</span>(第一个字段)做查询条件。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ mongosh --quiet articledemo --eval "db.inventory.find({qty:{\$gte:100,\$lte:150}}).explain('executionStats')"</pre>
+<span class="ok">winning stage: COLLSCAN
+totalKeysExamined: 0
+totalDocsExamined: 5000</span>
+<span class="cm"># 用 allPlansExecution 确认:规划器根本没有为这个索引生成候选计划</span>
+<span class="cmd">$ mongosh --quiet articledemo --eval "db.inventory.find({qty:{\$gte:100,\$lte:150}}).explain('allPlansExecution').queryPlanner.rejectedPlans.length"</span>
+<span class="ok">0</span>
+<span class="cm"># 换成只用第一个字段:</span>
+<span class="cmd">$ mongosh --quiet articledemo --eval "db.inventory.find({category:'electronics'}).explain('executionStats')"</span>
+<span class="ok">winning stage: FETCH
+input stage: IXSCAN
+totalKeysExamined: 1000
+totalDocsExamined: 1000</span>
+  </div>
+  <p><span class="mono">rejectedPlans.length: 0</span> 是关键证据——不是"用索引比 COLLSCAN 慢所以规划器选了 COLLSCAN",是压根没有第二个方案可选,跟上面 <span class="mono">findRelevantIndices</span> 只检查第一个字段的行为完全对上。只用 <span class="mono">category</span> 这个前缀字段,索引立刻变得可用,<span class="mono">keysExamined</span> 等于这个分类下的全部 1000 篇文档(因为 <span class="mono">qty</span> 没有约束,索引扫描没法进一步收窄)。</p>
+</section>
+
+<section>
+  <h2>真实源码:规则二——投影字段必须都在索引里</h2>
+  <p class="h2-sub">即使用了索引,默认还要多一步"回表"(FETCH)把完整文档从 collection 的 B-tree 里取出来——除非查询要的字段索引里全都有。</p>
+  <blockquote class="src">
+    <span class="path">src/mongo/db/query/planner_analysis.cpp · <a href="https://github.com/mongodb/mongo/blob/r8.3.7/src/mongo/db/query/planner_analysis.cpp#L450" target="_blank" rel="noopener">mongodb/mongo @ r8.3.7, L450</a></span>
+/**
+ * If any field is missing from the list of fields the projection wants, we are not covered.
+ */
+auto providesAllFields(const OrderedPathSet&amp; fields, const QuerySolutionNode&amp; solnRoot) {
+    for (auto&amp;&amp; field : fields) {
+        if (!solnRoot.hasField(field))
+            return false;
+    }
+    return true;
+}
+  </blockquote>
+  <p>逻辑非常直白:投影想要的每一个字段,都得挨个检查这份执行计划(比如一次 IXSCAN)能不能直接提供。只要有一个字段答不上来,就不算"覆盖",后面就得接一个 FETCH 去 collection 的 B-tree 里取完整文档。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ mongosh --quiet articledemo --eval '
+  db.inventory.find(
+    { category: "electronics", qty: { $gte: 100, $lte: 150 } },
+    { category: 1, qty: 1, _id: 0 }
+  ).explain("executionStats")
+'</pre>
+<span class="ok">winning stage: PROJECTION_COVERED
+nReturned: 100
+totalKeysExamined: 100
+totalDocsExamined: 0</span>
+  </div>
+  <p>投影只要 <span class="mono">category</span> 和 <span class="mono">qty</span>,两个字段都已经在索引条目里——<span class="mono">totalDocsExamined: 0</span>,FETCH 阶段完全被省掉了,数据直接从索引本身读出来。这不是"查询变快了一点",是根本没有再碰 collection 的 B-tree 文件。</p>
+</section>
+
+<section>
+  <h2>真实源码:规则三——排序要不要额外一步</h2>
+  <p class="h2-sub">如果索引扫描出来的顺序本身就满足排序要求,规划器就直接用这个顺序,不再加 SORT 阶段。</p>
+  <blockquote class="src">
+    <span class="path">src/mongo/db/query/planner_analysis.cpp · <a href="https://github.com/mongodb/mongo/blob/r8.3.7/src/mongo/db/query/planner_analysis.cpp#L1301" target="_blank" rel="noopener">mongodb/mongo @ r8.3.7, L1301</a></span>
+// See if solnRoot gives us the sort.  If so, we're done.
+auto providedSorts = solnRoot-&gt;providedSorts();
+if (providedSorts.contains(sortObj)) {
+    return true;
+}
+  </blockquote>
+  <p>每个执行计划节点(比如一次 IXSCAN)都能声明自己"天然提供"哪些排序顺序——如果请求的排序恰好在这个集合里,直接复用,函数提前返回,后面构建执行计划树时就不会再插入一个 SORT 节点。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ mongosh --quiet articledemo --eval "
+  db.inventory.find({category:'electronics'}).sort({qty:1}).explain('executionStats')
+    .queryPlanner.winningPlan.stage + ' &lt;- ' +
+  db.inventory.find({category:'electronics'}).sort({qty:1}).explain('executionStats')
+    .queryPlanner.winningPlan.inputStage.stage
+"</pre>
+<span class="ok">FETCH <- IXSCAN            (排序字段 qty 正好是索引第二个字段,不需要额外 SORT)</span>
+<span class="cm"># 换成按一个完全不在索引里的字段排序:</span>
+<span class="cmd">$ mongosh --quiet articledemo --eval "
+  db.inventory.find({category:'electronics'}).sort({price:1}).explain('executionStats')
+    .queryPlanner.winningPlan.stage
+"</span>
+<span class="ok">SORT                       (阶段链变成 SORT -&gt; FETCH -&gt; IXSCAN,多了一步阻塞式排序)</span>
+  </div>
+  <p>按 <span class="mono">qty</span> 排序时,<span class="mono">category</span> 是等值条件可以忽略,剩下索引字段顺序正好是 <span class="mono">[qty]</span>,跟排序要求完全一致,不需要额外阶段。换成按 <span class="mono">price</span>(完全不在这个索引里)排序,规划器只能先用索引把候选文档收窄,再在内存里做一次阻塞式排序——数据量一大,这一步就是实实在在的额外开销。</p>
+</section>
+
+<section>
+  <h2>交互演示:6 个真实查询,三条规则逐一过一遍</h2>
+  <p class="h2-sub">上面 6 个真实跑过的查询,按三条规则重新走一遍判断逻辑,对照真实 <span class="mono">explain()</span> 结果。</p>
+  <div class="demo" id="ixDemo">
+    <div class="demo-head"><span>查询规划三连问</span><span class="step-badge" id="ixStep">未开始</span></div>
+    <div class="demo-narration" id="ixNarration">点击"下一步"或"播放"开始。</div>
+    <div class="demo-body">
+      <div class="query-line" id="ixQuery">—</div>
+      <div class="checks" id="ixChecks"></div>
+      <div class="result-row">
+        <span class="result-badge" id="ixResultBadge">—</span>
+        <span class="result-stats" id="ixResultStats"></span>
+      </div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="ixReset">⏮ 重来</button>
+      <button class="btn" id="ixPrev">‹ 上一步</button>
+      <button class="btn primary" id="ixNext">下一步 ›</button>
+      <button class="btn" id="ixPlay">▶ 自动播放</button>
+      <span class="step-counter" id="ixCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">判断逻辑由 Python 脚本按上面三段真实源码逐条转写:规则一直接照抄 <span class="mono">findRelevantIndices</span> 只看第一个字段的行为;规则二照抄 <span class="mono">providesAllFields</span>;规则三照抄 <span class="mono">providedSorts</span> 命中检查。6 个场景每一个的模型预测结果,都和上面真实 <span class="mono">mongosh</span> <span class="mono">explain()</span> 输出逐条断言相等;一套独立重写的判断函数交叉核对过"这条查询到底用不用得上索引"。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文源码引用(<span class="mono">QueryPlannerIXSelect::findRelevantIndices</span>、<span class="mono">providesAllFields</span>、<span class="mono">QueryPlannerAnalysis::analyzeNonBlockingSort</span>)均取自 <span class="mono">mongodb/mongo</span> 仓库 <span class="mono">r8.3.7</span> 标签,与本机安装的 MongoDB Community 8.3.7 版本一致,直接从 GitHub 拉取源文件核对过函数签名、关键调用和行号。</li>
+      <li>全部 <span class="mono">explain()</span> 输出、<span class="mono">rejectedPlans</span> 计数均为本机真实 <span class="mono">mongosh</span> 会话对 <span class="mono">articledemo.inventory</span>(5000 篇真实文档)运行产生,未做删改。</li>
+      <li>演示数据的自检:6 个场景里模型判定的执行计划阶段,逐条和真实 <span class="mono">explain()</span> 捕获的阶段断言相等;两个"前缀规则"场景(只用第二个字段 vs 只用第一个字段)必须在是否用索引这件事上给出相反结论;一套独立重写的判断函数复核过每个场景是否用得上索引。</li>
+      <li>没有涉及:多键索引(multikey index)、通配符索引、索引交叉(index intersection)、聚合管道里的索引使用(下一篇会展开)、分片集合上索引选择的额外约束。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="mongo-aggregation.html">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">聚合管道:一条 pipeline 是怎么被拆开执行的</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>MongoDB 系列 · 第三篇 · 索引优化 · 源码引用自 mongodb/mongo r8.3.7,实验数据来自本机真实运行的 MongoDB Community 8.3.7</footer>
+
+<script>
+const DATA = {"scenarios": [{"name": "category+qty range (both predicate fields, default projection)", "predicate_fields": ["category", "qty"], "projection_fields": [], "sort_fields": [], "uses_index": true, "covered": false, "sort_ok": true, "model_stage": "FETCH+IXSCAN", "real_stage": "FETCH+IXSCAN", "real_stats": {"nReturned": 100, "totalKeysExamined": 100, "totalDocsExamined": 100}, "query_display": "find({ category: \"electronics\", qty: {$gte:100,$lte:150} })", "narration": "predicate 覆盖了索引的第一个字段 category,索引被判定为相关 -> 用索引 FETCH+IXSCAN,不是覆盖查询(投影是默认的全字段)。"}, {"name": "qty range only (predicate on 2nd field, not a prefix)", "predicate_fields": ["qty"], "projection_fields": [], "sort_fields": [], "uses_index": false, "covered": false, "sort_ok": true, "model_stage": "COLLSCAN", "real_stage": "COLLSCAN", "real_stats": {"nReturned": 510, "totalKeysExamined": 0, "totalDocsExamined": 5000}, "query_display": "find({ qty: {$gte:100,$lte:150} })", "narration": "predicate 只覆盖了索引的第二个字段 qty,findRelevantIndices 只看第一个字段(category),这个索引直接被判定为不相关 -> 连候选都不是,直接 COLLSCAN。"}, {"name": "category only (predicate on 1st field, is a prefix)", "predicate_fields": ["category"], "projection_fields": [], "sort_fields": [], "uses_index": true, "covered": false, "sort_ok": true, "model_stage": "FETCH+IXSCAN", "real_stage": "FETCH+IXSCAN", "real_stats": {"nReturned": 1000, "totalKeysExamined": 1000, "totalDocsExamined": 1000}, "query_display": "find({ category: \"electronics\" })", "narration": "predicate 命中索引第一个字段 -> 索引相关,用 FETCH+IXSCAN;qty 没有约束,keysExamined 等于这个分类下的全部文档数。"}, {"name": "category+qty range, projection={category,qty} (covered)", "predicate_fields": ["category", "qty"], "projection_fields": ["category", "qty"], "sort_fields": [], "uses_index": true, "covered": true, "sort_ok": true, "model_stage": "PROJECTION_COVERED", "real_stage": "PROJECTION_COVERED", "real_stats": {"nReturned": 100, "totalKeysExamined": 100, "totalDocsExamined": 0}, "query_display": "find({category:\"electronics\", qty:{$gte:100,$lte:150}}, {category:1, qty:1, _id:0})", "narration": "投影只要 category 和 qty,两个字段都已经在索引里 -> providesAllFields 判定为覆盖 -> PROJECTION_COVERED,完全不用回表,docsExamined=0。"}, {"name": "category equality, sort by qty (2nd index field, index order matches)", "predicate_fields": ["category"], "projection_fields": [], "sort_fields": ["qty"], "uses_index": true, "covered": false, "sort_ok": true, "model_stage": "FETCH+IXSCAN", "real_stage": "FETCH+IXSCAN", "real_stats": {"nReturned": 1000, "totalKeysExamined": 1000, "totalDocsExamined": 1000}, "query_display": "find({category:\"electronics\"}).sort({qty:1})", "narration": "category 是等值条件,可以跳过;剩下的索引字段顺序是 [qty],正好等于排序字段 -> providedSorts 命中,不需要额外的 SORT 阶段。"}, {"name": "category equality, sort by price (not in index, needs blocking sort)", "predicate_fields": ["category"], "projection_fields": [], "sort_fields": ["price"], "uses_index": true, "covered": false, "sort_ok": false, "model_stage": "SORT+FETCH+IXSCAN", "real_stage": "SORT+FETCH+IXSCAN", "real_stats": {"nReturned": 1000, "totalKeysExamined": 1000, "totalDocsExamined": 1000}, "query_display": "find({category:\"electronics\"}).sort({price:1})", "narration": "跳过等值字段 category 后,剩下的索引字段是 [qty],不等于排序字段 [price] -> providedSorts 没有命中,规划器在 IXSCAN 结果上再叠一个内存里的阻塞式 SORT 阶段。"}]};
+
+(function(){
+  const scenarios = DATA.scenarios;
+  const narration = document.getElementById('ixNarration');
+  const stepBadge = document.getElementById('ixStep');
+  const queryLine = document.getElementById('ixQuery');
+  const checksEl = document.getElementById('ixChecks');
+  const resultBadge = document.getElementById('ixResultBadge');
+  const resultStats = document.getElementById('ixResultStats');
+  const counter = document.getElementById('ixCounter');
+  let idx = -1, playing = false, playTimer = null;
+
+  function resultClass(stage){
+    if(stage === 'COLLSCAN') return 'warn';
+    if(stage === 'PROJECTION_COVERED') return 'best';
+    if(stage === 'SORT+FETCH+IXSCAN') return 'warn';
+    return 'good';
+  }
+
+  function render(){
+    idx = Math.max(-1, Math.min(scenarios.length - 1, idx));
+    if(idx < 0){
+      narration.textContent = '点击"下一步"或"播放"开始。';
+      stepBadge.textContent = '未开始';
+      queryLine.textContent = '—';
+      checksEl.innerHTML = '';
+      resultBadge.textContent = '—';
+      resultBadge.className = 'result-badge';
+      resultStats.textContent = '';
+      counter.textContent = `0 / ${scenarios.length}`;
+      document.getElementById('ixPrev').disabled = true;
+      document.getElementById('ixNext').disabled = false;
+      return;
+    }
+
+    const s = scenarios[idx];
+    narration.innerHTML = s.narration;
+    stepBadge.textContent = `第 ${idx+1} / ${scenarios.length} 步`;
+    queryLine.textContent = 'db.inventory.' + s.query_display;
+
+    checksEl.innerHTML = '';
+    const checks = [
+      { label: '规则一 · 前缀:查询条件覆盖索引第一个字段 (category)?', verdict: s.uses_index ? 'pass' : 'fail' },
+      { label: '规则二 · 覆盖:投影字段是否都在索引里?', verdict: !s.uses_index ? 'skip' : (s.projection_fields.length ? (s.covered ? 'pass' : 'fail') : 'skip') },
+      { label: '规则三 · 排序:索引顺序是否满足排序要求?', verdict: !s.uses_index ? 'skip' : (s.sort_fields.length ? (s.sort_ok ? 'pass' : 'fail') : 'skip') },
+    ];
+    checks.forEach(c => {
+      const row = document.createElement('div');
+      row.className = 'check';
+      row.dataset.verdict = c.verdict;
+      const label = document.createElement('span');
+      label.className = 'label';
+      label.textContent = c.label;
+      const verdict = document.createElement('span');
+      verdict.className = 'verdict';
+      verdict.textContent = c.verdict === 'pass' ? '通过' : (c.verdict === 'fail' ? '未通过' : '不适用');
+      row.appendChild(label); row.appendChild(verdict);
+      checksEl.appendChild(row);
+    });
+
+    resultBadge.textContent = s.model_stage;
+    resultBadge.className = 'result-badge ' + resultClass(s.model_stage);
+    resultStats.textContent = `真实 explain(): nReturned=${s.real_stats.nReturned}, totalKeysExamined=${s.real_stats.totalKeysExamined}, totalDocsExamined=${s.real_stats.totalDocsExamined}`;
+
+    counter.textContent = `${idx+1} / ${scenarios.length}`;
+    document.getElementById('ixPrev').disabled = idx <= -1;
+    document.getElementById('ixNext').disabled = idx >= scenarios.length - 1;
+  }
+
+  document.getElementById('ixNext').onclick = () => { idx++; render(); stopPlay(); };
+  document.getElementById('ixPrev').onclick = () => { idx--; render(); stopPlay(); };
+  document.getElementById('ixReset').onclick = () => { idx = -1; render(); stopPlay(); };
+  function stopPlay(){ playing = false; clearInterval(playTimer); document.getElementById('ixPlay').textContent = '▶ 自动播放'; }
+  document.getElementById('ixPlay').onclick = () => {
+    if(playing){ stopPlay(); return; }
+    playing = true; document.getElementById('ixPlay').textContent = '⏸ 暂停';
+    playTimer = setInterval(() => {
+      if(idx >= scenarios.length - 1){ stopPlay(); return; }
+      idx++; render();
+    }, 1800);
+  };
+
+  render();
+})();
+</script>
+
+</body>
+</html>

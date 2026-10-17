@@ -1,0 +1,459 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>String 内部:coder 决定 1 字节还是 2 字节,「不可变」只是约定——反射改一个字节,字面量、HashMap 全被改了</title>
+<meta name="description" content=" 关于 String 有两个流传很广的说法：JDK 9 之后引入了 Compact Strings，纯拉丁字符的字符串用 1 个字节存一个字符，含其他字符才用 2 个字节；String 是不可变的。这次用本机的 OpenJDK 17 逐个验证：用反射读出 String 内部的 value（byte）">
+<link rel="canonical" href="https://bigywater.tech/java-string.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="String 内部:coder 决定 1 字节还是 2 字节,「不可变」只是约定——反射改一个字节,字面量、HashMap 全被改了">
+<meta property="og:description" content=" 关于 String 有两个流传很广的说法：JDK 9 之后引入了 Compact Strings，纯拉丁字符的字符串用 1 个字节存一个字符，含其他字符才用 2 个字节；String 是不可变的。这次用本机的 OpenJDK 17 逐个验证：用反射读出 String 内部的 value（byte）">
+<meta property="og:url" content="https://bigywater.tech/java-string.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="String 内部:coder 决定 1 字节还是 2 字节,「不可变」只是约定——反射改一个字节,字面量、HashMap 全被改了">
+<meta name="twitter:description" content=" 关于 String 有两个流传很广的说法：JDK 9 之后引入了 Compact Strings，纯拉丁字符的字符串用 1 个字节存一个字符，含其他字符才用 2 个字节；String 是不可变的。这次用本机的 OpenJDK 17 逐个验证：用反射读出 String 内部的 value（byte）">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#E76F00; --series-c-soft:#FBEADA;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#FF9A44; --series-c-soft:#3A2914;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#FF9A44; --series-c-soft:#3A2914;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.lang-tabs{margin:20px 0; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper);}
+.lang-tabs .tab-bar{display:flex; flex-wrap:wrap; gap:0; border-bottom:1px solid var(--line); background:var(--bg);}
+.lang-tabs .tab{appearance:none; border:none; background:transparent; color:var(--ink-dim); padding:10px 16px; font-size:.88rem; cursor:pointer; border-bottom:2px solid transparent; font-family:inherit;}
+.lang-tabs .tab.active{color:var(--series-c); border-bottom-color:var(--series-c); font-weight:600;}
+.lang-tabs .tab-panel{display:none; padding:4px 16px 12px;}
+.lang-tabs .tab-panel.active{display:block;}
+.lang-tabs blockquote.src{margin:14px 0 8px;}
+.lang-tabs .term{margin:8px 0 4px;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Java 内部原理 · 字符串</div>
+  <h1>String 内部:coder 决定 1 字节还是 2 字节,「不可变」只是约定——反射改一个字节,字面量、HashMap 全被改了</h1>
+  <p>关于 <span class="mono">String</span> 有两个流传很广的说法：JDK 9 之后引入了 Compact Strings，纯拉丁字符的字符串用 1 个字节存一个字符，含其他字符才用 2 个字节；<span class="mono">String</span> 是不可变的。这次用本机的 OpenJDK 17 逐个验证：用反射读出 <span class="mono">String</span> 内部的 <span class="mono">value</span>（<span class="mono">byte[]</span>）和 <span class="mono">coder</span> 字段，看不同内容的字符串到底怎么存；用 <span class="mono">Instrumentation</span> 精确量出一个字符串占多少字节，开关 <span class="mono">-XX:-CompactStrings</span> 对比；再用反射直接改 <span class="mono">value</span> 里的一个字节，看&quot;不可变&quot;到底是被谁保证的，以及改了之后 <span class="mono">hashCode</span> 缓存、<span class="mono">HashMap</span>、字面量常量池会发生什么。最后是一个分步演示，每一帧都是真实程序在每个操作之后读出的字节。</p>
+  <div class="hero-fact"><div><div class="num">144 → 240</div><div class="lbl">长度 100 的 ASCII 字符串加一个「中」之后每个字符串占的字节数</div></div><div><div class="num">7 步</div><div class="lbl">分步演示，每一帧都是反射读出的 String.value 真实字节</div></div></div>
+</div></div>
+<div class="wrap">
+<p class="prev-post">上一篇:<a href="java-hashmap.html" target="_blank" rel="noopener">HashMap 扩容全过程:第 13 个 put 才触发,节点按 hash 的一位拆成两桶,预设容量省掉 18 次扩容</a></p>
+<section style="padding-top:8px;">
+  <h2>环境与方法</h2>
+  <blockquote class="src">
+    <span class="path">真实命令 · shell</span>
+$ java -version
+$ javac -d build MemAgent.java StringExp.java &amp;&amp; (cd build &amp;&amp; jar cfm agent.jar ../manifest.txt MemAgent.class)
+$ java -javaagent:build/agent.jar --add-opens java.base/java.lang=ALL-UNNAMED -cp build StringExp
+$ java -XX:-CompactStrings -javaagent:build/agent.jar --add-opens java.base/java.lang=ALL-UNNAMED -cp build StringExp
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测 · 本机执行输出</span>
+<pre class="code">openjdk version &quot;17.0.20.1&quot; 2026-08-18
+OpenJDK Runtime Environment Temurin-17.0.20.1+1 (build 17.0.20.1+1)
+OpenJDK 64-Bit Server VM Temurin-17.0.20.1+1 (build 17.0.20.1+1, mixed mode, sharing)
+
+java.version = 17.0.20.1，OpenJDK 64-Bit Server VM，aarch64，jvm 参数: [-javaagent:build/agent.jar, --add-opens=java.base/java.lang=ALL-UNNAMED]</pre></div>
+  <p><span class="mono">MemAgent</span> 是一个只有几行的 Java Agent，把 <span class="mono">Instrumentation</span> 存下来供实验调用 <span class="mono">getObjectSize</span>（它返回的是单个对象的浅层大小，不包含引用的对象，所以 <span class="mono">String</span> 对象和它的 <span class="mono">byte[]</span> 要分开量再相加）。读取 <span class="mono">String</span> 的私有字段用反射：</p>
+  <blockquote class="src">
+    <span class="path">真实命令 · java</span>
+Field VALUE = String.class.getDeclaredField(&quot;value&quot;);   // private final byte[] value
+Field CODER = String.class.getDeclaredField(&quot;coder&quot;);   // private final byte coder：0 = LATIN1，1 = UTF16
+VALUE.setAccessible(true);
+CODER.setAccessible(true);
+  </blockquote>
+  <p>在 JDK 17 里，这两行 <span class="mono">setAccessible(true)</span> 默认会失败，需要 <span class="mono">--add-opens java.base/java.lang=ALL-UNNAMED</span>。不加这个参数的真实报错是：</p>
+  <blockquote class="src">
+    <span class="path">真实命令 · shell</span>
+$ java NoOpens.java
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测 · 本机执行输出</span>
+<pre class="code">java.lang.reflect.InaccessibleObjectException: Unable to make field private final byte[] java.lang.String.value accessible: module java.base does not &quot;opens java.lang&quot; to unnamed module @4b53f538</pre></div>
+</section>
+<section>
+  <h2>真实验证:coder 按「内容」自动选择,拉丁字符 1 字节,其他字符 2 字节,一个字符就能让整个字符串翻倍</h2>
+  <div class="term"><span class="real-tag">真实实测 · 本机执行输出</span>
+<pre class="code">&quot;&quot;     length() = 0  coder = 0  value.length =  0  value = []
+&quot;abc&quot;  length() = 3  coder = 0  value.length =  3  value = [61 62 63]
+&quot;é&quot;    length() = 1  coder = 0  value.length =  1  value = [e9]
+&quot;€&quot;    length() = 1  coder = 1  value.length =  2  value = [ac 20]
+&quot;中&quot;    length() = 1  coder = 1  value.length =  2  value = [2d 4e]
+&quot;abc中&quot; length() = 4  coder = 1  value.length =  8  value = [61 00 62 00 63 00 2d 4e]
+&quot;😀&quot;   length() = 2  coder = 1  value.length =  4  value = [3d d8 00 de]</pre></div>
+  <p><span class="mono">coder = 0</span>（LATIN1）时每个字符一个字节：<span class="mono">&quot;abc&quot;</span> 的 <span class="mono">value</span> 是 <span class="mono">61 62 63</span> 三个字节；<span class="mono">&quot;é&quot;</span>（U+00E9，在 0–255 之内）仍是 1 个字节。<span class="mono">&quot;€&quot;</span>（U+20AC）和 <span class="mono">&quot;中&quot;</span>（U+4E2D）超出了这个范围，<span class="mono">coder = 1</span>（UTF16），每个字符 2 个字节，并且在这台机器上是小端序：<span class="mono">&quot;中&quot;</span> 是 <span class="mono">2d 4e</span>，低位字节在前。最关键的是 <span class="mono">&quot;abc中&quot;</span>：整个字符串的 <span class="mono">coder</span> 是 1，<span class="mono">value</span> 有 8 个字节，前面三个 ASCII 字符也被存成了 <span class="mono">61 00 62 00 63 00</span>，也就是一个非拉丁字符会让整个字符串的存储翻倍。<span class="mono">&quot;😀&quot;</span> 是 U+1F600，超出基本平面，<span class="mono">length()</span> 是 2（两个 UTF-16 代码单元），<span class="mono">value</span> 是 4 个字节 <span class="mono">3d d8 00 de</span>，也就是一对代理项。空字符串的 <span class="mono">coder</span> 是 0，<span class="mono">value</span> 长度 0。</p>
+  <p>关掉 Compact Strings（<span class="mono">-XX:-CompactStrings</span>）之后同一组字符串：</p>
+  <div class="term"><span class="real-tag">真实实测 · 本机执行输出</span>
+<pre class="code">&quot;&quot;     length() = 0  coder = 1  value.length =  0  value = []
+&quot;abc&quot;  length() = 3  coder = 1  value.length =  6  value = [61 00 62 00 63 00]
+&quot;é&quot;    length() = 1  coder = 1  value.length =  2  value = [e9 00]
+&quot;€&quot;    length() = 1  coder = 1  value.length =  2  value = [ac 20]
+&quot;中&quot;    length() = 1  coder = 1  value.length =  2  value = [2d 4e]
+&quot;abc中&quot; length() = 4  coder = 1  value.length =  8  value = [61 00 62 00 63 00 2d 4e]
+&quot;😀&quot;   length() = 2  coder = 1  value.length =  4  value = [3d d8 00 de]</pre></div>
+  <p>所有字符串（包括空串）的 <span class="mono">coder</span> 都变成了 1，<span class="mono">&quot;abc&quot;</span> 的 <span class="mono">value</span> 变成了 6 个字节。所以 <span class="mono">coder</span> 是 Compact Strings 这个特性的开关体现，不是字符串本身固定的属性。</p>
+</section>
+<section>
+  <h2>真实验证:一个字符串占多少字节,ASCII 是 144 字节,加一个「中」变成 240 字节</h2>
+  <div class="term"><span class="real-tag">真实实测 · 本机执行输出</span>
+<pre class="code">字符串                          coder     String 对象    byte[] 数组         合计
+长度 0，全是 ASCII                0                24           16         40
+长度 1，全是 ASCII                0                24           24         48
+长度 1，最后一个是「中」                1                24           24         48
+长度 10，全是 ASCII               0                24           32         56
+长度 10，最后一个是「中」               1                24           40         64
+长度 100，全是 ASCII              0                24          120        144
+长度 100，最后一个是「中」              1                24          216        240
+长度 1000，全是 ASCII             0                24         1016       1040
+长度 1000，最后一个是「中」             1                24         2016       2040</pre></div>
+  <p><span class="mono">String</span> 对象本身固定 24 字节（对象头、<span class="mono">value</span> 引用、缓存的 <span class="mono">hash</span>、<span class="mono">coder</span> 等字段加对齐），<span class="mono">byte[]</span> 数组是 16 字节的头加上数据再对齐到 8 的倍数：长度 100 的 ASCII 字符串数据是 100 字节，数组 120 字节，合计 144 字节；只要有一个「中」，数据翻成 200 字节，数组 216 字节，合计 240 字节，多了 96 字节（约 67%）。长度 1000 时是 1040 对 2040，接近 2 倍。长度 1 或 10 时因为数组头占比大，差距小一些：长度 10 是 56 对 64 字节。</p>
+  <p>用 <span class="mono">-XX:-CompactStrings</span> 关掉之后：</p>
+  <div class="term"><span class="real-tag">真实实测 · 本机执行输出</span>
+<pre class="code">字符串                          coder     String 对象    byte[] 数组         合计
+长度 0，全是 ASCII                1                24           16         40
+长度 1，全是 ASCII                1                24           24         48
+长度 1，最后一个是「中」                1                24           24         48
+长度 10，全是 ASCII               1                24           40         64
+长度 10，最后一个是「中」               1                24           40         64
+长度 100，全是 ASCII              1                24          216        240
+长度 100，最后一个是「中」              1                24          216        240
+长度 1000，全是 ASCII             1                24         2016       2040
+长度 1000，最后一个是「中」             1                24         2016       2040</pre></div>
+  <p>关掉之后，ASCII 字符串也和带「中」的一样大：长度 100 是 240 字节、长度 1000 是 2040 字节，Compact Strings 对纯拉丁字符串大约省了一半的数据空间。这些数字是这个 JVM（64 位、压缩指针默认开启）下的浅层大小，不是所有 JVM 配置通用的。我最开始试过用 <span class="mono">Runtime.totalMemory() - freeMemory()</span> 在 GC 之后估算，但同样的两批字符串两次估出来差了两成以上（119.9 字节对 148.0 字节每个，这次输出我没有保存），说明这种办法在 SerialGC 下不稳定，所以改用了 <span class="mono">Instrumentation</span>。</p>
+</section>
+<section>
+  <h2>真实验证:「不可变」是 API 层的约定,反射改一个字节,字面量和别的变量全都变了</h2>
+  <div class="term"><span class="real-tag">真实实测 · 本机执行输出</span>
+<pre class="code">修改前: s = hello，copy = hello，sub = ello
+copy 与 s 共享同一个 value 数组: true；sub 与 s 共享: false
+修改后: s = jello，copy = jello，sub = ello
+别的方法里再取一次同一个字面量: literalHello() = jello，与 s 是同一个对象: true
+新建一个内容为 jello 的字符串 fresh：s.equals(fresh) = true
+hashCode 缓存: s.hashCode() = 99162322（修改前是 99162322），fresh.hashCode() = 101009364
+HashMap 里放着 s：map.get(s) = 1，map.get(fresh) = null（s.equals(fresh) 明明是 true）</pre></div>
+  <p>这一段的每一行都值得拆开看：</p>
+  <ul>
+    <li><span class="mono">s</span> 是字面量 <span class="mono">&quot;hello&quot;</span>，<span class="mono">copy = new String(s)</span> 与 <span class="mono">s</span> 共享同一个 <span class="mono">byte[]</span>（输出 <span class="mono">true</span>）：<span class="mono">new String(String)</span> 只复制了数组的引用；<span class="mono">sub = s.substring(1)</span> 是新拷贝的数组（<span class="mono">false</span>）。</li>
+    <li>用反射把 <span class="mono">s</span> 的 <span class="mono">value[0]</span> 从 <span class="mono">h</span> 改成 <span class="mono">j</span> 之后，<span class="mono">s</span> 和 <span class="mono">copy</span> 都变成了 <span class="mono">jello</span>，<span class="mono">sub</span> 不受影响（还是 <span class="mono">ello</span>）。</li>
+    <li>在另一个方法里再取一次字面量 <span class="mono">&quot;hello&quot;</span>，得到的是 <span class="mono">jello</span>，而且和 <span class="mono">s</span> 是同一个对象（<span class="mono">==</span> 为 <span class="mono">true</span>）：常量池里的对象被改了，之后整个进程里写 <span class="mono">&quot;hello&quot;</span> 拿到的都是 <span class="mono">jello</span>。</li>
+    <li><span class="mono">hashCode</span> 是缓存的：<span class="mono">s.hashCode()</span> 仍然是修改前的 99162322，而内容同为 <span class="mono">jello</span> 的新字符串 <span class="mono">fresh</span> 的 <span class="mono">hashCode</span> 是 101009364。于是 <span class="mono">s.equals(fresh)</span> 是 <span class="mono">true</span>，但两者的 hash 不同，违反了&quot;相等的对象必须有相同 hashCode&quot;的约定，结果放着 <span class="mono">s</span> 的 <span class="mono">HashMap</span> 里用 <span class="mono">fresh</span> 去查得到 <span class="mono">null</span>。</li>
+  </ul>
+  <p>所以，<span class="mono">String</span> 的不可变不是 JVM 在内存层面强制的：它靠的是 <span class="mono">value</span> 字段是 <span class="mono">private final</span>、类里没有任何修改内容的公开方法，再加上 JDK 9 之后的模块封装（不加 <span class="mono">--add-opens</span> 反射根本进不去，见上面的报错）。一旦有代码绕过这些保护，共享同一个数组的对象、常量池里的字面量、已经缓存的 <span class="mono">hashCode</span> 都会一起出问题。这也是&quot;字符串可以放心当 HashMap 的 key、可以安全地在线程间共享&quot;这个前提的真实成立条件。这个实验只是为了理解&quot;不可变&quot;的实现方式，不要在生产代码里这样做。</p>
+</section>
+<section>
+  <h2>分步演示:concat、substring、new String 之后,value 的真实字节</h2>
+  <p>下面的演示依次执行 6 条语句：<span class="mono">s0 = &quot;abc&quot;</span>，<span class="mono">s1 = s0.concat(&quot;é&quot;)</span>，<span class="mono">s2 = s1.concat(&quot;中&quot;)</span>，<span class="mono">s3 = s2.substring(0, 3)</span>，<span class="mono">s4 = new String(s0)</span>，<span class="mono">s5 = s0.substring(1)</span>。每一帧的字节、<span class="mono">coder</span>、底层数组编号都是真实程序在每一步之后用反射读出的。可以看到：<span class="mono">s1</span> 仍然是 LATIN1；<span class="mono">s2</span> 追加「中」后整个字符串变成 UTF16，前面的字符被整体重新编码（<span class="mono">value</span> 从 4 字节变成 10 字节）；<span class="mono">s3</span> 从 UTF16 的 <span class="mono">s2</span> 里截出 <span class="mono">&quot;abc&quot;</span>，因为都在 0–255 之内，结果又回到 LATIN1；<span class="mono">s4</span> 与 <span class="mono">s0</span> 的数组编号相同（共享）；<span class="mono">s5</span> 是新数组。</p>
+<div class="demo" id="demo"><div class="demo-head">String 内部的 value 与 coder：每一步之后用反射读出的真实字节（OpenJDK 17，aarch64 小端）</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="mark"></i>新建的字符串的字节</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>
+(function(){
+const D = {"title": "String 内部的 value 与 coder：每一步之后用反射读出的真实字节（OpenJDK 17，aarch64 小端）", "panels": [{"id": "op", "kind": "text", "label": "刚执行的语句"}, {"id": "bytes", "kind": "cells", "label": "这一步新建的字符串的 value（byte[]），每格一个字节，十六进制"}, {"id": "vars", "kind": "kv", "label": "所有变量：内容 · coder · byte[] 长度 · 底层数组编号（编号相同 = 共享同一个 byte[]）"}], "legend": [["mark", "新建的字符串的字节"]], "caption": "", "steps": [{"note": "字面量 \"abc\" 只含 ASCII 字符，coder = 0（LATIN1），value 是 3 个字节：61 62 63，一个字符一个字节", "s": {"op": {"text": "String s0 = \"abc\";"}, "bytes": {"values": ["61", "62", "63"], "cur": [], "done": [], "mark": [0, 1, 2], "dim": [], "ptr": {}}, "vars": {"items": [["s0 = \"abc\"", "coder=0 · byte[3] · 数组①"]], "hl": ["s0 = \"abc\""]}}}, {"note": "追加的 \"é\"（U+00E9）仍在 0–255 范围内，结果仍是 LATIN1：coder = 0，value 长度 4。s0 没有变化（还是 3 个字节），concat 返回的是新对象", "s": {"op": {"text": "String s1 = s0.concat(\"é\");"}, "bytes": {"values": ["61", "62", "63", "e9"], "cur": [], "done": [], "mark": [0, 1, 2, 3], "dim": [], "ptr": {}}, "vars": {"items": [["s0 = \"abc\"", "coder=0 · byte[3] · 数组①"], ["s1 = \"abcé\"", "coder=0 · byte[4] · 数组②"]], "hl": ["s1 = \"abcé\""]}}}, {"note": "追加的 \"中\"（U+4E2D）超出 0–255，无法用 LATIN1 表示，整个字符串改用 UTF16：coder 从 0 变成 1，value 从 4 字节变成 10 字节：前面 4 个字符也被重新编码成每字符 2 字节（61 00 62 00 63 00 e9 00），最后是「中」的两个字节 2d 4e（小端，低位在前）", "s": {"op": {"text": "String s2 = s1.concat(\"中\");"}, "bytes": {"values": ["61", "00", "62", "00", "63", "00", "e9", "00", "2d", "4e"], "cur": [], "done": [], "mark": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], "dim": [], "ptr": {}}, "vars": {"items": [["s0 = \"abc\"", "coder=0 · byte[3] · 数组①"], ["s1 = \"abcé\"", "coder=0 · byte[4] · 数组②"], ["s2 = \"abcé中\"", "coder=1 · byte[10] · 数组③"]], "hl": ["s2 = \"abcé中\""]}}}, {"note": "s2 是 UTF16，但前 3 个字符 \"abc\" 都在 0–255 内：substring 的结果又「压缩」回了 LATIN1（coder = 0），value 只有 3 字节，并且是新拷贝的数组，与 s2 不共享", "s": {"op": {"text": "String s3 = s2.substring(0, 3);"}, "bytes": {"values": ["61", "62", "63"], "cur": [], "done": [], "mark": [0, 1, 2], "dim": [], "ptr": {}}, "vars": {"items": [["s0 = \"abc\"", "coder=0 · byte[3] · 数组①"], ["s1 = \"abcé\"", "coder=0 · byte[4] · 数组②"], ["s2 = \"abcé中\"", "coder=1 · byte[10] · 数组③"], ["s3 = \"abc\"", "coder=0 · byte[3] · 数组④"]], "hl": ["s3 = \"abc\""]}}}, {"note": "s4 的底层数组编号与 s0 相同：new String(String) 没有拷贝，两个字符串共享同一个 byte[]（下一节会看到，这也是「不可变」只是约定的原因之一）", "s": {"op": {"text": "String s4 = new String(s0);"}, "bytes": {"values": ["61", "62", "63"], "cur": [], "done": [], "mark": [0, 1, 2], "dim": [], "ptr": {}}, "vars": {"items": [["s0 = \"abc\"", "coder=0 · byte[3] · 数组①"], ["s1 = \"abcé\"", "coder=0 · byte[4] · 数组②"], ["s2 = \"abcé中\"", "coder=1 · byte[10] · 数组③"], ["s3 = \"abc\"", "coder=0 · byte[3] · 数组④"], ["s4 = \"abc\"", "coder=0 · byte[3] · 数组①"]], "hl": ["s4 = \"abc\""]}}}, {"note": "s5 通过 substring 得到，内容 \"bc\"，value 是新拷贝的 2 字节数组（编号⑤），与 s0 不共享", "s": {"op": {"text": "String s5 = s0.substring(1);"}, "bytes": {"values": ["62", "63"], "cur": [], "done": [], "mark": [0, 1], "dim": [], "ptr": {}}, "vars": {"items": [["s0 = \"abc\"", "coder=0 · byte[3] · 数组①"], ["s1 = \"abcé\"", "coder=0 · byte[4] · 数组②"], ["s2 = \"abcé中\"", "coder=1 · byte[10] · 数组③"], ["s3 = \"abc\"", "coder=0 · byte[3] · 数组④"], ["s4 = \"abc\"", "coder=0 · byte[3] · 数组①"], ["s5 = \"bc\"", "coder=0 · byte[2] · 数组⑤"]], "hl": ["s5 = \"bc\""]}}}, {"note": "演示结束：s0、s1 一直没有变（每个「修改」都返回新对象）；coder 由内容决定，可以从 LATIN1 升到 UTF16，也可以在 substring 时降回 LATIN1；共享数组只出现在 new String(String) 这种直接复制引用的场合", "s": {"op": {"text": "（全部语句执行完毕）"}, "bytes": {"values": ["62", "63"], "cur": [], "done": [], "mark": [], "dim": [], "ptr": {}}, "vars": {"items": [["s0 = \"abc\"", "coder=0 · byte[3] · 数组①"], ["s1 = \"abcé\"", "coder=0 · byte[4] · 数组②"], ["s2 = \"abcé中\"", "coder=1 · byte[10] · 数组③"], ["s3 = \"abc\"", "coder=0 · byte[3] · 数组④"], ["s4 = \"abc\"", "coder=0 · byte[3] · 数组①"], ["s5 = \"bc\"", "coder=0 · byte[2] · 数组⑤"]], "hl": []}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1000); };
+go(0);
+})();
+</script>
+</section>
+<section>
+  <h2>结论</h2>
+  <ul>
+    <li><span class="mono">String</span> 内部是 <span class="mono">byte[] value</span> 加一个 <span class="mono">coder</span> 字节：内容全在 0–255 之内用 LATIN1（1 字节/字符），否则整个字符串用 UTF16（2 字节/字符）；一个「中」就足以让长度 100 的 ASCII 字符串从 144 字节涨到 240 字节。</li>
+    <li><span class="mono">coder</span> 是内容的属性：<span class="mono">concat</span> 追加非拉丁字符会升级，<span class="mono">substring</span> 截出纯拉丁部分又会降回去；<span class="mono">-XX:-CompactStrings</span> 会让所有字符串都变成 UTF16，ASCII 字符串的大小翻倍。</li>
+    <li>「不可变」靠的是 <span class="mono">private final</span> 加没有修改方法加模块封装，而不是 JVM 强制：反射改一个字节，共享数组的 <span class="mono">new String(s)</span>、常量池里的字面量都会被改，缓存的 <span class="mono">hashCode</span> 不会跟着变，<span class="mono">HashMap</span> 就会找不到。</li>
+    <li><span class="mono">substring</span> 会拷贝数组（不共享），<span class="mono">new String(String)</span> 只复制引用（共享）。</li>
+  </ul>
+</section>
+<section>
+  <div class="refs"><h3>参考与说明</h3><ul>
+    <li>环境：本机 OpenJDK 17.0.20.1（Temurin），aarch64（小端），macOS。<span class="mono">coder</span>、<span class="mono">value</span> 是 JDK 内部字段，名称和语义随版本变化，本文只对这个版本成立。</li>
+    <li>实验源码 <span class="mono">StringExp.java</span>、<span class="mono">MemAgent.java</span>、<span class="mono">NoOpens.java</span> 和生成演示数据的 <span class="mono">StringDemo.java</span> 都在本机的实验目录里，数据全部来自它们的真实输出。</li>
+    <li>没有验证：JDK 8 及以前（<span class="mono">char[]</span> 存储，没有 Compact Strings）；G1 的字符串去重（<span class="mono">-XX:+UseStringDeduplication</span>）；大端机器上 UTF16 的字节序；字符串常量池（<span class="mono">intern</span>）的内存开销；<span class="mono">StringBuilder</span> 的存储方式。</li>
+    <li>相关文章:<a href="https://bigywater.tech/java-string-concat-bytecode.html" target="_blank" rel="noopener">字符串 + 拼接编译成了什么</a>、<a href="https://bigywater.tech/java-string-hashcode-collision.html" target="_blank" rel="noopener">String.hashCode() 真实公式</a>、<a href="https://bigywater.tech/java-string-codepoint-surrogate.html" target="_blank" rel="noopener">String 代理对</a>（同一系列，本文只说明 <span class="mono">String</span> 自己的存储）。</li>
+  </ul></div>
+</section>
+<section>
+  <a class="next-post" href="java-integer-cache.html" target="_blank" rel="noopener" style="text-decoration:none; color:inherit;">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">Integer 缓存:为什么 == 在测试环境正常,生产环境却悄悄失灵</div>
+    </div>
+    <div style="font-size:1.5rem;">→</div>
+  </a>
+</section>
+</div>
+<footer>Java 内部原理 · 字符串 · 数据来自本机 OpenJDK 17.0.20.1（aarch64）的真实实验</footer>
+</body>
+</html>

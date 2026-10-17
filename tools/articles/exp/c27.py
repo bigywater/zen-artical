@@ -1,0 +1,51 @@
+import sys, os, re, time, subprocess, json; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from dl import *
+tee('c27')
+img('alpine:3.20')
+purge()
+def vm(cmd):
+    rc, o = dk('run', '--rm', '--privileged', '--pid=host', *LAB, 'alpine:3.20', 'nsenter', '-t', '1', '-m', '-u', '-n', '-i', 'sh', '-c', cmd, raw=True)
+    return o.strip()
+def short(a): return re.sub(r'[0-9a-f]{64}', lambda m: m.group(0)[:12] + '…', a)
+def ps(pid): return vm(f"ps -o pid=,ppid=,args= -p {pid}").strip()
+def shims(): return vm("ps -eo pid=,args= | grep containerd-shim | grep -v grep | wc -l")
+print('== 一:容器里的进程,在 Docker Desktop 虚拟机里的父进程链(Docker Engine 29.8.2)')
+s0 = int(shims())
+cid = out('run', '-d', '--name', 'bwlab-c27a', *LAB, 'alpine:3.20', 'sleep', '600')
+pid = int(out('inspect', '--format', '{{.State.Pid}}', cid))
+print(f'  docker inspect 的 State.Pid = {pid}(这是虚拟机里看到的 PID;容器里它是 PID 1)')
+print(f'  /proc/{pid}/status 的 NSpid = {vm(f"grep NSpid /proc/{pid}/status")}(第一个是虚拟机里的 PID,第二个是容器里的 PID)')
+chain = []; p = pid
+for _ in range(4):
+    l = ps(p)
+    if not l: break
+    chain.append(short(l)); p = int(l.split()[1])
+    if p == 0: break
+for i, l in enumerate(chain): print(f'  {"  " * i}{l[:230]}')
+print(f'  容器进程的 PPID 是 containerd-shim 吗?{"containerd-shim" in chain[1]};shim 的参数里 -id 等于容器 ID 吗?{cid in ps(int(chain[0].split()[1]))}')
+print('== 二:每个容器一个 shim,runc 在容器运行时不存在')
+cid2 = out('run', '-d', '--name', 'bwlab-c27b', *LAB, 'alpine:3.20', 'sleep', '600'); cid3 = out('run', '-d', '--name', 'bwlab-c27c', *LAB, 'alpine:3.20', 'sleep', '600')
+s3 = int(shims())
+print(f'  起 3 个容器前后,containerd-shim 进程数:{s0} → {s3}(增加 {s3 - s0})')
+seen = []
+for _ in range(6):
+    r = vm("ps -eo pid=,ppid=,args= | grep -E 'runc' | grep -v -E 'grep|containerd-shim-runc-v2|runc-v2' | cut -c1-140")
+    seen.append(r.count('\n') + 1 if r else 0)
+    last = r
+    time.sleep(0.4)
+print(f'  容器运行期间连续 6 次查看虚拟机里的 runc 进程个数(只统计命令行里含 runc、不是 containerd-shim-runc-v2 的进程):{seen};最后一次看到的:{last.replace(chr(10), " ; ")[:200] or "无"}')
+print(f'  dockerd 与 containerd 在虚拟机里是什么进程?{vm("ps -eo pid=,ppid=,args= | grep -E \'dockerd --config|containerd --config\' | grep -v grep | head -3 | cut -c1-150").replace(chr(10), " ; ")}')
+print('== 三:docker exec 出来的进程,父进程是谁')
+dk('exec', '-d', cid, 'sleep', '555')
+time.sleep(0.5)
+ep = vm("ps -eo pid=,ppid=,args= | grep 'sleep 555' | grep -v grep | head -1").split()
+print(f'  docker exec -d 起的 sleep 555:PID {ep[0]},PPID {ep[1]};它的父进程是容器主进程所在的那个 shim 吗?{ep[1] == chain[0].split()[1] or ep[1] == str(chain[1].split()[0])};' + f'PPID 对应的进程:{short(ps(ep[1]))[:110]}')
+print('== 四:从虚拟机里直接杀掉容器的主进程')
+vm(f"kill -9 {pid}")
+time.sleep(1.5)
+s = json.loads(out('inspect', '--format', '{{json .State}}', cid))
+print(f'  kill -9 {pid} 之后:docker inspect Status={s["Status"]} ExitCode={s["ExitCode"]};shim 进程还在吗?{bool(ps(int(chain[1].split()[0])))}')
+dk('stop', '-t', '1', cid2)
+time.sleep(1)
+print(f'  docker stop 另一个容器之后,它的 shim 还在吗?{bool(vm(f"ps -eo args= | grep {cid2} | grep -v grep"))}')
+purge()

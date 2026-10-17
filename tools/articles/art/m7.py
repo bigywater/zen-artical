@@ -1,0 +1,24 @@
+from lib import *
+S = SS('m7')
+steps = [
+    step("一个全新的 mongod(还没有用户集合)的 dbpath:WiredTiger(50 字节)、WiredTiger.lock、WiredTiger.turtle(1,278 字节)、WiredTiger.wt、WiredTigerHS.wt、_mdb_catalog.wt、sizeStorer.wt、storage.bson(114 字节)、mongod.lock(6 字节)、_tmp/ 和 journal/ 目录,另外有 3 个 collection-*.wt 和 4 个 index-*.wt。$listCatalog 显示这 3 个集合是 admin.system.version、config.system.sessions、local.startup_log——系统集合也各占一个文件。", t=tl(S(1)), mark=lidx(S(1), 'ns: ', '$listCatalog'), done=lidx(S(1), 'WiredTiger.turtle', '_mdb_catalog.wt', 'journal/', 'storage.bson'), kv=KV([['全局文件', 'WiredTiger*、_mdb_catalog.wt、sizeStorer.wt'], ['系统集合', '3 个 collection-*.wt'], ['目录', 'journal/、_tmp/ (之后还有 diagnostic.data/)']], ['全局文件'])),
+    step("建一个 20,000 文档的集合 users 和两个二级索引之后,多出 1 个 collection-*.wt(364,544 字节)、3 个 index-*.wt(_id 217,088,age_1 110,592,city_1_name_1 258,048 字节)和 2 个 internal-sideWrites-*.wt(各 4,096 字节)。collStats 的 wiredTiger.uri 与每个索引的 uri 给出了对应的文件名:每个集合、每个索引各占一个 .wt 文件。", t=tl(S(2)), mark=lidx(S(2), 'collStats', '索引 '), done=lidx(S(2), 'collection-', 'index-', 'internal-sideWrites'), kv=KV([['集合', '1 个 collection-<ident>.wt'], ['每个索引', '1 个 index-<ident>.wt'], ['建索引时', '多出 internal-sideWrites-*.wt'], ['对应关系', 'collStats 的 uri']], ['集合'])),
+    step("文件名里的是 ident(UUID 样式),不是顺序号:$listCatalog 针对 test.users 返回 ident: collection-… 和 idxIdent 里 _id_、age_1、city_1_name_1 各自的 index-… 名字,与上一步 collStats 的 uri 完全对得上。", t=tl(S(3)), mark=lidx(S(3), 'ident:', 'idxIdent'), done=lidx(S(3), '_id_:', 'age_1:', 'city_1_name_1:'), kv=KV([['ident', '集合或索引在存储层的名字'], ['$listCatalog', '服务端用来查 ident 的命令'], ['文件名', 'collection- 或 index- 加 ident']], ['ident'])),
+    step("几个小文件:WiredTiger 文件内容是 WiredTiger 12.0.0: (November 15, 2024);mongod.lock 里是 mongod 的进程号(与实际进程一致);WiredTiger.turtle 共 6 行,包含版本串、版本号和 WiredTiger.wt 的元数据一行;storage.bson 解码得 {'storage': {'engine': 'wiredTiger', 'options': {'directoryPerDB': False, 'directoryForIndexes': False, 'groupCollections': False}}}。", t=tl(S(4)), mark=lidx(S(4), 'mongod.lock', 'storage.bson 解码', 'WiredTiger.turtle'), done=lidx(S(4), 'WiredTiger 12.0.0', 'WiredTiger  的内容'), kv=KV([['WiredTiger', '版本串'], ['mongod.lock', '进程号'], ['turtle', '元数据引导,6 行'], ['storage.bson', '存储引擎与目录选项']], ['mongod.lock'])),
+    step("journal 目录里有 WiredTigerLog.0000000001 和 WiredTigerPreplog.0000000001,文件大小各是 104,857,600(100 MiB),但 WiredTigerLog 实际占用磁盘只有 557,056 字节(稀疏文件,du 看到的小得多);diagnostic.data 里有 metrics.2026-10-12T01-18-45Z-00000(39,522 字节)。", t=tl(S(5)), mark=lidx(S(5), '实际占用磁盘', 'metrics.'), done=lidx(S(5), 'WiredTigerLog.0000000001  ', 'WiredTigerPreplog'), b=bars([['文件大小', 104857600, '104,857,600'], ['实际占用磁盘', 557056, '557,056']], 104857600, mark=[1], done=[0]), kv=KV([['journal/', '预分配的 100 MiB 日志文件'], ['实际占用', '远小于文件大小(稀疏)'], ['diagnostic.data/', 'FTDC 的 metrics 文件']], ['实际占用'])),
+    step("drop 集合 users 之后(fsync 并等待),dbpath 条目从 25 个变成 19 个,消失的是它的 6 个文件:collection-*.wt、3 个 index-*.wt 和 2 个 internal-sideWrites-*.wt;没有新增文件,_mdb_catalog.wt、sizeStorer.wt 等全局文件还在。", t=tl(S(6)), mark=lidx(S(6), '消失的'), done=lidx(S(6), '新增的: []'), kv=KV([['drop 集合', '对应的 .wt 文件随即被删除'], ['全局文件', '一直在']], ['drop 集合'])),
+]
+A = mkartm('m7', 7, 'MongoDB,dbpath,WiredTiger,文件,journal,真实验证,动画演示',
+    '实测 mongod 的 dbpath 目录:WiredTiger、turtle、_mdb_catalog.wt、sizeStorer.wt、storage.bson、mongod.lock 各是什么;每个集合、每个索引一个 .wt 文件,文件名里的 ident 用 collStats 与 $listCatalog 对应;journal 是 100 MiB 的稀疏预分配文件;drop 集合后对应文件消失。',
+    '数据目录里一堆 collection-xxx.wt、index-xxx.wt 到底是什么?这篇从空的 dbpath 开始,建集合和索引,逐个看新增了哪些文件、怎么对应回集合名、小文件里写了什么、journal 和诊断数据目录的情况。',
+    [('1 + 3 + 2', '建 1 个集合和 2 个二级索引后新增的文件:1 个 collection、3 个 index、2 个 internal-sideWrites'), ('100 MiB', 'journal 里每个日志文件的大小,但实际占用的磁盘只有 557,056 字节'), ('6 个', 'drop 这个集合后消失的文件数')],
+    [('空实例里有什么', '<p>全新的 mongod 也有 WiredTiger 的元数据文件、目录与日志目录,还有 3 个系统集合各自的文件(admin.system.version、config.system.sessions、local.startup_log)。</p>'),
+     ('集合与索引各一个文件', '<p>每个集合是一个 <code>collection-&lt;ident&gt;.wt</code>,每个索引是一个 <code>index-&lt;ident&gt;.wt</code>;建索引时还会出现 <code>internal-sideWrites-*.wt</code>。</p>'),
+     ('ident 对应关系', '<p>文件名里的 ident 不是顺序号。<code>collStats</code> 的 <code>wiredTiger.uri</code> 和聚合的 <code>$listCatalog</code> 都能把集合、索引和文件名对上。</p>'),
+     ('小文件', '<p><code>WiredTiger</code> 记版本串,<code>mongod.lock</code> 是进程号,<code>WiredTiger.turtle</code> 是元数据引导,<code>storage.bson</code> 记存储引擎与目录布局选项(这里都是默认值)。</p>'),
+     ('journal 与诊断数据', '<p>journal 日志文件预分配 100 MiB,但实际占用磁盘很小;<code>diagnostic.data</code> 存 FTDC 的 metrics 文件。</p>'),
+     ('drop 之后', '<p>drop 集合后它的数据文件、索引文件和 sideWrites 文件都被删除,全局文件保留。</p>')],
+    steps,
+    [ENV_M + '。文件列表、大小、内容都是在 mongod 运行时直接读 dbpath;ident 的 UUID 每次运行都不同',
+     '没有验证:directoryPerDB 与 directoryForIndexes 打开后的目录布局;WiredTigerHS.wt(历史存储)的具体内容;_tmp 目录何时有内容;WiredTiger.turtle 里 checkpoint 信息的格式;mongod 异常退出后遗留文件的恢复;Linux 上的文件差异'],
+    'dbpath 目录里的文件')

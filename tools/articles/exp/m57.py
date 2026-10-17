@@ -1,0 +1,50 @@
+import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from ml import *
+tee('m57'); reset()
+rs = ReplSet('m57', 1).start(); rs.wait_primary()
+c = rs.client(); db = c.test; ol = c.local['oplog.rs']
+c2 = MongoClient(rs.uri(), replicaSet=rs.rs, retryWrites=False); d2 = c2.test
+d2.t.insert_one({'_id': 1, 'a': 1, 'b': 'x', 'n': {'p': 1, 'q': {'r': 5}}, 'arr': [1, 2, 3], 'tags': ['a', 'b'], 'keep': 'k'})
+def last_ts(): return ol.find_one(sort=[('$natural', -1)])['ts']
+def upd(label, update, doc_filter=None, coll=None):
+    t0 = last_ts(); (coll or d2.t).update_one(doc_filter or {'_id': 1}, update)
+    e = list(ol.find({'ts': {'$gt': t0}, 'op': 'u'}).sort('$natural', 1))[-1]
+    print(f'  {label:<42}→ o = {e["o"]}')
+    return e
+print('== 一:oplog 里的 update 条目不是原来的 $set 命令,也不是整个新文档,而是一个 diff($v: 2)。先看 $set、$unset、$inc、新增字段')
+upd('$set: {a: 2}', {'$set': {'a': 2}})
+upd('$set: {b: "y", a: 3}', {'$set': {'b': 'y', 'a': 3}})
+upd('$unset: {keep: ""}', {'$unset': {'keep': ''}})
+upd('$inc: {a: 10}', {'$inc': {'a': 10}})
+upd('$set: {brand_new: 1}(新字段)', {'$set': {'brand_new': 1}})
+upd('$rename: {brand_new: "renamed"}', {'$rename': {'brand_new': 'renamed'}})
+print('== 二:diff 的记法:u = 更新或新增的字段(字段名 → 新值);d = 删除的字段(字段名 → false);i = 插入的新字段;s<字段名> = 对子文档 / 数组递归地给出 diff')
+upd('$set: {"n.p": 2}(子文档里的字段)', {'$set': {'n.p': 2}})
+upd('$set: {"n.q.r": 6}(两层嵌套)', {'$set': {'n.q.r': 6}})
+upd('$set: {"n.p": 3, "a": 4}(同时改子文档和顶层)', {'$set': {'n.p': 3, 'a': 4}})
+print('== 三:数组:改一个元素、追加元素、截断')
+upd('$set: {"arr.1": 20}', {'$set': {'arr.1': 20}})
+upd('$push: {arr: 4}', {'$push': {'arr': 4}})
+upd('$push: {tags: {$each: ["c", "d"]}}', {'$push': {'tags': {'$each': ['c', 'd']}}})
+upd('$pop: {arr: 1}(删最后一个)', {'$pop': {'arr': 1}})
+upd('$pull: {tags: "a"}(从头部删)', {'$pull': {'tags': 'a'}})
+print('== 四:文档很大、只改一个字段时:oplog 条目有多大?对比 replace_one(整个文档替换)')
+d2.big.insert_one({'_id': 1, 'v': 0, 'pad': 'x' * 100000})
+t0 = last_ts(); d2.big.update_one({'_id': 1}, {'$inc': {'v': 1}})
+e1 = list(ol.find({'ts': {'$gt': t0}, 'op': 'u'}))[-1]
+t0 = last_ts(); d2.big.replace_one({'_id': 1}, {'v': 2, 'pad': 'x' * 100000})
+e2 = list(ol.find({'ts': {'$gt': t0}, 'op': 'u'}))[-1]
+print(f'  文档约 {len(bson.encode(d2.big.find_one())):,} 字节。$inc 一个字段:oplog 条目 o = {e1["o"]},整个条目 {len(bson.encode(e1)):,} 字节')
+print(f'  replace_one:oplog 条目 o 的键 {sorted(e2["o"])[:4]}…,整个条目 {len(bson.encode(e2)):,} 字节(存的是整个新文档)')
+print('== 五:没有实际变化的 update 不写 oplog;update_many 对每个被修改的文档各写一条')
+t0 = last_ts(); r = d2.t.update_one({'_id': 1}, {'$set': {'a': 4}}); n_new = ol.count_documents({'ts': {'$gt': t0}, 'op': 'u'})
+print(f'  把 a 设成它已有的值 4:matched {r.matched_count} modified {r.modified_count};oplog 新增 {n_new} 条')
+d2.m.insert_many([{'_id': i, 'v': 0} for i in range(5)])
+t0 = last_ts(); r = d2.m.update_many({}, {'$inc': {'v': 1}}); es = list(ol.find({'ts': {'$gt': t0}, 'op': 'u'}).sort('$natural', 1))
+print(f'  update_many 修改 {r.modified_count} 个文档:oplog 新增 {len(es)} 条,各自的 o: {[e["o"]["diff"] for e in es][:3]} …(每个文档一条,o2 是 {[e["o2"] for e in es]})')
+print('== 六:聚合管道形式的 update(用表达式计算新值)也是 diff;把整个文档换掉($replaceWith)则是整文档替换')
+upd('[{$set: {a: {$add: ["$a", 1]}}}]', [{'$set': {'a': {'$add': ['$a', 1]}}}])
+upd('[{$unset: "b"}]', [{'$unset': 'b'}])
+e = upd('[{$replaceWith: {x: 1, y: 2}}]', [{'$replaceWith': {'_id': 1, 'x': 1, 'y': 2}}])
+print(f'  上一条的 o 的键: {sorted(e["o"])}(没有 diff,是整个新文档)')
+rs.stop()

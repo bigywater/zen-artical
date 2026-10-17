@@ -1,0 +1,516 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>jcmd:统一触发 JVM 诊断动作</title>
+<meta name="description" content="在 JDK 21 上用 jcmd 逐个调用:help 列出 49 个命令;VM.set_flag 只能改 13 个 manageable 参数(MinHeapFreeRatio 40 → 55,MaxHeapSize 被拒绝);GC.run 把 used 32 MB 降到 1 MB;NMT 的 baseline / summary.diff 看到 100 MB 直接内存在 Other 里 +102400KB;JFR.start / dump / stop 的一次完整录制。">
+<link rel="canonical" href="https://bigywater.tech/java-jcmd.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="jcmd:统一触发 JVM 诊断动作">
+<meta property="og:description" content="在 JDK 21 上用 jcmd 逐个调用:help 列出 49 个命令;VM.set_flag 只能改 13 个 manageable 参数(MinHeapFreeRatio 40 → 55,MaxHeapSize 被拒绝);GC.run 把 used 32 MB 降到 1 MB;NMT 的 baseline / summary.diff 看到 100 MB 直接内存在 Other 里 +102400KB;JFR.start / dump / stop 的一次完整录制。">
+<meta property="og:url" content="https://bigywater.tech/java-jcmd.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="jcmd:统一触发 JVM 诊断动作">
+<meta name="twitter:description" content="在 JDK 21 上用 jcmd 逐个调用:help 列出 49 个命令;VM.set_flag 只能改 13 个 manageable 参数(MinHeapFreeRatio 40 → 55,MaxHeapSize 被拒绝);GC.run 把 used 32 MB 降到 1 MB;NMT 的 baseline / summary.diff 看到 100 MB 直接内存在 Other 里 +102400KB;JFR.start / dump / stop 的一次完整录制。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">1846</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">343</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#B85C00; --series-c-soft:#FBE7D1;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#F29A4A; --series-c-soft:#3B2208;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#F29A4A; --series-c-soft:#3B2208;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Java · 344</div>
+  <h1>jcmd:统一触发 JVM 诊断动作</h1>
+  <p>jcmd 是一个入口,背后是 JVM 的诊断命令。这篇把 JDK 21 上它支持的命令分类数一遍,再把最常用的几类各跑一次,看输出和限制。</p>
+  <div class="hero-fact">
+<div><div class="num">49</div><div class="lbl">JDK 21.0.12 这个 JVM 上 jcmd <pid> help 列出的命令数</div></div><div><div class="num">13</div><div class="lbl">VM.flags -all 里 {manageable} 参数的个数(只有这些能 VM.set_flag)</div></div><div><div class="num">+102400KB</div><div class="lbl">分配 100 MB 直接内存后 NMT summary.diff 的 Other 增量</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="java-jstack.html">jstack:从线程转储读取阻塞关系</a></div>
+<section>
+  <h2>列出 JVM 与命令</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  jcmd 的输出(只列出本实验相关的行):
+    &lt;pid&gt; Main
+    &lt;pid&gt; jdk.jcmd/sun.tools.jcmd.JCmd
+  jcmd &lt;pid&gt; help 列出 49 个命令;按前缀统计: {'Compiler': 8, 'GC': 6, 'JFR': 6, 'JVMTI': 2, 'ManagementAgent': 4, 'Thread': 2, 'VM': 20, 'help': 1}
+  全部命令名: Compiler.CodeHeap_Analytics Compiler.codecache Compiler.codelist Compiler.directives_add Compiler.directives_clear Compiler.directives_print Compiler.directives_remove Compiler.queue GC.class_histogram GC.finalizer_info GC.heap_dump GC.heap_info GC.run GC.run_finalization JFR.check JFR.configure JFR.dump JFR.start JFR.stop JFR.view JVMTI.agent_load JVMTI.data_dump ManagementAgent.start ManagementAgent.start_local ManagementAgent.status ManagementAgent.stop Thread.dump_to_file Thread.print VM.cds VM.class_hierarchy VM.classes VM.classloader_stats VM.classloaders VM.command_line VM.dynlibs VM.events VM.flags VM.info VM.log VM.metaspace VM.native_memory VM.set_flag VM.stringtable VM.symboltable VM.system_properties VM.systemdictionary VM.uptime VM.version help
+  jcmd &lt;pid&gt; help Thread.print:
+    5510:
+    Thread.print
+    Print all threads with stacktraces.
+    
+    Impact: Medium: Depends on the number of threads.
+    
+    Syntax : Thread.print [options]
+    
+    Options: (options must be specified using the &lt;key&gt; or &lt;key&gt;=&lt;value&gt; syntax)
+    	-l : [optional] print java.util.concurrent locks (BOOLEAN, false)
+    	-e : [optional] print extended thread information (BOOLEAN, false)</pre></div>
+</section>
+<section>
+  <h2>只读信息命令</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  jcmd &lt;pid&gt; VM.version:
+    5510:
+    OpenJDK 64-Bit Server VM version 21.0.12.1
+    JDK 21.0.12.1
+  jcmd &lt;pid&gt; VM.uptime:
+    5510:
+    0.535 s
+  jcmd &lt;pid&gt; VM.command_line:
+    5510:
+    VM Arguments:
+    jvm_args: -Xmx256m -XX:+UseG1GC -Dapp.name=demo 
+    java_command: Main
+    java_class_path (initial): out
+    Launcher Type: SUN_STANDARD
+  jcmd &lt;pid&gt; GC.heap_info:
+    5510:
+     garbage-first heap   total 262144K, used 3022K [0x000000012c000000, 0x000000013c000000)
+      region size 1024K, 2 young (2048K), 0 survivors (0K)
+     Metaspace       used 411K, committed 576K, reserved 1114112K
+      class space    used 27K, committed 128K, reserved 1048576K
+  jcmd &lt;pid&gt; VM.flags(节选;共 24 个 -XX 参数):
+    -XX:ConcGCThreads=2 -XX:G1RemSetHowlMaxNumBuckets=8 -XX:GCDrainStackTargetSize=64 -XX:MaxHeapSize=268435456 -XX:MaxNewSize=160432128 -XX:SoftMaxHeapSize=268435456 -XX:+UseG1GC
+  jcmd &lt;pid&gt; VM.system_properties:53 个属性;其中 app.name = demo</pre></div>
+</section>
+<section>
+  <h2>VM.set_flag</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  jcmd &lt;pid&gt; VM.flags -all | grep manageable:
+    共 13 个 manageable 参数;前几个:
+       uintx G1PeriodicGCInterval = 0 {manageable} {default}
+       double G1PeriodicGCSystemLoadThreshold = 0.000000 {manageable} {default}
+       bool HeapDumpAfterFullGC = false {manageable} {default}
+       bool HeapDumpBeforeFullGC = false {manageable} {default}
+       intx HeapDumpGzipLevel = 0 {manageable} {default}
+  尝试改 MaxHeapSize(不是 manageable):
+    5510:
+    only 'writeable' flags can be set
+  改 MinHeapFreeRatio(manageable)前后:
+    前:  uintx MinHeapFreeRatio = 40 {manageable} {default}
+    set_flag 返回: '5510:\nCommand executed successfully'
+    后:  uintx MinHeapFreeRatio = 55 {manageable} {management}
+  改一个根本不存在的参数:
+    5510:
+    flag NoSuchFlag does not exist</pre></div>
+</section>
+<section>
+  <h2>GC 与编译器命令</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">   OK garbage
+  制造垃圾后:堆 used 32 MB / total 256 MB
+  GC.run 返回: '5510:\nCommand executed successfully'
+  GC.run 之后:堆 used 1 MB / total 14 MB
+   OK heap
+  GC.class_histogram 前 4 行(保留了 50 个 1 MB 数组):
+    5510:
+     num     #instances         #bytes  class name (module)
+    -------------------------------------------------------
+       1:         12956       53124120  [B (java.base@21.0.12.1)
+  Compiler.codecache:
+    5510:
+    CodeHeap 'non-profiled nmethods': size=120032Kb used=88Kb max_used=89Kb free=119943Kb
+     bounds [0x00000001240cc000, 0x000000012433c000, 0x000000012b604000]
+    CodeHeap 'profiled nmethods': size=120016Kb used=358Kb max_used=384Kb free=119658Kb</pre></div>
+</section>
+<section>
+  <h2>原生内存 NMT</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  没开 NativeMemoryTracking:
+    5546:
+    Native memory tracking is not enabled
+  jcmd &lt;pid&gt; VM.native_memory baseline: '5559:\nBaseline taken'
+   OK direct (分配并写满 100 MB 直接内存)
+  summary.diff 的 Total 行:
+    Total: reserved=1848806KB +102415KB, committed=483526KB +102479KB
+  summary.diff 里 Other 一段:
+    Other (reserved=102400KB +102400KB, committed=102400KB +102400KB)
+                                (malloc=102400KB +102400KB #1 +1)</pre></div>
+</section>
+<section>
+  <h2>JFR</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  JFR.start: Use jcmd 5575 JFR.dump name=r1 filename=FILEPATH to copy recording data to file.
+   149999997 OK work | OK garbage
+  JFR.check:
+    5575:
+    Recording 1: name=r1 maxsize=250.0MB (running)
+  JFR.dump: &lt;实验目录&gt; ;文件大小 408 KB
+  JFR.stop: 5575:
+Stopped recording "r1".
+  jfr summary 里几个事件的计数:
+     jdk.ObjectAllocationSample 131 1769
+     jdk.GCPhasePause 11 261
+     jdk.GarbageCollection 10 201
+     jdk.ExecutionSample 4 40
+     jdk.CPULoad 0 0</pre></div>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">jcmd</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "jcmd 不带参数列出本机的 Java 进程(进程号加主类,这里能看到 Main 与 jcmd 自己 sun.tools.jcmd.JCmd)。jcmd <pid> help 在 JDK 21 的这个 JVM 上列出 49 个命令:VM.* 20 个、Compiler.* 8 个、GC.* 6 个、JFR.* 6 个、ManagementAgent.* 4 个、Thread.* 2 个、JVMTI.* 2 个,外加 help 自己。命令是各 JVM 版本、各启动参数下可能不同的,所以先 help 再用。jcmd <pid> help Thread.print 给出说明、影响级别(“Impact: Medium: Depends on the number of threads.”)与选项(-l、-e)。", "s": {"t": {"lines": ["  jcmd 的输出(只列出本实验相关的行):", "    <pid> Main", "    <pid> jdk.jcmd/sun.tools.jcmd.JCmd", "  jcmd <pid> help 列出 49 个命令;按前缀统计: {'Compiler': 8, 'GC': 6, 'JFR': 6, 'JVMTI': 2, 'ManagementAgent': 4, 'Thread': 2, 'VM': 20, 'help': 1}", "  全部命令名: Compiler.CodeHeap_Analytics Compiler.codecache Compiler.codelist Compiler.directives_add Compiler.directives_clear Compiler.directives_print Compiler.directives_remove Compiler.queue GC.class_histogram GC.finalizer_info GC.heap_dump GC.heap_info GC.run GC.run_finalization JFR.check JFR.configure JFR.dump JFR.start JFR.stop JFR.view JVMTI.agent_load JVMTI.data_dump ManagementAgent.start ManagementAgent.start_local ManagementAgent.status ManagementAgent.stop Thread.dump_to_file Thread.print VM.cds VM.class_hierarchy VM.classes VM.classloader_stats VM.classloaders VM.command_line VM.dynlibs VM.events VM.flags VM.info VM.log VM.metaspace VM.native_memory VM.set_flag VM.stringtable VM.symboltable VM.system_properties VM.systemdictionary VM.uptime VM.version help", "  jcmd <pid> help Thread.print:", "    5510:", "    Thread.print", "    Print all threads with stacktraces.", "    Impact: Medium: Depends on the number of threads.", "    Syntax : Thread.print [options]", "    Options: (options must be specified using the <key> or <key>=<value> syntax)", "    \t-l : [optional] print java.util.concurrent locks (BOOLEAN, false)", "    \t-e : [optional] print extended thread information (BOOLEAN, false)"], "cur": [], "mark": [], "done": []}, "done": [0, 3], "mark": [3, 9], "b": {"items": [["VM.*", 20, "20"], ["Compiler.*", 8, "8"], ["GC.*", 6, "6"], ["JFR.*", 6, "6"], ["ManagementAgent.*", 4, "4"], ["Thread.* / JVMTI.*", 4, "4"]], "max": 20, "cur": [], "mark": [], "done": [0, 1, 2, 3, 4, 5]}, "kv": {"items": [["命令总数", "49(JDK 21.0.12)"], ["help <命令>", "给出 Impact 与选项"]], "hl": ["命令总数"]}}}, {"note": "只读命令:VM.version → OpenJDK 64-Bit Server VM version 21.0.12.1;VM.uptime → 0.536 s;VM.command_line → jvm_args: -Xmx256m -XX:+UseG1GC -Dapp.name=demo;GC.heap_info → G1,total 262144K、used 3022K、region size 1024K;VM.flags 里 24 个 -XX 参数(含 MaxHeapSize=268435456 与 UseG1GC);VM.system_properties 53 个属性,app.name = demo。", "s": {"t": {"lines": ["  jcmd <pid> VM.version:", "    5510:", "    OpenJDK 64-Bit Server VM version 21.0.12.1", "    JDK 21.0.12.1", "  jcmd <pid> VM.uptime:", "    5510:", "    0.535 s", "  jcmd <pid> VM.command_line:", "    5510:", "    VM Arguments:", "    jvm_args: -Xmx256m -XX:+UseG1GC -Dapp.name=demo ", "    java_command: Main", "    java_class_path (initial): out", "    Launcher Type: SUN_STANDARD", "  jcmd <pid> GC.heap_info:", "    5510:", "     garbage-first heap   total 262144K, used 3022K [0x000000012c000000, 0x000000013c000000)", "      region size 1024K, 2 young (2048K), 0 survivors (0K)", "     Metaspace       used 411K, committed 576K, reserved 1114112K", "      class space    used 27K, committed 128K, reserved 1048576K", "  jcmd <pid> VM.flags(节选;共 24 个 -XX 参数):", "    -XX:ConcGCThreads=2 -XX:G1RemSetHowlMaxNumBuckets=8 -XX:GCDrainStackTargetSize=64 -XX:MaxHeapSize=268435456 -XX:MaxNewSize=160432128 -XX:SoftMaxHeapSize=268435456 -XX:+UseG1GC", "  jcmd <pid> VM.system_properties:53 个属性;其中 app.name = demo"], "cur": [], "mark": [], "done": []}, "done": [0, 4, 7, 14], "mark": [10, 16, 22], "kv": {"items": [["VM.uptime", "0.536 s"], ["VM.flags", "24 个 -XX 参数"], ["VM.system_properties", "53 个属性"]], "hl": ["VM.flags"]}}}, {"note": "运行中改参数:jcmd <pid> VM.flags -all 里带 {manageable} 的有 13 个(例如 G1PeriodicGCInterval、HeapDumpBeforeFullGC、MinHeapFreeRatio)。VM.set_flag MaxHeapSize 100000000 被拒绝:“only 'writeable' flags can be set”;MinHeapFreeRatio 55 成功(“Command executed successfully”),之后 VM.flags -all 里它从 “40 {manageable} {default}” 变为 “55 {manageable} {management}”;不存在的参数得到 “flag NoSuchFlag does not exist”。", "s": {"t": {"lines": ["  jcmd <pid> VM.flags -all | grep manageable:", "    共 13 个 manageable 参数;前几个:", "       uintx G1PeriodicGCInterval = 0 {manageable} {default}", "       double G1PeriodicGCSystemLoadThreshold = 0.000000 {manageable} {default}", "       bool HeapDumpAfterFullGC = false {manageable} {default}", "       bool HeapDumpBeforeFullGC = false {manageable} {default}", "       intx HeapDumpGzipLevel = 0 {manageable} {default}", "  尝试改 MaxHeapSize(不是 manageable):", "    5510:", "    only 'writeable' flags can be set", "  改 MinHeapFreeRatio(manageable)前后:", "    前:  uintx MinHeapFreeRatio = 40 {manageable} {default}", "    set_flag 返回: '5510:\\nCommand executed successfully'", "    后:  uintx MinHeapFreeRatio = 55 {manageable} {management}", "  改一个根本不存在的参数:", "    5510:", "    flag NoSuchFlag does not exist"], "cur": [], "mark": [], "done": []}, "done": [1, 7], "mark": [9, 11, 13, 16], "kv": {"items": [["manageable 参数", "13 个"], ["MaxHeapSize", "拒绝:only 'writeable' flags can be set"], ["MinHeapFreeRatio", "40 → 55({management})"]], "hl": ["MinHeapFreeRatio"]}}}, {"note": "GC 命令:制造一批短命数组后 GC.heap_info 是 used 32 MB / total 256 MB;GC.run 之后 used 1 MB / total 14 MB(堆总量也被缩小了)。再保留 50 个 1 MB 数组后 GC.class_histogram 的第一行是 [B,12956 个实例、53124120 字节。Compiler.codecache 列出各 CodeHeap 的用量(non-profiled nmethods 约 88 KB,profiled nmethods 约 358 KB)。", "s": {"t": {"lines": ["   OK garbage", "  制造垃圾后:堆 used 32 MB / total 256 MB", "  GC.run 返回: '5510:\\nCommand executed successfully'", "  GC.run 之后:堆 used 1 MB / total 14 MB", "   OK heap", "  GC.class_histogram 前 4 行(保留了 50 个 1 MB 数组):", "    5510:", "     num     #instances         #bytes  class name (module)", "    -------------------------------------------------------", "       1:         12956       53124120  [B (java.base@21.0.12.1)", "  Compiler.codecache:", "    5510:", "    CodeHeap 'non-profiled nmethods': size=120032Kb used=88Kb max_used=89Kb free=119943Kb", "     bounds [0x00000001240cc000, 0x000000012433c000, 0x000000012b604000]", "    CodeHeap 'profiled nmethods': size=120016Kb used=358Kb max_used=384Kb free=119658Kb"], "cur": [], "mark": [], "done": []}, "done": [1, 3], "mark": [3, 9, 12], "b": {"items": [["GC.run 前 used", 32, "32 MB"], ["GC.run 后 used", 1, "1 MB"], ["GC.run 前 total", 256, "256 MB"], ["GC.run 后 total", 14, "14 MB"]], "max": 256, "cur": [], "mark": [], "done": [0, 1, 2, 3]}, "kv": {"items": [["GC.run", "used 32 → 1 MB,total 256 → 14 MB"], ["class_histogram 第 1 行", "[B 12956 个 53124120 字节"]], "hl": ["GC.run"]}}}, {"note": "原生内存:没有 -XX:NativeMemoryTracking 时 VM.native_memory summary 返回 “Native memory tracking is not enabled”。用 -XX:NativeMemoryTracking=summary 启动后:VM.native_memory baseline → “Baseline taken”;再分配并写满 100 MB 直接内存;summary.diff 的 Total 行是 reserved +102415KB、committed +102479KB,Other 一段是 +102400KB(malloc=102400KB +102400KB #1 +1)——直接内存在 NMT 里归在 Other。", "s": {"t": {"lines": ["  没开 NativeMemoryTracking:", "    5546:", "    Native memory tracking is not enabled", "  jcmd <pid> VM.native_memory baseline: '5559:\\nBaseline taken'", "   OK direct (分配并写满 100 MB 直接内存)", "  summary.diff 的 Total 行:", "    Total: reserved=1848806KB +102415KB, committed=483526KB +102479KB", "  summary.diff 里 Other 一段:", "    Other (reserved=102400KB +102400KB, committed=102400KB +102400KB)", "                                (malloc=102400KB +102400KB #1 +1)"], "cur": [], "mark": [], "done": []}, "done": [0, 3], "mark": [2, 6, 8], "kv": {"items": [["不开 NMT", "Native memory tracking is not enabled"], ["summary.diff Total", "committed +102479KB"], ["Other", "+102400KB(malloc,#1)"]], "hl": ["Other"]}}}, {"note": "JFR:jcmd <pid> JFR.start name=r1 settings=profile 开始录制(JFR.start 带 duration=0s 会被拒绝,“duration must be at least 1 second”,所以不带);跑一段计算与分配后 JFR.check 显示 Recording 1: name=r1 (running);JFR.dump 写出 408 KB 的 .jfr;JFR.stop 返回 Stopped recording \"r1\"。jfr summary 里:ObjectAllocationSample 131 条、GCPhasePause 11 条、GarbageCollection 10 条、ExecutionSample 4 条(这一小段 JVM 的运行时间很短)。", "s": {"t": {"lines": ["  JFR.start: Use jcmd 5575 JFR.dump name=r1 filename=FILEPATH to copy recording data to file.", "   149999997 OK work | OK garbage", "  JFR.check:", "    5575:", "    Recording 1: name=r1 maxsize=250.0MB (running)", "  JFR.dump: <实验目录> ;文件大小 408 KB", "  JFR.stop: 5575:", "Stopped recording \"r1\".", "  jfr summary 里几个事件的计数:", "     jdk.ObjectAllocationSample 131 1769", "     jdk.GCPhasePause 11 261", "     jdk.GarbageCollection 10 201", "     jdk.ExecutionSample 4 40", "     jdk.CPULoad 0 0"], "cur": [], "mark": [], "done": []}, "done": [0, 2, 5], "mark": [4, 5, 12], "kv": {"items": [["JFR.dump 文件", "408 KB"], ["ObjectAllocationSample", "131"], ["GarbageCollection", "10"]], "hl": ["JFR.dump 文件"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / OpenJDK(Temurin 17.0.20、Homebrew 21.0.12 与 27,每篇注明实际用的版本);用 javac 编译、java 直接运行,需要第三方库时用 Maven 解析依赖;计时用 System.nanoTime,数字每次运行会有小幅抖动。JDK 21.0.12,G1,-Xmx256m;所有命令都是命令行里真实运行的 jcmd</li><li>没有验证:GC.heap_dump 的耗时与文件大小(见另一篇 jmap)、Compiler.directives_* 与 JVMTI.agent_load 的实际效果、ManagementAgent.* 启动远程 JMX、在 JDK 17 / 27 上命令集的差别、jcmd 对容器内 JVM 的 attach 限制(这台没有 Docker)</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="java-jmap.html">
+    <div>
+      <div class="t1">下一篇 · JAVA 345</div>
+      <div class="t2">jmap:堆直方图与堆转储</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Java · jcmd:统一触发 JVM 诊断动作 · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

@@ -1,0 +1,22 @@
+from lib import *
+S = SS('p17')
+steps = [
+    step("Semaphore(N) 把同时在途的请求数卡在 N:100 个请求、服务器每个停 0.1 秒、服务器统计同时在处理的峰值。Semaphore(5):峰值 5,总耗时 2148 ms(下限 2000);Semaphore(20):峰值 20,557 ms(下限 500);Semaphore(100):峰值 100,138 ms(下限 100)。信号量大小就是服务器看到的并发峰值。", t=tl(S(1)), done=lidx(S(1), 'Semaphore(  5)', 'Semaphore( 20)', 'Semaphore(100)'), b=bars([['Semaphore(5):服务器峰值', 5, '5'], ['Semaphore(20):服务器峰值', 20, '20'], ['Semaphore(100):服务器峰值', 100, '100']], 100, done=[0, 1, 2]), kv=KV([['Semaphore(5)', '峰值 5,2148 ms'], ['Semaphore(20)', '峰值 20,557 ms'], ['Semaphore(100)', '峰值 100,138 ms']], ['Semaphore(5)'])),
+    step("最常见的写法错误:信号量只包住 await session.get(),没包住读取响应体。服务器先发响应头,0.3 秒后才发 10 字节的体。Semaphore(5) 包住整个 async with(含 read):服务器同时在处理的峰值 5,50 个请求花 3069 ms;信号量只包住 await session.get():get 拿到响应头就释放了信号量,服务器同时在处理的峰值是 50,总耗时 328 ms。看起来“限了 5”,实际并发是 50。", t=tl(S(2)), done=lidx(S(2), '包住整个 async with'), mark=lidx(S(2), '只包住 await session.get()'), b=bars([['包住整个 async with:峰值', 5, '5'], ['只包住 get():峰值', 50, '50']], 50, done=[0], mark=[1]), kv=KV([['包住整个 async with', '峰值 5,3069 ms'], ['只包住 get()', '峰值 50,328 ms'], ['原因', 'get 返回时只收到响应头']], ['只包住 get()'])),
+    step("连接池限制和信号量的区别:TCPConnector(limit=10) 只管连接数,排队等连接的时间会算进 ClientTimeout(total=1.0)。200 个请求(每个 0.1 秒,10 并发理论上要 2 秒):limit=10 时成功 90、超时 110,总耗时 1011 ms;TCPConnector(limit=0) 加 Semaphore(10),让排队发生在超时之外:成功 200、超时 0,总耗时 2154 ms。同样的并发上限,排队放在哪一侧,结果完全不同。", t=tl(S(3)), done=lidx(S(3), 'Semaphore(10)'), mark=lidx(S(3), 'TCPConnector(limit=10),total'), b=bars([['limit=10:成功', 90, '90'], ['limit=10:超时', 110, '110'], ['limit=0 + Semaphore(10):成功', 200, '200']], 200, mark=[1], done=[2]), kv=KV([['limit=10', '成功 90 / 超时 110'], ['limit=0 + Semaphore', '成功 200 / 超时 0'], ['原因', '排队时间算进了 total']], ['limit=10'])),
+    step("一次创建很多任务的代价:每个任务只 sleep 1 ms,信号量 / worker 都是 100。2 万个任务:gather 加信号量峰值内存 51.2 MiB(起点 23.5),0.31 s;100 个 worker 从有界队列取 23.6 MiB,0.25 s。20 万个任务:gather 310.8 MiB、3.41 s;queue 23.5 MiB、2.39 s。gather 把所有任务先建出来,即使它们大部分只是在等信号量;worker 加有界队列的内存不随任务总数增长。", t=tl(S(4)), done=lidx(S(4), '200000 个任务'), mark=lidx(S(4), '20000 个任务'), b=bars([['20 万任务 gather 峰值 MiB', 310.8, '310.8'], ['20 万任务 queue 峰值 MiB', 23.5, '23.5']], 320, mark=[0], done=[1]), kv=KV([['gather 20 万', '310.8 MiB,3.41 s'], ['queue 20 万', '23.5 MiB,2.39 s'], ['区别', '任务数不随总量增长']], ['区别'])),
+    step("Semaphore 唤醒等待者的顺序:Semaphore(2),12 个任务按 0 到 11 的顺序创建,实际获得信号量的顺序是 0, 1, 2, …, 11,与创建顺序一致(先到先得)。需要优先级的话,信号量本身做不到,要换成优先级队列(后面有一篇讲抓取顺序)。", t=tl(S(5)), done=lidx(S(5), '与创建顺序一致'), mark=lidx(S(5), '实际获得信号量的顺序'), kv=KV([['获得顺序', '0 → 11,与创建顺序一致'], ['含义', '先到先得'], ['要优先级', '用优先级队列']], ['含义'])),
+]
+A = mkartp('p17', 17, '爬虫,asyncio,Semaphore,aiohttp,并发控制,TCPConnector,超时,Python,真实验证,动画演示',
+    '实测 asyncio 信号量限制爬虫并发:Semaphore(N) 让服务器看到的并发峰值恰好是 N;但只包住 session.get() 而不包住读取响应体时,Semaphore(5) 的实际并发是 50;TCPConnector(limit=10) 加 total 超时让 200 个请求中 110 个超时,改用 Semaphore 排队则 0 个;20 万个任务 gather 要 310.8 MiB,worker 加队列 23.5 MiB。',
+    '给 asyncio 爬虫加一个 Semaphore 似乎是标准动作,但写法很容易悄悄失效。这篇用本机服务器统计“同时在处理的请求峰值”,看几种写法到底限住了没有,排队时间算不算超时,以及一次建出几十万个任务要付多少内存。',
+    [('50', 'Semaphore(5) 只包住 session.get() 时,服务器实际看到的并发峰值'), ('90 / 110', 'TCPConnector(limit=10) 加 1 秒总超时,200 个请求里成功 / 超时的个数'), ('310.8 对 23.5 MiB', '20 万个任务:gather 加信号量与 worker 加队列的峰值内存')],
+    [('信号量等于并发峰值', '<p><code>Semaphore(N)</code> 包住整个请求流程时,服务器看到的并发峰值恰好是 N,总耗时紧贴 <code>请求数 / N × 单次耗时</code>。</p>'),
+     ('范围写小了', '<p><code>await session.get()</code> 在收到响应头时就返回,这时释放信号量,响应体还没读。如果服务器的响应体很慢,实际的在途连接数会远超信号量。正确的写法是让 <code>async with sem</code> 包住 <code>async with session.get(...)</code> 的整个块,包括 <code>await r.read()</code>。</p>'),
+     ('limit 与总超时', '<p><code>TCPConnector(limit=10)</code> 让多出来的请求在连接器里排队,而这个排队时间算在 <code>ClientTimeout(total=…)</code> 里:1 秒的总超时下,200 个请求只有 90 个来得及完成。用 <code>limit=0</code> 加自己的 <code>Semaphore</code>,排队发生在超时计时之前,200 个全部成功。</p>'),
+     ('任务总数很大时', '<p><code>gather</code> 先把所有协程创建成任务,哪怕它们大部分只是在等信号量:20 万个任务峰值内存 310.8 MiB,耗时 3.41 s。改成固定数量的 worker 从有界队列取任务,内存不随任务总数增长(23.5 MiB),也更快(2.39 s)。这里每个任务只是 <code>sleep(0.001)</code>,真实任务持有的数据会让差距更大。</p>'),
+     ('唤醒顺序', '<p>实测等待信号量的任务按到达顺序获得它。要按优先级处理,需要优先级队列而不是信号量。</p>')],
+    steps,
+    [ENV_P + '。服务器每个请求停 0.1 秒(慢响应体的版本先发响应头、0.3 秒后发体),记录同时在处理的请求峰值;客户端是 aiohttp 3.14.3;第四节在独立子进程里用 resource.getrusage 测峰值内存;每项各测一次(没有重复取中位数),所以毫秒级数字只供参考,结论看相对关系',
+     '没有验证:Semaphore 在取消、异常时的释放(async with 会释放,这里没单独测);asyncio.TaskGroup 与 Semaphore 的配合;限速(每秒多少个请求)与限并发的区别(后面有令牌桶一篇);多进程下每个进程各一个信号量时总并发;aiohttp 之外的客户端(httpx、curl_cffi)里相同的陷阱'],
+    '信号量限制并发')

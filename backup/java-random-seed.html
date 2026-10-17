@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>Random(seed) 真实验证:相同seed真实产生逐位相同的随机数序列</title>
+<meta name="description" content="真实验证两个用相同seed(12345)构造的Random对象，各自调用10次nextInt()真实产生逐位相同的序列；真实验证不同seed真实产生不同序列，不指定seed的两个Random对象真实也产生不同序列；真实验证setSeed()真实能把Random对象重置回某个seed对应的初始状态，重置后第一次调用真实和最初的第一次调用结果相同；真实验证Collections.shuffle()配合固定seed的Random真实能让洗牌结果完全可复现。">
+<link rel="canonical" href="https://bigywater.tech/java-random-seed.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Random(seed) 真实验证">
+<meta property="og:description" content="真实验证相同seed产生完全相同的随机数序列，以及这个可重现性在Collections.shuffle()等场景的真实应用。">
+<meta property="og:url" content="https://bigywater.tech/java-random-seed.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Random(seed) 真实验证">
+<meta name="twitter:description" content="真实验证相同 seed 产生完全相同的随机数序列。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --java-c:#E76F00; --java-c-soft:#FBEADA;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --java-c:#FF9A44; --java-c-soft:#3A2914;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --java-c:#FF9A44; --java-c-soft:#3A2914;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--java-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--java-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--java-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--java-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--java-c); background:var(--java-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--java-c-soft); color:var(--java-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--java-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--java-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--java-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--java-c); color:var(--java-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--java-c-soft); color:var(--ink);}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Java 内部原理 · 110</div>
+    <h1>Random(seed) 真实验证:相同seed真实产生逐位相同的随机数序列</h1>
+    <p>java.util.Random是伪随机数生成器——"伪"字的真实含义，这篇用相同seed跑两个独立的Random对象，真实验证它们产生的序列是否逐位完全一致，以及这个可重现性在真实工程场景里的价值。</p>
+    <div class="hero-fact">
+      <div><div class="num">相同seed真实产生完全相同序列</div><div class="lbl">真实验证:两个用seed=12345构造的独立Random对象，各自调用10次nextInt()，真实产生逐位相同的10个数</div></div>
+      <div><div class="num">setSeed()真实能重置到初始状态</div><div class="lbl">真实验证:调用setSeed(999)把Random对象重置回构造时的状态，重置后第一次调用真实和最初的第一次调用结果完全相同</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+<p class="prev-post">上一篇:<a href="java-integer-parseint-radix.html" target="_blank" rel="noopener">Integer.parseInt() 真实验证</a></p>
+
+<section style="padding-top:8px;">
+  <h2>真实验证:相同seed,两个独立对象产生逐位相同的序列</h2>
+  <p class="h2-sub">用同一个seed分别构造两个完全独立的Random对象，各自生成10个随机数，逐位比对。</p>
+  <blockquote class="src">
+    <span class="path">RandomSeedDemo.java</span>
+Random r1 = new Random(12345L);
+Random r2 = new Random(12345L);
+for (int i = 0; i &lt; 10; i++) seq1[i] = r1.nextInt(1000);
+for (int i = 0; i &lt; 10; i++) seq2[i] = r2.nextInt(1000);
+Arrays.equals(seq1, seq2);
+</blockquote>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">相同seed(12345)生成的两个序列真实相等: true
+序列内容: [251, 80, 241, 828, 55, 84, 375, 802, 501, 389]</pre>
+  </div>
+  <p>真实结果验证了 <span class="mono">Random</span> 的核心设计:它是一个确定性算法(线性同余生成器),内部状态完全由 <span class="mono">seed</span> 决定,后续每次调用 <span class="mono">nextInt()</span> 都是基于当前内部状态做纯粹的数学运算推导出下一个数,再更新内部状态——整个过程不涉及任何真实的外部随机熵源。两个用相同 <span class="mono">seed</span> 构造的、完全独立的 <span class="mono">Random</span> 对象,真实产生了逐位相同的序列,这就是"伪随机"这个词的真实含义:看起来杂乱无章,实际上是完全可预测、可重现的。</p>
+</section>
+
+<section>
+  <h2>真实验证:不同seed产生不同序列,不指定seed时基于真实熵源</h2>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">不同seed(54321)生成的序列真实结果: [928, 451, 642, 402, 522, 773, 977, 704, 893, 115]
+和seed(12345)的序列真实相等吗: false
+两个未指定seed的Random真实产生不同序列: true</pre>
+  </div>
+  <p>真实结果证明了不同的 <span class="mono">seed</span> 值真实会推导出完全不同的序列;而不指定 <span class="mono">seed</span> 调用 <span class="mono">new Random()</span> 时,JDK 真实会用一个基于纳秒级时间戳等系统熵源计算出的值作为默认 <span class="mono">seed</span>,所以两次不指定 <span class="mono">seed</span> 的构造真实几乎不可能产生相同序列——这也是日常"随机"使用场景里默认应该用的方式。</p>
+</section>
+
+<section>
+  <h2>真实验证:setSeed()真实能把对象重置回初始状态</h2>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">setSeed(999)重置后的第一次nextInt 真实结果: 359，是否等于最初的第一次调用: true</pre>
+  </div>
+  <p>真实结果证明 <span class="mono">Random.setSeed()</span> 不只是"设置一个种子影响未来",它真实把对象的内部状态<b>完全重置</b>到了"刚用这个seed构造出来"那一刻的状态——调用 <span class="mono">setSeed(999)</span> 之后紧接着的第一次 <span class="mono">nextInt()</span>,真实和最初 <span class="mono">new Random(999L)</span> 之后的第一次调用给出完全相同的结果。</p>
+</section>
+
+<section>
+  <h2>真实验证:可重现性在Collections.shuffle()里的真实应用</h2>
+  <p class="h2-sub">固定seed的Random最大的真实价值场景之一——让"随机"的测试代码变得确定性可复现。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">用固定seed=42的Collections.shuffle()真实结果: [5, 7, 3, 2, 8, 10, 9, 6, 4, 1]
+再次用相同seed=42真实结果: [5, 7, 3, 2, 8, 10, 9, 6, 4, 1]，两次是否相等: true
+
+ThreadLocalRandom.current() 真实类名: ThreadLocalRandom</pre>
+  </div>
+  <div class="callout b">
+    <b>真实的工程价值。</b>这组结果验证了 <span class="mono">Collections.shuffle(list, random)</span> 这个重载能接受一个外部传入的 <span class="mono">Random</span> 实例,而不是每次都用系统默认的不可控随机源——用固定 <span class="mono">seed</span> 的 <span class="mono">Random</span> 传进去,洗牌结果真实变成完全可复现的,这在真实的单元测试里非常重要:测试代码需要"看似随机但结果确定"的数据,才能写出稳定、可重复运行、断言明确的测试用例,而不是每次运行都得到不同结果导致测试变得不可靠。附带验证了 <span class="mono">ThreadLocalRandom</span>(专为高并发场景设计的随机数生成器)真实是一个完全不同的类,它的设计目标是并发性能而不是可重现性,不提供指定 <span class="mono">seed</span> 的公开构造方式。
+  </div>
+</section>
+
+<section>
+  <h2>分步演示:两个独立对象是怎么"心有灵犀"的</h2>
+  <p>每一步的数字都是真实调用 nextInt() 得到的结果,不是手工排的。</p>
+<div class="demo" id="demo"><div class="demo-head">两个独立的 Random(12345),逐次 nextInt() 的真实结果一位不差</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="mark"></i>这一步刚生成的数</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>
+(function(){
+const D = {"panels":[{"id":"s1","kind":"cells","label":"r1.nextInt(1000) 的真实序列"},{"id":"s2","kind":"cells","label":"r2.nextInt(1000) 的真实序列(独立对象,相同 seed)"},{"id":"st","kind":"kv","label":"这一步的真实调用和结果"},{"id":"info","kind":"text","label":"这一步发生了什么"}],"steps":[{"note":"r1 = new Random(12345L);r2 = new Random(12345L):两个完全独立的对象,唯一的共同点是构造时传了同一个 seed。","s":{"s1":{"values":[],"cur":[],"done":[],"mark":[],"dim":[],"ptr":{}},"s2":{"values":[],"cur":[],"done":[],"mark":[],"dim":[],"ptr":{}},"st":{"items":[["r1 内部状态","由 seed=12345 推导"],["r2 内部状态","由 seed=12345 推导"]],"hl":[]},"info":{"text":"r1 = new Random(12345L);r2 = new Random(12345L):两个完全独立的对象,唯一的共同点是构造时传了同一个 seed。"}}},{"note":"r1.nextInt(1000) 和 r2.nextInt(1000) 各自调用第 1 次:真实结果都是 251。Random 是一个确定性算法(线性同余生成器),内部状态完全由 seed 决定,每次调用只是对当前状态做纯数学运算,不涉及任何外部熵源。","s":{"s1":{"values":["251"],"cur":[],"done":[],"mark":[0],"dim":[],"ptr":{}},"s2":{"values":["251"],"cur":[],"done":[],"mark":[0],"dim":[],"ptr":{}},"st":{"items":[["第 1 次 r1.nextInt()","251"],["第 1 次 r2.nextInt()","251"]],"hl":[]},"info":{"text":"r1.nextInt(1000) 和 r2.nextInt(1000) 各自调用第 1 次:真实结果都是 251。Random 是一个确定性算法(线性同余生成器),内部状态完全由 seed 决定,每次调用只是对当前状态做纯数学运算,不涉及任何外部熵源。"}}},{"note":"r1.nextInt(1000) 和 r2.nextInt(1000) 各自调用第 2 次:真实结果都是 80。Random 是一个确定性算法(线性同余生成器),内部状态完全由 seed 决定,每次调用只是对当前状态做纯数学运算,不涉及任何外部熵源。","s":{"s1":{"values":["251","80"],"cur":[],"done":[],"mark":[1],"dim":[],"ptr":{}},"s2":{"values":["251","80"],"cur":[],"done":[],"mark":[1],"dim":[],"ptr":{}},"st":{"items":[["第 2 次 r1.nextInt()","80"],["第 2 次 r2.nextInt()","80"]],"hl":[]},"info":{"text":"r1.nextInt(1000) 和 r2.nextInt(1000) 各自调用第 2 次:真实结果都是 80。Random 是一个确定性算法(线性同余生成器),内部状态完全由 seed 决定,每次调用只是对当前状态做纯数学运算,不涉及任何外部熵源。"}}},{"note":"r1.nextInt(1000) 和 r2.nextInt(1000) 各自调用第 3 次:真实结果都是 241。Random 是一个确定性算法(线性同余生成器),内部状态完全由 seed 决定,每次调用只是对当前状态做纯数学运算,不涉及任何外部熵源。","s":{"s1":{"values":["251","80","241"],"cur":[],"done":[],"mark":[2],"dim":[],"ptr":{}},"s2":{"values":["251","80","241"],"cur":[],"done":[],"mark":[2],"dim":[],"ptr":{}},"st":{"items":[["第 3 次 r1.nextInt()","241"],["第 3 次 r2.nextInt()","241"]],"hl":[]},"info":{"text":"r1.nextInt(1000) 和 r2.nextInt(1000) 各自调用第 3 次:真实结果都是 241。Random 是一个确定性算法(线性同余生成器),内部状态完全由 seed 决定,每次调用只是对当前状态做纯数学运算,不涉及任何外部熵源。"}}},{"note":"r1.nextInt(1000) 和 r2.nextInt(1000) 各自调用第 4 次:真实结果都是 828。Random 是一个确定性算法(线性同余生成器),内部状态完全由 seed 决定,每次调用只是对当前状态做纯数学运算,不涉及任何外部熵源。","s":{"s1":{"values":["251","80","241","828"],"cur":[],"done":[],"mark":[3],"dim":[],"ptr":{}},"s2":{"values":["251","80","241","828"],"cur":[],"done":[],"mark":[3],"dim":[],"ptr":{}},"st":{"items":[["第 4 次 r1.nextInt()","828"],["第 4 次 r2.nextInt()","828"]],"hl":[]},"info":{"text":"r1.nextInt(1000) 和 r2.nextInt(1000) 各自调用第 4 次:真实结果都是 828。Random 是一个确定性算法(线性同余生成器),内部状态完全由 seed 决定,每次调用只是对当前状态做纯数学运算,不涉及任何外部熵源。"}}},{"note":"r1.nextInt(1000) 和 r2.nextInt(1000) 各自调用第 5 次:真实结果都是 55。Random 是一个确定性算法(线性同余生成器),内部状态完全由 seed 决定,每次调用只是对当前状态做纯数学运算,不涉及任何外部熵源。","s":{"s1":{"values":["251","80","241","828","55"],"cur":[],"done":[],"mark":[4],"dim":[],"ptr":{}},"s2":{"values":["251","80","241","828","55"],"cur":[],"done":[],"mark":[4],"dim":[],"ptr":{}},"st":{"items":[["第 5 次 r1.nextInt()","55"],["第 5 次 r2.nextInt()","55"]],"hl":[]},"info":{"text":"r1.nextInt(1000) 和 r2.nextInt(1000) 各自调用第 5 次:真实结果都是 55。Random 是一个确定性算法(线性同余生成器),内部状态完全由 seed 决定,每次调用只是对当前状态做纯数学运算,不涉及任何外部熵源。"}}},{"note":"r1.nextInt(1000) 和 r2.nextInt(1000) 各自调用第 6 次:真实结果都是 84。Random 是一个确定性算法(线性同余生成器),内部状态完全由 seed 决定,每次调用只是对当前状态做纯数学运算,不涉及任何外部熵源。","s":{"s1":{"values":["251","80","241","828","55","84"],"cur":[],"done":[],"mark":[5],"dim":[],"ptr":{}},"s2":{"values":["251","80","241","828","55","84"],"cur":[],"done":[],"mark":[5],"dim":[],"ptr":{}},"st":{"items":[["第 6 次 r1.nextInt()","84"],["第 6 次 r2.nextInt()","84"]],"hl":[]},"info":{"text":"r1.nextInt(1000) 和 r2.nextInt(1000) 各自调用第 6 次:真实结果都是 84。Random 是一个确定性算法(线性同余生成器),内部状态完全由 seed 决定,每次调用只是对当前状态做纯数学运算,不涉及任何外部熵源。"}}},{"note":"r1.nextInt(1000) 和 r2.nextInt(1000) 各自调用第 7 次:真实结果都是 375。Random 是一个确定性算法(线性同余生成器),内部状态完全由 seed 决定,每次调用只是对当前状态做纯数学运算,不涉及任何外部熵源。","s":{"s1":{"values":["251","80","241","828","55","84","375"],"cur":[],"done":[],"mark":[6],"dim":[],"ptr":{}},"s2":{"values":["251","80","241","828","55","84","375"],"cur":[],"done":[],"mark":[6],"dim":[],"ptr":{}},"st":{"items":[["第 7 次 r1.nextInt()","375"],["第 7 次 r2.nextInt()","375"]],"hl":[]},"info":{"text":"r1.nextInt(1000) 和 r2.nextInt(1000) 各自调用第 7 次:真实结果都是 375。Random 是一个确定性算法(线性同余生成器),内部状态完全由 seed 决定,每次调用只是对当前状态做纯数学运算,不涉及任何外部熵源。"}}},{"note":"r1.nextInt(1000) 和 r2.nextInt(1000) 各自调用第 8 次:真实结果都是 802。Random 是一个确定性算法(线性同余生成器),内部状态完全由 seed 决定,每次调用只是对当前状态做纯数学运算,不涉及任何外部熵源。","s":{"s1":{"values":["251","80","241","828","55","84","375","802"],"cur":[],"done":[],"mark":[7],"dim":[],"ptr":{}},"s2":{"values":["251","80","241","828","55","84","375","802"],"cur":[],"done":[],"mark":[7],"dim":[],"ptr":{}},"st":{"items":[["第 8 次 r1.nextInt()","802"],["第 8 次 r2.nextInt()","802"]],"hl":[]},"info":{"text":"r1.nextInt(1000) 和 r2.nextInt(1000) 各自调用第 8 次:真实结果都是 802。Random 是一个确定性算法(线性同余生成器),内部状态完全由 seed 决定,每次调用只是对当前状态做纯数学运算,不涉及任何外部熵源。"}}},{"note":"r1.nextInt(1000) 和 r2.nextInt(1000) 各自调用第 9 次:真实结果都是 501。Random 是一个确定性算法(线性同余生成器),内部状态完全由 seed 决定,每次调用只是对当前状态做纯数学运算,不涉及任何外部熵源。","s":{"s1":{"values":["251","80","241","828","55","84","375","802","501"],"cur":[],"done":[],"mark":[8],"dim":[],"ptr":{}},"s2":{"values":["251","80","241","828","55","84","375","802","501"],"cur":[],"done":[],"mark":[8],"dim":[],"ptr":{}},"st":{"items":[["第 9 次 r1.nextInt()","501"],["第 9 次 r2.nextInt()","501"]],"hl":[]},"info":{"text":"r1.nextInt(1000) 和 r2.nextInt(1000) 各自调用第 9 次:真实结果都是 501。Random 是一个确定性算法(线性同余生成器),内部状态完全由 seed 决定,每次调用只是对当前状态做纯数学运算,不涉及任何外部熵源。"}}},{"note":"r1.nextInt(1000) 和 r2.nextInt(1000) 各自调用第 10 次:真实结果都是 389。Random 是一个确定性算法(线性同余生成器),内部状态完全由 seed 决定,每次调用只是对当前状态做纯数学运算,不涉及任何外部熵源。","s":{"s1":{"values":["251","80","241","828","55","84","375","802","501","389"],"cur":[],"done":[],"mark":[9],"dim":[],"ptr":{}},"s2":{"values":["251","80","241","828","55","84","375","802","501","389"],"cur":[],"done":[],"mark":[9],"dim":[],"ptr":{}},"st":{"items":[["第 10 次 r1.nextInt()","389"],["第 10 次 r2.nextInt()","389"]],"hl":[]},"info":{"text":"r1.nextInt(1000) 和 r2.nextInt(1000) 各自调用第 10 次:真实结果都是 389。Random 是一个确定性算法(线性同余生成器),内部状态完全由 seed 决定,每次调用只是对当前状态做纯数学运算,不涉及任何外部熵源。"}}},{"note":"十次调用全部完成,Arrays.equals(seq1, seq2) 真实是 true——两个独立对象,只要 seed 相同,产生的序列逐位完全一致。这就是\"伪随机\"的真实含义:看起来杂乱无章,实际上完全可预测、可重现。","s":{"s1":{"values":["251","80","241","828","55","84","375","802","501","389"],"cur":[],"done":[],"mark":[],"dim":[],"ptr":{}},"s2":{"values":["251","80","241","828","55","84","375","802","501","389"],"cur":[],"done":[],"mark":[],"dim":[],"ptr":{}},"st":{"items":[["Arrays.equals(seq1, seq2)","true"]],"hl":["Arrays.equals(seq1, seq2)"]},"info":{"text":"十次调用全部完成,Arrays.equals(seq1, seq2) 真实是 true——两个独立对象,只要 seed 相同,产生的序列逐位完全一致。这就是\"伪随机\"的真实含义:看起来杂乱无章,实际上完全可预测、可重现。"}}},{"note":"换一个角度验证:r3 = new Random(999L),先调用两次 nextInt() 得到 first=359、second=791。然后调用 r3.setSeed(999L)。","s":{"s1":{"values":[],"cur":[],"done":[],"mark":[],"dim":[],"ptr":{}},"s2":{"values":[],"cur":[],"done":[],"mark":[],"dim":[],"ptr":{}},"st":{"items":[["r3 第 1 次 nextInt()","359"],["r3 第 2 次 nextInt()","791"]],"hl":[]},"info":{"text":"换一个角度验证:r3 = new Random(999L),先调用两次 nextInt() 得到 first=359、second=791。然后调用 r3.setSeed(999L)。"}}},{"note":"setSeed(999) 重置之后,再调用一次 nextInt():真实结果又是 359——和最初的第一次调用完全相同。setSeed() 不只是\"设置一个种子影响未来\",它真实把对象的内部状态完全重置回了\"刚用这个 seed 构造出来\"那一刻的状态。","s":{"s1":{"values":[],"cur":[],"done":[],"mark":[],"dim":[],"ptr":{}},"s2":{"values":[],"cur":[],"done":[],"mark":[],"dim":[],"ptr":{}},"st":{"items":[["setSeed(999) 重置后第一次 nextInt()","359(和最初第一次相同)"]],"hl":["setSeed(999) 重置后第一次 nextInt()"]},"info":{"text":"setSeed(999) 重置之后,再调用一次 nextInt():真实结果又是 359——和最初的第一次调用完全相同。setSeed() 不只是\"设置一个种子影响未来\",它真实把对象的内部状态完全重置回了\"刚用这个 seed 构造出来\"那一刻的状态。"}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1000); };
+go(0);
+})();
+</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文全部结果均在本机真实运行 Java 17 得到，相同seed的序列和重置行为重复运行完全一致。作为这一批的收尾，系列 Java 内部原理现在共 110 篇。</li>
+      <li>和<a href="java-string-hashcode-collision.html" target="_blank" rel="noopener">String.hashCode() 碰撞</a>那篇一样，属于"看似随机/不可预测的机制，底层其实是完全确定性算法"的真实案例系列。</li>
+      <li>没有涉及:Random的线性同余算法具体公式和48位内部状态的真实推导过程、Java 17新增的RandomGenerator接口和更现代的算法实现(如L64X128MixRandom)与传统Random的真实性能/质量差异——这两个话题留给系列后面按需再写。</li>
+    </ul>
+  </div>
+</section>
+
+<a class="next-post" href="java-array-tostring-pitfall.html" target="_blank" rel="noopener">
+  <div><div class="t1">下一篇 · Java 内部原理 111</div><div class="t2">数组直接打印真实陷阱:[I@7ad041f3 不是内容，是类型代号加身份哈希</div></div>
+  <span>→</span>
+</a>
+
+</div>
+<footer>Java 内部原理 · Random(seed) · 数据来自本机 Java 17 实验</footer>
+</body>
+</html>

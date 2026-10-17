@@ -1,0 +1,22 @@
+from lib import *
+S = SS('w41')
+steps = [
+    step("TIME_WAIT 持续多久:本机 net.inet.tcp.msl = 15000(MSL 15 秒),所以 2MSL 是 30 秒。客户端主动 close 一个连接后,每 0.5 秒查一次 netstat:close 之后立刻就看到 TIME_WAIT,31.4 秒时这一行消失,持续约 31.3 秒——就是 2 × 15 秒加上轮询的误差。另一个参数 net.inet.tcp.fin_timeout = 60000(FIN_WAIT_2 的超时,不是 TIME_WAIT 的)。", t=tl(S(1)), mark=lidx(S(1), '客户端(端口'), done=lidx(S(1), 'net.inet.tcp.msl', 'net.inet.tcp.fin_timeout'), b=bars([['MSL', 15, '15 s'], ['2MSL = 理论 TIME_WAIT', 30, '30 s'], ['实测 TIME_WAIT', 31.3, '31.3 s']], 31.3, mark=[2], done=[0, 1]), kv=KV([['net.inet.tcp.msl', '15000 ms'], ['2MSL', '30 秒'], ['实测', '31.3 秒(轮询间隔 0.5 s)']], ['实测'])),
+    step("TIME_WAIT 占住四元组:客户端绑定固定源端口 51999,连接服务器后 close(客户端成为主动关闭方,留下 TIME_WAIT),马上用同一个源端口再连同一个服务器。不设 SO_REUSEADDR:bind 就失败(Address already in use);设了 SO_REUSEADDR:bind 成功,但 connect 失败(Address already in use)。也就是说在 macOS 上,同一个源端口、同一个服务器的新连接在 TIME_WAIT 期间被拒绝——这是 TIME_WAIT 的第一个作用:防止旧连接迟到的包被同一四元组的新连接误收。", t=tl(S(2)), mark=lidx(S(2), '设 SO_REUSEADDR', '不设 SO_REUSEADDR'), done=lidx(S(2), '同一个源端口'), kv=KV([['不设 SO_REUSEADDR', 'bind 失败'], ['设 SO_REUSEADDR', 'bind 成功,connect 仍失败'], ['原因', '该四元组还在 TIME_WAIT']], ['原因'])),
+    step("谁留下 TIME_WAIT:谁先 close 谁留下。各建立并关闭 500 个连接:客户端先 close 时,500 个 TIME_WAIT 都在客户端一侧(本地端口是临时端口),服务端一侧 0 个;服务端先 close 时,500 个 TIME_WAIT 都在服务端一侧(本地端口 = 服务端口),客户端一侧 0 个。所以“服务器上有大量 TIME_WAIT”往往是因为服务器主动关闭了连接(HTTP 短连接 Connection: close、超时踢人等);客户端的 TIME_WAIT 则会占用客户端的临时端口。", t=tl(S(3)), mark=lidx(S(3), '客户端先 close', '服务端先 close'), done=lidx(S(3), '所以“服务器上有大量'), b=bars([['客户端先 close · 客户端一侧', 500, '500'], ['客户端先 close · 服务端一侧', 0, '0'], ['服务端先 close · 服务端一侧', 500, '500'], ['服务端先 close · 客户端一侧', 0, '0']], 500, mark=[0, 2], done=[1, 3]), kv=KV([['客户端先关', '500 个 TIME_WAIT 在客户端'], ['服务端先关', '500 个 TIME_WAIT 在服务端'], ['规律', '主动关闭的一方留下']], ['规律'])),
+    step("大量 TIME_WAIT 的后果:客户端对同一个服务器连续建立再关闭短连接,成功 15696 次后第 15697 次失败:[Errno 49] Can't assign requested address(5.8 秒内做完),此刻 netstat 里和这个服务端口有关的 TIME_WAIT 有 15696 个,而临时端口范围 49152~65535 一共 16384 个。失败之后立刻再试 200 次,成功 0 次、失败 200 次——本机的临时端口基本被 TIME_WAIT 占满了。不再建立新连接,等了 31 秒后 TIME_WAIT 只剩不到 50 个(最早的一批是 5.8 秒前建立的,每个持续约 30 秒)。短连接 + 客户端主动关闭 + 大量连接同一个服务器,就是临时端口耗尽的典型成因。", t=tl(S(4)), mark=lidx(S(4), '连续建立 / 关闭短连接', '失败之后立刻再试 200 次'), done=lidx(S(4), '此刻 netstat', '不再建立新连接'), b=bars([['成功建立 / 关闭的短连接', 15696, '15,696'], ['临时端口范围', 16384, '16,384'], ['TIME_WAIT', 15696, '15,696']], 16384, mark=[2], done=[0, 1]), kv=KV([['15697 次', '[Errno 49] Can\'t assign requested address'], ['再试 200 次', '成功 0 次'], ['排空', '31 秒后剩不到 50 个']], ['再试 200 次'])),
+    step("绕过 TIME_WAIT 的办法与代价:同样 500 个连接,客户端正常 close() 之后和这个服务端口有关的 TIME_WAIT 有 500 个;设了 SO_LINGER(开,0 秒)再 close(),发出的是 RST,TIME_WAIT 有 0 个。linger 0 省掉了 TIME_WAIT,但代价是对方没读完的数据会丢,迟到的旧包也可能被新连接收到;更常见的正确做法是让客户端主动关闭、用连接池复用连接、调大临时端口范围。", t=tl(S(5)), mark=lidx(S(5), 'SO_LINGER(开,0 秒)后 close()'), done=lidx(S(5), '正常 close()', 'linger 0'), b=bars([['正常 close() · TIME_WAIT', 500, '500'], ['SO_LINGER 0 · TIME_WAIT', 0, '0']], 500, mark=[1], done=[0]), kv=KV([['正常 close()', '500 个 TIME_WAIT'], ['SO_LINGER(开,0)', '0 个,但发的是 RST'], ['代价', '未读数据丢失,旧包风险']], ['代价'])),
+]
+A = mkartw('w41', 41, '网络协议,TCP,TIME_WAIT,2MSL,临时端口,SO_LINGER,真实验证,动画演示',
+    'macOS 的 MSL 是 15 秒,TIME_WAIT 实测持续 31.3 秒;同一四元组在 TIME_WAIT 期间连不上(即使设了 SO_REUSEADDR);谁先 close 谁留下 TIME_WAIT;短连接 15696 次后临时端口耗尽(Can\'t assign requested address);SO_LINGER 0 能省掉 TIME_WAIT 但发 RST。',
+    'TIME_WAIT 为什么要等 2MSL?谁会留下它?大量堆积会怎样?这篇量出本机 TIME_WAIT 的真实时长,让同一个源端口马上重连被拒绝,把临时端口真的用光,最后看 SO_LINGER 0 能不能绕开它。',
+    [('31.3 秒', 'TIME_WAIT 实测持续时间(MSL 15 秒,2MSL = 30 秒)'), ('15,696', '连续建立再关闭的短连接数,之后临时端口耗尽,新连接报 Can\'t assign requested address'), ('500 → 0', '同样 500 个连接,正常 close() 留下 500 个 TIME_WAIT,SO_LINGER 0 留下 0 个')],
+    [('时长', '<p>本机 MSL 15 秒,TIME_WAIT 持续 2MSL,实测约 31 秒。</p>'),
+     ('作用', '<p>占住四元组,防止旧连接的迟到包混进新连接:TIME_WAIT 期间同一个源端口不能连同一个服务器(即使设了 SO_REUSEADDR 也不行)。</p>'),
+     ('谁留下', '<p>谁先 close 谁留下:服务器主动关闭,TIME_WAIT 在服务器;客户端主动关闭,TIME_WAIT 在客户端并占用临时端口。</p>'),
+     ('堆积的后果', '<p>客户端短连接太多时,临时端口会被 TIME_WAIT 占满,新连接报 Can\'t assign requested address,要等 TIME_WAIT 过期才恢复。</p>'),
+     ('绕过', '<p>SO_LINGER 0 用 RST 代替 FIN,不留 TIME_WAIT,但会丢未读数据。更好的做法是复用连接。</p>')],
+    steps,
+    [ENV_W + '。全部在 lo0 上做;临时端口耗尽实验用掉了大约 16000 个端口,实验结束后等待 TIME_WAIT 过期;TIME_WAIT 的数量按 netstat 里与服务端口相关的行统计;耗尽时失败的次数与具体个数每次略有不同',
+     '没有验证:真实网络上 TIME_WAIT 对 NAT 设备或负载均衡的影响;net.inet.tcp.msl 能否调小(需要 root);TIME_WAIT 的第二个作用(确保最后一个 ACK 丢失时对方重传的 FIN 能得到再次确认)没有单独演示;Linux 的 tcp_tw_reuse / 时间戳复用在 macOS 上没有对应项;失败时随机选端口的细节'],
+    'TIME_WAIT')

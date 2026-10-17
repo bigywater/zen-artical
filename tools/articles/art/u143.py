@@ -1,0 +1,18 @@
+from lib import *
+import re
+S = SS('u143')
+R = J('u143'); b = re.search(r'Unix 域套接字 ([\d.]+) µs,TCP 回环 ([\d.]+) µs', R['bench']); t = re.search(r'Unix 域套接字 ([\d.]+) GB/s,TCP 回环 ([\d.]+) GB/s', R['bench'])
+ln = re.search(r'文件名最长 (\d+) 字节时 bind 成功,总路径长度 (\d+) 字节;文件名 (\d+) 字节\(总长 (\d+)\)失败', R['len'])
+steps = [
+    step("Unix 域套接字用法和 TCP 几乎一样,但地址是文件系统路径:UnixListener::bind(&path) 之后,路径上出现一个文件,is_socket = true(权限 755)。回显服务:客户端 connect 路径、发 \"你好 uds\"、收到回显。服务端 accept 得到的对端地址 as_pathname() 是 None —— 客户端没有 bind,是未命名套接字。", t=tl(S(1)), done=lidx(S(1), 'bind 之后路径上出现', '服务端:对端地址', '客户端:收到'), kv=KV([['地址', '文件系统路径'], ['bind', '创建一个 socket 类型的文件'], ['未 bind 的客户端', '对端地址 None']], ['bind'])),
+    step("套接字文件不会随 listener 一起消失:listener 已经 drop,路径上的文件仍然存在(true),需要自己删除。残留文件的后果:再 bind 同一个路径得到 Err(AddrInUse, 48);connect 到这个没人监听的残留文件得到 Err(ConnectionRefused, 61);删掉文件后 bind 成功;connect 一个根本不存在的路径是 Err(NotFound, 2)。服务启动时通常先删旧文件再 bind。", t=tl(S(2)), done=lidx(S(2), '上一个 listener', '删除文件后 bind'), mark=lidx(S(2), '再 bind 同一个路径', 'connect 到这个没人监听', 'connect 到不存在的路径'), kv=KV([['残留文件 bind', 'AddrInUse / 48'], ['残留文件 connect', 'ConnectionRefused / 61'], ['路径不存在', 'NotFound / 2']], ['残留文件 bind'])),
+    step(f"路径长度有上限(sockaddr_un 的 sun_path):目录部分 53 字节,文件名最长 {ln.group(1)} 字节时 bind 成功(总路径 {ln.group(2)} 字节),文件名 {ln.group(3)} 字节(总长 {ln.group(4)})失败,错误「path must be shorter than SUN_LEN」。在 macOS 上路径要短于 104 字节(含结尾 0);测试代码里把套接字放在很深的临时目录下容易踩到。", t=tl(S(3)), done=lidx(S(3), '文件名最长'), kv=KV([['可用的最长路径', f'{ln.group(2)} 字节'], ['再长一字节', 'path must be shorter than SUN_LEN']], ['可用的最长路径'])),
+    step("不需要路径的套接字对:UnixStream::pair() 返回一对已连接的 UnixStream,a 写 ping,b 读到 \"ping\",两端都没有路径地址(None),适合线程/父子进程通信。UnixDatagram::pair() 保留消息边界:发 3 字节与 2 字节,两次 recv 分别得到 3 和 2 字节。", t=tl(S(4)), done=lidx(S(4), 'UnixStream::pair', 'UnixDatagram'), kv=KV([['UnixStream::pair()', '已连接,无路径'], ['UnixDatagram', '数据报边界保留']], ['UnixStream::pair()'])),
+    step(f"速度(同一台机器,release):4 字节回显 5 万次,Unix 域套接字平均往返 {b.group(1)} µs,TCP 回环 {b.group(2)} µs,Unix 域快约 {float(b.group(2)) / float(b.group(1)):.1f} 倍。但单向吞吐(64 KiB 块、1 GiB)反过来:Unix 域套接字 {t.group(1)} GB/s,TCP 回环 {t.group(2)} GB/s。小消息往返 Unix 域更快,大块吞吐在这台 macOS 上 TCP 更快 —— 结论是这台机器上的实测,换系统会不同。", t=tl(S(5)), done=lidx(S(5), '往返延迟', '单向吞吐'), b=bars([['UDS 往返 µs', float(b.group(1)), f'{b.group(1)} µs'], ['TCP 往返 µs', float(b.group(2)), f'{b.group(2)} µs']], float(b.group(2)), cur=[1], done=[0]), kv=KV([['往返延迟', f'UDS {b.group(1)} µs / TCP {b.group(2)} µs'], ['吞吐', f'UDS {t.group(1)} GB/s / TCP {t.group(2)} GB/s']], ['吞吐'])),
+]
+A = mkart('u143', 143, 'Rust,Unix域套接字,UnixStream,IPC,真实验证,动画演示',
+    f'用 std::os::unix::net 验证 Unix 域套接字:bind 创建 socket 类型文件(权限 755);残留文件使 bind 得 AddrInUse(48)、connect 得 ConnectionRefused(61);路径最长 {ln.group(2)} 字节;UnixStream::pair 与 UnixDatagram;往返延迟 {b.group(1)} 对 TCP {b.group(2)} µs,但吞吐 {t.group(1)} 对 {t.group(2)} GB/s(TCP 更高)。',
+    '同一台机器上的进程通信,Unix 域套接字比 TCP 回环好在哪?它的地址是文件,带来哪些坑?这篇验证套接字文件、残留文件错误、路径长度限制、socketpair,并把延迟和吞吐与 TCP 回环对比。',
+    [(f'{b.group(1)} 对 {b.group(2)} µs', 'Unix 域与 TCP 回环的 4 字节往返延迟'), (f'{ln.group(2)} 字节', '本机上可 bind 的最长套接字路径(再长一字节失败)'), ('48 / 61', '残留套接字文件时 bind 与 connect 的 OS 错误码')],
+    [('套接字是文件', '<p>TCP 版本见<a href="rust-tcp-listener-stream.html">TCP Listener 与 TcpStream</a>;文件描述符的释放见<a href="rust-file-descriptor-release.html">文件描述符与资源释放</a>。</p>'), ('残留的套接字文件', None), ('路径长度', '<p>macOS 的 sun_path 是 104 字节,Linux 是 108 字节,这里只验证了 macOS。</p>'), ('socketpair 与数据报', None), ('与 TCP 回环对比', '<p>吞吐与延迟是 macOS 上的单次微基准,不能推广到 Linux。</p>')],
+    steps, [ENV_U + '。macOS;文件放在系统临时目录', '没有验证:Linux 的抽象命名空间套接字(@name)、通过 SCM_RIGHTS 传递文件描述符、SO_PEERCRED / getpeereid 取对端身份(std 里 peer_cred 不稳定)、套接字文件的权限控制访问、tokio 的 UnixStream'], 'Unix 域套接字')

@@ -1,0 +1,51 @@
+import sys, os, re, time, subprocess, json; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from dl import *
+tee('c19')
+img('alpine:3.20')
+purge()
+def vm(cmd):
+    rc, o = dk('run', '--rm', '--privileged', '--pid=host', *LAB, 'alpine:3.20', 'nsenter', '-t', '1', '-m', '-u', '-n', '-i', 'sh', '-c', cmd, raw=True)
+    return o.strip()
+SNAP = '/var/lib/desktop-containerd/daemon/io.containerd.snapshotter.v1.overlayfs/snapshots/'
+def short(p): return p.replace(SNAP, '<snapshots>/')
+d = ctx('c19', {'Dockerfile': 'FROM alpine:3.20\nRUN echo one > /one.txt\nRUN echo two > /two.txt\nCOPY big.bin /big.bin\n', 'big.bin': os.urandom(3 * 1024 * 1024)})
+rc, o = build(d, 'bwlab-c19', '--provenance=false', '--sbom=false'); assert rc == 0, o[-300:]
+nl = len(json.loads(out('image', 'inspect', '--format', '{{json .RootFS.Layers}}', 'bwlab-c19')))
+print('== 一:Docker Desktop 这个 Docker 用的存储(Docker Engine 29.8.2)')
+print(f'  docker info:Storage Driver = {out("info", "--format", "{{.Driver}}")};DriverStatus = {out("info", "--format", "{{.DriverStatus}}")}')
+cid = out('run', '-d', '--name', 'bwlab-c19c', *LAB, 'bwlab-c19', 'sleep', '600')
+print(f'  docker inspect 的 GraphDriver = {out("inspect", "--format", "{{json .GraphDriver}}", cid)}(没有 overlay2 的 LowerDir / UpperDir 字段)')
+print(f'  镜像 bwlab-c19 有 {nl} 层(RootFS.Layers)')
+print('== 二:进到 Docker Desktop 的虚拟机里,找这个容器的 overlay 挂载')
+mt = vm(f"grep '{cid}' /proc/mounts")
+line = mt.splitlines()[0]
+mp = line.split()[1]
+opts = line.split()[3]
+low = re.search(r'lowerdir=([^,]+)', opts).group(1).split(':')
+up = re.search(r'upperdir=([^,]+)', opts).group(1)
+wk = re.search(r'workdir=([^,]+)', opts).group(1)
+print(f'  挂载点:{mp.replace(cid, "<容器ID>")};文件系统类型:{line.split()[2]}')
+print(f'  lowerdir 有 {len(low)} 个目录(镜像 {nl} 层);第一个:{short(low[0])}')
+print(f'  upperdir = {short(up)}')
+print(f'  workdir  = {short(wk)}')
+print(f'  lowerdir 的顺序:最上面一层在最前面。逐个看每个 lower 目录里有什么:')
+for i, l in enumerate(low):
+    print(f'    lower[{i}] 有:{vm(f"ls {l}").replace(chr(10), " ")[:80]}')
+print(f'  lower[0] 里的文件:{vm(f"find {low[0]} -type f -o -type l | sed s#{low[0]}##").replace(chr(10), " ")}(镜像只有 {nl} 层,多出来的这一层是容器创建时加的)')
+print('== 三:容器里写文件,落在 upperdir 里')
+print(f'  容器启动后 upperdir 里:{vm(f"ls -A {up}") or "(空)"}')
+dk('exec', cid, 'sh', '-c', 'echo new > /new.txt; echo changed >> /one.txt; mkdir /newdir; echo x > /newdir/x')
+print(f'  容器里创建 new.txt、新目录 newdir,并往原有的 one.txt 追加一行之后,upperdir 里:{vm(f"ls -A {up}").replace(chr(10), " ")}')
+print(f'  upperdir 里的 one.txt 内容:{vm(f"cat {up}/one.txt").replace(chr(10), " | ")}')
+orig = [vm(f'cat {l}/one.txt 2>/dev/null') for l in low]
+print(f'  每个 lower 里的 one.txt:{[o_ or "无" for o_ in orig]}')
+print(f'  没改动的 big.bin 在 upperdir 里吗?{"big.bin" in vm(f"ls -A {up}")}')
+print('== 四:合并后的视图(merged)和容器里看到的一致')
+print(f'  在挂载点上 ls:{vm(f"ls {mp}").replace(chr(10), " ")}')
+print(f'  挂载点上 cat one.txt:{vm(f"cat {mp}/one.txt").replace(chr(10), " | ")};容器里 cat one.txt:{out("exec", cid, "cat", "/one.txt").replace(chr(10), " | ")}')
+print('== 五:删掉容器之后')
+print(f'  upperdir 还在吗?{vm(f"[ -d {up} ] && echo 在 || echo 已删除")};挂载点还在吗?{vm(f"grep -c {cid} /proc/mounts")} 行挂载记录')
+dk('rm', '-f', cid)
+print(f'  docker rm -f 之后:upperdir {vm(f"[ -d {up} ] && echo 在 || echo 已删除")};挂载记录 {vm(f"grep -c {cid} /proc/mounts || true")} 行')
+print(f'  容器创建时多出来的 lower[0]:{vm(f"[ -d {low[0]} ] && echo 在 || echo 已删除")};镜像的层 lower[1]:{vm(f"[ -d {low[1]} ] && echo 在 || echo 已删除")}')
+purge()

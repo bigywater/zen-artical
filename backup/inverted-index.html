@@ -1,0 +1,802 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>倒排索引是什么</title>
+<meta name="description" content="从词项到文档列表的倒排索引结构与真实检索过程。">
+<link rel="canonical" href="https://bigywater.tech/inverted-index.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="倒排索引是什么">
+<meta property="og:description" content="从词项到文档列表的倒排索引结构与真实检索过程。">
+<meta property="og:url" content="https://bigywater.tech/inverted-index.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="倒排索引是什么">
+<meta name="twitter:description" content="从词项到文档列表的倒排索引结构与真实检索过程。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F6F7F9; --surface:#FFFFFF; --surface-2:#EEF0F4; --surface-3:#E4E7ED;
+  --ink:#1D2130; --ink-soft:#52586B; --ink-faint:#868DA3;
+  --line:#DDE1E8; --line-soft:#E9ECF1;
+  --term-c:#3B4C9E; --term-soft:#E1E5F7;
+  --match-c:#B8891A; --match-soft:#FBEECE;
+  --postings-c:#12807E; --postings-soft:#D9F0EE;
+  --danger:#B4483A; --danger-soft:#F7E2DE;
+  --code-bg:#1B1E2A; --code-ink:#E7E9F5; --code-comment:#7C8199; --code-kw:#7FC7D9; --code-str:#D9B168;
+  --shadow:0 1px 2px rgba(20,22,35,.06),0 10px 28px -14px rgba(20,22,35,.16);
+  --radius:12px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#12141C; --surface:#191C27; --surface-2:#212533; --surface-3:#292E3F;
+    --ink:#E7E9F0; --ink-soft:#ABB1C4; --ink-faint:#6D7389;
+    --line:#2C3141; --line-soft:#232734;
+    --term-c:#8B9AE8; --term-soft:#232C4D;
+    --match-c:#E8C34C; --match-soft:#3A2F16;
+    --postings-c:#4FC9C6; --postings-soft:#163B39;
+    --danger:#E08272; --danger-soft:#3B241F;
+    --code-bg:#0F111A; --code-ink:#E7E9F5; --code-comment:#6B7089; --code-kw:#7FC7D9; --code-str:#D9B168;
+    --shadow:0 1px 2px rgba(0,0,0,.35),0 14px 32px -16px rgba(0,0,0,.55);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#12141C; --surface:#191C27; --surface-2:#212533; --surface-3:#292E3F;
+  --ink:#E7E9F0; --ink-soft:#ABB1C4; --ink-faint:#6D7389;
+  --line:#2C3141; --line-soft:#232734;
+  --term-c:#8B9AE8; --term-soft:#232C4D;
+  --match-c:#E8C34C; --match-soft:#3A2F16;
+  --postings-c:#4FC9C6; --postings-soft:#163B39;
+  --danger:#E08272; --danger-soft:#3B241F;
+  --code-bg:#0F111A; --code-ink:#E7E9F5; --code-comment:#6B7089; --code-kw:#7FC7D9; --code-str:#D9B168;
+  --shadow:0 1px 2px rgba(0,0,0,.35),0 14px 32px -16px rgba(0,0,0,.55);
+}
+*{box-sizing:border-box;}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.7;}
+.mono{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;}
+.wide{max-width:1040px;margin:0 auto;padding:0 22px;}
+.prose{max-width:1040px;margin:0 auto;padding:0 22px;}
+h1,h2{letter-spacing:-.01em;text-wrap:balance;}
+
+header.hero{padding:60px 0 28px;}
+.eyebrow{font-size:12.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);margin:0 0 14px;}
+h1{font-size:clamp(28px,4.6vw,40px);margin:0 0 16px;line-height:1.18;font-weight:800;}
+.hero-sub{font-size:17px;color:var(--ink-soft);margin:0 0 20px;}
+.legend-row{display:flex;gap:10px;flex-wrap:wrap;margin:24px 0 4px;}
+.legend-chip{display:inline-flex;align-items:center;gap:8px;padding:7px 13px;border-radius:999px;border:1px solid var(--line);background:var(--surface);font-size:13px;font-weight:600;}
+.legend-dot{width:11px;height:11px;border-radius:50%;flex:none;}
+.legend-chip .term-dot{background:var(--term-c);} .legend-chip .match-dot{background:var(--match-c);} .legend-chip .postings-dot{background:var(--postings-c);}
+
+section{padding:36px 0;}
+section.divider-top{border-top:1px solid var(--line);}
+h2{font-size:21px;margin:0 0 4px;font-weight:800;}
+.section-kicker{font-size:12.5px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.07em;font-weight:700;margin:0 0 8px;}
+p{font-size:15.5px;color:var(--ink-soft);margin:0 0 16px;}
+.prose p b, .prose li b{color:var(--ink);font-weight:700;}
+.prose ul,.prose ol{padding-left:22px;font-size:15.5px;color:var(--ink-soft);}
+.prose li{margin-bottom:8px;}
+.term-tag{color:var(--term-c);font-weight:700;}
+.match-tag{color:var(--match-c);font-weight:700;}
+.postings-tag{color:var(--postings-c);font-weight:700;}
+
+.analogy{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:20px 0;}
+@media (max-width:700px){.analogy{grid-template-columns:1fr;}}
+.acard{border:1px solid var(--line);border-radius:var(--radius);padding:18px;background:var(--surface);box-shadow:var(--shadow);}
+.acard h3{margin:0 0 8px;font-size:15.5px;}
+.acard p{font-size:14px;margin:0;}
+.acard.forward h3{color:var(--danger);}
+.acard.inverted h3{color:var(--postings-c);}
+
+.entity-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:22px 0;}
+@media (max-width:760px){.entity-cards{grid-template-columns:1fr;}}
+.ecard{border:1px solid var(--line);border-radius:var(--radius);padding:18px;background:var(--surface);box-shadow:var(--shadow);}
+.ecard .etitle{font-size:16.5px;font-weight:800;display:flex;align-items:center;gap:9px;margin-bottom:8px;}
+.ecard.term .etitle{color:var(--term-c);} .ecard.match .etitle{color:var(--match-c);} .ecard.postings .etitle{color:var(--postings-c);}
+.ecard p{font-size:14px;margin:0;}
+.edot{width:13px;height:13px;border-radius:50%;flex:none;}
+.ecard.term .edot{background:var(--term-c);} .ecard.match .edot{background:var(--match-c);} .ecard.postings .edot{background:var(--postings-c);}
+
+.code-quote{background:var(--code-bg);border-radius:var(--radius);overflow:hidden;margin:20px 0;box-shadow:var(--shadow);}
+.code-head{display:flex;justify-content:space-between;align-items:center;padding:9px 16px;background:rgba(255,255,255,.04);border-bottom:1px solid rgba(255,255,255,.08);}
+.code-path{font-family:ui-monospace,monospace;font-size:12px;color:var(--code-comment);}
+.code-quote pre{margin:0;padding:16px;overflow-x:auto;}
+.code-quote code{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;font-size:12.8px;line-height:1.6;color:var(--code-ink);white-space:pre;}
+
+.callout{border-left:3px solid var(--match-c);background:var(--match-soft);border-radius:0 8px 8px 0;padding:12px 16px;font-size:14px;color:var(--ink);margin:18px 0;}
+.callout b{color:var(--match-c);}
+.callout.info{border-left-color:var(--term-c);background:var(--term-soft);}
+.callout.info b{color:var(--term-c);}
+
+/* ---- simulator ---- */
+.sim-panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px;margin:22px 0;}
+.sim-controls{display:flex;align-items:center;gap:8px;margin-bottom:18px;flex-wrap:wrap;}
+button.ctrl{appearance:none;border:1px solid var(--line);background:var(--surface-2);color:var(--ink);padding:8px 14px;border-radius:8px;font-size:14px;cursor:pointer;font-weight:600;transition:background .15s,border-color .15s;}
+button.ctrl:hover:not(:disabled){background:var(--surface-3);}
+button.ctrl:disabled{opacity:.4;cursor:not-allowed;}
+button.ctrl.primary{background:var(--ink);color:var(--bg);border-color:var(--ink);}
+button.ctrl:focus-visible{outline:2px solid var(--term-c);outline-offset:2px;}
+.sim-progress{font-size:12.5px;color:var(--ink-faint);margin-left:2px;font-family:ui-monospace,monospace;}
+.spacer{flex:1;}
+select.ctrl{padding:6px 10px;}
+
+.tabs{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;}
+.tab{appearance:none;border:1px solid var(--line);background:var(--surface-2);color:var(--ink-soft);padding:8px 16px;border-radius:999px;font-size:13.5px;cursor:pointer;font-weight:600;transition:background .15s,color .15s,border-color .15s;}
+.tab[data-active="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink);}
+.tab:focus-visible{outline:2px solid var(--term-c);outline-offset:2px;}
+
+.docs-grid{display:grid;grid-template-columns:1fr;gap:8px;margin-bottom:16px;}
+.doc-card{border:1.5px solid var(--line);border-radius:8px;padding:9px 12px;background:var(--surface-2);transition:border-color .25s,background .25s;font-size:13.5px;}
+.doc-card[data-active="true"]{border-color:var(--term-c);background:var(--term-soft);}
+.doc-id{font-weight:800;color:var(--term-c);margin-right:8px;font-family:ui-monospace,monospace;}
+.doc-text{color:var(--ink-soft);}
+
+.token-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px;min-height:32px;}
+.token-chip{border:1.5px solid var(--line);border-radius:7px;padding:4px 9px;font-size:13px;font-family:ui-monospace,monospace;background:var(--surface);color:var(--ink-soft);}
+.token-chip[data-kept="true"]{border-color:var(--match-c);background:var(--match-soft);color:var(--ink);font-weight:700;}
+.token-chip[data-kept="false"]{opacity:.45;text-decoration:line-through;}
+
+.index-table{border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-bottom:16px;}
+.index-row{display:flex;align-items:center;gap:10px;padding:6px 12px;border-bottom:1px solid var(--line-soft);font-size:13px;}
+.index-row:last-child{border-bottom:none;}
+.index-row[data-flash="true"]{background:var(--match-soft);}
+.index-term{font-family:ui-monospace,monospace;font-weight:700;color:var(--term-c);min-width:70px;}
+.index-postings{display:flex;gap:5px;flex-wrap:wrap;}
+.doc-chip{border:1.5px solid var(--postings-c);background:var(--postings-soft);color:var(--ink);border-radius:6px;padding:2px 7px;font-size:11.5px;font-family:ui-monospace,monospace;font-weight:700;}
+.doc-chip.new{border-color:var(--match-c);background:var(--match-soft);}
+
+.merge-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;}
+.merge-label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-faint);font-weight:700;margin-bottom:5px;font-family:ui-monospace,monospace;}
+.merge-cell{width:46px;height:40px;border-radius:7px;border:2px solid var(--line);background:var(--surface);display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:ui-monospace,monospace;font-size:13px;font-weight:700;color:var(--ink);position:relative;transition:border-color .2s,background .2s;}
+.merge-cell[data-ptr="true"]{border-color:var(--term-c);box-shadow:0 0 0 3px var(--term-soft);}
+.merge-cell[data-consumed="true"]{opacity:.35;}
+.merge-cell .ptr-label{position:absolute;top:-16px;font-size:9px;color:var(--term-c);font-weight:800;}
+.merge-block{margin-bottom:14px;}
+.result-row{display:flex;gap:6px;flex-wrap:wrap;min-height:40px;}
+.result-cell{width:40px;height:36px;border-radius:7px;border:2px solid var(--postings-c);background:var(--postings-soft);display:flex;align-items:center;justify-content:center;font-family:ui-monospace,monospace;font-weight:700;font-size:13px;color:var(--ink);}
+
+.sim-desc{background:var(--surface-2);border-radius:8px;padding:12px 14px;font-size:13.5px;color:var(--ink-soft);margin-bottom:14px;min-height:44px;border:1px solid var(--line-soft);}
+.sim-desc b{color:var(--ink);}
+.sim-formula{font-family:ui-monospace,monospace;font-size:13px;color:var(--ink-faint);margin-bottom:8px;}
+
+.sim-log{max-height:170px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:8px;}
+.log-item{padding:6px 9px;border-radius:6px;font-size:12.5px;color:var(--ink-faint);cursor:pointer;font-family:ui-monospace,monospace;display:flex;gap:8px;}
+.log-item:hover{background:var(--surface-2);}
+.log-item[data-active="true"]{background:var(--term-soft);color:var(--ink);font-weight:600;}
+.log-idx{min-width:22px;color:var(--ink-faint);}
+
+.refs{font-size:14px;color:var(--ink-soft);}
+.refs li{margin-bottom:10px;}
+.refs a{color:var(--term-c);}
+footer.endnote{border-top:1px solid var(--line);padding:24px 0 56px;font-size:13px;color:var(--ink-faint);}
+
+@media (prefers-reduced-motion:reduce){*{transition:none !important;}}
+</style>
+
+<article>
+<header class="hero prose">
+  <p class="eyebrow">数据结构与搜索引擎 · 写给完全没接触过的人</p>
+  <h1>倒排索引是什么,Elasticsearch 又是什么</h1>
+  <p class="hero-sub">这篇不需要任何前置知识。核心概念其实你早就用过——就是<b>一本书最后几页的"索引"</b>。这篇文章会带着搭一个真正能跑、能验证结果的迷你搜索引擎,配一个可以逐步播放的动画演示。</p>
+  <div class="legend-row">
+    <span class="legend-chip"><span class="legend-dot term-dot"></span>词项(term) · 拆出来的一个个词</span>
+    <span class="legend-chip"><span class="legend-dot match-dot"></span>命中/关键步骤</span>
+    <span class="legend-chip"><span class="legend-dot postings-dot"></span>倒排表(postings) · 词对应的文档列表</span>
+  </div>
+</header>
+
+<section class="prose">
+  <p class="section-kicker">01 · 从一本书的索引说起</p>
+  <h2>你早就用过倒排索引了</h2>
+  <p>翻开一本厚厚的技术书,最后几页通常有个"索引",长这样:</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">一本书最后的索引(节选)</span></div>
+    <pre><code>并发 ................ 45, 112, 203
+锁 ................... 46, 47, 118
+死锁 .................. 118, 205</code></pre>
+  </div>
+  <p>这就是一个倒排索引——"锁"这个词出现在第 46、47、118 页,一目了然。如果没有这个索引,你想知道"死锁"在哪些页出现过,唯一的办法是<b>从第一页翻到最后一页</b>,一页一页找。书越厚,这件事越绝望。搜索引擎、数据库的全文搜索功能、你在网站里点的那个搜索框,解决的都是同一个问题,只是把"书"换成了成千上万篇文档。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">02 · 两种索引,方向正好相反</p>
+  <h2>正排索引 vs 倒排索引</h2>
+  <div class="analogy">
+    <div class="acard forward">
+      <h3>正排索引(forward index)</h3>
+      <p>文档 → 词。就是文档本身:第 1 篇文档写的是"the quick brown fox..."。这是数据本来的样子,查"这篇文档写了什么"很快,但反过来查"哪些文档提到了 fox"就得把每篇文档都读一遍。</p>
+    </div>
+    <div class="acard inverted">
+      <h3>倒排索引(inverted index)</h3>
+      <p>词 → 文档。把方向倒过来:"fox" 这个词出现在文档 1、3、6。查"哪些文档提到了 fox"变成了查一个词典,一步到位——这正是"倒排"这个名字的来源:把正常的"文档到词"关系倒过来,变成"词到文档"。</p>
+    </div>
+  </div>
+  <p>下面用 6 篇一句话文档做例子,后面的演示都基于这几篇:</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">示例文档(6 篇)</span></div>
+    <pre><code>1: the quick brown fox jumps over the lazy dog
+2: the lazy dog sleeps all day
+3: quick fox is a clever animal
+4: my dog loves to play in the park
+5: the cat sat on the mat
+6: quick brown fox and lazy dog are common in stories</code></pre>
+  </div>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">03 · 建倒排索引的三步</p>
+  <h2>分词 / 归一化 / 倒排表</h2>
+  <div class="entity-cards">
+    <div class="ecard term"><div class="etitle"><span class="edot"></span>分词(tokenize)</div><p>把一句话拆成一个个词。英文按空格拆相对简单;中文没有空格,需要专门的分词算法(比如判断"搜索引擎"该拆成"搜索/引擎"还是整体保留)——这是中文搜索比英文麻烦的地方。</p></div>
+    <div class="ecard match"><div class="etitle"><span class="edot"></span>归一化 + 停用词</div><p>把词统一成小写、去掉标点,再把"the"“is"“a"这类几乎每篇文档都有、没有区分度的高频词(停用词 stopword)过滤掉——它们不会帮你缩小搜索范围,留着只会让索引变大。</p></div>
+    <div class="ecard postings"><div class="etitle"><span class="edot"></span>倒排表(postings list)</div><p>为每个词维护一份"出现在哪些文档里"的清单,清单里的文档编号<b>从小到大排好序</b>——排序这一点很关键,下面查询那一步全靠它加速。</p></div>
+  </div>
+</section>
+
+<section class="prose divider-top" id="sim-section">
+  <p class="section-kicker">04 · 现场直播</p>
+  <h2>亲手建一个索引,再亲手查一次</h2>
+  <p>下面的演示分两部分:先看着索引一步步被建起来,再看一次真正的查询——两个词的倒排表都排好了序,查询时用两根指针从头往后扫,这个算法叫<b>归并(merge)</b>,和归并排序合并两个有序数组是同一个技巧。整个过程<b>用代码真跑过,并且和"笨办法"(挨篇文档暴力扫描)的结果逐条核对一致</b>,不是随手画的动画。</p>
+</section>
+
+<section class="wide">
+  <div class="sim-panel">
+    <div class="tabs" id="tabs">
+      <button class="tab" data-mode="build">建立索引</button>
+      <button class="tab" data-mode="and">查询: quick AND dog</button>
+      <button class="tab" data-mode="or">查询: quick OR cat</button>
+      <button class="tab" data-mode="andnot">查询: dog AND NOT lazy</button>
+    </div>
+
+    <div id="buildView">
+      <div class="docs-grid" id="docsGrid"></div>
+      <div class="merge-label">当前文档分词结果</div>
+      <div class="token-row" id="tokenRow"></div>
+      <div class="merge-label">倒排索引(正在建立)</div>
+      <div class="index-table" id="indexTable"></div>
+    </div>
+
+    <div id="queryView" style="display:none;">
+      <div class="merge-block">
+        <div class="merge-label" id="labelA">词项 A 的倒排表</div>
+        <div class="merge-row" id="rowA"></div>
+      </div>
+      <div class="merge-block">
+        <div class="merge-label" id="labelB">词项 B 的倒排表</div>
+        <div class="merge-row" id="rowB"></div>
+      </div>
+      <div class="merge-block">
+        <div class="merge-label">结果</div>
+        <div class="result-row" id="resultRow"></div>
+      </div>
+    </div>
+
+    <div class="sim-desc">
+      <div class="sim-formula" id="simFormula">&mdash;</div>
+      <div id="simDesc">点击"下一步"或"播放"开始。</div>
+    </div>
+
+    <div class="sim-controls">
+      <button class="ctrl" id="btnReset">重置</button>
+      <button class="ctrl" id="btnPrev">上一步</button>
+      <button class="ctrl primary" id="btnPlay">播放</button>
+      <button class="ctrl" id="btnNext">下一步</button>
+      <span class="sim-progress" id="simProgress">0 / 0</span>
+      <div class="spacer"></div>
+      <label class="sim-progress" for="simSpeed">速度</label>
+      <select class="ctrl" id="simSpeed">
+        <option value="1800">慢</option>
+        <option value="1000" selected>中</option>
+        <option value="450">快</option>
+      </select>
+    </div>
+
+    <div class="sim-log" id="simLog"></div>
+  </div>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">05 · 为什么这么快</p>
+  <h2>把"暴力扫描"和"倒排索引"放在一起比一比</h2>
+  <p>假设有 100 万篇文档,平均每篇 300 个词。要找出所有包含"倒排索引"这个词的文档:</p>
+  <ul>
+    <li><b>暴力扫描:</b>每篇文档都要读一遍、逐词比较,最坏情况约 100万 × 300 = 3 亿次比较。文档越多、越长,这个数字线性往上涨,没有任何捷径。</li>
+    <li><b>倒排索引:</b>直接去词典里找"倒排索引"这一项,拿到它的倒排表——如果这个词只在 8000 篇文档里出现过,你面对的就是一份 8000 个数字的列表,而不是 3 亿次比较。建索引的成本在<b>写入</b>数据的时候就已经付过了,查询的时候直接享受现成的结果。</li>
+  </ul>
+  <p>多个词一起查(比如 AND)呢?两份倒排表都已经排好序,用上面演示里那种"两根指针从头往后走"的<b>归并</b>算法,只需要把两份表各扫一遍——时间只跟"两份表加起来多长"成正比,而不是"表 A 的每一项都去表 B 里找一遍"(那样是长度相乘,慢得多)。伪代码大概是这样:</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">伪代码:两个有序倒排表求交集(AND)</span></div>
+    <pre><code>i, j = 0, 0
+result = []
+while i &lt; len(listA) and j &lt; len(listB):
+    if listA[i] == listB[j]:
+        result.append(listA[i])   # 两边都有,命中
+        i += 1; j += 1
+    elif listA[i] &lt; listB[j]:
+        i += 1                    # A 这边小,A 往前走一步
+    else:
+        j += 1                    # B 这边小,B 往前走一步
+return result</code></pre>
+  </div>
+  <p class="callout info"><b>为什么必须先排序:</b>如果两份列表是乱序的,指针没法"哪边小就走哪边"这样简单地往前挪,只能退化成挨个去另一边里找,速度立刻打回"暴力"的水平。这也是为什么倒排表建好之后,文档编号必须保持有序——排序不是为了好看,是为了让归并算法能生效。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">06 · 光找到还不够,得排出好坏</p>
+  <h2>相关性打分:TF-IDF 与 BM25</h2>
+  <p>倒排索引解决的是"哪些文档包含这个词",但真实搜索还要回答"这些文档里,哪篇跟我最相关"。经典做法叫 <b>TF-IDF</b>,拆开看很好懂:</p>
+  <ul>
+    <li><b>TF(词频,term frequency):</b>一个词在某篇文档里出现得越多次,这篇文档大概率跟这个词关系越大。</li>
+    <li><b>IDF(逆文档频率,inverse document frequency):</b>如果一个词几乎所有文档都有(比如"的"“是"),它就没有区分度,权重应该低;反过来,一个词越稀有,能在某篇文档里出现就越说明这篇文档专门讲这件事,权重应该高。</li>
+  </ul>
+  <p>把 TF 和 IDF 相乘,就是一篇文档对这个词的分数,分数越高排名越靠前。Elasticsearch(以及背后的 Lucene)默认用的是 TF-IDF 的改进版 <b>BM25</b>,主要改进了两点:词频不是越高越好(出现 10 次和出现 100 次,相关性差别不该那么大,需要"边际递减"处理);要考虑文档长度(长文档天然词多,原始词频会占便宜,需要按长度打折)。你不需要记住公式,只要知道:<b>搜索结果的排序,依据的是"词有多稀有"和"词在这篇文档里有多突出",而不是随便排的</b>。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">07 · Elasticsearch 到底是什么</p>
+  <h2>Lucene 加上"分布式"这层壳</h2>
+  <p>上面讲的分词、倒排表、归并查询、打分排序,全部是一个叫 <b>Lucene</b> 的开源库真正实现的东西(Java 写的,Apache 协议开源)。但 Lucene 只是一个<b>库</b>——你得写 Java 代码调用它的 API,而且它天生是单机的,一台机器的硬盘和内存放不下的数据,它管不了。</p>
+  <p><b>Elasticsearch 就是在 Lucene 外面包了一层</b>,补上了三件事:</p>
+  <ul>
+    <li><b>网络接口:</b>不用写 Java 调 API,发一个 HTTP 请求、传一段 JSON 就能存数据、查数据,任何语言都能用。</li>
+    <li><b>分片(shard):</b>数据量大到一台机器放不下(或者想让查询更快),就把索引拆成好几份,分别交给不同的机器。想象一本百科全书太厚了,一个人抱不动、翻页也慢——拆成好几卷,交给不同的人保管,查的时候几个人同时在自己那一卷里找,再把结果汇总,比一个人从头翻到尾快得多。</li>
+    <li><b>副本(replica):</b>每一卷再复印一份,交给另一个人也保管一份——原本那个人请假了(机器宕机),复印本立刻能顶上,数据不会丢、服务不会断。</li>
+  </ul>
+  <p>再加上聚合(aggregation)能力——不只是"找到包含某个词的文档",还能做"按小时统计出现错误关键词的日志条数"这类统计分析,这也是为什么 Elasticsearch 常常不只被当搜索引擎用,还被当分析引擎用。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">08 · 什么时候该用</p>
+  <h2>真实场景</h2>
+  <ul>
+    <li><b>站内全文搜索:</b>电商网站的商品搜索、文档站/内容站的搜索框、App 里的搜索功能——只要用户会输入关键词、你需要"模糊匹配 + 按相关性排序",这就是 Elasticsearch 的核心场景。</li>
+    <li><b>日志与可观测性(经典的 ELK/Elastic Stack):</b>把服务器日志、应用日志统一收集进 Elasticsearch,能几秒钟内搜出"过去一小时所有带 error 的日志",这是目前最常见的生产用法之一,Kibana(配套的可视化工具)负责把这些数据画成仪表盘。</li>
+    <li><b>准实时的数据分析/报表:</b>靠聚合能力做统计看板,数据写进去几秒后就能被查询和统计到。</li>
+  </ul>
+  <p class="callout"><b>不适合的场景:</b>需要强一致性的交易型数据(比如银行转账、订单主记录)不该把 Elasticsearch 当成唯一的数据源——它更适合当"专门用来搜索的镜像副本"。常见做法是主数据放在关系型数据库(或者其它专门的存储)里,再同步一份到 Elasticsearch 用来搜索,而不是反过来。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">09 · 参考与说明</p>
+  <h2>这篇文章做了哪些简化</h2>
+  <ul class="refs">
+    <li>示例里的分词只是按空格拆分英文单词、转小写、过滤一份很小的停用词表——真实的 Lucene 分词器(analyzer)要处理标点、大小写、词干提取(stemming,比如把 "jumps" "jumping" 都归一到 "jump")、多语言(尤其中文分词)等复杂得多的情况。这篇为了让每一步都能被肉眼看懂,刻意跳过了这些。</li>
+    <li>真实的倒排表除了文档编号,通常还会记录词频、词在文档里的具体位置(用于短语搜索,比如精确匹配"quick fox"这个词组)——这篇的演示只保留了"出现在哪些文档"这一层,没有展开位置信息。</li>
+    <li>Lucene 是开源项目,想深入可以看 <a href="https://github.com/apache/lucene" target="_blank" rel="noopener">github.com/apache/lucene</a>;Elasticsearch 的官方文档在 <a href="https://www.elastic.co/guide/" target="_blank" rel="noopener">elastic.co/guide</a>。这篇没有像之前讲 Go 运行时那样逐行引用它们的源码——面向的读者不同,这里更注重把"倒排索引是什么、为什么快"这个核心概念讲清楚。</li>
+    <li>本文里"6 篇文档建索引、3 条查询"的完整过程和结果,是用 Python 脚本真实跑出来的,并且和暴力扫描的结果逐项核对过,不是手算的示例。</li>
+  </ul>
+</section>
+
+<footer class="endnote prose">
+  数据结构系列 · 倒排索引这一个想法,撑起了从 Google 搜索到你App里的那个搜索框、再到公司里查日志用的 Kibana 面板的一大片工业界基础设施——核心思路从头到尾就是"把方向倒过来,再排好序"。
+</footer>
+</article>
+
+<script>
+var DATA = {"docs": {"1": "the quick brown fox jumps over the lazy dog", "2": "the lazy dog sleeps all day", "3": "quick fox is a clever animal", "4": "my dog loves to play in the park", "5": "the cat sat on the mat", "6": "quick brown fox and lazy dog are common in stories"}, "stopwords": ["a", "all", "an", "and", "are", "in", "is", "my", "of", "on", "over", "the", "to"], "indexEvents": [{"docId": 1, "text": "the quick brown fox jumps over the lazy dog", "rawTokens": ["the", "quick", "brown", "fox", "jumps", "over", "the", "lazy", "dog"], "kept": ["quick", "brown", "fox", "jumps", "lazy", "dog"], "removedStopwords": ["the", "over", "the"], "type": "tokenize-doc"}, {"docId": 2, "text": "the lazy dog sleeps all day", "rawTokens": ["the", "lazy", "dog", "sleeps", "all", "day"], "kept": ["lazy", "dog", "sleeps", "day"], "removedStopwords": ["the", "all"], "type": "tokenize-doc"}, {"docId": 3, "text": "quick fox is a clever animal", "rawTokens": ["quick", "fox", "is", "a", "clever", "animal"], "kept": ["quick", "fox", "clever", "animal"], "removedStopwords": ["is", "a"], "type": "tokenize-doc"}, {"docId": 4, "text": "my dog loves to play in the park", "rawTokens": ["my", "dog", "loves", "to", "play", "in", "the", "park"], "kept": ["dog", "loves", "play", "park"], "removedStopwords": ["my", "to", "in", "the"], "type": "tokenize-doc"}, {"docId": 5, "text": "the cat sat on the mat", "rawTokens": ["the", "cat", "sat", "on", "the", "mat"], "kept": ["cat", "sat", "mat"], "removedStopwords": ["the", "on", "the"], "type": "tokenize-doc"}, {"docId": 6, "text": "quick brown fox and lazy dog are common in stories", "rawTokens": ["quick", "brown", "fox", "and", "lazy", "dog", "are", "common", "in", "stories"], "kept": ["quick", "brown", "fox", "lazy", "dog", "common", "stories"], "removedStopwords": ["and", "are", "in"], "type": "tokenize-doc"}, {"term": "quick", "docId": 1, "postingsNow": [1], "type": "postings-add"}, {"term": "brown", "docId": 1, "postingsNow": [1], "type": "postings-add"}, {"term": "fox", "docId": 1, "postingsNow": [1], "type": "postings-add"}, {"term": "jumps", "docId": 1, "postingsNow": [1], "type": "postings-add"}, {"term": "lazy", "docId": 1, "postingsNow": [1], "type": "postings-add"}, {"term": "dog", "docId": 1, "postingsNow": [1], "type": "postings-add"}, {"term": "lazy", "docId": 2, "postingsNow": [1, 2], "type": "postings-add"}, {"term": "dog", "docId": 2, "postingsNow": [1, 2], "type": "postings-add"}, {"term": "sleeps", "docId": 2, "postingsNow": [2], "type": "postings-add"}, {"term": "day", "docId": 2, "postingsNow": [2], "type": "postings-add"}, {"term": "quick", "docId": 3, "postingsNow": [1, 3], "type": "postings-add"}, {"term": "fox", "docId": 3, "postingsNow": [1, 3], "type": "postings-add"}, {"term": "clever", "docId": 3, "postingsNow": [3], "type": "postings-add"}, {"term": "animal", "docId": 3, "postingsNow": [3], "type": "postings-add"}, {"term": "dog", "docId": 4, "postingsNow": [1, 2, 4], "type": "postings-add"}, {"term": "loves", "docId": 4, "postingsNow": [4], "type": "postings-add"}, {"term": "play", "docId": 4, "postingsNow": [4], "type": "postings-add"}, {"term": "park", "docId": 4, "postingsNow": [4], "type": "postings-add"}, {"term": "cat", "docId": 5, "postingsNow": [5], "type": "postings-add"}, {"term": "sat", "docId": 5, "postingsNow": [5], "type": "postings-add"}, {"term": "mat", "docId": 5, "postingsNow": [5], "type": "postings-add"}, {"term": "quick", "docId": 6, "postingsNow": [1, 3, 6], "type": "postings-add"}, {"term": "brown", "docId": 6, "postingsNow": [1, 6], "type": "postings-add"}, {"term": "fox", "docId": 6, "postingsNow": [1, 3, 6], "type": "postings-add"}, {"term": "lazy", "docId": 6, "postingsNow": [1, 2, 6], "type": "postings-add"}, {"term": "dog", "docId": 6, "postingsNow": [1, 2, 4, 6], "type": "postings-add"}, {"term": "common", "docId": 6, "postingsNow": [6], "type": "postings-add"}, {"term": "stories", "docId": 6, "postingsNow": [6], "type": "postings-add"}, {"index": {"animal": [3], "brown": [1, 6], "cat": [5], "clever": [3], "common": [6], "day": [2], "dog": [1, 2, 4, 6], "fox": [1, 3, 6], "jumps": [1], "lazy": [1, 2, 6], "loves": [4], "mat": [5], "park": [4], "play": [4], "quick": [1, 3, 6], "sat": [5], "sleeps": [2], "stories": [6]}, "type": "index-built"}], "finalIndex": {"animal": [3], "brown": [1, 6], "cat": [5], "clever": [3], "common": [6], "day": [2], "dog": [1, 2, 4, 6], "fox": [1, 3, 6], "jumps": [1], "lazy": [1, 2, 6], "loves": [4], "mat": [5], "park": [4], "play": [4], "quick": [1, 3, 6], "sat": [5], "sleeps": [2], "stories": [6]}, "queries": [{"term1": "quick", "term2": "dog", "mode": "AND", "postings1": [1, 3, 6], "postings2": [1, 2, 4, 6], "steps": [{"type": "compare", "prevI": 0, "prevJ": 0, "snapshot": {"a": [1, 3, 6], "b": [1, 2, 4, 6], "i": 0, "j": 0, "result": []}}, {"type": "match", "prevI": 0, "prevJ": 0, "snapshot": {"a": [1, 3, 6], "b": [1, 2, 4, 6], "i": 1, "j": 1, "result": [1]}}, {"type": "compare", "prevI": 1, "prevJ": 1, "snapshot": {"a": [1, 3, 6], "b": [1, 2, 4, 6], "i": 1, "j": 1, "result": [1]}}, {"type": "advance-b", "prevI": 1, "prevJ": 1, "snapshot": {"a": [1, 3, 6], "b": [1, 2, 4, 6], "i": 1, "j": 2, "result": [1]}}, {"type": "compare", "prevI": 1, "prevJ": 2, "snapshot": {"a": [1, 3, 6], "b": [1, 2, 4, 6], "i": 1, "j": 2, "result": [1]}}, {"type": "advance-a", "prevI": 1, "prevJ": 2, "snapshot": {"a": [1, 3, 6], "b": [1, 2, 4, 6], "i": 2, "j": 2, "result": [1]}}, {"type": "compare", "prevI": 2, "prevJ": 2, "snapshot": {"a": [1, 3, 6], "b": [1, 2, 4, 6], "i": 2, "j": 2, "result": [1]}}, {"type": "advance-b", "prevI": 2, "prevJ": 2, "snapshot": {"a": [1, 3, 6], "b": [1, 2, 4, 6], "i": 2, "j": 3, "result": [1]}}, {"type": "compare", "prevI": 2, "prevJ": 3, "snapshot": {"a": [1, 3, 6], "b": [1, 2, 4, 6], "i": 2, "j": 3, "result": [1]}}, {"type": "match", "prevI": 2, "prevJ": 3, "snapshot": {"a": [1, 3, 6], "b": [1, 2, 4, 6], "i": 3, "j": 4, "result": [1, 6]}}, {"type": "done", "prevI": 3, "prevJ": 4, "snapshot": {"a": [1, 3, 6], "b": [1, 2, 4, 6], "i": 3, "j": 4, "result": [1, 6]}}], "result": [1, 6]}, {"term1": "quick", "term2": "cat", "mode": "OR", "postings1": [1, 3, 6], "postings2": [5], "steps": [{"type": "compare", "prevI": 0, "prevJ": 0, "snapshot": {"a": [1, 3, 6], "b": [5], "i": 0, "j": 0, "result": []}}, {"type": "take-a", "prevI": 0, "prevJ": 0, "snapshot": {"a": [1, 3, 6], "b": [5], "i": 1, "j": 0, "result": [1]}}, {"type": "compare", "prevI": 1, "prevJ": 0, "snapshot": {"a": [1, 3, 6], "b": [5], "i": 1, "j": 0, "result": [1]}}, {"type": "take-a", "prevI": 1, "prevJ": 0, "snapshot": {"a": [1, 3, 6], "b": [5], "i": 2, "j": 0, "result": [1, 3]}}, {"type": "compare", "prevI": 2, "prevJ": 0, "snapshot": {"a": [1, 3, 6], "b": [5], "i": 2, "j": 0, "result": [1, 3]}}, {"type": "take-b", "prevI": 2, "prevJ": 0, "snapshot": {"a": [1, 3, 6], "b": [5], "i": 2, "j": 1, "result": [1, 3, 5]}}, {"type": "take-rest-a", "prevI": 2, "prevJ": 1, "snapshot": {"a": [1, 3, 6], "b": [5], "i": 3, "j": 1, "result": [1, 3, 5, 6]}}, {"type": "done", "prevI": 3, "prevJ": 1, "snapshot": {"a": [1, 3, 6], "b": [5], "i": 3, "j": 1, "result": [1, 3, 5, 6]}}], "result": [1, 3, 5, 6]}, {"term1": "dog", "term2": "lazy", "mode": "ANDNOT", "postings1": [1, 2, 4, 6], "postings2": [1, 2, 6], "steps": [{"type": "compare", "prevI": 0, "prevJ": 0, "snapshot": {"a": [1, 2, 4, 6], "b": [1, 2, 6], "i": 0, "j": 0, "result": []}}, {"type": "exclude", "prevI": 0, "prevJ": 0, "snapshot": {"a": [1, 2, 4, 6], "b": [1, 2, 6], "i": 1, "j": 1, "result": []}}, {"type": "compare", "prevI": 1, "prevJ": 1, "snapshot": {"a": [1, 2, 4, 6], "b": [1, 2, 6], "i": 1, "j": 1, "result": []}}, {"type": "exclude", "prevI": 1, "prevJ": 1, "snapshot": {"a": [1, 2, 4, 6], "b": [1, 2, 6], "i": 2, "j": 2, "result": []}}, {"type": "compare", "prevI": 2, "prevJ": 2, "snapshot": {"a": [1, 2, 4, 6], "b": [1, 2, 6], "i": 2, "j": 2, "result": []}}, {"type": "keep", "prevI": 2, "prevJ": 2, "snapshot": {"a": [1, 2, 4, 6], "b": [1, 2, 6], "i": 3, "j": 2, "result": [4]}}, {"type": "compare", "prevI": 3, "prevJ": 2, "snapshot": {"a": [1, 2, 4, 6], "b": [1, 2, 6], "i": 3, "j": 2, "result": [4]}}, {"type": "exclude", "prevI": 3, "prevJ": 2, "snapshot": {"a": [1, 2, 4, 6], "b": [1, 2, 6], "i": 4, "j": 3, "result": [4]}}, {"type": "done", "prevI": 4, "prevJ": 3, "snapshot": {"a": [1, 2, 4, 6], "b": [1, 2, 6], "i": 4, "j": 3, "result": [4]}}], "result": [4]}]};
+var MODE = 'build';
+var idx = -1;
+var playTimer = null;
+
+var buildView = document.getElementById('buildView');
+var queryView = document.getElementById('queryView');
+var docsGrid = document.getElementById('docsGrid');
+var tokenRow = document.getElementById('tokenRow');
+var indexTable = document.getElementById('indexTable');
+var rowA = document.getElementById('rowA');
+var rowB = document.getElementById('rowB');
+var resultRow = document.getElementById('resultRow');
+var simLog = document.getElementById('simLog');
+
+function buildEvents(){ return DATA.indexEvents; }
+function queryEvents(mode){
+  var q = DATA.queries[{'and':0,'or':1,'andnot':2}[mode]];
+  return q.steps.map(function(s){ return Object.assign({queryMeta:q}, s); });
+}
+function currentEvents(){
+  return MODE === 'build' ? buildEvents() : queryEvents(MODE);
+}
+
+function renderBuildDocs(){
+  docsGrid.innerHTML = '';
+  Object.keys(DATA.docs).forEach(function(docId){
+    var card = document.createElement('div');
+    card.className = 'doc-card';
+    card.id = 'doc-' + docId;
+    card.innerHTML = '<span class="doc-id">#' + docId + '</span><span class="doc-text">' + DATA.docs[docId] + '</span>';
+    docsGrid.appendChild(card);
+  });
+}
+
+function computeIndexSoFar(upto){
+  var idxMap = {};
+  var order = [];
+  var lastAdded = null;
+  var events = buildEvents();
+  for(var k=0;k<=upto && k<events.length;k++){
+    var e = events[k];
+    if(e.type === 'postings-add'){
+      if(!(e.term in idxMap)){ idxMap[e.term] = []; order.push(e.term); }
+      idxMap[e.term] = e.postingsNow.slice();
+      lastAdded = e.term;
+    }
+  }
+  return {idxMap: idxMap, order: order, lastAdded: (upto>=0 && events[upto] && events[upto].type==='postings-add') ? events[upto].term : null};
+}
+
+function renderBuild(){
+  var events = buildEvents();
+  var e = idx >= 0 ? events[idx] : null;
+
+  var activeDoc = null;
+  if(e && e.type === 'tokenize-doc') activeDoc = e.docId;
+  else if(e && e.type === 'postings-add'){
+    for(var k=idx;k>=0;k--){ if(events[k].type==='tokenize-doc'){ activeDoc = events[k].docId; break; } }
+  }
+  Object.keys(DATA.docs).forEach(function(docId){
+    document.getElementById('doc-'+docId).dataset.active = (String(activeDoc) === String(docId)) ? 'true' : 'false';
+  });
+
+  tokenRow.innerHTML = '';
+  var tokEvent = null;
+  if(e && e.type === 'tokenize-doc') tokEvent = e;
+  else if(activeDoc !== null){
+    for(var k2=idx;k2>=0;k2--){ if(events[k2].type==='tokenize-doc' && events[k2].docId===activeDoc){ tokEvent = events[k2]; break; } }
+  }
+  if(tokEvent){
+    tokEvent.rawTokens.forEach(function(tok){
+      var chip = document.createElement('span');
+      chip.className = 'token-chip';
+      var kept = tokEvent.kept.indexOf(tok) !== -1;
+      chip.dataset.kept = kept ? 'true' : 'false';
+      chip.textContent = tok;
+      tokenRow.appendChild(chip);
+    });
+  } else {
+    var note = document.createElement('span');
+    note.style.cssText = 'font-size:13px;color:var(--ink-faint);font-style:italic;';
+    note.textContent = idx < 0 ? '(还没开始)' : '';
+    tokenRow.appendChild(note);
+  }
+
+  var st = computeIndexSoFar(idx);
+  indexTable.innerHTML = '';
+  st.order.forEach(function(term){
+    var row = document.createElement('div');
+    row.className = 'index-row';
+    row.dataset.flash = (term === st.lastAdded) ? 'true' : 'false';
+    var termEl = document.createElement('div');
+    termEl.className = 'index-term';
+    termEl.textContent = term;
+    var postingsEl = document.createElement('div');
+    postingsEl.className = 'index-postings';
+    st.idxMap[term].forEach(function(docId, i){
+      var chip = document.createElement('span');
+      chip.className = 'doc-chip' + ((term === st.lastAdded && i === st.idxMap[term].length-1) ? ' new' : '');
+      chip.textContent = '#' + docId;
+      postingsEl.appendChild(chip);
+    });
+    row.appendChild(termEl); row.appendChild(postingsEl);
+    indexTable.appendChild(row);
+  });
+}
+
+function renderQuery(){
+  var q = DATA.queries[{'and':0,'or':1,'andnot':2}[MODE]];
+  var events = queryEvents(MODE);
+  var e = idx >= 0 ? events[idx] : null;
+  var snap = e ? e.snapshot : {a: q.postings1, b: q.postings2, i: 0, j: 0, result: []};
+
+  document.getElementById('labelA').textContent = '词项 "' + q.term1 + '" 的倒排表';
+  document.getElementById('labelB').textContent = '词项 "' + q.term2 + '" 的倒排表';
+
+  function renderRow(container, arr, ptrIdx, consumedUpto){
+    container.innerHTML = '';
+    arr.forEach(function(v, i){
+      var cell = document.createElement('div');
+      cell.className = 'merge-cell';
+      cell.dataset.ptr = (i === ptrIdx) ? 'true' : 'false';
+      cell.dataset.consumed = (i < consumedUpto) ? 'true' : 'false';
+      if(i === ptrIdx){
+        var lbl = document.createElement('div');
+        lbl.className = 'ptr-label';
+        lbl.textContent = '指针';
+        cell.appendChild(lbl);
+      }
+      var txt = document.createElement('div');
+      txt.textContent = '#' + v;
+      cell.appendChild(txt);
+      container.appendChild(cell);
+    });
+  }
+  renderRow(rowA, snap.a, snap.i, snap.i);
+  renderRow(rowB, snap.b, snap.j, snap.j);
+
+  resultRow.innerHTML = '';
+  if(snap.result.length === 0){
+    var em = document.createElement('span');
+    em.style.cssText = 'font-size:13px;color:var(--ink-faint);font-style:italic;';
+    em.textContent = '(还没有结果)';
+    resultRow.appendChild(em);
+  } else {
+    snap.result.forEach(function(v){
+      var cell = document.createElement('div');
+      cell.className = 'result-cell';
+      cell.textContent = '#' + v;
+      resultRow.appendChild(cell);
+    });
+  }
+}
+
+function render(){
+  buildView.style.display = MODE === 'build' ? '' : 'none';
+  queryView.style.display = MODE === 'build' ? 'none' : '';
+
+  if(MODE === 'build') renderBuild(); else renderQuery();
+
+  var events = currentEvents();
+  var e = idx >= 0 ? events[idx] : null;
+  var formulaEl = document.getElementById('simFormula');
+  var descEl = document.getElementById('simDesc');
+  if(idx < 0){
+    formulaEl.textContent = '—';
+    descEl.innerHTML = '点击"下一步"或"播放"开始。';
+  } else {
+    formulaEl.textContent = formulaFor(e);
+    descEl.innerHTML = descFor(e);
+  }
+
+  document.getElementById('simProgress').textContent = (idx+1) + ' / ' + events.length;
+  document.getElementById('btnPrev').disabled = idx < 0;
+  document.getElementById('btnNext').disabled = idx >= events.length - 1;
+
+  var items = simLog.children;
+  for(var i2=0;i2<items.length;i2++){
+    items[i2].setAttribute('data-active', i2 === idx ? 'true' : 'false');
+  }
+  if(idx >= 0 && items[idx]) items[idx].scrollIntoView({block:'nearest'});
+}
+
+function formulaFor(e){
+  if(MODE === 'build'){
+    if(e.type === 'tokenize-doc') return '分词文档 #' + e.docId;
+    if(e.type === 'postings-add') return 'index["' + e.term + '"].add(#' + e.docId + ')';
+    if(e.type === 'index-built') return '// 索引建立完成';
+  } else {
+    if(e.type === 'compare') return 'compare(A[' + e.snapshot.i + ']=#' + e.snapshot.a[e.snapshot.i] + ', B[' + e.snapshot.j + ']=#' + e.snapshot.b[e.snapshot.j] + ')';
+    if(e.type === 'done') return '// 查询结束';
+    return e.type;
+  }
+  return '—';
+}
+
+function descFor(e){
+  if(MODE === 'build'){
+    if(e.type === 'tokenize-doc'){
+      return '文档 #' + e.docId + ':<code class="mono">"' + e.text + '"</code><br>先按空格拆词、转小写,得到 ' + e.rawTokens.length + ' 个词;其中 <b>' + e.removedStopwords.join('、') + '</b>' + (e.removedStopwords.length ? ' 是停用词,会被过滤掉。' : '。');
+    }
+    if(e.type === 'postings-add'){
+      return '词 <b>"' + e.term + '"</b> 在文档 <b>#' + e.docId + '</b> 里出现——把 #' + e.docId + ' 加进它的倒排表。';
+    }
+    if(e.type === 'index-built'){
+      return '6 篇文档全部处理完毕,倒排索引建立完成,一共有 ' + Object.keys(e.index).length + ' 个不同的词项。';
+    }
+  } else {
+    var q = e.queryMeta;
+    if(e.type === 'compare') return '两根指针分别指向 A 的第 ' + (e.snapshot.i+1) + ' 项(#' + e.snapshot.a[e.snapshot.i] + ')和 B 的第 ' + (e.snapshot.j+1) + ' 项(#' + e.snapshot.b[e.snapshot.j] + '),比较这两个文档编号。';
+    if(e.type === 'match') return '两边相等(#' + e.value + ')——两个词都出现在这篇文档里,<b>命中</b>,加入结果,两根指针都往前走一步。';
+    if(e.type === 'advance-a') return 'A 这边的编号更小,说明它不可能在 B 里出现(B 已经过了这个编号)——A 的指针往前走一步。';
+    if(e.type === 'advance-b') return 'B 这边的编号更小——B 的指针往前走一步。';
+    if(e.type === 'take-both') return '两边相等——这篇文档只需要收一次,加入结果,两根指针都往前走。';
+    if(e.type === 'take-a') return 'A 这边更小——先把它收进结果(OR 是"任一边有就要"),A 的指针往前走。';
+    if(e.type === 'take-b') return 'B 这边更小——先把它收进结果,B 的指针往前走。';
+    if(e.type === 'take-rest-a') return 'B 那边已经扫完了,A 剩下的直接全部收进结果。';
+    if(e.type === 'take-rest-b') return 'A 那边已经扫完了,B 剩下的直接全部收进结果。';
+    if(e.type === 'exclude') return '两边相等——这篇文档同时出现了 A 和 B,AND NOT 要排除它,不加入结果。';
+    if(e.type === 'keep') return 'A 这边更小,说明这篇文档只有 A、没有 B——保留进结果。';
+    if(e.type === 'keep-rest') return 'B 那边已经扫完了,A 剩下的都不可能再被排除,直接保留。';
+    if(e.type === 'done') return '两份倒排表都扫完了。最终结果:<b>' + q.result.map(function(v){return '#'+v;}).join(', ') + '</b>——和暴力扫描全部 6 篇文档核对过,完全一致。';
+  }
+  return '';
+}
+
+function labelForEvent(e){
+  if(MODE === 'build'){
+    if(e.type === 'tokenize-doc') return '分词 #' + e.docId;
+    if(e.type === 'postings-add') return '"' + e.term + '" 加入 #' + e.docId;
+    if(e.type === 'index-built') return '索引建立完成';
+  } else {
+    if(e.type === 'compare') return '比较 A[' + e.snapshot.i + '] / B[' + e.snapshot.j + ']';
+    if(e.type === 'done') return '查询结束';
+    return e.type;
+  }
+  return '';
+}
+
+function buildLog(){
+  var events = currentEvents();
+  simLog.innerHTML = '';
+  events.forEach(function(e,i){
+    var item = document.createElement('div');
+    item.className = 'log-item';
+    item.setAttribute('data-active','false');
+    var idxSpan = document.createElement('span');
+    idxSpan.className = 'log-idx';
+    idxSpan.textContent = i+1;
+    var txt = document.createElement('span');
+    txt.textContent = labelForEvent(e);
+    item.appendChild(idxSpan); item.appendChild(txt);
+    item.addEventListener('click', function(ii){ return function(){ stopPlay(); idx = ii; render(); }; }(i));
+    simLog.appendChild(item);
+  });
+}
+
+function goTo(i){
+  var events = currentEvents();
+  idx = Math.max(-1, Math.min(events.length-1, i));
+  render();
+}
+function stopPlay(){
+  if(playTimer){ clearInterval(playTimer); playTimer = null; }
+  document.getElementById('btnPlay').textContent = '播放';
+}
+document.getElementById('btnNext').addEventListener('click', function(){ stopPlay(); goTo(idx+1); });
+document.getElementById('btnPrev').addEventListener('click', function(){ stopPlay(); goTo(idx-1); });
+document.getElementById('btnReset').addEventListener('click', function(){ stopPlay(); goTo(-1); });
+document.getElementById('btnPlay').addEventListener('click', function(){
+  var events = currentEvents();
+  if(playTimer){ stopPlay(); return; }
+  if(idx >= events.length - 1) goTo(-1);
+  document.getElementById('btnPlay').textContent = '暂停';
+  var speed = parseInt(document.getElementById('simSpeed').value, 10);
+  playTimer = setInterval(function(){
+    var evs = currentEvents();
+    if(idx >= evs.length - 1){ stopPlay(); return; }
+    goTo(idx+1);
+  }, speed);
+});
+document.getElementById('simSpeed').addEventListener('change', function(){
+  if(playTimer){ stopPlay(); document.getElementById('btnPlay').click(); }
+});
+
+var tabs = document.getElementById('tabs');
+Array.prototype.forEach.call(tabs.children, function(b){
+  b.dataset.active = (b.dataset.mode === MODE) ? 'true' : 'false';
+  b.addEventListener('click', function(){
+    var m = b.dataset.mode;
+    if(m === MODE) return;
+    stopPlay();
+    MODE = m;
+    Array.prototype.forEach.call(tabs.children, function(bb){
+      bb.dataset.active = (bb.dataset.mode === MODE) ? 'true' : 'false';
+    });
+    buildLog();
+    goTo(-1);
+  });
+});
+
+renderBuildDocs();
+buildLog();
+goTo(-1);
+</script>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+</body>
+</html>

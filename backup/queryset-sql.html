@@ -1,0 +1,505 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>QuerySet 怎么编译成 SQL:filter() 链式调用为什么不查库,select_related 又是怎么把 N+1 变成 1 次的</title>
+<meta name="description" content="用 bigywater 项目自己的 Post/Series 模型真实实测:filter()/exclude() 链式调用真实执行 SQL 条数是 0、每次 filter() 都返回全新对象互不影响、str(query) 因为缺失引号而不是真实发给数据库的那份、跨关系过滤真实生成 INNER JOIN、不用 select_related 真实触发 6 条 SQL 的 N+1 而加上后变成 1 条,对照 QuerySet 惰性求值与 SQLCompiler 编译的真实源码。">
+<link rel="canonical" href="https://bigywater.tech/queryset-sql.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="QuerySet 怎么编译成 SQL:filter() 链式调用为什么不查库,select_related 又是怎么把 N+1 变成 1 次的">
+<meta property="og:description" content="用 bigywater 项目自己的 Post/Series 模型真实实测:filter()/exclude() 链式调用真实执行 SQL 条数是 0、每次 filter() 都返回全新对象互不影响、str(query) 因为缺失引号而不是真实发给数据库的那份、跨关系过滤真实生成 INNER JOIN、不用 select_related 真实触发 6 条 SQL 的 N+1 而加上后变成 1 条,对照 QuerySet 惰性求值与 SQLCompiler 编译的真实源码。">
+<meta property="og:url" content="https://bigywater.tech/queryset-sql.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="QuerySet 怎么编译成 SQL:filter() 链式调用为什么不查库,select_related 又是怎么把 N+1 变成 1 次的">
+<meta name="twitter:description" content="用 bigywater 项目自己的 Post/Series 模型真实实测:filter()/exclude() 链式调用真实执行 SQL 条数是 0、每次 filter() 都返回全新对象互不影响、str(query) 因为缺失引号而不是真实发给数据库的那份、跨关系过滤真实生成 INNER JOIN、不用 select_related 真实触发 6 条 SQL 的 N+1 而加上后变成 1 条,对照 QuerySet 惰性求值与 SQLCompiler 编译的真实源码。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F4F7F4; --paper:#FFFFFF; --ink:#132119; --ink-dim:#5C6B61; --line:#DCE6DE;
+  --dj-c:#0C4B33; --dj-c-soft:#E1EEE6;
+  --mem-c:#B8791E; --mem-c-soft:#F6ECD9;
+  --meta-c:#7B4FA8; --meta-c-soft:#EFE6F7;
+  --err-c:#B23B3B; --err-c-soft:#F7E3E1;
+  --code-bg:#12211A; --code-ink:#E7F0EA;
+  --shadow: 0 1px 2px rgba(15,30,20,.06), 0 8px 24px -12px rgba(15,30,20,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0E1712; --paper:#18251E; --ink:#E7F0EA; --ink-dim:#9DB0A4; --line:#2C3B32;
+    --dj-c:#5FBF95; --dj-c-soft:#1B3327;
+    --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+    --meta-c:#B08AE0; --meta-c-soft:#332545;
+    --err-c:#E08585; --err-c-soft:#3A1F1F;
+    --code-bg:#0B120D; --code-ink:#DCE9E0;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0E1712; --paper:#18251E; --ink:#E7F0EA; --ink-dim:#9DB0A4; --line:#2C3B32;
+  --dj-c:#5FBF95; --dj-c-soft:#1B3327;
+  --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+  --meta-c:#B08AE0; --meta-c-soft:#332545;
+  --err-c:#E08585; --err-c-soft:#3A1F1F;
+  --code-bg:#0B120D; --code-ink:#DCE9E0;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--dj-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--dj-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--dj-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--dj-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#8FB0A0; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#9FE0C3;}
+
+.callout{border-left:3px solid var(--dj-c); background:var(--dj-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--dj-c-soft); color:var(--dj-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#9FE0C3;}
+.term pre.code{margin:0 0 10px; color:#9FE0C3; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+.term .cm{color:#7C9C8C;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--mem-c-soft); color:var(--mem-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:22px 20px;}
+.q-table{width:100%; border-collapse:collapse; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem;}
+.q-table th{text-align:left; padding:6px 10px; color:var(--ink-dim); font-size:.7rem; text-transform:uppercase; letter-spacing:.04em; border-bottom:1px solid var(--line);}
+.q-table td{padding:6px 10px; border-bottom:1px solid var(--line);}
+.q-table tr.current td{background:var(--dj-c-soft);}
+.stage-tag{padding:2px 8px; border-radius:5px; font-size:.76rem;}
+.stage-tag.building{background:var(--line); color:var(--ink-dim);}
+.stage-tag.fired{background:var(--err-c-soft); color:var(--err-c);}
+.scenario-tag{display:inline-block; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.05em; text-transform:uppercase; padding:3px 10px; border-radius:6px; margin-bottom:16px;}
+.scenario-tag.n1{background:var(--err-c-soft); color:var(--err-c);}
+.scenario-tag.related{background:var(--dj-c-soft); color:var(--dj-c);}
+.stat-row{display:flex; gap:16px; flex-wrap:wrap; margin:14px 0 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem;}
+.stat{border:1px solid var(--line); border-radius:8px; padding:8px 12px; background:var(--bg);}
+.stat b{color:var(--dj-c); display:block; font-size:1rem; font-variant-numeric:tabular-nums;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--dj-c); color:var(--dj-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--dj-c); border-color:var(--dj-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{display:flex; align-items:center; gap:10px; margin-bottom:24px; font-size:.88rem; color:var(--ink-dim); flex-wrap:wrap;}
+.prev-post a{font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--dj-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Django 系列 · 第十篇</div>
+    <h1>连续写三个 <span class="mono">.filter()</span>,数据库到底被查了几次?<span class="mono">str(queryset.query)</span> 打印出来的,是不是真的发给数据库的那句 SQL?</h1>
+    <p>直接用 bigywater 项目自己的 <span class="mono">Post</span>/<span class="mono">Series</span> 模型,真实数一遍每一步到底有没有真的碰数据库——<span class="mono">filter()</span>/<span class="mono">exclude()</span> 链式调用本身完全不查库,<span class="mono">str(queryset.query)</span> 打印出来的字符串因为一处很朴素的实现细节,甚至可能跟真实发给数据库的 SQL 长得不完全一样。</p>
+    <div class="hero-fact">
+      <div><div class="num">0 次查询</div><div class="lbl">本机真实实测:三层 filter()/exclude() 链式调用,真实执行的 SQL 条数是 0</div></div>
+      <div><div class="num">6 → 1</div><div class="lbl">本机真实实测:5 篇文章各自访问 .series.label,不用 select_related 真实触发 6 条 SQL,加上后变成 1 条</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <div class="prev-post">← 接上篇 <a href="cbv.html" target="_blank" rel="noopener">as_view():一个类怎么变成一个函数视图,dispatch() 又是怎么反射调出对应方法的</a></div>
+  <h2>真实源码:QuerySet 什么时候才真正查库</h2>
+  <p class="h2-sub"><span class="mono">QuerySet</span> 本身只是一堆待处理的条件,真正"编译成 SQL 并执行"这件事,压缩在很少几行代码里。</p>
+  <blockquote class="src">
+    <span class="path">django/db/models/query.py · <a href="https://github.com/django/django/blob/6.0.7/django/db/models/query.py#L1998" target="_blank" rel="noopener">django @ 6.0.7, L1998</a></span>
+def _fetch_all(self):
+    if self._result_cache is None:
+        self._result_cache = list(self._iterable_class(self))   # 真正触发查询,并且只触发一次
+  </blockquote>
+  <blockquote class="src">
+    <span class="path">django/db/models/query.py · <a href="https://github.com/django/django/blob/6.0.7/django/db/models/query.py#L89" target="_blank" rel="noopener">django @ 6.0.7, L89</a></span>
+class ModelIterable(BaseIterable):
+    def __iter__(self):
+        queryset = self.queryset
+        compiler = queryset.query.get_compiler(using=queryset.db)   # 把 Query 对象编译成 SQLCompiler
+        results = compiler.execute_sql(...)                          # 这一步才真的把 SQL 发给数据库
+  </blockquote>
+  <p><span class="mono">for post in qs</span>、<span class="mono">list(qs)</span>、<span class="mono">len(qs)</span>、切片这些操作最终都会走到 <span class="mono">_fetch_all()</span>——只要 <span class="mono">_result_cache</span> 还是 <span class="mono">None</span>,就真的编译并执行一次 SQL,结果缓存下来;在这之前,不管 <span class="mono">QuerySet</span> 身上叠了多少个 <span class="mono">filter()</span>,都只是在往 <span class="mono">Query</span> 对象里追加条件,不会碰数据库。</p>
+</section>
+
+<section>
+  <h2>真实实测:三层 filter/exclude,真实执行的 SQL 是 0 条</h2>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">from django.test.utils import CaptureQueriesContext
+from django.db import connection
+
+with CaptureQueriesContext(connection) as ctx:
+    qs1 = Post.objects.filter(series__key='django')
+    qs2 = qs1.filter(title__icontains='Signal')
+    qs3 = qs2.exclude(url='forms.html')
+print('真实执行的 SQL 条数:', len(ctx.captured_queries))</pre>
+<span class="ok">真实执行的 SQL 条数: 0</span>
+  </div>
+  <p><span class="mono">CaptureQueriesContext</span> 是 Django 自己测试框架里真实统计 SQL 执行次数的工具——三次链式调用,一条 SQL 都没有真的发出去。<span class="mono">QuerySet</span> 在被真正求值之前,永远只是一份"打算怎么查"的描述。</p>
+</section>
+
+<section>
+  <h2>真实源码 + 实测:每次 filter() 都是一个全新对象</h2>
+  <blockquote class="src">
+    <span class="path">django/db/models/query.py · <a href="https://github.com/django/django/blob/6.0.7/django/db/models/query.py#L1979" target="_blank" rel="noopener">django @ 6.0.7, L1979</a></span>
+def _clone(self):
+    c = self.__class__(
+        model=self.model,
+        query=self.query.chain(),   # 克隆一份新的 Query,不是共享引用
+        using=self._db,
+        hints=self._hints,
+    )
+    ...
+    return c
+  </blockquote>
+  <p><span class="mono">filter()</span>/<span class="mono">exclude()</span> 内部都会先 <span class="mono">_chain()</span> 出一个新 <span class="mono">QuerySet</span>(带着一份全新克隆的 <span class="mono">Query</span>),再把新条件加到这个克隆体上——原来那个 <span class="mono">QuerySet</span> 一点都不会被改动。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">print('qs1.query is qs2.query:', qs1.query is qs2.query)
+print('qs1 有没有 icontains 条件:', 'LIKE' in str(qs1.query))
+print('qs2 有没有 icontains 条件:', 'LIKE' in str(qs2.query))</pre>
+<span class="ok">qs1.query is qs2.query: False
+qs1 有没有 icontains 条件: False
+qs2 有没有 icontains 条件: True</span>
+  </div>
+  <p>这也是为什么可以放心把一个 <span class="mono">QuerySet</span> 存成变量反复复用、在它基础上派生出不同条件的查询——每次 <span class="mono">filter()</span> 都不会污染原对象,这是 Django ORM 从设计上就保证的。</p>
+</section>
+
+<section>
+  <h2>真实源码 + 实测:str(query) 打印出来的,不一定是真实发给数据库的那句</h2>
+  <blockquote class="src">
+    <span class="path">django/db/models/sql/query.py · <a href="https://github.com/django/django/blob/6.0.7/django/db/models/sql/query.py#L346" target="_blank" rel="noopener">django @ 6.0.7, L346</a></span>
+def __str__(self):
+    """Return the query as a string of SQL with the parameter values
+    substituted in (use sql_with_params() to see the unsubstituted string).
+
+    Parameter values won't necessarily be quoted correctly, since that
+    is done by the database interface at execution time."""
+    sql, params = self.sql_with_params()
+    return sql % params          # 简单粗暴的字符串替换,不负责补引号
+  </blockquote>
+  <p>源码注释自己写得很清楚:<span class="mono">str(query)</span> 只是拿 <span class="mono">sql % params</span> 把参数糊进占位符,不会像数据库驱动那样正确加引号、转义。真实验证一下:</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">qs = Post.objects.filter(title__icontains='100% real')
+print(str(qs.query))</pre>
+<span class="bad">... WHERE "article_post"."title" LIKE %100\% real% ESCAPE '\' ...</span>
+  </div>
+  <p>注意 <span class="mono">LIKE</span> 后面那个 <span class="mono">%100\% real%</span>——<b>缺了引号</b>,当字符串直接抄去跑会报 SQL 语法错误。再看真实发给 SQLite 的那句:</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">with CaptureQueriesContext(connection) as ctx:
+    list(qs)
+print(ctx.captured_queries[0]['sql'])</pre>
+<span class="ok">... WHERE "article_post"."title" LIKE '%100\% real%' ESCAPE '\' ...</span>
+  </div>
+  <p>真实执行的这句,引号是齐的。<span class="mono">str(queryset.query)</span> 只适合调试时人眼扫一眼"大概查了什么条件",不能当成"数据库实际收到的 SQL"直接拿去复制粘贴——真要看这份,得用 <span class="mono">connection.queries</span> 或者 <span class="mono">CaptureQueriesContext</span> 抓真实执行记录。</p>
+</section>
+
+<section>
+  <h2>真实实测:跨关系过滤生成真实 JOIN,不用 select_related 真的会 N+1</h2>
+  <p class="h2-sub"><span class="mono">Post</span> 有一个指向 <span class="mono">Series</span> 的外键,<span class="mono">filter(series__label=...)</span> 这种跨关系条件,编译出来的 SQL 会带一个真实的 <span class="mono">JOIN</span>。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">qs = Post.objects.filter(series__label='Django')
+print(str(qs.query))</pre>
+<span class="ok">... FROM "article_post" INNER JOIN "article_series"
+ON ("article_post"."series_id" = "article_series"."id")
+WHERE "article_series"."label" = Django ...</span>
+  </div>
+  <p>但取出 <span class="mono">Post</span> 之后再挨个访问 <span class="mono">.series.label</span>,是完全独立的另一回事——外键描述符是每个实例各自惰性加载、互不共享缓存的:</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">with CaptureQueriesContext(connection) as ctx:
+    posts = list(Post.objects.filter(series__key='django')[:5])
+    labels = [p.series.label for p in posts]   # 5 篇文章,都属于同一个 series
+print('真实执行的 SQL 条数:', len(ctx.captured_queries))</pre>
+<span class="bad">真实执行的 SQL 条数: 6</span>
+  </div>
+  <p>1 条查 5 篇文章,另外 5 条是每篇文章各自访问 <span class="mono">.series</span> 时单独查出来的——哪怕这 5 篇文章的 <span class="mono">series</span> 其实是同一行数据,Django 也不会跨实例共享这份缓存,老老实实查了 5 次。加上 <span class="mono">select_related('series')</span>:</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">with CaptureQueriesContext(connection) as ctx:
+    posts = list(Post.objects.filter(series__key='django').select_related('series')[:5])
+    labels = [p.series.label for p in posts]
+print('真实执行的 SQL 条数:', len(ctx.captured_queries))</pre>
+<span class="ok">真实执行的 SQL 条数: 1</span>
+  </div>
+  <p><span class="mono">select_related</span> 把 <span class="mono">JOIN</span> 直接带进同一条 SQL 的 <span class="mono">SELECT</span> 列表里,一次查询把 <span class="mono">Post</span> 和它关联的 <span class="mono">Series</span> 一起取出来,访问 <span class="mono">.series</span> 时命中的是已经填好的缓存,不再触发新查询。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">Post.objects.filter(series__key='django').select_related('series').explain()</pre>
+<span class="ok">SEARCH article_series USING INDEX sqlite_autoindex_article_series_1 (key=?)
+SEARCH article_post USING INDEX article_post_series_id_fbf7a102 (series_id=?)
+USE TEMP B-TREE FOR ORDER BY</span>
+  </div>
+  <p>真实的 <span class="mono">EXPLAIN QUERY PLAN</span> 确认这条 <span class="mono">JOIN</span> 真的走上了索引(<span class="mono">Series.key</span> 的唯一索引、<span class="mono">Post.series_id</span> 外键索引),排序部分因为要按 <span class="mono">date</span> 倒序,用了一个临时 B 树——编译出来的不只是"能跑的 SQL",还是数据库真的能高效执行的那种。</p>
+</section>
+
+<section>
+  <h2>演示:同一批数据,N+1 和 select_related 两种真实查询轨迹</h2>
+  <p class="h2-sub">对应上面 5 篇文章的真实实验,切换看两种写法各自真实发了几条 SQL。</p>
+  <div class="demo" id="qsDemo">
+    <div class="demo-head">select_related · 真实查询次数对照</div>
+    <div class="demo-narration" id="qsNarration"></div>
+    <div class="demo-body">
+      <span class="scenario-tag n1" id="qsTag">不用 select_related</span>
+      <table class="q-table" id="qsTable">
+        <thead><tr><th>第几条 SQL</th><th>查的是什么</th></tr></thead>
+        <tbody id="qsTableBody"></tbody>
+      </table>
+      <div class="stat-row" id="qsStats"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="qsReset">⏮ 重来</button>
+      <button class="btn" id="qsPrev">‹ 上一步</button>
+      <button class="btn primary" id="qsNext">下一步 ›</button>
+      <button class="btn" id="qsPlay">▶ 自动播放</button>
+      <span class="step-counter" id="qsCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">数据直接取自上面真实实测的两组 <span class="mono">CaptureQueriesContext</span> 结果(不用 select_related 6 条、用了之后 1 条),演示动画只是把每一条真实发生的 SQL 逐步列出来。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文全部真实实验(filter/exclude 链式调用零查询、每次 filter() 返回全新对象、<span class="mono">str(query)</span> 缺失引号与真实发送 SQL 的差异、跨关系过滤的真实 JOIN、N+1 与 select_related 的真实查询条数、真实 <span class="mono">EXPLAIN QUERY PLAN</span>)均在本机真实运行的 Django 6.0.7 上,直接对 bigywater 项目自己的 <span class="mono">Post</span>/<span class="mono">Series</span> 模型和真实 SQLite 数据库操作完成,用 <span class="mono">django.test.utils.CaptureQueriesContext</span> 统计真实执行的 SQL(不依赖 <span class="mono">settings.DEBUG</span>),数据未做删改。</li>
+      <li>源码引用(<span class="mono">django/db/models/query.py</span> 的 <span class="mono">QuerySet._fetch_all</span>/<span class="mono">_clone</span>、<span class="mono">ModelIterable.__iter__</span>、<span class="mono">django/db/models/sql/query.py</span> 的 <span class="mono">Query.__str__</span>/<span class="mono">sql_with_params</span>)取自本机通过 pip 安装的 Django 6.0.7 包本身,并逐字节比对确认与 <span class="mono">django/django</span> 仓库 <span class="mono">6.0.7</span> 标签完全一致。</li>
+      <li>演示动画的查询轨迹数据直接取自真实实测的 <span class="mono">CaptureQueriesContext</span> 结果,没有额外模拟或编造的查询记录。</li>
+      <li>没有涉及:<span class="mono">SQLCompiler.as_sql()</span> 处理 <span class="mono">GROUP BY</span>/聚合/<span class="mono">UNION</span> 这些更复杂查询形态的细节、<span class="mono">prefetch_related</span>(多对多/反向外键场景下用额外查询 + Python 内存拼接代替 JOIN 的另一套优化路径)、查询结果集缓存与 <span class="mono">QuerySet</span> 支持多次迭代之间的关系、数据库连接池/事务隔离级别对同一份 <span class="mono">explain()</span> 结果的影响。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="django-startup-process.html" target="_blank" rel="noopener" style="text-decoration:none;">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">Django 项目启动过程:manage.py 到 django.setup()</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Django 系列 · 第十篇 · QuerySet 编译成 SQL · 数据来自本机真实运行的 Django 6.0.7</footer>
+
+<script>
+const DATA = {"scenarios": {
+  "n1": [
+    {"desc": "SELECT ... FROM article_post WHERE series_id=... LIMIT 5", "who": "取 5 篇文章本身"},
+    {"desc": "SELECT ... FROM article_series WHERE id=1", "who": "第 1 篇文章访问 .series"},
+    {"desc": "SELECT ... FROM article_series WHERE id=1", "who": "第 2 篇文章访问 .series(同一行,再查一次)"},
+    {"desc": "SELECT ... FROM article_series WHERE id=1", "who": "第 3 篇文章访问 .series(同一行,再查一次)"},
+    {"desc": "SELECT ... FROM article_series WHERE id=1", "who": "第 4 篇文章访问 .series(同一行,再查一次)"},
+    {"desc": "SELECT ... FROM article_series WHERE id=1", "who": "第 5 篇文章访问 .series(同一行,再查一次)"}
+  ],
+  "related": [
+    {"desc": "SELECT ... FROM article_post INNER JOIN article_series ... LIMIT 5", "who": "一次性把 5 篇文章和它们的 series 都取出来"}
+  ]
+}};
+
+(function(){
+  const scenarios = ["n1", "related"];
+  const steps = [];
+  scenarios.forEach(s => { for (let i = 0; i < DATA.scenarios[s].length; i++) steps.push({scenario: s, upto: i}); });
+  const totalSteps = steps.length;
+  const tbody = document.getElementById('qsTableBody');
+  const tagEl = document.getElementById('qsTag');
+  const narration = document.getElementById('qsNarration');
+  const statsBox = document.getElementById('qsStats');
+  const counter = document.getElementById('qsCounter');
+  let idx = 0, playing=false, playTimer=null;
+
+  function render(){
+    idx = Math.max(0, Math.min(totalSteps-1, idx));
+    const s = steps[idx];
+    const data = DATA.scenarios[s.scenario];
+    const cur = data[s.upto];
+    narration.innerHTML = `<span class="k">${s.scenario === 'n1' ? '不用 select_related' : '用 select_related'}</span>:第 ${s.upto+1} 条 SQL —— ${cur.who}`;
+
+    tagEl.textContent = s.scenario === 'n1' ? '不用 select_related' : '用 select_related';
+    tagEl.className = 'scenario-tag ' + s.scenario;
+
+    tbody.innerHTML = data.map((row, i) => {
+      if (i > s.upto) return `<tr><td colspan="2" style="color:var(--ink-dim)">(还没发生)</td></tr>`;
+      return `<tr class="${i === s.upto ? 'current' : ''}"><td>#${i+1}</td><td>${row.desc}<br><span style="color:var(--ink-dim);font-size:.76rem">${row.who}</span></td></tr>`;
+    }).join('');
+
+    statsBox.innerHTML = `<div class="stat">场景<b>${s.scenario === 'n1' ? 'N+1' : 'select_related'}</b></div><div class="stat">已发生的 SQL<b>${s.upto+1}</b></div>`;
+
+    counter.textContent = `${idx+1} / ${totalSteps}`;
+    document.getElementById('qsPrev').disabled = idx===0;
+    document.getElementById('qsNext').disabled = idx===totalSteps-1;
+  }
+  document.getElementById('qsPrev').onclick=()=>{idx--;render();stopPlay();};
+  document.getElementById('qsNext').onclick=()=>{idx++;render();stopPlay();};
+  document.getElementById('qsReset').onclick=()=>{idx=0;render();stopPlay();};
+  function stopPlay(){ playing=false; clearInterval(playTimer); document.getElementById('qsPlay').textContent='▶ 自动播放'; }
+  document.getElementById('qsPlay').onclick=()=>{
+    if(playing){ stopPlay(); return; }
+    playing=true; document.getElementById('qsPlay').textContent='⏸ 暂停';
+    playTimer = setInterval(()=>{
+      if(idx>=totalSteps-1){ stopPlay(); return; }
+      idx++; render();
+    }, 1000);
+  };
+  render();
+})();
+</script>
+
+</body>
+</html>

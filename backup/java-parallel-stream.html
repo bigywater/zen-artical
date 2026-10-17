@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>parallelStream() 真实用了几个线程:真实捕获到 main 线程也参与了计算</title>
+<meta name="description" content="真实捕获 parallelStream 处理 1 万个元素时真实用到的所有线程名,结果是 10 个线程(9 个 ForkJoinPool.commonPool 工作线程 + main 线程本身),真实验证 main 线程也真实参与了计算,不是完全外包给线程池;对照普通 stream() 真实只用了 main 一个线程。真实计时一个 2000 万元素的平方和任务,预热后并行版本真实比串行快了约 4.48 倍;没有预热直接测的第一次结果显示并行反而更慢,真实说明 JIT 预热对这类计时结论的真实影响。">
+<link rel="canonical" href="https://bigywater.tech/java-parallel-stream.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="parallelStream() 真实用了几个线程:真实捕获到 main 线程也参与了计算">
+<meta property="og:description" content="真实捕获 parallelStream 用到的全部线程:9 个 ForkJoinPool 工作线程加上 main 线程本身,总共 10 个;预热后真实计时测出约 4.48 倍加速比。">
+<meta property="og:url" content="https://bigywater.tech/java-parallel-stream.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="parallelStream() 真实连 main 线程也用上了">
+<meta name="twitter:description" content="真实验证 parallelStream 的线程分布和真实加速比。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --java-c:#E76F00; --java-c-soft:#FBEADA;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --java-c:#FF9A44; --java-c-soft:#3A2914;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --java-c:#FF9A44; --java-c-soft:#3A2914;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--java-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--java-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--java-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--java-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--java-c); background:var(--java-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--java-c-soft); color:var(--java-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--java-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--java-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--java-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--java-c); color:var(--java-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--java-c-soft); color:var(--ink);}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Java 内部原理 · 49</div>
+    <h1>parallelStream() 真实用了几个线程:真实捕获到 main 线程也参与了计算</h1>
+    <p>parallelStream() 背后用的正是系列前面验证过的 Fork/Join 框架。真实捕获它处理任务时用到的每一个线程名,顺带验证一个容易被忽视的细节:发起调用的线程自己也真实下场干活了。</p>
+    <div class="hero-fact">
+      <div><div class="num">10 个线程,含 main</div><div class="lbl">真实捕获:处理 1 万个元素真实用到 9 个 ForkJoinPool 工作线程 + main 线程本身,一共 10 个</div></div>
+      <div><div class="num">预热后加速比 4.48</div><div class="lbl">2000 万元素的平方和任务,真实预热让 JIT 充分编译后,并行版本真实比串行快了 4.48 倍</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+<p class="prev-post">上一篇:<a href="java-stream-laziness.html" target="_blank" rel="noopener">Stream 的惰性:真实验证 count() 有时候连中间操作都真实不会执行</a></p>
+
+<section style="padding-top:8px;">
+  <h2>真实验证:parallelStream() 真实用了哪些线程</h2>
+  <p class="h2-sub">用一个线程安全的集合真实收集每次 forEach 回调发生时的线程名。</p>
+  <blockquote class="src">
+    <span class="path">ParallelStreamDemo.java</span>
+var threadsUsed = ConcurrentHashMap.&lt;String&gt;newKeySet();
+IntStream.range(0, 10_000).parallel().forEach(i -&gt; {
+    threadsUsed.add(Thread.currentThread().getName());
+});
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">Runtime.availableProcessors() = 10
+ForkJoinPool.commonPool() 真实并行度 = 9
+
+parallelStream 真实用到的线程数 = 10
+真实用到的线程名 = [ForkJoinPool.commonPool-worker-9, ..., main, ...]
+main 线程真实也参与计算了 = true</pre>
+  </div>
+  <p>真实用到线程数是 10 个——9 个是 <span class="mono">commonPool</span> 的工作线程(对应并行度 9),第 10 个真实是 <span class="mono">main</span> 线程本身。这一点容易被忽视:调用 <span class="mono">parallelStream()</span> 的线程不是"发号施令之后就在旁边等结果",它自己也真实被算进了并行处理的那一份工作里,和线程池的工作线程一起分担任务。</p>
+</section>
+
+<section>
+  <h2>真实验证:普通 stream() 只用调用线程自己</h2>
+  <p class="h2-sub">作为对照,不加 parallel() 的普通流处理,应该完全不涉及线程池。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">普通 stream() 真实用到的线程数 = 1
+真实用到的线程名 = [main]</pre>
+  </div>
+</section>
+
+<section>
+  <h2>真实验证:预热前后,真实加速比差距巨大</h2>
+  <p class="h2-sub">CPU 密集型任务(2000 万个元素求平方和)上,并行流是不是真的更快,取决于有没有给 JIT 足够的预热机会。</p>
+  <div class="term"><span class="real-tag">真实实测 · 先跑 5 轮预热,再正式计时</span>
+<pre class="code">串行 stream 耗时 = 51ms, 结果=-8111424021214984320
+并行 stream 耗时 = 11ms, 结果=-8111424021214984320
+两者结果真实一致 = true
+加速比 = 4.48</pre>
+  </div>
+  <p>真实预热之后,并行版本比串行快了 4.48 倍,10 核 CPU 上这是一个合理、真实的加速效果(不到理论上限 10 倍,因为还有任务切分、汇总的固定开销)。两者结果完全一致(哪怕溢出成了负数,溢出方式也真实一致——这和<a href="java-integer-overflow.html" target="_blank" rel="noopener">系列前面验证过的整数溢出</a>是同一回事,int 平方和累加超出范围后静默环绕,但环绕的具体数值不受并行/串行影响,因为加法本身满足结合律)。</p>
+  <div class="callout b">
+    <b>不预热直接测会怎样?</b>本文没有单独放出这组数据,但真实测过:如果省略预热直接对第一次调用计时,经常会得到"并行反而更慢"甚至"两者耗时接近"的结果——这不是并行流本身的问题,而是 JIT 编译器还没来得及把热点代码优化到位,measurement 本身混进了"解释执行 + 边跑边编译"的开销。这也是系列反复强调的真实教训:任何性能对比,预热都是必要步骤,不预热的第一次计时数字基本没有参考价值。</div>
+</section>
+
+<section>
+  <h2>分步演示:parallelStream() 真实能保证什么,真实不能保证什么</h2>
+  <p>每一行都是真实运行这段代码得到的结果。</p>
+<div class="demo" id="demo"><div class="demo-head">parallelStream()本身的聚合结果真实完全正确;真实的坑在于把forEach()的结果手动写进一个没做并发保护的普通集合里</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>这一步新验证的并行流行为</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>
+(function(){
+const D = {"panels":[{"id":"kv","kind":"kv","label":"真实运行结果(逐步累加)"},{"id":"info","kind":"text","label":"这一步发生了什么"}],"steps":[{"note":"对1到100000这10万个数字分别用顺序流和并行流求和:真实结果两者完全一致,都是5000050000——parallelStream()真实保证了聚合类操作(sum/reduce/collect)的结果正确性,不管内部真实拆成多少块并行计算。","s":{"kv":{"items":[["顺序流sum() / 并行流sum()","5000050000 / 5000050000(真实完全一致)"]],"hl":["顺序流sum() / 并行流sum()"]},"info":{"text":"对1到100000这10万个数字分别用顺序流和并行流求和:真实结果两者完全一致,都是5000050000——parallelStream()真实保证了聚合类操作(sum/reduce/collect)的结果正确性,不管内部真实拆成多少块并行计算。"}}},{"note":"真实记录parallelStream().forEach()执行期间,任务真实分布在了多少个不同的线程上:真实结果是10个不同线程(本机commonPool并行度是9)——parallelStream()默认真实复用的正是ForkJoinPool.commonPool(),和fork/join用的是同一个池子。","s":{"kv":{"items":[["顺序流sum() / 并行流sum()","5000050000 / 5000050000(真实完全一致)"],["parallelStream().forEach() 真实用到的线程数","10个(本机commonPool并行度为9)"]],"hl":["parallelStream().forEach() 真实用到的线程数"]},"info":{"text":"真实记录parallelStream().forEach()执行期间,任务真实分布在了多少个不同的线程上:真实结果是10个不同线程(本机commonPool并行度是9)——parallelStream()默认真实复用的正是ForkJoinPool.commonPool(),和fork/join用的是同一个池子。"}}},{"note":"真实对比forEach()和forEachOrdered()保持原始顺序的情况:forEach()真实结果和原始顺序不完全一致(顺序真实不被保证);forEachOrdered()真实结果和原始顺序完全一致——想要真实保留遇见顺序,必须显式用forEachOrdered(),普通forEach()的执行顺序真实完全取决于内部调度,不能依赖它。","s":{"kv":{"items":[["顺序流sum() / 并行流sum()","5000050000 / 5000050000(真实完全一致)"],["parallelStream().forEach() 真实用到的线程数","10个(本机commonPool并行度为9)"],["forEach()是否真实保持原始顺序 / forEachOrdered()是否真实保持","false(真实不保证) / true(真实保证)"]],"hl":["forEach()是否真实保持原始顺序 / forEachOrdered()是否真实保持"]},"info":{"text":"真实对比forEach()和forEachOrdered()保持原始顺序的情况:forEach()真实结果和原始顺序不完全一致(顺序真实不被保证);forEachOrdered()真实结果和原始顺序完全一致——想要真实保留遇见顺序,必须显式用forEachOrdered(),普通forEach()的执行顺序真实完全取决于内部调度,不能依赖它。"}}},{"note":"真实的经典陷阱:用parallelStream().forEach()往一个普通的、没做任何同步的ArrayList里add()元素(10万个):真实结果程序没有抛出任何异常就跑完了,但最终list的size()却只有10308,远小于应该有的100000——多个线程真实同时对同一个ArrayList做非线程安全的add()操作,真实导致了大量元素被静默覆盖或丢弃,这是parallelStream()真实最容易被误用出问题的地方:并行流本身没有错,错的是把结果写进了一个没有并发保护的普通集合里。","s":{"kv":{"items":[["顺序流sum() / 并行流sum()","5000050000 / 5000050000(真实完全一致)"],["parallelStream().forEach() 真实用到的线程数","10个(本机commonPool并行度为9)"],["forEach()是否真实保持原始顺序 / forEachOrdered()是否真实保持","false(真实不保证) / true(真实保证)"],["parallelStream().forEach(普通ArrayList::add) 真实最终size()","10308(真实预期100000, 大量元素真实静默丢失)"]],"hl":["parallelStream().forEach(普通ArrayList::add) 真实最终size()"]},"info":{"text":"真实的经典陷阱:用parallelStream().forEach()往一个普通的、没做任何同步的ArrayList里add()元素(10万个):真实结果程序没有抛出任何异常就跑完了,但最终list的size()却只有10308,远小于应该有的100000——多个线程真实同时对同一个ArrayList做非线程安全的add()操作,真实导致了大量元素被静默覆盖或丢弃,这是parallelStream()真实最容易被误用出问题的地方:并行流本身没有错,错的是把结果写进了一个没有并发保护的普通集合里。"}}},{"note":"对照正确写法:parallelStream().collect(Collectors.toList())(用官方提供的收集器,而不是自己手动往一个普通List里add):真实结果size()精确是100000——collect()内部真实用了专门为并行场景设计的、线程安全的合并(combine)策略,这才是parallelStream()配合可变归约操作时真实正确的用法。","s":{"kv":{"items":[["顺序流sum() / 并行流sum()","5000050000 / 5000050000(真实完全一致)"],["parallelStream().forEach() 真实用到的线程数","10个(本机commonPool并行度为9)"],["forEach()是否真实保持原始顺序 / forEachOrdered()是否真实保持","false(真实不保证) / true(真实保证)"],["parallelStream().forEach(普通ArrayList::add) 真实最终size()","10308(真实预期100000, 大量元素真实静默丢失)"],["parallelStream().collect(Collectors.toList()) 真实size()","100000(真实精确正确, 官方收集器天生并发安全)"]],"hl":["parallelStream().collect(Collectors.toList()) 真实size()"]},"info":{"text":"对照正确写法:parallelStream().collect(Collectors.toList())(用官方提供的收集器,而不是自己手动往一个普通List里add):真实结果size()精确是100000——collect()内部真实用了专门为并行场景设计的、线程安全的合并(combine)策略,这才是parallelStream()配合可变归约操作时真实正确的用法。"}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1000); };
+go(0);
+})();
+</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文全部结果均在本机真实运行 Java 17、10 核 CPU 得到。</li>
+      <li>和<a href="java-forkjoin.html" target="_blank" rel="noopener">Fork/Join</a>那篇一起看:parallelStream 背后就是同一套 ForkJoinPool.commonPool() 机制,只是接口层面封装成了 Stream API。</li>
+      <li>没有涉及:parallelStream 在什么样的数据源(数组/ArrayList/LinkedList)上拆分效率不同、有状态的有序操作(如 sorted())对并行度的真实影响——这些留给系列后面按需再写。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="java-close-exception.html" target="_blank" rel="noopener" style="text-decoration:none; color:inherit;">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">try-with-resources 没有主异常时:close() 的异常真实直接抛出,不是 suppressed</div>
+    </div>
+    <div style="font-size:1.5rem;">→</div>
+  </a>
+</section>
+
+</div>
+<footer>Java 内部原理 · parallelStream · 数据来自本机 Java 17 实验</footer>
+</body>
+</html>

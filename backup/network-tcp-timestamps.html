@@ -1,0 +1,444 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>TCP 时间戳选项:RTT 测量与 PAWS</title>
+<meta name="description" content="实测 TCP 时间戳选项:占 12 字节(lo0 载荷 16344−12=16332);时钟 1000 Hz;keepalive 探测不带时间戳;TSecr 配对 20/20 成功但抓包差值只是一半 RTT(50 对 100 ms);重传的 36 个段里 34 个 ACK 回显重传的 TSval,分得清是哪次发送;PAWS 只有计算。">
+<link rel="canonical" href="https://bigywater.tech/network-tcp-timestamps.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="TCP 时间戳选项:RTT 测量与 PAWS">
+<meta property="og:description" content="实测 TCP 时间戳选项:占 12 字节(lo0 载荷 16344−12=16332);时钟 1000 Hz;keepalive 探测不带时间戳;TSecr 配对 20/20 成功但抓包差值只是一半 RTT(50 对 100 ms);重传的 36 个段里 34 个 ACK 回显重传的 TSval,分得清是哪次发送;PAWS 只有计算。">
+<meta property="og:url" content="https://bigywater.tech/network-tcp-timestamps.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="TCP 时间戳选项:RTT 测量与 PAWS">
+<meta name="twitter:description" content="实测 TCP 时间戳选项:占 12 字节(lo0 载荷 16344−12=16332);时钟 1000 Hz;keepalive 探测不带时间戳;TSecr 配对 20/20 成功但抓包差值只是一半 RTT(50 对 100 ms);重传的 36 个段里 34 个 ACK 回显重传的 TSval,分得清是哪次发送;PAWS 只有计算。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">2725</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">70</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">97</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">56</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">78</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">114</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">111</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">88</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#40678F; --series-c-soft:#DDE7F2;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#86B1DC; --series-c-soft:#16263A;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#86B1DC; --series-c-soft:#16263A;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>网络协议 · 63</div>
+  <h1>TCP 时间戳选项:RTT 测量与 PAWS</h1>
+  <p>TCP 时间戳选项一箭双雕:让发送方在重传存在时仍能放心测 RTT,又让接收方能挡掉绕了一圈回来的旧包(PAWS)。这篇在 macOS 上抓包看它的格式、开销、时钟,用 TSecr 配对测 RTT,在丢包里验证 ACK 回显的是哪一次发送。PAWS 的注入验证做不到,只给计算。</p>
+  <div class="hero-fact">
+<div><div class="num">1000 Hz</div><div class="lbl">本机与 example.com 服务器的时间戳钟:1 ms 一个刻度,49.7 天回绕</div></div><div><div class="num">34 / 36</div><div class="lbl">被重传的段里,有 ACK 回显了重传那次的 TSval 的个数</div></div><div><div class="num">50 vs 100 ms</div><div class="lbl">单个抓包点用 TSecr 配对读到的 RTT 与内核 rttcur 的差别</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="network-tcp-hol-blocking.html">TCP 队头阻塞:一个包丢了,后面的数据都在等</a></div>
+<section>
+  <h2>格式与开销</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  lo0:SYN 里 TSval=True(TSecr = 0),SYN+ACK 里 TS=True;SYN 的 MSS = 16344;数据段里最大载荷 = 16332 字节;数据段 TCP 头长 32 字节(20 基本 + 12 时间戳选项)
+  所以 lo0 上 MSS 16344 − 12 字节时间戳选项 = 16332 字节有效载荷
+  example.com:本机 SYN 里 TS=True,服务器 SYN+ACK 里 TS=True(两边都有才会启用);SYN+ACK 的 MSS = 1400</pre></div>
+  <p>kind 8、10 字节加两个 NOP 共 12 字节,两端 SYN 都带才启用;lo0 上有效载荷从 MSS 16344 变成 16332。</p>
+</section>
+<section>
+  <h2>时钟</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  net.inet.tcp.randomize_timestamps: 1(1 = 每条连接的 TSval 起点加一个随机偏移,所以 TSval 的绝对值没有意义,只有差值有意义)
+  lo0:客户端发出的 keepalive 探测 9 个,其中带时间戳选项的 0 个(TCP 头长 [20] 字节);服务端回的 ACK 9 个,带时间戳选项的 9 个(头长 [32] 字节)
+  服务端 ACK 里的 TSecr(回显客户端最近一个带时间戳的包的 TSval):[949424606]——只有一个值,因为探测没有带时间戳,服务端没有新的可回显
+  服务端 TSval 的变化(相邻差值):[1001, 1000, 1000, 1000, 1001, 1001, 1001, 1001]
+  本机的时间戳钟:1000.0 次/秒(Hz);每个刻度 1.00 ms;32 位 TSval 绕一圈要 49.7 天(计算)
+  example.com:握手之后、关闭之前(第 1~7.5 秒)本机发出的纯 ACK(keepalive 探测)6 个,带时间戳的 0 个;服务器发来的带时间戳的包 9 个
+  服务器 TSval 随时间变化的速率 1000.1 Hz(每个刻度 1.00 ms)</pre></div>
+  <p>回 ACK 的一端 TSval 每秒增加约 1000;每条连接起点有随机偏移。keepalive 探测不带时间戳。</p>
+</section>
+<section>
+  <h2>用 TSecr 量 RTT</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  凭 TSecr 配对成功 20 个数据段(共发 20 条)。dummynet 让同一个包在 lo0 上被抓到不止一次(延迟前后各一份),所以“RTT”有两种读法:
+  数据段第一次被抓到 → 对应 ACK 第一次被抓到:中位 50.0 ms(最小 49.5 / 最大 51.1)——只包含一个方向的延迟
+  数据段第一次被抓到 → 对应 ACK 最后一次被抓到(= 真正送达):中位 50.0 ms(最小 49.5 / 最大 51.1)——两个方向都包含
+  内核 tcp_info:rttcur = 100 ms,srtt = 93 ms,rttvar = 13 ms</pre></div>
+  <p>TSecr 配对 20/20 成功,但单个抓包点读到的差值不是真正 RTT(50 对 100 ms)。</p>
+</section>
+<section>
+  <h2>Karn 问题</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  发了 150 个不同的数据段;其中被重传(同一序号出现不同 TSval)的 36 个
+    序号 24194:发送过 2 次,TSval = [3326993437, 3326993503],间隔(ms)= [66]
+    序号 24294:发送过 2 次,TSval = [3326993483, 3326993573],间隔(ms)= [90]
+    序号 24344:发送过 2 次,TSval = [3326993508, 3326993573],间隔(ms)= [65]
+  在被重传的 36 个段里:有 ACK 回显了某次重传的 TSval 的 34 个,有 ACK 回显了最初那次的 TSval 的 0 个</pre></div>
+  <p>36 个被重传的段中,34 个 ACK 回显重传的 TSval,发送方因此分得清 ACK 对应哪次发送。</p>
+</section>
+<section>
+  <h2>PAWS</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">     100 Mbit/s 的链路上,2^32 字节的序号空间     343.6 秒回绕一次(计算)
+    1000 Mbit/s 的链路上,2^32 字节的序号空间      34.4 秒回绕一次(计算)
+   10000 Mbit/s 的链路上,2^32 字节的序号空间       3.4 秒回绕一次(计算)
+  100000 Mbit/s 的链路上,2^32 字节的序号空间       0.3 秒回绕一次(计算)
+  时间戳钟 1000 Hz:TSval 32 位回绕要 49.7 天,PAWS 的比较窗口(2^31)是 24.9 天;规范要求时间戳钟的刻度在 1 ms~1 s 之间,保证一个包在网络里的寿命(MSL)远小于绕一圈的时间(计算)</pre></div>
+  <p>序号 32 位回绕:10 Gbit/s 下 3.4 秒。TSval 49.7 天才回绕,可以挡掉旧包。没有实测。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">时间戳与 PAWS</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "b", "kind": "bars", "label": "数字对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "时间戳选项(kind 8,长度 10:TSval 4 字节 + TSecr 4 字节,前面补两个 NOP 凑成 12 字节)。lo0 上 SYN 和 SYN+ACK 里都有,SYN 的 TSecr 是 0;example.com 的 SYN+ACK 里也有(两边都带才启用)。代价是每个数据段的 TCP 头从 20 字节变成 32 字节:lo0 的 MSS 是 16344,数据段里观察到的最大载荷是 16332 字节 = 16344 − 12。example.com 的 SYN+ACK 里 MSS 是 1400。", "s": {"t": {"lines": ["  lo0:SYN 里 TSval=True(TSecr = 0),SYN+ACK 里 TS=True;SYN 的 MSS = 16344;数据段里最大载荷 = 16332 字节;数据段 TCP 头长 32 字节(20 基本 + 12 时间戳选项)", "  所以 lo0 上 MSS 16344 − 12 字节时间戳选项 = 16332 字节有效载荷", "  example.com:本机 SYN 里 TS=True,服务器 SYN+ACK 里 TS=True(两边都有才会启用);SYN+ACK 的 MSS = 1400"], "cur": [], "mark": [], "done": []}, "mark": [0, 1], "done": [2], "kv": {"items": [["选项", "kind 8,10 字节 + 2 NOP = 12 字节"], ["协商", "两端的 SYN 都带才启用"], ["lo0 载荷", "16344 − 12 = 16332 字节"]], "hl": ["lo0 载荷"]}}}, {"note": "时间戳的“钟”:连接空闲,用 keepalive(idle=1、intvl=1)让客户端每秒发一个探测、服务端回 ACK。服务端回的 9 个 ACK 都带时间戳,TSval 相邻差值是 [1001, 1000, 1000, 1000, 1001, 1001, 1001, 1001]——每秒增加约 1000,即 1000 Hz,一个刻度 1.00 ms,32 位 TSval 绕一圈要 49.7 天(计算)。有两个有意思的现象:客户端发出的 9 个 keepalive 探测一个都不带时间戳选项(头长 20 字节),所以服务端回的 ACK 里 TSecr 一直是同一个值;net.inet.tcp.randomize_timestamps = 1,每条连接的 TSval 起点加随机偏移,绝对值没有意义。example.com 一侧:本机握手后发出的 6 个纯 ACK(探测)同样 0 个带时间戳;服务器发来的 9 个带时间戳的包,TSval 变化速率 1000.1 Hz,也是 1 ms 一个刻度。", "s": {"t": {"lines": ["  net.inet.tcp.randomize_timestamps: 1(1 = 每条连接的 TSval 起点加一个随机偏移,所以 TSval 的绝对值没有意义,只有差值有意义)", "  lo0:客户端发出的 keepalive 探测 9 个,其中带时间戳选项的 0 个(TCP 头长 [20] 字节);服务端回的 ACK 9 个,带时间戳选项的 9 个(头长 [32] 字节)", "  服务端 ACK 里的 TSecr(回显客户端最近一个带时间戳的包的 TSval):[949424606]——只有一个值,因为探测没有带时间戳,服务端没有新的可回显", "  服务端 TSval 的变化(相邻差值):[1001, 1000, 1000, 1000, 1001, 1001, 1001, 1001]", "  本机的时间戳钟:1000.0 次/秒(Hz);每个刻度 1.00 ms;32 位 TSval 绕一圈要 49.7 天(计算)", "  example.com:握手之后、关闭之前(第 1~7.5 秒)本机发出的纯 ACK(keepalive 探测)6 个,带时间戳的 0 个;服务器发来的带时间戳的包 9 个", "  服务器 TSval 随时间变化的速率 1000.1 Hz(每个刻度 1.00 ms)"], "cur": [], "mark": [], "done": []}, "mark": [1, 2, 3], "done": [4, 5, 6], "b": {"items": [["本机时间戳钟", 1000.0, "1000.0 Hz"], ["example.com 服务器", 1000.1, "1000.1 Hz"]], "max": 1000.1, "cur": [], "mark": [], "done": [0, 1]}, "kv": {"items": [["本机", "1000.0 Hz,1.00 ms 一刻度"], ["example.com", "1000.1 Hz"], ["keepalive 探测", "不带时间戳选项(头 20 字节)"], ["回绕", "2^32 ÷ 1000 Hz = 49.7 天(计算)"]], "hl": ["keepalive 探测"]}}}, {"note": "用时间戳量往返时间:lo0 上 netlab 每方向延迟 50 ms,发 20 条小消息(间隔 150 ms)。对每个数据段,找服务端第一个 TSecr 等于它的 TSval 的 ACK,两者被抓到的时间差:20 个段全部配对成功,中位 50.0 ms(最小 49.5 / 最大 51.1)。但内核自己的 tcp_info 给出 rttcur = 100 ms、srtt = 93 ms、rttvar = 13 ms。抓包得到的只有一半:我的推断是 dummynet 的延迟有一部分发生在抓包点之外,抓包只看到每个包一次,所以 ACK 的返程延迟没有算进去。用 TSecr 配对本身没有问题(20/20),但要得到真实 RTT 必须在发送端内核里量,不能拿一个抓包点的两次时间相减。", "s": {"t": {"lines": ["  凭 TSecr 配对成功 20 个数据段(共发 20 条)。dummynet 让同一个包在 lo0 上被抓到不止一次(延迟前后各一份),所以“RTT”有两种读法:", "  数据段第一次被抓到 → 对应 ACK 第一次被抓到:中位 50.0 ms(最小 49.5 / 最大 51.1)——只包含一个方向的延迟", "  数据段第一次被抓到 → 对应 ACK 最后一次被抓到(= 真正送达):中位 50.0 ms(最小 49.5 / 最大 51.1)——两个方向都包含", "  内核 tcp_info:rttcur = 100 ms,srtt = 93 ms,rttvar = 13 ms"], "cur": [], "mark": [], "done": []}, "mark": [1, 3], "done": [0, 2], "b": {"items": [["抓包配对 RTT(中位)", 50.0, "50.0 ms"], ["内核 rttcur", 100, "100 ms"], ["内核 srtt", 93, "93 ms"]], "max": 100, "cur": [], "mark": [0], "done": [1, 2]}, "kv": {"items": [["TSecr 配对", "20 / 20 成功"], ["抓包差值", "50.0 ms(一个方向)"], ["tcp_info", "rttcur 100 ms / srtt 93 ms"]], "hl": ["抓包差值"]}}}, {"note": "重传的歧义(Karn 问题):丢包 20%、延迟 20 ms,发 150 个小消息。150 个数据段里有 36 个被重传(同一序号出现不同的 TSval),例如序号 24194 发了 2 次,TSval 分别是 3326993437 和 3326993503;序号 24294 的两次间隔 90 ms。在这 36 个被重传的段里,有 34 个能找到一个 ACK 的 TSecr 等于某次重传的 TSval,而 TSecr 等于最初那次 TSval 的是 0 个。没有时间戳时,发送方收到这些 ACK 分不清是对原包还是重传包的回应,Karn 算法只好丢掉这些 RTT 样本;有了时间戳,TSecr 直接告诉你是哪一次发送,可以放心采样。", "s": {"t": {"lines": ["  发了 150 个不同的数据段;其中被重传(同一序号出现不同 TSval)的 36 个", "    序号 24194:发送过 2 次,TSval = [3326993437, 3326993503],间隔(ms)= [66]", "    序号 24294:发送过 2 次,TSval = [3326993483, 3326993573],间隔(ms)= [90]", "    序号 24344:发送过 2 次,TSval = [3326993508, 3326993573],间隔(ms)= [65]", "  在被重传的 36 个段里:有 ACK 回显了某次重传的 TSval 的 34 个,有 ACK 回显了最初那次的 TSval 的 0 个"], "cur": [], "mark": [], "done": []}, "mark": [0, 4], "done": [1, 2, 3], "b": {"items": [["数据段", 150, "150"], ["被重传", 36, "36"], ["ACK 回显重传的 TSval", 34, "34"], ["ACK 回显最初的 TSval", 0, "0"]], "max": 150, "cur": [], "mark": [2], "done": [0, 1, 3]}, "kv": {"items": [["被重传的段", "36 / 150"], ["ACK 回显重传 TSval", "34 个"], ["ACK 回显最初 TSval", "0 个"], ["意义", "分得清 ACK 对应哪次发送"]], "hl": ["意义"]}}}, {"note": "PAWS(防止回绕的序号)只能给计算,没有实测:它的规则是“收到的段的 TSval 比本连接记录的最近值 ts_recent 还小(按 32 位回绕比较),就丢掉”,要验证需要往连接里注入旧报文,这需要原始套接字,这里做不到。需要它的原因是序号 32 位会回绕:2^32 字节在 100 Mbit/s 的链路上 343.6 秒回绕一次,1000 Mbit/s 上 34.4 秒,10000 Mbit/s 上 3.4 秒,100000 Mbit/s 上 0.3 秒——比一个旧包在网络里能活的时间还短时,旧包的序号就可能被误当成新数据。时间戳钟 1000 Hz 时,TSval 要 49.7 天才回绕,PAWS 的比较窗口(2^31)是 24.9 天,远大于包的寿命,所以可以靠 TSval 把旧包挡掉。(全部是计算值。)", "s": {"t": {"lines": ["     100 Mbit/s 的链路上,2^32 字节的序号空间     343.6 秒回绕一次(计算)", "    1000 Mbit/s 的链路上,2^32 字节的序号空间      34.4 秒回绕一次(计算)", "   10000 Mbit/s 的链路上,2^32 字节的序号空间       3.4 秒回绕一次(计算)", "  100000 Mbit/s 的链路上,2^32 字节的序号空间       0.3 秒回绕一次(计算)", "  时间戳钟 1000 Hz:TSval 32 位回绕要 49.7 天,PAWS 的比较窗口(2^31)是 24.9 天;规范要求时间戳钟的刻度在 1 ms~1 s 之间,保证一个包在网络里的寿命(MSL)远小于绕一圈的时间(计算)"], "cur": [], "mark": [], "done": []}, "mark": [4], "done": [0, 1, 2, 3], "b": {"items": [["100 Mbit/s", 343.6, "343.6 秒"], ["1 Gbit/s", 34.4, "34.4 秒"], ["10 Gbit/s", 3.4, "3.4 秒"], ["100 Gbit/s", 0.3, "0.3 秒"]], "max": 343.6, "cur": [], "mark": [], "done": [0, 1, 2, 3]}, "kv": {"items": [["序号回绕", "2^32 字节 ÷ 带宽(计算)"], ["TSval 回绕", "49.7 天(1000 Hz,计算)"], ["PAWS", "没有实测(需要注入旧报文)"]], "hl": ["PAWS"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64(Apple 芯片)/ Python 3.14.8 / tcpdump(libpcap)/ scapy 2.8 / dpkt / dnspython / h2 / aioquic / OpenSSL / curl 8.7.1;抓包在 lo0(环回)上做,少数实验用真实网卡 en0(这台机器上 en0 是 Wi-Fi,tcpdump 看到的是系统转成以太网格式的帧,所以文中的“以太网头”都指这个 14 字节的头)或访问公网(会在文章里注明);需要丢包 / 延迟 / 限速时,用一个只作用于 lo0 端口 9400-9499 的 dummynet 辅助脚本(netlab);所有服务端都是本机自己起的进程;时间戳取自 tcpdump 的 -tt,数字每次运行会有小幅抖动。第一、二、三、四节在 lo0 和 en0 抓包;第三、四节用 netlab(每方向 50 ms 与 20 ms,丢包 0% 与 20%);抓包点读到的 RTT 只有一半的解释是推断;重传数量随机,每次运行不同</li><li>没有验证:PAWS 的实际丢包行为(需要注入旧报文,没有原始套接字);关闭时间戳(本机没有找到对应的 sysctl)后的行为;TSval 起点随机偏移的范围;kernel 内部如何用 TSecr 量 RTT(只从抓包侧配对);时间戳泄露开机时间的隐私问题(randomize_timestamps=1 正是对它的缓解,但没有测试其它系统)</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="network-tcp-loss-throughput.html">
+    <div>
+      <div class="t1">下一篇 · 网络协议 64</div>
+      <div class="t2">丢包率对 TCP 吞吐的影响:用延迟与丢包注入实测</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>网络协议 · TCP 时间戳选项:RTT 测量与 PAWS · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

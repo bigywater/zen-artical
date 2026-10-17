@@ -1,0 +1,1033 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>Go map 内部原理</title>
+<meta name="description" content="bucket 结构、扩容迁移、遍历随机化背后的真实源码。">
+<link rel="canonical" href="https://bigywater.tech/gomap.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Go map 内部原理">
+<meta property="og:description" content="bucket 结构、扩容迁移、遍历随机化背后的真实源码。">
+<meta property="og:url" content="https://bigywater.tech/gomap.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Go map 内部原理">
+<meta name="twitter:description" content="bucket 结构、扩容迁移、遍历随机化背后的真实源码。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#FAF8F5; --surface:#FFFFFF; --surface-2:#F1EEE8; --surface-3:#E9E4D8;
+  --ink:#201C2B; --ink-soft:#55506A; --ink-faint:#8B85A0;
+  --line:#E4DFD5; --line-soft:#EDE9DF;
+  --grp-c:#B3552E; --grp-soft:#F5E2D6;
+  --hash-c:#4C5FD6; --hash-soft:#E4E7FC;
+  --dir-c:#12807E; --dir-soft:#D9F0EE;
+  --warn:#B8791A; --warn-soft:#FBEBD3;
+  --code-bg:#211D30; --code-ink:#E7E2F5; --code-comment:#8D84AE; --code-kw:#7FD4C7; --code-str:#E3B368;
+  --shadow:0 1px 2px rgba(32,28,43,.06),0 10px 28px -14px rgba(32,28,43,.16);
+  --radius:12px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#15121F; --surface:#1D1930; --surface-2:#241F3B; --surface-3:#2C2647;
+    --ink:#EDE9F7; --ink-soft:#B5AECB; --ink-faint:#756D91;
+    --line:#332C4D; --line-soft:#2A2440;
+    --grp-c:#E08A5C; --grp-soft:#3A2618;
+    --hash-c:#8B97F0; --hash-soft:#23274A;
+    --dir-c:#4FC9C6; --dir-soft:#163B39;
+    --warn:#E3A94C; --warn-soft:#3A2A16;
+    --code-bg:#0F0D1A; --code-ink:#E7E2F5; --code-comment:#786F9C; --code-kw:#7FD4C7; --code-str:#E3B368;
+    --shadow:0 1px 2px rgba(0,0,0,.35),0 14px 32px -16px rgba(0,0,0,.55);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#15121F; --surface:#1D1930; --surface-2:#241F3B; --surface-3:#2C2647;
+  --ink:#EDE9F7; --ink-soft:#B5AECB; --ink-faint:#756D91;
+  --line:#332C4D; --line-soft:#2A2440;
+  --grp-c:#E08A5C; --grp-soft:#3A2618;
+  --hash-c:#8B97F0; --hash-soft:#23274A;
+  --dir-c:#4FC9C6; --dir-soft:#163B39;
+  --warn:#E3A94C; --warn-soft:#3A2A16;
+  --code-bg:#0F0D1A; --code-ink:#E7E2F5; --code-comment:#786F9C; --code-kw:#7FD4C7; --code-str:#E3B368;
+  --shadow:0 1px 2px rgba(0,0,0,.35),0 14px 32px -16px rgba(0,0,0,.55);
+}
+*{box-sizing:border-box;}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;}
+.wide{max-width:1080px;margin:0 auto;padding:0 22px;}
+.prose{max-width:1080px;margin:0 auto;padding:0 22px;}
+h1,h2,h3{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;letter-spacing:-.01em;text-wrap:balance;}
+
+header.hero{padding:64px 0 30px;}
+.eyebrow{font-size:12.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-faint);margin:0 0 14px;}
+h1{font-size:clamp(30px,5vw,44px);margin:0 0 16px;line-height:1.12;}
+.hero-sub{font-size:17px;color:var(--ink-soft);margin:0 0 22px;}
+.meta-row{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--ink-faint);}
+.meta-row span{display:inline-flex;align-items:center;gap:6px;}
+
+.legend-row{display:flex;gap:10px;flex-wrap:wrap;margin:28px 0 4px;}
+.legend-chip{display:inline-flex;align-items:center;gap:8px;padding:7px 13px;border-radius:999px;border:1px solid var(--line);background:var(--surface);font-size:13px;font-weight:600;}
+.legend-dot{width:11px;height:11px;border-radius:50%;flex:none;}
+.legend-chip .grp-dot{background:var(--grp-c);} .legend-chip .hash-dot{background:var(--hash-c);} .legend-chip .dir-dot{background:var(--dir-c);}
+
+section{padding:40px 0;}
+section.divider-top{border-top:1px solid var(--line);}
+h2{font-size:22px;margin:0 0 4px;}
+.section-kicker{font-size:12.5px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.08em;font-weight:700;margin:0 0 8px;}
+p{font-size:15.5px;color:var(--ink-soft);margin:0 0 16px;}
+.prose p b, .prose li b{color:var(--ink);font-weight:700;}
+.prose ul{padding-left:22px;font-size:15.5px;color:var(--ink-soft);}
+.prose li{margin-bottom:8px;}
+.grp-tag{color:var(--grp-c);font-weight:700;}
+.hash-tag{color:var(--hash-c);font-weight:700;}
+.dir-tag{color:var(--dir-c);font-weight:700;}
+
+.entity-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:22px 0;}
+@media (max-width:760px){.entity-cards{grid-template-columns:1fr;}}
+.ecard{border:1px solid var(--line);border-radius:var(--radius);padding:18px;background:var(--surface);box-shadow:var(--shadow);}
+.ecard .etitle{font-family:ui-monospace,monospace;font-size:18px;font-weight:700;display:flex;align-items:center;gap:9px;margin-bottom:8px;}
+.ecard.grp .etitle{color:var(--grp-c);} .ecard.hash .etitle{color:var(--hash-c);} .ecard.dir .etitle{color:var(--dir-c);}
+.ecard p{font-size:14px;margin:0;}
+.edot{width:13px;height:13px;border-radius:50%;flex:none;}
+.ecard.grp .edot{background:var(--grp-c);} .ecard.hash .edot{background:var(--hash-c);} .ecard.dir .edot{background:var(--dir-c);}
+
+.code-quote{background:var(--code-bg);border-radius:var(--radius);overflow:hidden;margin:20px 0;box-shadow:var(--shadow);}
+.code-head{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;background:rgba(255,255,255,.04);border-bottom:1px solid rgba(255,255,255,.08);}
+.code-path{font-family:ui-monospace,monospace;font-size:12.5px;color:var(--code-comment);}
+.code-link{font-family:ui-monospace,monospace;font-size:12px;color:var(--code-kw);text-decoration:none;white-space:nowrap;}
+.code-link:hover{text-decoration:underline;}
+.code-quote pre{margin:0;padding:16px;overflow-x:auto;}
+.code-quote code{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;font-size:12.8px;line-height:1.6;color:var(--code-ink);white-space:pre;}
+
+.callout{border-left:3px solid var(--warn);background:var(--warn-soft);border-radius:0 8px 8px 0;padding:12px 16px;font-size:14px;color:var(--ink);margin:18px 0;}
+.callout b{color:var(--warn);}
+
+/* ---- simulator ---- */
+.sim-panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px;margin:22px 0;}
+.sim-controls{display:flex;align-items:center;gap:8px;margin-bottom:18px;flex-wrap:wrap;}
+button.ctrl{appearance:none;border:1px solid var(--line);background:var(--surface-2);color:var(--ink);padding:8px 14px;border-radius:8px;font-size:14px;cursor:pointer;font-weight:600;transition:background .15s,border-color .15s;font-family:ui-monospace,monospace;}
+button.ctrl:hover:not(:disabled){background:var(--surface-3);}
+button.ctrl:disabled{opacity:.4;cursor:not-allowed;}
+button.ctrl.primary{background:var(--ink);color:var(--bg);border-color:var(--ink);}
+button.ctrl:focus-visible{outline:2px solid var(--dir-c);outline-offset:2px;}
+.sim-progress{font-size:12.5px;color:var(--ink-faint);margin-left:2px;font-family:ui-monospace,monospace;}
+.spacer{flex:1;}
+select.ctrl{padding:6px 10px;font-family:ui-monospace,monospace;}
+
+.dir-strip{display:flex;align-items:center;gap:8px;margin-bottom:16px;flex-wrap:wrap;}
+.dir-label{font-size:11.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-faint);font-weight:700;margin-right:2px;}
+.dir-box{min-width:52px;height:36px;border-radius:8px;border:1.5px solid var(--line);background:var(--surface-2);display:flex;align-items:center;justify-content:center;font-family:ui-monospace,monospace;font-size:12px;color:var(--ink-faint);font-weight:700;transition:border-color .2s,background .2s,color .2s;}
+.dir-box[data-active="true"]{border-color:var(--dir-c);background:var(--dir-soft);color:var(--ink);}
+.dir-empty-note{font-size:12.5px;color:var(--ink-faint);font-style:italic;}
+
+.tables-row{display:grid;gap:14px;margin-bottom:16px;}
+.tables-row[data-count="1"]{grid-template-columns:1fr;}
+.tables-row[data-count="2"]{grid-template-columns:1fr 1fr;}
+@media (max-width:760px){.tables-row[data-count="2"]{grid-template-columns:1fr;}}
+.table-card{border:1.5px solid var(--line);border-radius:10px;padding:12px;background:var(--surface-2);}
+.table-card-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px;font-family:ui-monospace,monospace;}
+.table-card-title{font-weight:700;color:var(--dir-c);font-size:13.5px;}
+.table-card-meta{font-size:11px;color:var(--ink-faint);}
+.group-row{margin-bottom:8px;}
+.group-idx{font-size:10.5px;color:var(--ink-faint);font-family:ui-monospace,monospace;margin-bottom:3px;}
+.slots-row{display:flex;gap:4px;flex-wrap:wrap;}
+.slot-cell{width:64px;height:44px;border-radius:6px;border:1.5px dashed var(--line);display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:ui-monospace,monospace;font-size:10.5px;color:var(--ink-faint);transition:border-color .2s,background .2s,color .2s;flex:none;position:relative;}
+.slot-cell[data-state="full"]{border-style:solid;border-color:var(--grp-c);background:var(--grp-soft);color:var(--ink);}
+.slot-cell[data-state="deleted"]{border-color:var(--warn);color:var(--warn);}
+.slot-cell[data-hl="true"]{border-color:var(--dir-c);border-width:2.5px;box-shadow:0 0 0 3px var(--dir-soft);}
+.slot-key{font-weight:700;font-size:11px;}
+.slot-h2{font-size:9px;color:var(--hash-c);font-weight:700;}
+.slot-empty-mark{opacity:.5;}
+
+.hash-strip{display:flex;align-items:center;gap:10px;flex-wrap:wrap;border:1px solid var(--line);border-radius:8px;padding:8px 12px;margin-bottom:16px;font-family:ui-monospace,monospace;font-size:12.5px;}
+.hash-chip{display:inline-flex;align-items:center;gap:6px;}
+.hash-chip .hk{color:var(--ink-faint);}
+.hash-chip .hv{font-weight:700;}
+.hash-chip.h1 .hv{color:var(--ink-soft);}
+.hash-chip.h2 .hv{color:var(--hash-c);background:var(--hash-soft);padding:2px 7px;border-radius:5px;}
+
+.sim-desc{background:var(--surface-2);border-radius:8px;padding:12px 14px;font-size:13.5px;color:var(--ink-soft);margin-bottom:14px;min-height:44px;border:1px solid var(--line-soft);}
+.sim-desc b{color:var(--ink);}
+.sim-formula{font-family:ui-monospace,monospace;font-size:13px;color:var(--ink-faint);margin-bottom:8px;}
+
+.sim-log{max-height:190px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:8px;}
+.log-item{padding:6px 9px;border-radius:6px;font-size:12.5px;color:var(--ink-faint);cursor:pointer;font-family:ui-monospace,monospace;display:flex;gap:8px;}
+.log-item:hover{background:var(--surface-2);}
+.log-item[data-active="true"]{background:var(--dir-soft);color:var(--ink);font-weight:600;}
+.log-idx{min-width:22px;color:var(--ink-faint);}
+
+.refs{font-size:14px;color:var(--ink-soft);}
+.refs li{margin-bottom:10px;}
+.refs a{color:var(--dir-c);}
+footer.endnote{border-top:1px solid var(--line);padding:26px 0 60px;font-size:13px;color:var(--ink-faint);}
+
+.legend2{display:flex;gap:16px;flex-wrap:wrap;margin-top:14px;font-size:12.5px;color:var(--ink-faint);}
+.legend2 span{display:inline-flex;align-items:center;gap:6px;}
+.lg-box{width:14px;height:14px;border-radius:4px;border:1.5px dashed var(--line);display:inline-block;}
+.lg-box.full{border-style:solid;border-color:var(--grp-c);background:var(--grp-soft);}
+.lg-box.deleted{border-color:var(--warn);}
+.lg-box.hl{border-color:var(--dir-c);border-style:solid;box-shadow:0 0 0 2px var(--dir-soft);}
+
+@media (prefers-reduced-motion:reduce){*{transition:none !important;}}
+</style>
+
+<article>
+<header class="hero prose">
+  <p class="eyebrow">GO 运行时内部原理</p>
+  <h1>Go map 内部原理</h1>
+  <p class="hero-sub">Go 1.24 把内置 map 的实现整个换掉了:告别用了十几年的"桶 + 溢出链",改成了业界成熟的 <b>Swiss Table</b> 设计。这篇文章配了一个可以逐步播放的插入/查找/扩容模拟器,以及若干条直接引用自 Go 运行时源码的片段。</p>
+  <div class="meta-row">
+    <span>· 引用 Go 源码 commit <code class="mono">72aa6db7</code>,路径 <code class="mono">src/internal/runtime/maps/</code></span>
+    <span>· 源码遵循 BSD-3-Clause 协议,版权归 The Go Authors 所有,下文均为简短引用并附原文链接</span>
+  </div>
+  <div class="legend-row">
+    <span class="legend-chip"><span class="legend-dot grp-dot"></span>分组 + 控制字节 · 8 个槽位打包在一起,一次比较扫完整组</span>
+    <span class="legend-chip"><span class="legend-dot hash-dot"></span>H1 / H2 · 一个哈希拆成"去哪找"和"像不像"两部分</span>
+    <span class="legend-chip"><span class="legend-dot dir-dot"></span>目录 + 可扩展哈希 · 满了只分裂一半,不用整体搬家</span>
+  </div>
+</header>
+
+<section class="prose">
+  <p class="section-kicker">01 · 为什么要换掉用了十几年的实现</p>
+  <h2>从桶 + 溢出链到 Swiss Table</h2>
+  <p>老版本的 Go map(<code class="mono">runtime/map.go</code> 里的 <code class="mono">hmap</code>/<code class="mono">bmap</code>)用的是经典设计:一个桶装 8 个键值对,桶满了就挂一条"溢出桶"链表继续装。这个设计简单可靠,但有两个老毛病:溢出链一长,查找就退化成链表遍历;而且桶数组一旦扩容,旧数据要靠"渐进式搬迁"(每次写操作顺手搬一点)慢慢挪到新桶里,map 内部同时存在新旧两套桶,逻辑复杂,还占内存。</p>
+  <p>Go 1.24 把内置 map 换成了 <a href="https://abseil.io/about/design/swisstables" target="_blank" rel="noopener">Abseil Swiss Table</a> 那一套思路的本土实现,搬进了新目录 <code class="mono">internal/runtime/maps</code>。核心变化是三个:</p>
+  <ul>
+    <li>每组(<b>group</b>)8 个槽位配一个 8 字节的<b>控制字</b>,状态查询可以对整个控制字做一次位运算,不用逐个槽位比较;</li>
+    <li>哈希值拆成 <b>H1</b>(决定去哪个分组探测)和 <b>H2</b>(存进控制字节当"指纹",大概率不用真的比较 key 就能排除错误候选);</li>
+    <li>不再有"渐进式搬迁"这种半新半旧的中间状态——map 满了就把这一个 table 干净利落地<b>一分为二</b>,配合一个可以整体翻倍的<b>目录</b>(有点像数据库里的可扩展哈希),搬迁范围永远只有"这一个 table",不会牵连整个 map。</li>
+  </ul>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">02 · 三个核心概念</p>
+  <h2>分组 / 哈希拆分 / 目录</h2>
+  <div class="entity-cards">
+    <div class="ecard grp"><div class="etitle"><span class="edot"></span>Group</div><p>8 个键值槽位 + 1 个控制字节数组。每个控制字节是三种状态之一:<b>空</b>(1000 0000)、<b>已删除</b>(1111 1110)、<b>占用</b>(0 + 7 位 H2)。查找时把控制字整体和 H2 做匹配,一次搞定 8 个槽位的初筛。</p></div>
+    <div class="ecard hash"><div class="etitle"><span class="edot"></span>H1 / H2</div><p>H1 是哈希值去掉低 7 位后的部分,决定从哪个分组开始探测;H2 是低 7 位,存进控制字节当"指纹"。只有指纹对上了,才会真的去比较 key 本身——多数不匹配的槽位在这一步就被过滤掉了。</p></div>
+    <div class="ecard dir"><div class="etitle"><span class="edot"></span>目录 + 可扩展哈希</div><p>特别小的 map(≤7 个元素)甚至没有目录,直接是一个裸分组。长大之后,目录数组的每一项指向一个 table;table 满了就分裂成两个,必要时目录整体翻倍——这就是"可扩展哈希"。</p></div>
+  </div>
+
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">group.go · L115-L123</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/internal/runtime/maps/group.go#L115-L123" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>// Each slot in the hash table has a control byte which can have one of three
+// states: empty, deleted, and full. They have the following bit patterns:
+//
+//	  empty: 1 0 0 0 0 0 0 0
+//	deleted: 1 1 1 1 1 1 1 0
+//	   full: 0 h h h h h h h  // h represents the H2 hash bits
+//
+// TODO(prattmic): Consider inverting the top bit so that the zero value is empty.
+type ctrl uint8</code></pre>
+  </div>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">group.go · L248-L271</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/internal/runtime/maps/group.go#L248-L271" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>type groupReference struct {
+	// data points to the group, which is described by typ.Group and has
+	// layout depending on GOEXPERIMENT=mapsplitgroup:
+	//
+	// With mapsplitgroup (split arrays):
+	// type group struct {
+	// 	ctrls ctrlGroup
+	// 	keys  [abi.MapGroupSlots]typ.Key
+	// 	elems [abi.MapGroupSlots]typ.Elem
+	// }
+	//
+	// Without (interleaved slots):
+	// type group struct {
+	// 	ctrls ctrlGroup
+	// 	slots [abi.MapGroupSlots]struct {
+	// 		key  typ.Key
+	// 		elem typ.Elem
+	// 	}
+	// }
+	//
+	// In both cases, key(i) and elem(i) use the same formula via
+	// typ.KeysOff/KeyStride and typ.ElemsOff/ElemStride.
+	data unsafe.Pointer // data *typ.Group
+}</code></pre>
+  </div>
+  <p>控制字节和键值槽位是紧挨着存的同一块内存(<code class="mono">ctrls + keys + elems</code>),不是三个分开分配的数组——这样一个分组只需要一次内存访问就能把控制字节全部读进 CPU 缓存行,做位运算判断哪些槽位"看起来像"要找的 key。</p>
+
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">map.go · L200-L211</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/internal/runtime/maps/map.go#L200-L211" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>// Extracts the H1 portion of a hash: the 57 upper bits.
+// TODO(prattmic): what about 32-bit systems?
+func h1(h uintptr) uintptr {
+	return h &gt;&gt; 7
+}
+
+// Extracts the H2 portion of a hash: the 7 bits not used for h1.
+//
+// These are used as an occupied control byte.
+func h2(h uintptr) uintptr {
+	return h &amp; 0x7f
+}</code></pre>
+  </div>
+
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">map.go · L214-L265(Map 结构体节选)</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/internal/runtime/maps/map.go#L214-L265" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>type Map struct {
+	// The number of filled slots (i.e. the number of elements in all
+	// tables). Excludes deleted slots.
+	// Must be first (known by the compiler, for len() builtin).
+	used uint64
+
+	// seed is the hash seed, computed as a unique random number per map.
+	seed uintptr
+
+	// The directory of tables.
+	//
+	// Normally dirPtr points to an array of table pointers
+	//
+	// dirPtr *[dirLen]*table
+	//
+	// The length (dirLen) of this array is `1 &lt;&lt; globalDepth`. Multiple
+	// entries may point to the same table. See top-level comment for more
+	// details.
+	//
+	// Small map optimization: if the map always contained
+	// abi.MapGroupSlots or fewer entries, it fits entirely in a
+	// single group. In that case dirPtr points directly to a single group.
+	//
+	// dirPtr *group
+	//
+	// In this case, dirLen is 0. used counts the number of used slots in
+	// the group. Note that small maps never have deleted slots (as there
+	// is no probe sequence to maintain).
+	dirPtr unsafe.Pointer
+	dirLen int
+
+	// The number of bits to use in table directory lookups.
+	globalDepth uint8
+
+	// The number of bits to shift out of the hash for directory lookups.
+	// On 64-bit systems, this is 64 - globalDepth.
+	globalShift uint8
+
+	// writing is a flag that is toggled (XOR 1) while the map is being
+	// written. Normally it is set to 1 when writing, but if there are
+	// multiple concurrent writers, then toggling increases the probability
+	// that both sides will detect the race.
+	writing uint8
+
+	// tombstonePossible is false if we know that no table in this map
+	// contains a tombstone.
+	tombstonePossible bool
+
+	// clearSeq is a sequence counter of calls to Clear. It is used to
+	// detect map clears during iteration.
+	clearSeq uint64
+}</code></pre>
+  </div>
+  <p>注意 <code class="mono">dirPtr</code> 那段注释里的 <b>small map optimization</b>:如果一个 map 从头到尾都不超过 8 个元素,<code class="mono">dirLen</code> 永远是 0,<code class="mono">dirPtr</code> 直接指向唯一的那个分组,连目录这层间接寻址都省了。这也是为什么下面的模拟器一开始不会画出"目录"这一行——真的没有。</p>
+</section>
+
+<section class="prose divider-top" id="sim-section">
+  <p class="section-kicker">03 · 现场直播</p>
+  <h2>插入 15 个 key,亲眼看着它长大</h2>
+  <p>下面是一段<b>真实模拟并逐条校验过</b>的轨迹:依次插入 15 个编程语言名字作为 key。规则严格照抄上面(以及后面会引用)的源码:分组、H1/H2、探测序列、小 map 优化、目录翻倍、墓碑删除全部真实实现,我写了一个独立脚本,验证了插入结束后每个 key 都能通过模拟的 <code class="mono">Get</code> 正确查到,并且和一个朴素的 Python dict 逐项比对完全一致。<b>唯一不真实的地方是哈希函数本身</b>——用的是一个固定种子的 FNV-1a,不是 Go 运行时真正用的、每个进程随机加盐的硬件加速哈希,细节见文末说明。</p>
+</section>
+
+<section class="wide">
+  <div class="sim-panel">
+    <div class="hash-strip" id="hashStrip">
+      <span class="hash-chip"><span class="hk">key</span> <span class="hv" id="hashKeyVal">—</span></span>
+      <span class="hash-chip h1"><span class="hk">H1</span> <span class="hv" id="hashH1Val">—</span></span>
+      <span class="hash-chip h2"><span class="hk">H2</span> <span class="hv" id="hashH2Val">—</span></span>
+    </div>
+
+    <div class="dir-strip" id="dirStrip">
+      <span class="dir-label">目录 Directory</span>
+      <span class="dir-empty-note" id="dirEmptyNote">(小 map,没有目录)</span>
+    </div>
+
+    <div class="tables-row" id="tablesRow" data-count="1"></div>
+
+    <div class="sim-desc">
+      <div class="sim-formula" id="simFormula">&mdash;</div>
+      <div id="simDesc">点击"下一步"或"播放",从空 map 开始插入。</div>
+    </div>
+
+    <div class="sim-controls">
+      <button class="ctrl" id="btnReset">重置</button>
+      <button class="ctrl" id="btnPrev">上一步</button>
+      <button class="ctrl primary" id="btnPlay">播放</button>
+      <button class="ctrl" id="btnNext">下一步</button>
+      <span class="sim-progress" id="simProgress">0 / 0</span>
+      <div class="spacer"></div>
+      <label class="sim-progress" for="simSpeed">速度</label>
+      <select class="ctrl" id="simSpeed">
+        <option value="2000">慢</option>
+        <option value="1100" selected>中</option>
+        <option value="500">快</option>
+      </select>
+    </div>
+
+    <div class="sim-log" id="simLog"></div>
+
+    <div class="legend2">
+      <span><span class="lg-box"></span>空槽位</span>
+      <span><span class="lg-box full"></span>已占用(显示 key + H2 指纹)</span>
+      <span><span class="lg-box deleted"></span>墓碑(已删除,但还占位)</span>
+      <span><span class="lg-box hl"></span>此刻正在检查/改变</span>
+    </div>
+  </div>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">04 · 一次查找是怎么发生的</p>
+  <h2>探测序列(probe sequence)</h2>
+  <p>模拟器里几乎每一步都在做同一件事:算出 H1,从它对应的分组开始,沿着一条固定的"探测序列"逐组检查,直到找到 key 或者碰到一个真正的空槽位为止。这条序列不是随便走的,是二次探测(quadratic probing),保证只要分组数是 2 的幂,就一定会不重不漏地走遍每一个分组:</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">table.go · L1323-L1355</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/internal/runtime/maps/table.go#L1323-L1355" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>
+// probeSeq maintains the state for a probe sequence that iterates through the
+// groups in a table. The sequence is a triangular progression of the form
+// hash, hash + 1, hash + 1 + 2, hash + 1 + 2 + 3, ..., modulo mask + 1.
+// The i-th term of the sequence is
+//
+//	p(i) := hash + (i^2 + i)/2 (mod mask+1)
+//
+// The sequence effectively outputs the indexes of *groups*. The group
+// machinery allows us to check an entire group with minimal branching.
+//
+// It turns out that this probe sequence visits every group exactly once if
+// the number of groups is a power of two, since (i^2+i)/2 is a bijection in
+// Z/(2^m). See https://en.wikipedia.org/wiki/Quadratic_probing
+type probeSeq struct {
+	mask   uint64
+	offset uint64
+	index  uint64
+}
+
+func makeProbeSeq(hash uintptr, mask uint64) probeSeq {
+	return probeSeq{
+		mask:   mask,
+		offset: uint64(hash) &amp; mask,
+		index:  0,
+	}
+}
+
+func (s probeSeq) next() probeSeq {
+	s.index++
+	s.offset = (s.offset + s.index) &amp; s.mask
+	return s
+}</code></pre>
+  </div>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">table.go · L165-L223(getWithKey 节选)</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/internal/runtime/maps/table.go#L165-L223" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>func (t *table) getWithKey(typ *abi.MapType, hash uintptr, key unsafe.Pointer) (unsafe.Pointer, unsafe.Pointer, bool) {
+	// To find the location of a key in the table, we compute hash(key). From
+	// h1(hash(key)) and the capacity, we construct a probeSeq that visits
+	// every group of slots in some interesting order. See [probeSeq].
+	//
+	// We walk through these indices. At each index, we select the entire
+	// group starting with that index and extract potential candidates:
+	// occupied slots with a control byte equal to h2(hash(key)). The key
+	// at candidate slot i is compared with key; if key == g.slot(i).key
+	// we are done and return the slot; if there is an empty slot in the
+	// group, we stop and return an error; otherwise we continue to the
+	// next probe index. Tombstones (ctrlDeleted) effectively behave like
+	// full slots that never match the value we're looking for.
+	//
+	// The h2 bits ensure when we compare a key we are likely to have
+	// actually found the object. That is, the chance is low that keys
+	// compare false. Thus, when we search for an object, we are unlikely
+	// to call Equal many times. This likelihood can be analyzed as follows
+	// (assuming that h2 is a random enough hash function).
+	//
+	// Let's assume that there are k "wrong" objects that must be examined
+	// in a probe sequence. For example, when doing a find on an object
+	// that is in the table, k is the number of objects between the start
+	// of the probe sequence and the final found object (not including the
+	// final found object). The expected number of objects with an h2 match
+	// is then k/128. Measurements and analysis indicate that even at high
+	// load factors, k is less than 32, meaning that the number of false
+	// positive comparisons we must perform is less than 1/8 per find.
+	seq := makeProbeSeq(h1(hash), t.groups.lengthMask)
+	h2Hash := h2(hash)
+	for ; ; seq = seq.next() {
+		g := t.groups.group(typ, seq.offset)
+
+		match := g.ctrls().matchH2(h2Hash)
+
+		for match != 0 {
+			i := match.first()
+
+			slotKey := g.key(typ, i)
+			if typ.IndirectKey() {
+				slotKey = *((*unsafe.Pointer)(slotKey))
+			}
+			if typ.Key.Equal(key, slotKey) {
+				slotElem := g.elem(typ, i)
+				if typ.IndirectElem() {
+					slotElem = *((*unsafe.Pointer)(slotElem))
+				}
+				return slotKey, slotElem, true
+			}
+			match = match.removeFirst()
+		}
+
+		match = g.ctrls().matchEmpty()
+		if match != 0 {
+			// Finding an empty slot means we've reached the end of
+			// the probe sequence.
+			return nil, nil, false
+		}
+	}</code></pre>
+  </div>
+  <p>这段注释里的概率分析很有意思:假设一次查找路上要跳过 k 个"不是它"的槽位,由于 H2 只有 7 位(128 种取值),期望只有 k/128 个槽位会因为指纹碰巧相同而被误判成"像是它",需要真的调用 <code class="mono">Equal</code> 比较一次。也就是说,H2 指纹几乎把"逐个比较 key"这件事完全挡在了外面。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">05 · 从裸分组到 table</p>
+  <h2>小 map 优化,以及并发写检测</h2>
+  <p>模拟器插入到第 8 个 key(kotlin)时,单独的裸分组已经放满了 7 个(留 1 个空槽位保证探测能终止),这次插入直接触发"升级":新建一个有目录的正式 table,把原来 7 个 key 重新哈希搬进去,再放入第 8 个。这条路径,连同 Go map 一个经典的运行时保护——并发写检测——都在 <code class="mono">PutSlot</code> 里:</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">map.go · L505-L554(PutSlot 节选)</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/internal/runtime/maps/map.go#L505-L554" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>func (m *Map) PutSlot(typ *abi.MapType, key unsafe.Pointer) unsafe.Pointer {
+	if m.writing != 0 {
+		fatal("concurrent map writes")
+	}
+
+	hash := typ.Hasher(key, m.seed)
+
+	// Set writing after calling Hasher, since Hasher may panic, in which
+	// case we have not actually done a write.
+	m.writing ^= 1 // toggle, see comment on writing
+
+	if m.dirPtr == nil {
+		m.growToSmall(typ)
+	}
+
+	if m.dirLen == 0 {
+		elem := m.putSlotSmall(typ, hash, key)
+		if elem == nil {
+			// Can't fit another entry, grow to full size map.
+			tab := m.growToTable(typ)
+
+			elem = tab.uncheckedPutSlotForAssign(typ, hash, key)
+			m.used++
+
+			tab.checkInvariants(typ, m)
+		}
+
+		if m.writing == 0 {
+			fatal("concurrent map writes")
+		}
+		m.writing ^= 1
+
+		return elem
+	}
+
+	for {
+		idx := m.directoryIndex(hash)
+		elem, ok := m.directoryAt(idx).PutSlot(typ, m, hash, key)
+		if !ok {
+			continue
+		}
+
+		if m.writing == 0 {
+			fatal("concurrent map writes")
+		}
+		m.writing ^= 1
+
+		return elem
+	}
+}</code></pre>
+  </div>
+  <p><code class="mono">m.writing ^= 1</code> 这个异或翻转,就是 <code class="mono">fatal("concurrent map writes")</code> panic 的来源:写入开始时翻成 1,写入结束时再翻回 0;如果两个 goroutine 同时写同一个 map,大概率会有一次在对方还没翻回去之前就闯进来,检测到"应该是 0 却发现已经是 1(或者反过来)",直接 <code class="mono">fatal</code> 崩溃整个进程——这是故意设计成不可恢复的崩溃而不是 panic/recover,因为一旦发生数据竞争,map 内部状态已经不可信了。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">06 · table 满了怎么办</p>
+  <h2>分裂,而不是整体搬家</h2>
+  <p>继续插入到第 15 个 key(zig)时,table 的 <code class="mono">growthLeft</code> 归零,触发分裂:按"比当前多用一位"的哈希位,把原 table 里的所有条目分流成两个新 table,原来指向旧 table 的目录项也跟着更新。如果目录已经没有多余的位可用(<code class="mono">localDepth == globalDepth</code>),就把整个目录翻倍,给新长出来的 table 腾位置:</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">map.go · L382-L414(installTableSplit 节选)</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/internal/runtime/maps/map.go#L382-L414" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>func (m *Map) installTableSplit(old, left, right *table) {
+	if old.localDepth == m.globalDepth {
+		// No room for another level in the directory. Grow the
+		// directory.
+		newDir := make([]*table, m.dirLen*2)
+		for i := range m.dirLen {
+			t := m.directoryAt(uintptr(i))
+			newDir[2*i] = t
+			newDir[2*i+1] = t
+			// t may already exist in multiple indices. We should
+			// only update t.index once. Since the index must
+			// increase, seeing the original index means this must
+			// be the first time we've encountered this table.
+			if t.index == i {
+				t.index = 2 * i
+			}
+		}
+		m.globalDepth++
+		m.globalShift--
+		//m.directory = newDir
+		m.dirPtr = unsafe.Pointer(&amp;newDir[0])
+		m.dirLen = len(newDir)
+	}
+
+	// N.B. left and right may still consume multiple indices if the
+	// directory has grown multiple times since old was last split.
+	left.index = old.index
+	m.replaceTable(left)
+
+	entries := 1 &lt;&lt; (m.globalDepth - left.localDepth)
+	right.index = left.index + entries
+	m.replaceTable(right)
+}</code></pre>
+  </div>
+  <p>关键在于:分裂只发生在<b>那一个装满的 table</b> 身上,不会波及目录里其它已经安顿好的 table。这就是"可扩展哈希"这个名字的由来——目录会长大,但已经存在的数据不会被无谓地重新搬动。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">07 · 删除为什么要留个"墓碑"</p>
+  <h2>tombstone</h2>
+  <p>模拟器里删除一个 key 时,如果它所在的分组还有空槽位,会直接把控制字节标成"空";但如果这个分组当时已经<b>全满</b>,直接标成空会切断经过它的探测链——后面的某个查找可能正是靠"这个分组没有空位,继续往下一个分组找"才能找到真正的目标,一旦提前看到空位就会误判成"没找到"。所以这种情况下会留一个特殊状态:<b>墓碑</b>(deleted),它在探测时表现得像"占用"(继续往下找),但在插入时可以被覆盖复用:</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">table.go · L520-L538</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/internal/runtime/maps/table.go#L520-L538" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>				// Only a full group can appear in the middle
+				// of a probe sequence (a group with at least
+				// one empty slot terminates probing). Once a
+				// group becomes full, it stays full until
+				// rehashing/resizing. So if the group isn't
+				// full now, we can simply remove the element.
+				// Otherwise, we create a tombstone to mark the
+				// slot as deleted.
+				var tombstone bool
+				if g.ctrls().matchEmpty() != 0 {
+					g.ctrls().set(i, ctrlEmpty)
+					t.growthLeft++
+				} else {
+					g.ctrls().set(i, ctrlDeleted)
+					tombstone = true
+				}
+
+				t.checkInvariants(typ, m)
+				return tombstone</code></pre>
+  </div>
+  <p class="callout"><b>这次模拟里没有真的踩到墓碑分支:</b>删除的 key 所在分组当时还有空位,所以直接标成了空,你在模拟器里会看到 <code class="mono">tombstone: false</code>。上面这段源码就是那个"分组已满"分支的真实逻辑——原理相同,只是这次插入的 15 个 key 不巧没有把某个分组正好填满就删除。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">08 · 三个经典问题</p>
+  <h2>顺手回答几个 FAQ</h2>
+  <ul>
+    <li><b>为什么不能对 map 的元素取地址(<code class="mono">&m[k]</code> 编译不过)?</b> 因为一次分裂或者从小 map 升级到 table,都会把键值对<b>重新哈希搬到新内存位置</b>——如果允许你拿着旧地址,分裂一发生这个指针就悬空了。禁止取地址是编译期就杜绝这类隐患。</li>
+    <li><b>为什么每次遍历 map,输出顺序都不一样?</b> 不是错觉,是故意的:迭代器从一个<b>随机槽位偏移</b>开始扫描,不从头开始:</li>
+  </ul>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">table.go · L710-L714</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/internal/runtime/maps/table.go#L710-L714" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>	// Randomize iteration order by starting iteration at a random slot
+	// offset. The offset into the directory uses a separate offset, as it
+	// must adjust when the directory grows.
+	entryOffset uint64
+	dirOffset   uint64</code></pre>
+  </div>
+  <ul>
+    <li>早年的 Go 甚至没有明说这是故意的,直到开发者发现有代码依赖"遍历顺序恰好稳定"这种未定义行为——于是干脆用随机起点把这种依赖直接打破,逼你不要依赖它。</li>
+    <li><b>为什么并发读写 map 会直接崩溃退出,而不是 panic 后能 recover?</b> 见上面第 05 节的 <code class="mono">writing</code> 标志位——数据竞争发生后 map 内部状态已经不可信,继续运行风险更大,所以用不可恢复的 <code class="mono">fatal</code> 直接终止进程,而不是可以被 <code class="mono">recover</code> 掉的普通 panic。</li>
+  </ul>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">09 · 参考与说明</p>
+  <h2>引用与这个模拟器做了哪些简化</h2>
+  <ul class="refs">
+    <li>本文所有源码引用均来自 <a href="https://github.com/golang/go" target="_blank" rel="noopener">golang/go</a>,commit <code class="mono">72aa6db7943024b48c4d41c1fbc32b57b9fa036e</code>,路径 <code class="mono">src/internal/runtime/maps/</code> 与 <code class="mono">src/runtime/map.go</code>,遵循 Go 项目的 BSD-3-Clause 协议(© The Go Authors)。每段引用都标了具体文件、行号,并附了指向该 commit 的永久链接。</li>
+    <li><a href="https://go.dev/blog/swisstable" target="_blank" rel="noopener">Go 官方博客:Faster Go maps with Swiss Tables</a>——Go 1.24 这次切换的官方说明。</li>
+    <li><a href="https://abseil.io/about/design/swisstables" target="_blank" rel="noopener">Abseil:Swiss Tables design notes</a>——这套设计最初的出处。</li>
+    <li>模拟器用固定种子的 FNV-1a 代替了 Go 运行时真正的、每进程随机加盐且用了 AES 指令集加速的哈希函数——算法结构(H1/H2 拆分、探测、分组)完全照抄真实实现,只有"哈希值具体是多少"这件事是假的。</li>
+    <li>真实的 <code class="mono">table.split</code> 会按更复杂的规则选择新 table 的容量(<code class="mono">maxTableCapacity</code> 相关逻辑),这里为了演示简化成"新 table 和原 table 容量相同"。</li>
+    <li>模拟器把"探测一个分组"当作一步来展示,没有进一步拆到"控制字里 8 个字节逐个比较"这一级——真实硬件上这是一条 SIMD 指令,拆到那一级对理解算法没有额外帮助。</li>
+  </ul>
+</section>
+
+<footer class="endnote prose">
+  Go 运行时系列 · 如果你在更早或更晚的 Go 版本里读到的 map 实现和这篇不一样,大概率是因为你用的版本早于 1.24(还是桶 + 溢出链),或者运行时又继续演进了。
+</footer>
+</article>
+
+<script>
+var SIM = [{"type": "init-small", "snapshot": {"mode": "small", "group": {"ctrl": ["empty", "empty", "empty", "empty", "empty", "empty", "empty", "empty"], "key": [null, null, null, null, null, null, null, null], "val": [null, null, null, null, null, null, null, null]}, "used": 0}}, {"key": "go", "h1": 120823724720883384, "h2": 69, "phase": "small", "type": "hash", "snapshot": {"mode": "small", "group": {"ctrl": ["empty", "empty", "empty", "empty", "empty", "empty", "empty", "empty"], "key": [null, null, null, null, null, null, null, null], "val": [null, null, null, null, null, null, null, null]}, "used": 0}}, {"key": "go", "val": 1, "slot": 0, "phase": "small", "type": "place", "snapshot": {"mode": "small", "group": {"ctrl": [{"h2": 69}, "empty", "empty", "empty", "empty", "empty", "empty", "empty"], "key": ["go", null, null, null, null, null, null, null], "val": [1, null, null, null, null, null, null, null]}, "used": 1}}, {"key": "python", "h1": 41799993130735141, "h2": 34, "phase": "small", "type": "hash", "snapshot": {"mode": "small", "group": {"ctrl": [{"h2": 69}, "empty", "empty", "empty", "empty", "empty", "empty", "empty"], "key": ["go", null, null, null, null, null, null, null], "val": [1, null, null, null, null, null, null, null]}, "used": 1}}, {"key": "python", "val": 2, "slot": 1, "phase": "small", "type": "place", "snapshot": {"mode": "small", "group": {"ctrl": [{"h2": 69}, {"h2": 34}, "empty", "empty", "empty", "empty", "empty", "empty"], "key": ["go", "python", null, null, null, null, null, null], "val": [1, 2, null, null, null, null, null, null]}, "used": 2}}, {"key": "rust", "h1": 31951554037146265, "h2": 110, "phase": "small", "type": "hash", "snapshot": {"mode": "small", "group": {"ctrl": [{"h2": 69}, {"h2": 34}, "empty", "empty", "empty", "empty", "empty", "empty"], "key": ["go", "python", null, null, null, null, null, null], "val": [1, 2, null, null, null, null, null, null]}, "used": 2}}, {"key": "rust", "val": 3, "slot": 2, "phase": "small", "type": "place", "snapshot": {"mode": "small", "group": {"ctrl": [{"h2": 69}, {"h2": 34}, {"h2": 110}, "empty", "empty", "empty", "empty", "empty"], "key": ["go", "python", "rust", null, null, null, null, null], "val": [1, 2, 3, null, null, null, null, null]}, "used": 3}}, {"key": "java", "h1": 47001729391826421, "h2": 111, "phase": "small", "type": "hash", "snapshot": {"mode": "small", "group": {"ctrl": [{"h2": 69}, {"h2": 34}, {"h2": 110}, "empty", "empty", "empty", "empty", "empty"], "key": ["go", "python", "rust", null, null, null, null, null], "val": [1, 2, 3, null, null, null, null, null]}, "used": 3}}, {"key": "java", "val": 4, "slot": 3, "phase": "small", "type": "place", "snapshot": {"mode": "small", "group": {"ctrl": [{"h2": 69}, {"h2": 34}, {"h2": 110}, {"h2": 111}, "empty", "empty", "empty", "empty"], "key": ["go", "python", "rust", "java", null, null, null, null], "val": [1, 2, 3, 4, null, null, null, null]}, "used": 4}}, {"key": "c", "h1": 39734819577210508, "h2": 84, "phase": "small", "type": "hash", "snapshot": {"mode": "small", "group": {"ctrl": [{"h2": 69}, {"h2": 34}, {"h2": 110}, {"h2": 111}, "empty", "empty", "empty", "empty"], "key": ["go", "python", "rust", "java", null, null, null, null], "val": [1, 2, 3, 4, null, null, null, null]}, "used": 4}}, {"key": "c", "val": 5, "slot": 4, "phase": "small", "type": "place", "snapshot": {"mode": "small", "group": {"ctrl": [{"h2": 69}, {"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 84}, "empty", "empty", "empty"], "key": ["go", "python", "rust", "java", "c", null, null, null], "val": [1, 2, 3, 4, 5, null, null, null]}, "used": 5}}, {"key": "ruby", "h1": 2395303000769190, "h2": 3, "phase": "small", "type": "hash", "snapshot": {"mode": "small", "group": {"ctrl": [{"h2": 69}, {"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 84}, "empty", "empty", "empty"], "key": ["go", "python", "rust", "java", "c", null, null, null], "val": [1, 2, 3, 4, 5, null, null, null]}, "used": 5}}, {"key": "ruby", "val": 6, "slot": 5, "phase": "small", "type": "place", "snapshot": {"mode": "small", "group": {"ctrl": [{"h2": 69}, {"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 84}, {"h2": 3}, "empty", "empty"], "key": ["go", "python", "rust", "java", "c", "ruby", null, null], "val": [1, 2, 3, 4, 5, 6, null, null]}, "used": 6}}, {"key": "swift", "h1": 127079965314046853, "h2": 14, "phase": "small", "type": "hash", "snapshot": {"mode": "small", "group": {"ctrl": [{"h2": 69}, {"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 84}, {"h2": 3}, "empty", "empty"], "key": ["go", "python", "rust", "java", "c", "ruby", null, null], "val": [1, 2, 3, 4, 5, 6, null, null]}, "used": 6}}, {"key": "swift", "val": 7, "slot": 6, "phase": "small", "type": "place", "snapshot": {"mode": "small", "group": {"ctrl": [{"h2": 69}, {"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 84}, {"h2": 3}, {"h2": 14}, "empty"], "key": ["go", "python", "rust", "java", "c", "ruby", "swift", null], "val": [1, 2, 3, 4, 5, 6, 7, null]}, "used": 7}}, {"key": "kotlin", "h1": 79490215252651901, "h2": 60, "phase": "small", "type": "hash", "snapshot": {"mode": "small", "group": {"ctrl": [{"h2": 69}, {"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 84}, {"h2": 3}, {"h2": 14}, "empty"], "key": ["go", "python", "rust", "java", "c", "ruby", "swift", null], "val": [1, 2, 3, 4, 5, 6, 7, null]}, "used": 7}}, {"capacity": 16, "entries": ["go", "python", "rust", "java", "c", "ruby", "swift"], "type": "promote", "snapshot": {"mode": "table", "globalDepth": 0, "dirLen": 1, "tables": [{"uid": 1, "localDepth": 0, "used": 0, "growthLeft": 14, "groups": [{"ctrl": ["empty", "empty", "empty", "empty", "empty", "empty", "empty", "empty"], "key": [null, null, null, null, null, null, null, null], "val": [null, null, null, null, null, null, null, null]}, {"ctrl": ["empty", "empty", "empty", "empty", "empty", "empty", "empty", "empty"], "key": [null, null, null, null, null, null, null, null], "val": [null, null, null, null, null, null, null, null]}], "dirSlots": [0]}], "used": 7}}, {"key": "kotlin", "h1": 79490215252651901, "h2": 60, "phase": "table", "dirIdx": 0, "tableUid": 1, "type": "hash", "snapshot": {"mode": "table", "globalDepth": 0, "dirLen": 1, "tables": [{"uid": 1, "localDepth": 0, "used": 7, "growthLeft": 7, "groups": [{"ctrl": [{"h2": 69}, {"h2": 84}, {"h2": 3}, "empty", "empty", "empty", "empty", "empty"], "key": ["go", "c", "ruby", null, null, null, null, null], "val": [1, 5, 6, null, null, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 14}, "empty", "empty", "empty", "empty"], "key": ["python", "rust", "java", "swift", null, null, null, null], "val": [2, 3, 4, 7, null, null, null, null]}], "dirSlots": [0]}], "used": 7}}, {"key": "kotlin", "tableUid": 1, "groupIdx": 1, "type": "probe-group", "snapshot": {"mode": "table", "globalDepth": 0, "dirLen": 1, "tables": [{"uid": 1, "localDepth": 0, "used": 7, "growthLeft": 7, "groups": [{"ctrl": [{"h2": 69}, {"h2": 84}, {"h2": 3}, "empty", "empty", "empty", "empty", "empty"], "key": ["go", "c", "ruby", null, null, null, null, null], "val": [1, 5, 6, null, null, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 14}, "empty", "empty", "empty", "empty"], "key": ["python", "rust", "java", "swift", null, null, null, null], "val": [2, 3, 4, 7, null, null, null, null]}], "dirSlots": [0]}], "used": 7}}, {"key": "kotlin", "val": 8, "tableUid": 1, "groupIdx": 1, "slot": 4, "phase": "table", "type": "place", "snapshot": {"mode": "table", "globalDepth": 0, "dirLen": 1, "tables": [{"uid": 1, "localDepth": 0, "used": 8, "growthLeft": 6, "groups": [{"ctrl": [{"h2": 69}, {"h2": 84}, {"h2": 3}, "empty", "empty", "empty", "empty", "empty"], "key": ["go", "c", "ruby", null, null, null, null, null], "val": [1, 5, 6, null, null, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 14}, {"h2": 60}, "empty", "empty", "empty"], "key": ["python", "rust", "java", "swift", "kotlin", null, null, null], "val": [2, 3, 4, 7, 8, null, null, null]}], "dirSlots": [0]}], "used": 8}}, {"key": "scala", "h1": 25465542148947507, "h2": 21, "phase": "table", "dirIdx": 0, "tableUid": 1, "type": "hash", "snapshot": {"mode": "table", "globalDepth": 0, "dirLen": 1, "tables": [{"uid": 1, "localDepth": 0, "used": 8, "growthLeft": 6, "groups": [{"ctrl": [{"h2": 69}, {"h2": 84}, {"h2": 3}, "empty", "empty", "empty", "empty", "empty"], "key": ["go", "c", "ruby", null, null, null, null, null], "val": [1, 5, 6, null, null, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 14}, {"h2": 60}, "empty", "empty", "empty"], "key": ["python", "rust", "java", "swift", "kotlin", null, null, null], "val": [2, 3, 4, 7, 8, null, null, null]}], "dirSlots": [0]}], "used": 8}}, {"key": "scala", "tableUid": 1, "groupIdx": 1, "type": "probe-group", "snapshot": {"mode": "table", "globalDepth": 0, "dirLen": 1, "tables": [{"uid": 1, "localDepth": 0, "used": 8, "growthLeft": 6, "groups": [{"ctrl": [{"h2": 69}, {"h2": 84}, {"h2": 3}, "empty", "empty", "empty", "empty", "empty"], "key": ["go", "c", "ruby", null, null, null, null, null], "val": [1, 5, 6, null, null, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 14}, {"h2": 60}, "empty", "empty", "empty"], "key": ["python", "rust", "java", "swift", "kotlin", null, null, null], "val": [2, 3, 4, 7, 8, null, null, null]}], "dirSlots": [0]}], "used": 8}}, {"key": "scala", "val": 9, "tableUid": 1, "groupIdx": 1, "slot": 5, "phase": "table", "type": "place", "snapshot": {"mode": "table", "globalDepth": 0, "dirLen": 1, "tables": [{"uid": 1, "localDepth": 0, "used": 9, "growthLeft": 5, "groups": [{"ctrl": [{"h2": 69}, {"h2": 84}, {"h2": 3}, "empty", "empty", "empty", "empty", "empty"], "key": ["go", "c", "ruby", null, null, null, null, null], "val": [1, 5, 6, null, null, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 14}, {"h2": 60}, {"h2": 21}, "empty", "empty"], "key": ["python", "rust", "java", "swift", "kotlin", "scala", null, null], "val": [2, 3, 4, 7, 8, 9, null, null]}], "dirSlots": [0]}], "used": 9}}, {"key": "perl", "h1": 74130550173443089, "h2": 7, "phase": "table", "dirIdx": 0, "tableUid": 1, "type": "hash", "snapshot": {"mode": "table", "globalDepth": 0, "dirLen": 1, "tables": [{"uid": 1, "localDepth": 0, "used": 9, "growthLeft": 5, "groups": [{"ctrl": [{"h2": 69}, {"h2": 84}, {"h2": 3}, "empty", "empty", "empty", "empty", "empty"], "key": ["go", "c", "ruby", null, null, null, null, null], "val": [1, 5, 6, null, null, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 14}, {"h2": 60}, {"h2": 21}, "empty", "empty"], "key": ["python", "rust", "java", "swift", "kotlin", "scala", null, null], "val": [2, 3, 4, 7, 8, 9, null, null]}], "dirSlots": [0]}], "used": 9}}, {"key": "perl", "tableUid": 1, "groupIdx": 1, "type": "probe-group", "snapshot": {"mode": "table", "globalDepth": 0, "dirLen": 1, "tables": [{"uid": 1, "localDepth": 0, "used": 9, "growthLeft": 5, "groups": [{"ctrl": [{"h2": 69}, {"h2": 84}, {"h2": 3}, "empty", "empty", "empty", "empty", "empty"], "key": ["go", "c", "ruby", null, null, null, null, null], "val": [1, 5, 6, null, null, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 14}, {"h2": 60}, {"h2": 21}, "empty", "empty"], "key": ["python", "rust", "java", "swift", "kotlin", "scala", null, null], "val": [2, 3, 4, 7, 8, 9, null, null]}], "dirSlots": [0]}], "used": 9}}, {"key": "perl", "val": 10, "tableUid": 1, "groupIdx": 1, "slot": 6, "phase": "table", "type": "place", "snapshot": {"mode": "table", "globalDepth": 0, "dirLen": 1, "tables": [{"uid": 1, "localDepth": 0, "used": 10, "growthLeft": 4, "groups": [{"ctrl": [{"h2": 69}, {"h2": 84}, {"h2": 3}, "empty", "empty", "empty", "empty", "empty"], "key": ["go", "c", "ruby", null, null, null, null, null], "val": [1, 5, 6, null, null, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 14}, {"h2": 60}, {"h2": 21}, {"h2": 7}, "empty"], "key": ["python", "rust", "java", "swift", "kotlin", "scala", "perl", null], "val": [2, 3, 4, 7, 8, 9, 10, null]}], "dirSlots": [0]}], "used": 10}}, {"key": "php", "h1": 77338841289229678, "h2": 21, "phase": "table", "dirIdx": 0, "tableUid": 1, "type": "hash", "snapshot": {"mode": "table", "globalDepth": 0, "dirLen": 1, "tables": [{"uid": 1, "localDepth": 0, "used": 10, "growthLeft": 4, "groups": [{"ctrl": [{"h2": 69}, {"h2": 84}, {"h2": 3}, "empty", "empty", "empty", "empty", "empty"], "key": ["go", "c", "ruby", null, null, null, null, null], "val": [1, 5, 6, null, null, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 14}, {"h2": 60}, {"h2": 21}, {"h2": 7}, "empty"], "key": ["python", "rust", "java", "swift", "kotlin", "scala", "perl", null], "val": [2, 3, 4, 7, 8, 9, 10, null]}], "dirSlots": [0]}], "used": 10}}, {"key": "php", "tableUid": 1, "groupIdx": 0, "type": "probe-group", "snapshot": {"mode": "table", "globalDepth": 0, "dirLen": 1, "tables": [{"uid": 1, "localDepth": 0, "used": 10, "growthLeft": 4, "groups": [{"ctrl": [{"h2": 69}, {"h2": 84}, {"h2": 3}, "empty", "empty", "empty", "empty", "empty"], "key": ["go", "c", "ruby", null, null, null, null, null], "val": [1, 5, 6, null, null, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 14}, {"h2": 60}, {"h2": 21}, {"h2": 7}, "empty"], "key": ["python", "rust", "java", "swift", "kotlin", "scala", "perl", null], "val": [2, 3, 4, 7, 8, 9, 10, null]}], "dirSlots": [0]}], "used": 10}}, {"key": "php", "val": 11, "tableUid": 1, "groupIdx": 0, "slot": 3, "phase": "table", "type": "place", "snapshot": {"mode": "table", "globalDepth": 0, "dirLen": 1, "tables": [{"uid": 1, "localDepth": 0, "used": 11, "growthLeft": 3, "groups": [{"ctrl": [{"h2": 69}, {"h2": 84}, {"h2": 3}, {"h2": 21}, "empty", "empty", "empty", "empty"], "key": ["go", "c", "ruby", "php", null, null, null, null], "val": [1, 5, 6, 11, null, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 14}, {"h2": 60}, {"h2": 21}, {"h2": 7}, "empty"], "key": ["python", "rust", "java", "swift", "kotlin", "scala", "perl", null], "val": [2, 3, 4, 7, 8, 9, 10, null]}], "dirSlots": [0]}], "used": 11}}, {"key": "lua", "h1": 55854392380889627, "h2": 12, "phase": "table", "dirIdx": 0, "tableUid": 1, "type": "hash", "snapshot": {"mode": "table", "globalDepth": 0, "dirLen": 1, "tables": [{"uid": 1, "localDepth": 0, "used": 11, "growthLeft": 3, "groups": [{"ctrl": [{"h2": 69}, {"h2": 84}, {"h2": 3}, {"h2": 21}, "empty", "empty", "empty", "empty"], "key": ["go", "c", "ruby", "php", null, null, null, null], "val": [1, 5, 6, 11, null, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 14}, {"h2": 60}, {"h2": 21}, {"h2": 7}, "empty"], "key": ["python", "rust", "java", "swift", "kotlin", "scala", "perl", null], "val": [2, 3, 4, 7, 8, 9, 10, null]}], "dirSlots": [0]}], "used": 11}}, {"key": "lua", "tableUid": 1, "groupIdx": 1, "type": "probe-group", "snapshot": {"mode": "table", "globalDepth": 0, "dirLen": 1, "tables": [{"uid": 1, "localDepth": 0, "used": 11, "growthLeft": 3, "groups": [{"ctrl": [{"h2": 69}, {"h2": 84}, {"h2": 3}, {"h2": 21}, "empty", "empty", "empty", "empty"], "key": ["go", "c", "ruby", "php", null, null, null, null], "val": [1, 5, 6, 11, null, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 14}, {"h2": 60}, {"h2": 21}, {"h2": 7}, "empty"], "key": ["python", "rust", "java", "swift", "kotlin", "scala", "perl", null], "val": [2, 3, 4, 7, 8, 9, 10, null]}], "dirSlots": [0]}], "used": 11}}, {"key": "lua", "val": 12, "tableUid": 1, "groupIdx": 1, "slot": 7, "phase": "table", "type": "place", "snapshot": {"mode": "table", "globalDepth": 0, "dirLen": 1, "tables": [{"uid": 1, "localDepth": 0, "used": 12, "growthLeft": 2, "groups": [{"ctrl": [{"h2": 69}, {"h2": 84}, {"h2": 3}, {"h2": 21}, "empty", "empty", "empty", "empty"], "key": ["go", "c", "ruby", "php", null, null, null, null], "val": [1, 5, 6, 11, null, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 14}, {"h2": 60}, {"h2": 21}, {"h2": 7}, {"h2": 12}], "key": ["python", "rust", "java", "swift", "kotlin", "scala", "perl", "lua"], "val": [2, 3, 4, 7, 8, 9, 10, 12]}], "dirSlots": [0]}], "used": 12}}, {"key": "haskell", "h1": 3450831401965356, "h2": 125, "phase": "table", "dirIdx": 0, "tableUid": 1, "type": "hash", "snapshot": {"mode": "table", "globalDepth": 0, "dirLen": 1, "tables": [{"uid": 1, "localDepth": 0, "used": 12, "growthLeft": 2, "groups": [{"ctrl": [{"h2": 69}, {"h2": 84}, {"h2": 3}, {"h2": 21}, "empty", "empty", "empty", "empty"], "key": ["go", "c", "ruby", "php", null, null, null, null], "val": [1, 5, 6, 11, null, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 14}, {"h2": 60}, {"h2": 21}, {"h2": 7}, {"h2": 12}], "key": ["python", "rust", "java", "swift", "kotlin", "scala", "perl", "lua"], "val": [2, 3, 4, 7, 8, 9, 10, 12]}], "dirSlots": [0]}], "used": 12}}, {"key": "haskell", "tableUid": 1, "groupIdx": 0, "type": "probe-group", "snapshot": {"mode": "table", "globalDepth": 0, "dirLen": 1, "tables": [{"uid": 1, "localDepth": 0, "used": 12, "growthLeft": 2, "groups": [{"ctrl": [{"h2": 69}, {"h2": 84}, {"h2": 3}, {"h2": 21}, "empty", "empty", "empty", "empty"], "key": ["go", "c", "ruby", "php", null, null, null, null], "val": [1, 5, 6, 11, null, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 14}, {"h2": 60}, {"h2": 21}, {"h2": 7}, {"h2": 12}], "key": ["python", "rust", "java", "swift", "kotlin", "scala", "perl", "lua"], "val": [2, 3, 4, 7, 8, 9, 10, 12]}], "dirSlots": [0]}], "used": 12}}, {"key": "haskell", "val": 13, "tableUid": 1, "groupIdx": 0, "slot": 4, "phase": "table", "type": "place", "snapshot": {"mode": "table", "globalDepth": 0, "dirLen": 1, "tables": [{"uid": 1, "localDepth": 0, "used": 13, "growthLeft": 1, "groups": [{"ctrl": [{"h2": 69}, {"h2": 84}, {"h2": 3}, {"h2": 21}, {"h2": 125}, "empty", "empty", "empty"], "key": ["go", "c", "ruby", "php", "haskell", null, null, null], "val": [1, 5, 6, 11, 13, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 14}, {"h2": 60}, {"h2": 21}, {"h2": 7}, {"h2": 12}], "key": ["python", "rust", "java", "swift", "kotlin", "scala", "perl", "lua"], "val": [2, 3, 4, 7, 8, 9, 10, 12]}], "dirSlots": [0]}], "used": 13}}, {"key": "elixir", "h1": 43057171343603024, "h2": 9, "phase": "table", "dirIdx": 0, "tableUid": 1, "type": "hash", "snapshot": {"mode": "table", "globalDepth": 0, "dirLen": 1, "tables": [{"uid": 1, "localDepth": 0, "used": 13, "growthLeft": 1, "groups": [{"ctrl": [{"h2": 69}, {"h2": 84}, {"h2": 3}, {"h2": 21}, {"h2": 125}, "empty", "empty", "empty"], "key": ["go", "c", "ruby", "php", "haskell", null, null, null], "val": [1, 5, 6, 11, 13, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 14}, {"h2": 60}, {"h2": 21}, {"h2": 7}, {"h2": 12}], "key": ["python", "rust", "java", "swift", "kotlin", "scala", "perl", "lua"], "val": [2, 3, 4, 7, 8, 9, 10, 12]}], "dirSlots": [0]}], "used": 13}}, {"key": "elixir", "tableUid": 1, "groupIdx": 0, "type": "probe-group", "snapshot": {"mode": "table", "globalDepth": 0, "dirLen": 1, "tables": [{"uid": 1, "localDepth": 0, "used": 13, "growthLeft": 1, "groups": [{"ctrl": [{"h2": 69}, {"h2": 84}, {"h2": 3}, {"h2": 21}, {"h2": 125}, "empty", "empty", "empty"], "key": ["go", "c", "ruby", "php", "haskell", null, null, null], "val": [1, 5, 6, 11, 13, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 14}, {"h2": 60}, {"h2": 21}, {"h2": 7}, {"h2": 12}], "key": ["python", "rust", "java", "swift", "kotlin", "scala", "perl", "lua"], "val": [2, 3, 4, 7, 8, 9, 10, 12]}], "dirSlots": [0]}], "used": 13}}, {"key": "elixir", "val": 14, "tableUid": 1, "groupIdx": 0, "slot": 5, "phase": "table", "type": "place", "snapshot": {"mode": "table", "globalDepth": 0, "dirLen": 1, "tables": [{"uid": 1, "localDepth": 0, "used": 14, "growthLeft": 0, "groups": [{"ctrl": [{"h2": 69}, {"h2": 84}, {"h2": 3}, {"h2": 21}, {"h2": 125}, {"h2": 9}, "empty", "empty"], "key": ["go", "c", "ruby", "php", "haskell", "elixir", null, null], "val": [1, 5, 6, 11, 13, 14, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 14}, {"h2": 60}, {"h2": 21}, {"h2": 7}, {"h2": 12}], "key": ["python", "rust", "java", "swift", "kotlin", "scala", "perl", "lua"], "val": [2, 3, 4, 7, 8, 9, 10, 12]}], "dirSlots": [0]}], "used": 14}}, {"key": "zig", "h1": 99620753919953691, "h2": 106, "phase": "table", "dirIdx": 0, "tableUid": 1, "type": "hash", "snapshot": {"mode": "table", "globalDepth": 0, "dirLen": 1, "tables": [{"uid": 1, "localDepth": 0, "used": 14, "growthLeft": 0, "groups": [{"ctrl": [{"h2": 69}, {"h2": 84}, {"h2": 3}, {"h2": 21}, {"h2": 125}, {"h2": 9}, "empty", "empty"], "key": ["go", "c", "ruby", "php", "haskell", "elixir", null, null], "val": [1, 5, 6, 11, 13, 14, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 14}, {"h2": 60}, {"h2": 21}, {"h2": 7}, {"h2": 12}], "key": ["python", "rust", "java", "swift", "kotlin", "scala", "perl", "lua"], "val": [2, 3, 4, 7, 8, 9, 10, 12]}], "dirSlots": [0]}], "used": 14}}, {"key": "zig", "tableUid": 1, "groupIdx": 1, "type": "probe-group", "snapshot": {"mode": "table", "globalDepth": 0, "dirLen": 1, "tables": [{"uid": 1, "localDepth": 0, "used": 14, "growthLeft": 0, "groups": [{"ctrl": [{"h2": 69}, {"h2": 84}, {"h2": 3}, {"h2": 21}, {"h2": 125}, {"h2": 9}, "empty", "empty"], "key": ["go", "c", "ruby", "php", "haskell", "elixir", null, null], "val": [1, 5, 6, 11, 13, 14, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 14}, {"h2": 60}, {"h2": 21}, {"h2": 7}, {"h2": 12}], "key": ["python", "rust", "java", "swift", "kotlin", "scala", "perl", "lua"], "val": [2, 3, 4, 7, 8, 9, 10, 12]}], "dirSlots": [0]}], "used": 14}}, {"key": "zig", "tableUid": 1, "groupIdx": 0, "type": "probe-group", "snapshot": {"mode": "table", "globalDepth": 0, "dirLen": 1, "tables": [{"uid": 1, "localDepth": 0, "used": 14, "growthLeft": 0, "groups": [{"ctrl": [{"h2": 69}, {"h2": 84}, {"h2": 3}, {"h2": 21}, {"h2": 125}, {"h2": 9}, "empty", "empty"], "key": ["go", "c", "ruby", "php", "haskell", "elixir", null, null], "val": [1, 5, 6, 11, 13, 14, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 14}, {"h2": 60}, {"h2": 21}, {"h2": 7}, {"h2": 12}], "key": ["python", "rust", "java", "swift", "kotlin", "scala", "perl", "lua"], "val": [2, 3, 4, 7, 8, 9, 10, 12]}], "dirSlots": [0]}], "used": 14}}, {"oldUid": 1, "leftUid": 2, "rightUid": 3, "leftKeys": ["c", "ruby", "haskell", "elixir", "python", "rust", "java", "scala", "lua"], "rightKeys": ["go", "php", "swift", "kotlin", "perl"], "newGlobalDepth": 1, "newDirLen": 2, "type": "split", "snapshot": {"mode": "table", "globalDepth": 1, "dirLen": 2, "tables": [{"uid": 2, "localDepth": 1, "used": 9, "growthLeft": 5, "groups": [{"ctrl": [{"h2": 84}, {"h2": 3}, {"h2": 125}, {"h2": 9}, "empty", "empty", "empty", "empty"], "key": ["c", "ruby", "haskell", "elixir", null, null, null, null], "val": [5, 6, 13, 14, null, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 21}, {"h2": 12}, "empty", "empty", "empty"], "key": ["python", "rust", "java", "scala", "lua", null, null, null], "val": [2, 3, 4, 9, 12, null, null, null]}], "dirSlots": [0]}, {"uid": 3, "localDepth": 1, "used": 5, "growthLeft": 9, "groups": [{"ctrl": [{"h2": 69}, {"h2": 21}, "empty", "empty", "empty", "empty", "empty", "empty"], "key": ["go", "php", null, null, null, null, null, null], "val": [1, 11, null, null, null, null, null, null]}, {"ctrl": [{"h2": 14}, {"h2": 60}, {"h2": 7}, "empty", "empty", "empty", "empty", "empty"], "key": ["swift", "kotlin", "perl", null, null, null, null, null], "val": [7, 8, 10, null, null, null, null, null]}], "dirSlots": [1]}], "used": 14}}, {"key": "zig", "h1": 99620753919953691, "h2": 106, "phase": "table", "dirIdx": 1, "tableUid": 3, "type": "hash", "snapshot": {"mode": "table", "globalDepth": 1, "dirLen": 2, "tables": [{"uid": 2, "localDepth": 1, "used": 9, "growthLeft": 5, "groups": [{"ctrl": [{"h2": 84}, {"h2": 3}, {"h2": 125}, {"h2": 9}, "empty", "empty", "empty", "empty"], "key": ["c", "ruby", "haskell", "elixir", null, null, null, null], "val": [5, 6, 13, 14, null, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 21}, {"h2": 12}, "empty", "empty", "empty"], "key": ["python", "rust", "java", "scala", "lua", null, null, null], "val": [2, 3, 4, 9, 12, null, null, null]}], "dirSlots": [0]}, {"uid": 3, "localDepth": 1, "used": 5, "growthLeft": 9, "groups": [{"ctrl": [{"h2": 69}, {"h2": 21}, "empty", "empty", "empty", "empty", "empty", "empty"], "key": ["go", "php", null, null, null, null, null, null], "val": [1, 11, null, null, null, null, null, null]}, {"ctrl": [{"h2": 14}, {"h2": 60}, {"h2": 7}, "empty", "empty", "empty", "empty", "empty"], "key": ["swift", "kotlin", "perl", null, null, null, null, null], "val": [7, 8, 10, null, null, null, null, null]}], "dirSlots": [1]}], "used": 14}}, {"key": "zig", "tableUid": 3, "groupIdx": 1, "type": "probe-group", "snapshot": {"mode": "table", "globalDepth": 1, "dirLen": 2, "tables": [{"uid": 2, "localDepth": 1, "used": 9, "growthLeft": 5, "groups": [{"ctrl": [{"h2": 84}, {"h2": 3}, {"h2": 125}, {"h2": 9}, "empty", "empty", "empty", "empty"], "key": ["c", "ruby", "haskell", "elixir", null, null, null, null], "val": [5, 6, 13, 14, null, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 21}, {"h2": 12}, "empty", "empty", "empty"], "key": ["python", "rust", "java", "scala", "lua", null, null, null], "val": [2, 3, 4, 9, 12, null, null, null]}], "dirSlots": [0]}, {"uid": 3, "localDepth": 1, "used": 5, "growthLeft": 9, "groups": [{"ctrl": [{"h2": 69}, {"h2": 21}, "empty", "empty", "empty", "empty", "empty", "empty"], "key": ["go", "php", null, null, null, null, null, null], "val": [1, 11, null, null, null, null, null, null]}, {"ctrl": [{"h2": 14}, {"h2": 60}, {"h2": 7}, "empty", "empty", "empty", "empty", "empty"], "key": ["swift", "kotlin", "perl", null, null, null, null, null], "val": [7, 8, 10, null, null, null, null, null]}], "dirSlots": [1]}], "used": 14}}, {"key": "zig", "val": 15, "tableUid": 3, "groupIdx": 1, "slot": 3, "phase": "table", "type": "place", "snapshot": {"mode": "table", "globalDepth": 1, "dirLen": 2, "tables": [{"uid": 2, "localDepth": 1, "used": 9, "growthLeft": 5, "groups": [{"ctrl": [{"h2": 84}, {"h2": 3}, {"h2": 125}, {"h2": 9}, "empty", "empty", "empty", "empty"], "key": ["c", "ruby", "haskell", "elixir", null, null, null, null], "val": [5, 6, 13, 14, null, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 21}, {"h2": 12}, "empty", "empty", "empty"], "key": ["python", "rust", "java", "scala", "lua", null, null, null], "val": [2, 3, 4, 9, 12, null, null, null]}], "dirSlots": [0]}, {"uid": 3, "localDepth": 1, "used": 6, "growthLeft": 8, "groups": [{"ctrl": [{"h2": 69}, {"h2": 21}, "empty", "empty", "empty", "empty", "empty", "empty"], "key": ["go", "php", null, null, null, null, null, null], "val": [1, 11, null, null, null, null, null, null]}, {"ctrl": [{"h2": 14}, {"h2": 60}, {"h2": 7}, {"h2": 106}, "empty", "empty", "empty", "empty"], "key": ["swift", "kotlin", "perl", "zig", null, null, null, null], "val": [7, 8, 10, 15, null, null, null, null]}], "dirSlots": [1]}], "used": 15}}, {"key": "java", "h1": 47001729391826421, "h2": 111, "phase": "table", "dirIdx": 0, "tableUid": 2, "op": "get", "type": "hash", "snapshot": {"mode": "table", "globalDepth": 1, "dirLen": 2, "tables": [{"uid": 2, "localDepth": 1, "used": 9, "growthLeft": 5, "groups": [{"ctrl": [{"h2": 84}, {"h2": 3}, {"h2": 125}, {"h2": 9}, "empty", "empty", "empty", "empty"], "key": ["c", "ruby", "haskell", "elixir", null, null, null, null], "val": [5, 6, 13, 14, null, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 21}, {"h2": 12}, "empty", "empty", "empty"], "key": ["python", "rust", "java", "scala", "lua", null, null, null], "val": [2, 3, 4, 9, 12, null, null, null]}], "dirSlots": [0]}, {"uid": 3, "localDepth": 1, "used": 6, "growthLeft": 8, "groups": [{"ctrl": [{"h2": 69}, {"h2": 21}, "empty", "empty", "empty", "empty", "empty", "empty"], "key": ["go", "php", null, null, null, null, null, null], "val": [1, 11, null, null, null, null, null, null]}, {"ctrl": [{"h2": 14}, {"h2": 60}, {"h2": 7}, {"h2": 106}, "empty", "empty", "empty", "empty"], "key": ["swift", "kotlin", "perl", "zig", null, null, null, null], "val": [7, 8, 10, 15, null, null, null, null]}], "dirSlots": [1]}], "used": 15}}, {"key": "java", "tableUid": 2, "groupIdx": 1, "op": "get", "type": "probe-group", "snapshot": {"mode": "table", "globalDepth": 1, "dirLen": 2, "tables": [{"uid": 2, "localDepth": 1, "used": 9, "growthLeft": 5, "groups": [{"ctrl": [{"h2": 84}, {"h2": 3}, {"h2": 125}, {"h2": 9}, "empty", "empty", "empty", "empty"], "key": ["c", "ruby", "haskell", "elixir", null, null, null, null], "val": [5, 6, 13, 14, null, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 21}, {"h2": 12}, "empty", "empty", "empty"], "key": ["python", "rust", "java", "scala", "lua", null, null, null], "val": [2, 3, 4, 9, 12, null, null, null]}], "dirSlots": [0]}, {"uid": 3, "localDepth": 1, "used": 6, "growthLeft": 8, "groups": [{"ctrl": [{"h2": 69}, {"h2": 21}, "empty", "empty", "empty", "empty", "empty", "empty"], "key": ["go", "php", null, null, null, null, null, null], "val": [1, 11, null, null, null, null, null, null]}, {"ctrl": [{"h2": 14}, {"h2": 60}, {"h2": 7}, {"h2": 106}, "empty", "empty", "empty", "empty"], "key": ["swift", "kotlin", "perl", "zig", null, null, null, null], "val": [7, 8, 10, 15, null, null, null, null]}], "dirSlots": [1]}], "used": 15}}, {"key": "java", "val": 4, "tableUid": 2, "groupIdx": 1, "slot": 2, "type": "get-hit", "snapshot": {"mode": "table", "globalDepth": 1, "dirLen": 2, "tables": [{"uid": 2, "localDepth": 1, "used": 9, "growthLeft": 5, "groups": [{"ctrl": [{"h2": 84}, {"h2": 3}, {"h2": 125}, {"h2": 9}, "empty", "empty", "empty", "empty"], "key": ["c", "ruby", "haskell", "elixir", null, null, null, null], "val": [5, 6, 13, 14, null, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 21}, {"h2": 12}, "empty", "empty", "empty"], "key": ["python", "rust", "java", "scala", "lua", null, null, null], "val": [2, 3, 4, 9, 12, null, null, null]}], "dirSlots": [0]}, {"uid": 3, "localDepth": 1, "used": 6, "growthLeft": 8, "groups": [{"ctrl": [{"h2": 69}, {"h2": 21}, "empty", "empty", "empty", "empty", "empty", "empty"], "key": ["go", "php", null, null, null, null, null, null], "val": [1, 11, null, null, null, null, null, null]}, {"ctrl": [{"h2": 14}, {"h2": 60}, {"h2": 7}, {"h2": 106}, "empty", "empty", "empty", "empty"], "key": ["swift", "kotlin", "perl", "zig", null, null, null, null], "val": [7, 8, 10, 15, null, null, null, null]}], "dirSlots": [1]}], "used": 15}}, {"key": "nonexistent", "h1": 71600758940547768, "h2": 30, "phase": "table", "dirIdx": 0, "tableUid": 2, "op": "get", "type": "hash", "snapshot": {"mode": "table", "globalDepth": 1, "dirLen": 2, "tables": [{"uid": 2, "localDepth": 1, "used": 9, "growthLeft": 5, "groups": [{"ctrl": [{"h2": 84}, {"h2": 3}, {"h2": 125}, {"h2": 9}, "empty", "empty", "empty", "empty"], "key": ["c", "ruby", "haskell", "elixir", null, null, null, null], "val": [5, 6, 13, 14, null, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 21}, {"h2": 12}, "empty", "empty", "empty"], "key": ["python", "rust", "java", "scala", "lua", null, null, null], "val": [2, 3, 4, 9, 12, null, null, null]}], "dirSlots": [0]}, {"uid": 3, "localDepth": 1, "used": 6, "growthLeft": 8, "groups": [{"ctrl": [{"h2": 69}, {"h2": 21}, "empty", "empty", "empty", "empty", "empty", "empty"], "key": ["go", "php", null, null, null, null, null, null], "val": [1, 11, null, null, null, null, null, null]}, {"ctrl": [{"h2": 14}, {"h2": 60}, {"h2": 7}, {"h2": 106}, "empty", "empty", "empty", "empty"], "key": ["swift", "kotlin", "perl", "zig", null, null, null, null], "val": [7, 8, 10, 15, null, null, null, null]}], "dirSlots": [1]}], "used": 15}}, {"key": "nonexistent", "tableUid": 2, "groupIdx": 0, "op": "get", "type": "probe-group", "snapshot": {"mode": "table", "globalDepth": 1, "dirLen": 2, "tables": [{"uid": 2, "localDepth": 1, "used": 9, "growthLeft": 5, "groups": [{"ctrl": [{"h2": 84}, {"h2": 3}, {"h2": 125}, {"h2": 9}, "empty", "empty", "empty", "empty"], "key": ["c", "ruby", "haskell", "elixir", null, null, null, null], "val": [5, 6, 13, 14, null, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 21}, {"h2": 12}, "empty", "empty", "empty"], "key": ["python", "rust", "java", "scala", "lua", null, null, null], "val": [2, 3, 4, 9, 12, null, null, null]}], "dirSlots": [0]}, {"uid": 3, "localDepth": 1, "used": 6, "growthLeft": 8, "groups": [{"ctrl": [{"h2": 69}, {"h2": 21}, "empty", "empty", "empty", "empty", "empty", "empty"], "key": ["go", "php", null, null, null, null, null, null], "val": [1, 11, null, null, null, null, null, null]}, {"ctrl": [{"h2": 14}, {"h2": 60}, {"h2": 7}, {"h2": 106}, "empty", "empty", "empty", "empty"], "key": ["swift", "kotlin", "perl", "zig", null, null, null, null], "val": [7, 8, 10, 15, null, null, null, null]}], "dirSlots": [1]}], "used": 15}}, {"key": "nonexistent", "tableUid": 2, "groupIdx": 0, "type": "get-miss", "snapshot": {"mode": "table", "globalDepth": 1, "dirLen": 2, "tables": [{"uid": 2, "localDepth": 1, "used": 9, "growthLeft": 5, "groups": [{"ctrl": [{"h2": 84}, {"h2": 3}, {"h2": 125}, {"h2": 9}, "empty", "empty", "empty", "empty"], "key": ["c", "ruby", "haskell", "elixir", null, null, null, null], "val": [5, 6, 13, 14, null, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 21}, {"h2": 12}, "empty", "empty", "empty"], "key": ["python", "rust", "java", "scala", "lua", null, null, null], "val": [2, 3, 4, 9, 12, null, null, null]}], "dirSlots": [0]}, {"uid": 3, "localDepth": 1, "used": 6, "growthLeft": 8, "groups": [{"ctrl": [{"h2": 69}, {"h2": 21}, "empty", "empty", "empty", "empty", "empty", "empty"], "key": ["go", "php", null, null, null, null, null, null], "val": [1, 11, null, null, null, null, null, null]}, {"ctrl": [{"h2": 14}, {"h2": 60}, {"h2": 7}, {"h2": 106}, "empty", "empty", "empty", "empty"], "key": ["swift", "kotlin", "perl", "zig", null, null, null, null], "val": [7, 8, 10, 15, null, null, null, null]}], "dirSlots": [1]}], "used": 15}}, {"key": "ruby", "tableUid": 2, "groupIdx": 0, "slot": 1, "tombstone": false, "phase": "table", "type": "delete", "snapshot": {"mode": "table", "globalDepth": 1, "dirLen": 2, "tables": [{"uid": 2, "localDepth": 1, "used": 8, "growthLeft": 6, "groups": [{"ctrl": [{"h2": 84}, "empty", {"h2": 125}, {"h2": 9}, "empty", "empty", "empty", "empty"], "key": ["c", null, "haskell", "elixir", null, null, null, null], "val": [5, null, 13, 14, null, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 21}, {"h2": 12}, "empty", "empty", "empty"], "key": ["python", "rust", "java", "scala", "lua", null, null, null], "val": [2, 3, 4, 9, 12, null, null, null]}], "dirSlots": [0]}, {"uid": 3, "localDepth": 1, "used": 6, "growthLeft": 8, "groups": [{"ctrl": [{"h2": 69}, {"h2": 21}, "empty", "empty", "empty", "empty", "empty", "empty"], "key": ["go", "php", null, null, null, null, null, null], "val": [1, 11, null, null, null, null, null, null]}, {"ctrl": [{"h2": 14}, {"h2": 60}, {"h2": 7}, {"h2": 106}, "empty", "empty", "empty", "empty"], "key": ["swift", "kotlin", "perl", "zig", null, null, null, null], "val": [7, 8, 10, 15, null, null, null, null]}], "dirSlots": [1]}], "used": 14}}, {"key": "ruby", "h1": 2395303000769190, "h2": 3, "phase": "table", "dirIdx": 0, "tableUid": 2, "op": "get", "type": "hash", "snapshot": {"mode": "table", "globalDepth": 1, "dirLen": 2, "tables": [{"uid": 2, "localDepth": 1, "used": 8, "growthLeft": 6, "groups": [{"ctrl": [{"h2": 84}, "empty", {"h2": 125}, {"h2": 9}, "empty", "empty", "empty", "empty"], "key": ["c", null, "haskell", "elixir", null, null, null, null], "val": [5, null, 13, 14, null, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 21}, {"h2": 12}, "empty", "empty", "empty"], "key": ["python", "rust", "java", "scala", "lua", null, null, null], "val": [2, 3, 4, 9, 12, null, null, null]}], "dirSlots": [0]}, {"uid": 3, "localDepth": 1, "used": 6, "growthLeft": 8, "groups": [{"ctrl": [{"h2": 69}, {"h2": 21}, "empty", "empty", "empty", "empty", "empty", "empty"], "key": ["go", "php", null, null, null, null, null, null], "val": [1, 11, null, null, null, null, null, null]}, {"ctrl": [{"h2": 14}, {"h2": 60}, {"h2": 7}, {"h2": 106}, "empty", "empty", "empty", "empty"], "key": ["swift", "kotlin", "perl", "zig", null, null, null, null], "val": [7, 8, 10, 15, null, null, null, null]}], "dirSlots": [1]}], "used": 14}}, {"key": "ruby", "tableUid": 2, "groupIdx": 0, "op": "get", "type": "probe-group", "snapshot": {"mode": "table", "globalDepth": 1, "dirLen": 2, "tables": [{"uid": 2, "localDepth": 1, "used": 8, "growthLeft": 6, "groups": [{"ctrl": [{"h2": 84}, "empty", {"h2": 125}, {"h2": 9}, "empty", "empty", "empty", "empty"], "key": ["c", null, "haskell", "elixir", null, null, null, null], "val": [5, null, 13, 14, null, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 21}, {"h2": 12}, "empty", "empty", "empty"], "key": ["python", "rust", "java", "scala", "lua", null, null, null], "val": [2, 3, 4, 9, 12, null, null, null]}], "dirSlots": [0]}, {"uid": 3, "localDepth": 1, "used": 6, "growthLeft": 8, "groups": [{"ctrl": [{"h2": 69}, {"h2": 21}, "empty", "empty", "empty", "empty", "empty", "empty"], "key": ["go", "php", null, null, null, null, null, null], "val": [1, 11, null, null, null, null, null, null]}, {"ctrl": [{"h2": 14}, {"h2": 60}, {"h2": 7}, {"h2": 106}, "empty", "empty", "empty", "empty"], "key": ["swift", "kotlin", "perl", "zig", null, null, null, null], "val": [7, 8, 10, 15, null, null, null, null]}], "dirSlots": [1]}], "used": 14}}, {"key": "ruby", "tableUid": 2, "groupIdx": 0, "type": "get-miss", "snapshot": {"mode": "table", "globalDepth": 1, "dirLen": 2, "tables": [{"uid": 2, "localDepth": 1, "used": 8, "growthLeft": 6, "groups": [{"ctrl": [{"h2": 84}, "empty", {"h2": 125}, {"h2": 9}, "empty", "empty", "empty", "empty"], "key": ["c", null, "haskell", "elixir", null, null, null, null], "val": [5, null, 13, 14, null, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 21}, {"h2": 12}, "empty", "empty", "empty"], "key": ["python", "rust", "java", "scala", "lua", null, null, null], "val": [2, 3, 4, 9, 12, null, null, null]}], "dirSlots": [0]}, {"uid": 3, "localDepth": 1, "used": 6, "growthLeft": 8, "groups": [{"ctrl": [{"h2": 69}, {"h2": 21}, "empty", "empty", "empty", "empty", "empty", "empty"], "key": ["go", "php", null, null, null, null, null, null], "val": [1, 11, null, null, null, null, null, null]}, {"ctrl": [{"h2": 14}, {"h2": 60}, {"h2": 7}, {"h2": 106}, "empty", "empty", "empty", "empty"], "key": ["swift", "kotlin", "perl", "zig", null, null, null, null], "val": [7, 8, 10, 15, null, null, null, null]}], "dirSlots": [1]}], "used": 14}}, {"key": "swift", "h1": 127079965314046853, "h2": 14, "phase": "table", "dirIdx": 1, "tableUid": 3, "op": "get", "type": "hash", "snapshot": {"mode": "table", "globalDepth": 1, "dirLen": 2, "tables": [{"uid": 2, "localDepth": 1, "used": 8, "growthLeft": 6, "groups": [{"ctrl": [{"h2": 84}, "empty", {"h2": 125}, {"h2": 9}, "empty", "empty", "empty", "empty"], "key": ["c", null, "haskell", "elixir", null, null, null, null], "val": [5, null, 13, 14, null, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 21}, {"h2": 12}, "empty", "empty", "empty"], "key": ["python", "rust", "java", "scala", "lua", null, null, null], "val": [2, 3, 4, 9, 12, null, null, null]}], "dirSlots": [0]}, {"uid": 3, "localDepth": 1, "used": 6, "growthLeft": 8, "groups": [{"ctrl": [{"h2": 69}, {"h2": 21}, "empty", "empty", "empty", "empty", "empty", "empty"], "key": ["go", "php", null, null, null, null, null, null], "val": [1, 11, null, null, null, null, null, null]}, {"ctrl": [{"h2": 14}, {"h2": 60}, {"h2": 7}, {"h2": 106}, "empty", "empty", "empty", "empty"], "key": ["swift", "kotlin", "perl", "zig", null, null, null, null], "val": [7, 8, 10, 15, null, null, null, null]}], "dirSlots": [1]}], "used": 14}}, {"key": "swift", "tableUid": 3, "groupIdx": 1, "op": "get", "type": "probe-group", "snapshot": {"mode": "table", "globalDepth": 1, "dirLen": 2, "tables": [{"uid": 2, "localDepth": 1, "used": 8, "growthLeft": 6, "groups": [{"ctrl": [{"h2": 84}, "empty", {"h2": 125}, {"h2": 9}, "empty", "empty", "empty", "empty"], "key": ["c", null, "haskell", "elixir", null, null, null, null], "val": [5, null, 13, 14, null, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 21}, {"h2": 12}, "empty", "empty", "empty"], "key": ["python", "rust", "java", "scala", "lua", null, null, null], "val": [2, 3, 4, 9, 12, null, null, null]}], "dirSlots": [0]}, {"uid": 3, "localDepth": 1, "used": 6, "growthLeft": 8, "groups": [{"ctrl": [{"h2": 69}, {"h2": 21}, "empty", "empty", "empty", "empty", "empty", "empty"], "key": ["go", "php", null, null, null, null, null, null], "val": [1, 11, null, null, null, null, null, null]}, {"ctrl": [{"h2": 14}, {"h2": 60}, {"h2": 7}, {"h2": 106}, "empty", "empty", "empty", "empty"], "key": ["swift", "kotlin", "perl", "zig", null, null, null, null], "val": [7, 8, 10, 15, null, null, null, null]}], "dirSlots": [1]}], "used": 14}}, {"key": "swift", "val": 7, "tableUid": 3, "groupIdx": 1, "slot": 0, "type": "get-hit", "snapshot": {"mode": "table", "globalDepth": 1, "dirLen": 2, "tables": [{"uid": 2, "localDepth": 1, "used": 8, "growthLeft": 6, "groups": [{"ctrl": [{"h2": 84}, "empty", {"h2": 125}, {"h2": 9}, "empty", "empty", "empty", "empty"], "key": ["c", null, "haskell", "elixir", null, null, null, null], "val": [5, null, 13, 14, null, null, null, null]}, {"ctrl": [{"h2": 34}, {"h2": 110}, {"h2": 111}, {"h2": 21}, {"h2": 12}, "empty", "empty", "empty"], "key": ["python", "rust", "java", "scala", "lua", null, null, null], "val": [2, 3, 4, 9, 12, null, null, null]}], "dirSlots": [0]}, {"uid": 3, "localDepth": 1, "used": 6, "growthLeft": 8, "groups": [{"ctrl": [{"h2": 69}, {"h2": 21}, "empty", "empty", "empty", "empty", "empty", "empty"], "key": ["go", "php", null, null, null, null, null, null], "val": [1, 11, null, null, null, null, null, null]}, {"ctrl": [{"h2": 14}, {"h2": 60}, {"h2": 7}, {"h2": 106}, "empty", "empty", "empty", "empty"], "key": ["swift", "kotlin", "perl", "zig", null, null, null, null], "val": [7, 8, 10, 15, null, null, null, null]}], "dirSlots": [1]}], "used": 14}}];
+var idx = -1;
+var playTimer = null;
+
+var dirStrip = document.getElementById('dirStrip');
+var tablesRow = document.getElementById('tablesRow');
+var simLog = document.getElementById('simLog');
+
+function fmtHex(n, digits){
+  var s = n.toString(16);
+  if(s.length > digits) s = s.slice(-digits);
+  while(s.length < digits) s = '0' + s;
+  return '0x' + s;
+}
+
+function ctrlState(c){
+  if(c === 'empty') return {state:'empty'};
+  if(c === 'deleted') return {state:'deleted'};
+  return {state:'full', h2: c.h2};
+}
+
+var SLOT_EVENT_TYPES = ['place', 'update', 'get-hit', 'get-miss', 'delete', 'delete-miss', 'probe-group'];
+
+function highlightFor(e, snap){
+  var hl = {tableUid: null, groupIdx: null};
+  if(SLOT_EVENT_TYPES.indexOf(e.type) === -1) return hl;
+  if(snap.mode === 'small'){
+    // small-phase events never carry tableUid/groupIdx (there's only one group)
+    hl.tableUid = 'small';
+    hl.groupIdx = 0;
+  } else {
+    hl.tableUid = e.tableUid !== undefined ? e.tableUid : null;
+    hl.groupIdx = e.groupIdx !== undefined ? e.groupIdx : null;
+  }
+  return hl;
+}
+
+function renderSlotCell(cellData, hl, tableUid, groupIdx, slotIdx){
+  var div = document.createElement('div');
+  div.className = 'slot-cell';
+  var cs = ctrlState(cellData.ctrl);
+  div.dataset.state = cs.state;
+  var isHl = hl.tableUid === tableUid && hl.groupIdx === groupIdx;
+  div.dataset.hl = isHl ? 'true' : 'false';
+  if(cs.state === 'full'){
+    var kEl = document.createElement('div');
+    kEl.className = 'slot-key';
+    kEl.textContent = cellData.key;
+    var hEl = document.createElement('div');
+    hEl.className = 'slot-h2';
+    hEl.textContent = 'h2=' + fmtHex(cs.h2, 2);
+    div.appendChild(kEl); div.appendChild(hEl);
+  } else if(cs.state === 'deleted'){
+    var x = document.createElement('div');
+    x.className = 'slot-empty-mark';
+    x.textContent = '† 墓碑';
+    div.appendChild(x);
+  } else {
+    var dash = document.createElement('div');
+    dash.className = 'slot-empty-mark';
+    dash.textContent = '·';
+    div.appendChild(dash);
+  }
+  return div;
+}
+
+function renderTableCard(label, groups, meta, tableUid, hl){
+  var card = document.createElement('div');
+  card.className = 'table-card';
+  var head = document.createElement('div');
+  head.className = 'table-card-head';
+  var title = document.createElement('span');
+  title.className = 'table-card-title';
+  title.textContent = label;
+  var metaEl = document.createElement('span');
+  metaEl.className = 'table-card-meta';
+  metaEl.textContent = meta;
+  head.appendChild(title); head.appendChild(metaEl);
+  card.appendChild(head);
+  groups.forEach(function(g, gi){
+    var row = document.createElement('div');
+    row.className = 'group-row';
+    var idxLabel = document.createElement('div');
+    idxLabel.className = 'group-idx';
+    idxLabel.textContent = '分组 ' + gi;
+    var slotsRow = document.createElement('div');
+    slotsRow.className = 'slots-row';
+    for(var i=0;i<g.ctrl.length;i++){
+      var cellData = {ctrl: g.ctrl[i], key: g.key[i], val: g.val[i]};
+      slotsRow.appendChild(renderSlotCell(cellData, hl, tableUid, gi, i));
+    }
+    row.appendChild(idxLabel); row.appendChild(slotsRow);
+    card.appendChild(row);
+  });
+  return card;
+}
+
+function render(){
+  var snap = idx >= 0 ? SIM[idx].snapshot : {mode:'small', group:null, used:0};
+  var e = idx >= 0 ? SIM[idx] : null;
+  var hl = e ? highlightFor(e, snap) : {tableUid:null, groupIdx:null};
+
+  dirStrip.querySelectorAll('.dir-box').forEach(function(el){ el.remove(); });
+  var emptyNote = document.getElementById('dirEmptyNote');
+
+  tablesRow.innerHTML = '';
+
+  if(snap.mode === 'small'){
+    emptyNote.style.display = '';
+    tablesRow.dataset.count = '1';
+    if(snap.group){
+      tablesRow.appendChild(renderTableCard('小 map(裸分组)', [snap.group], 'used=' + snap.used, 'small', hl));
+    }
+  } else {
+    emptyNote.style.display = 'none';
+    for(var i=0;i<snap.dirLen;i++){
+      var owner = snap.tables.find(function(t){ return t.dirSlots.indexOf(i) !== -1; });
+      var box = document.createElement('div');
+      box.className = 'dir-box';
+      box.textContent = 'T' + (owner ? owner.uid : '?') + ' [' + i + ']';
+      box.dataset.active = (owner && e && e.dirIdx === i) ? 'true' : 'false';
+      dirStrip.appendChild(box);
+    }
+    tablesRow.dataset.count = String(Math.min(snap.tables.length, 2));
+    snap.tables.forEach(function(t){
+      var label = 'Table #' + t.uid + '  (localDepth=' + t.localDepth + ')';
+      var meta = 'used=' + t.used + ' growthLeft=' + t.growthLeft;
+      tablesRow.appendChild(renderTableCard(label, t.groups, meta, t.uid, hl));
+    });
+  }
+
+  var hashKeyVal = document.getElementById('hashKeyVal');
+  var hashH1Val = document.getElementById('hashH1Val');
+  var hashH2Val = document.getElementById('hashH2Val');
+  if(e && e.type === 'hash'){
+    hashKeyVal.textContent = e.key;
+    hashH1Val.textContent = fmtHex(e.h1, 12) + '…';
+    hashH2Val.textContent = fmtHex(e.h2, 2);
+  } else if(idx < 0){
+    hashKeyVal.textContent = '—'; hashH1Val.textContent = '—'; hashH2Val.textContent = '—';
+  }
+
+  var formulaEl = document.getElementById('simFormula');
+  var descEl = document.getElementById('simDesc');
+  if(idx < 0){
+    formulaEl.textContent = '—';
+    descEl.innerHTML = '点击"下一步"或"播放",从空 map 开始插入。';
+  } else {
+    formulaEl.textContent = formulaFor(e);
+    descEl.innerHTML = descFor(e);
+  }
+
+  document.getElementById('simProgress').textContent = (idx+1) + ' / ' + SIM.length;
+  document.getElementById('btnPrev').disabled = idx < 0;
+  document.getElementById('btnNext').disabled = idx >= SIM.length - 1;
+
+  var items = simLog.children;
+  for(var i2=0;i2<items.length;i2++){
+    items[i2].setAttribute('data-active', i2 === idx ? 'true' : 'false');
+  }
+  if(idx >= 0 && items[idx]) items[idx].scrollIntoView({block:'nearest'});
+}
+
+function formulaFor(e){
+  if(e.type === 'init-small') return 'newGroups(1)  // 空 map,建一个裸分组';
+  if(e.type === 'hash') return 'hash(' + JSON.stringify(e.key) + ') → h1=' + fmtHex(e.h1,12) + '…, h2=' + fmtHex(e.h2,2);
+  if(e.type === 'place') return (e.phase==='small' ? 'putSlotSmall' : 'uncheckedPutSlot') + '(' + JSON.stringify(e.key) + ') → slot ' + e.slot;
+  if(e.type === 'update') return 'update(' + JSON.stringify(e.key) + ') → slot ' + e.slot;
+  if(e.type === 'promote') return 'growToTable(capacity=' + e.capacity + ')';
+  if(e.type === 'probe-group') return (e.op==='get'?'Get':'Put') + ': probe group ' + e.groupIdx + ' of table #' + e.tableUid;
+  if(e.type === 'split') return 'table.split() → #' + e.leftUid + ' + #' + e.rightUid;
+  if(e.type === 'get-hit') return 'Get(' + JSON.stringify(e.key) + ') = ' + e.val;
+  if(e.type === 'get-miss') return 'Get(' + JSON.stringify(e.key) + ') → not found';
+  if(e.type === 'delete') return 'Delete(' + JSON.stringify(e.key) + ')  tombstone=' + e.tombstone;
+  if(e.type === 'delete-miss') return 'Delete(' + JSON.stringify(e.key) + ') → not found';
+  return '—';
+}
+
+function descFor(e){
+  if(e.type === 'init-small') return '这是一个全新的空 map。还没有目录,连一个分组都是插入第一个 key 时才会创建。';
+  if(e.type === 'hash') return '计算 <b>' + e.key + '</b> 的哈希值,拆成 H1(决定去哪个分组探测)和 H2(存进控制字节当指纹)两部分。';
+  if(e.type === 'place') return e.phase === 'small'
+    ? '把 <b>' + e.key + '</b> 放进裸分组的第 ' + e.slot + ' 号槽位,控制字节设成它的 H2。'
+    : '沿探测序列找到第一个空/已删除的槽位(table #' + e.tableUid + ' 分组 ' + e.groupIdx + ' 的第 ' + e.slot + ' 号),放入 <b>' + e.key + '</b>。';
+  if(e.type === 'update') return 'key <b>' + e.key + '</b> 已经存在,直接原地更新它的值,不需要新占一个槽位。';
+  if(e.type === 'promote') return '裸分组的 7 个槽位已经用满(留 1 个空槽位保证探测能终止),触发升级:新建一个容量 ' + e.capacity + ' 的正式 table,把已有的 ' + e.entries.length + ' 个 key 重新哈希搬进去。';
+  if(e.type === 'probe-group') return (e.op === 'get' ? '查找' : '插入') + ' <b>' + e.key + '</b> 时探测到 table #' + e.tableUid + ' 的分组 ' + e.groupIdx + ':比较控制字节里所有 H2 == 目标指纹 的槽位。';
+  if(e.type === 'split') return 'table #' + e.oldUid + ' 的 growthLeft 归零,触发分裂:按多一位哈希拆成 table #' + e.leftUid + '(留下 ' + e.leftKeys.length + ' 个 key)和 #' + e.rightUid + '(分走 ' + e.rightKeys.length + ' 个 key)。' + (e.newDirLen > 1 ? ' 目录扩大到了 ' + e.newDirLen + ' 项(globalDepth=' + e.newGlobalDepth + ')。' : '');
+  if(e.type === 'get-hit') return '沿探测序列找到 H2 指纹匹配、且 key 真的相等的槽位,命中,值是 <b>' + e.val + '</b>。';
+  if(e.type === 'get-miss') return '探测到一个真正的<b>空槽位</b>,说明这条探测链到此为止,key 不存在。';
+  if(e.type === 'delete') return e.tombstone
+    ? '删除 <b>' + e.key + '</b>:它所在的分组当时已经<b>全满</b>,直接标记成空会切断经过它的探测链,所以标记成<b>墓碑</b>(仍然占位,但值已清空)。'
+    : '删除 <b>' + e.key + '</b>:它所在的分组还有空槽位,可以放心直接标记成<b>空</b>,不需要墓碑。';
+  if(e.type === 'delete-miss') return 'key <b>' + e.key + '</b> 不存在,删除是空操作。';
+  return '';
+}
+
+function labelForEvent(e){
+  if(e.type === 'init-small') return '创建空 map';
+  if(e.type === 'hash') return 'hash(' + e.key + ')';
+  if(e.type === 'place') return '放入 ' + e.key;
+  if(e.type === 'update') return '更新 ' + e.key;
+  if(e.type === 'promote') return '升级为正式 table';
+  if(e.type === 'probe-group') return '探测分组 ' + e.groupIdx + '(table #' + e.tableUid + ')';
+  if(e.type === 'split') return 'table #' + e.oldUid + ' 分裂';
+  if(e.type === 'get-hit') return 'Get ' + e.key + ' 命中';
+  if(e.type === 'get-miss') return 'Get ' + e.key + ' 未命中';
+  if(e.type === 'delete') return '删除 ' + e.key + (e.tombstone ? '(墓碑)' : '');
+  if(e.type === 'delete-miss') return '删除 ' + e.key + '(不存在)';
+  return '';
+}
+
+function buildLog(){
+  simLog.innerHTML = '';
+  SIM.forEach(function(e,i){
+    var item = document.createElement('div');
+    item.className = 'log-item';
+    item.setAttribute('data-active','false');
+    var idxSpan = document.createElement('span');
+    idxSpan.className = 'log-idx';
+    idxSpan.textContent = i+1;
+    var txt = document.createElement('span');
+    txt.textContent = labelForEvent(e);
+    item.appendChild(idxSpan); item.appendChild(txt);
+    item.addEventListener('click', function(ii){ return function(){ stopPlay(); idx = ii; render(); }; }(i));
+    simLog.appendChild(item);
+  });
+}
+
+function goTo(i){
+  idx = Math.max(-1, Math.min(SIM.length-1, i));
+  render();
+}
+function stopPlay(){
+  if(playTimer){ clearInterval(playTimer); playTimer = null; }
+  document.getElementById('btnPlay').textContent = '播放';
+}
+document.getElementById('btnNext').addEventListener('click', function(){ stopPlay(); goTo(idx+1); });
+document.getElementById('btnPrev').addEventListener('click', function(){ stopPlay(); goTo(idx-1); });
+document.getElementById('btnReset').addEventListener('click', function(){ stopPlay(); goTo(-1); });
+document.getElementById('btnPlay').addEventListener('click', function(){
+  if(playTimer){ stopPlay(); return; }
+  if(idx >= SIM.length - 1) goTo(-1);
+  document.getElementById('btnPlay').textContent = '暂停';
+  var speed = parseInt(document.getElementById('simSpeed').value, 10);
+  playTimer = setInterval(function(){
+    if(idx >= SIM.length - 1){ stopPlay(); return; }
+    goTo(idx+1);
+  }, speed);
+});
+document.getElementById('simSpeed').addEventListener('change', function(){
+  if(playTimer){ stopPlay(); document.getElementById('btnPlay').click(); }
+});
+
+buildLog();
+goTo(-1);
+</script>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+</body>
+</html>

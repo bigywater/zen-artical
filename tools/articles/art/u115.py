@@ -1,0 +1,17 @@
+from lib import *
+S = SS('u115')
+steps = [
+    step("胖指针的大小:&u8 是 8 字节;&[u8]、&str、&dyn Debug、*const dyn Debug、Box<dyn Debug> 都是 16 字节 —— 数据地址 + 一个元数据。元数据在切片和 str 里是长度,在 dyn Trait 里是 vtable 指针。", t=tl(S(1)), done=lidx(S(1), '&u8 8'), kv=KV([['&T', '8 字节'], ['&[T] / &str / &dyn Trait', '16 字节 = 地址 + 元数据']], ['&[T] / &str / &dyn Trait'])),
+    step("拆开真实的胖指针:&v[1..4] 的数据地址 = v 的地址 + 1(true),长度元数据 = 3;&str \"héllo\" 的元数据是 6 —— 字节数而不是字符数(5 个字符,é 占 2 字节)。&dyn Debug 转成 *const () 之后只剩 8 字节的数据地址,vtable 信息丢掉了。", t=tl(S(1)), done=lidx(S(1), '&v[1..4]', '&str 的元数据', '转成 *const ()'), kv=KV([['切片的元数据', '元素个数 3'], ['str 的元数据', '字节数 6'], ['转成 *const ()', '丢掉元数据']], ['str 的元数据'])),
+    step("vtable 与类型绑定,不与对象绑定:两个 A 对象的 &dyn Sub 共享同一个 vtable(true),A 与 B 的 vtable 不同(false),数据地址当然不同。", t=tl(S(2)), done=lidx(S(2), '两个 A'), kv=KV([['同一具体类型', '共享 vtable'], ['不同具体类型', 'vtable 不同']], ['同一具体类型'])),
+    step("trait 上转型(&dyn Sub → &dyn Super,当前稳定):数据地址不变,在这个例子里 vtable 指针也没变(false)—— Super 是 Sub 的第一个超 trait,它的方法排在 Sub 的 vtable 前面,不需要换表。通过 &dyn Super 调用 name() 得到 \"A\"。这是一个例子的观察,不代表所有上转型都不换 vtable(多个超 trait 的情形没有验证)。", t=tl(S(2)), mark=lidx(S(2), '上转型'), kv=KV([['数据地址', '不变'], ['vtable 指针', '这个例子里不变']], ['vtable 指针'])),
+    step("比较 dyn 指针:同一个对象的两个 &dyn T,ptr::eq(a, b) = true;先转成 *const () 只比数据地址,也是 true。ptr::eq 对胖指针同时比较地址和 vtable —— 如果同一类型的 vtable 在不同编译单元被复制,地址相同的指针也可能不等,所以只想比对象身份时转成 *const () 更稳妥(这里的情形没有复现出差异)。", t=tl(S(3)), done=lidx(S(3), 'ptr::eq', '按数据地址'), kv=KV([['ptr::eq(胖指针)', '比较地址 + 元数据'], ['转成 *const ()', '只比数据地址']], ['转成 *const ()'])),
+    step("通过 vtable 在运行时取到具体类型的信息:Vec<Box<dyn Animal>> 里,size_of_val 对 Cat 得 0、Elephant 得 100、Noisy 得 16(align 8);离开作用域时 Noisy 的 Drop 通过 vtable 的 drop 槽被调用,打印「Noisy(tiger) 的 Drop 通过 vtable 被调用」。", t=tl(S(4)), done=lidx(S(4), 'cat', 'elephant', 'tiger', 'Noisy(tiger)'), b=bars([['Cat', 0, '0 B'], ['Elephant', 100, '100 B'], ['Noisy', 16, '16 B']], 104, done=[0, 1, 2]), kv=KV([['size_of_val', '运行时从 vtable 取'], ['drop', 'vtable 的 drop 槽']], ['drop'])),
+    step("dyn Any:Vec<Box<dyn Any>> 里放 i32、&str、String、f64,downcast_ref 逐个比对 TypeId 还原:5、\"str\"、\"owned\";最后一个 f64 都没匹配上,(**it).type_id() == TypeId::of::<f64>() 为 true。类型信息来自 vtable 里的 type_id 函数。", t=tl(S(5)), done=lidx(S(5), 'i32 = 5', '&str', 'String', '未知类型'), kv=KV([['downcast_ref::<T>()', '比对 TypeId'], ['TypeId', '来自 vtable']], ['TypeId'])),
+]
+A = mkart('u115', 115, 'Rust,trait object,胖指针,vtable,真实验证,动画演示',
+    '用 transmute 与 size_of_val 验证 trait object 的胖指针:dyn / 切片 / str 都是 16 字节(地址 + 元数据:vtable 或长度);转 *const () 丢元数据;vtable 与具体类型绑定;trait 上转型的数据地址与 vtable 观察;ptr::eq 比较;size_of_val 与 Drop 经 vtable;dyn Any 的 TypeId 向下转型。',
+    '“trait object 是胖指针”这句话到底指什么?这篇把胖指针拆开,看地址与元数据,再验证 vtable 与类型的对应关系、上转型、指针比较、size_of_val、Drop 和 Any 向下转型都是怎么靠 vtable 实现的。',
+    [('16 字节', '&dyn Trait、&[T]、&str 的大小(&T 是 8)'), ('6 字节', '&str \"héllo\" 的长度元数据(5 个字符)'), ('共享', '同一具体类型的所有 &dyn 共享同一个 vtable')],
+    [('胖指针的元数据', '<p>trait object 与动态分发的基础见<a href="rust-trait-object-dynamic-dispatch.html">Trait Object 与动态分发</a>(那篇里已经读过 vtable 的布局)。</p>'), ('同一类型共享 vtable', None), ('比较 dyn 指针', None), ('运行时才知道的信息', None), ('dyn Any', '<p>切片的胖指针见<a href="rust-slice-fat-pointer.html">Slice 的胖指针</a>。</p>')],
+    steps, [ENV_U + '。transmute 拆胖指针依赖当前布局(元数据是第二个机器字),不是稳定保证', '没有验证:多个超 trait 时上转型是否换 vtable、不同 crate 里 vtable 被复制后 ptr::eq 的表现、dyn Trait + Send 与 dyn Trait 的 vtable 是否相同、vtable 内存布局(见 Trait Object 一篇)'], 'Trait Object 胖指针')

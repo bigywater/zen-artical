@@ -1,0 +1,16 @@
+from lib import *
+S = SS('f42')
+R = J('f42'); m = R['mem']; sm = m['流式(生成器,每块 1 MB)']; bg = m['一次性 bytes(300 MB)']; al = R['all']
+steps = [
+    step(f"真实 gunicorn 下的流式响应:/slow 的生成器每 0.2 秒 yield 一块,响应头是 Transfer-Encoding: chunked、Connection: close,没有 Content-Length;5 个 chunk 到达客户端的时间是 0.0、0.2、0.4、0.61、0.81 秒(第一块立刻到达)。对比 /all(先在内存里拼好 5 块再返回):响应头是 Content-Length: 35,收到响应头就用了 {al[0]} 秒,正文一次性到达。", t=tl(S(1)), done=lidx(S(1), '/slow 每个 chunk', '响应头:'), mark=lidx(S(1), '/all(先在内存里'), kv=KV([['/slow', 'chunked,第一块 0.0 秒到达'], ['/all', f'Content-Length: 35,{al[0]} 秒后才有响应']], ['/slow'])),
+    step("用 curl --raw -i 看线路上的格式:状态行与头(Transfer-Encoding: chunked)之后,每块的格式是「十六进制长度\\r\\n内容\\r\\n」(这里是 7\\r\\nchunk0\\n\\r\\n),最后以 0\\r\\n\\r\\n 结束。", t=tl(S(2)), done=lidx(S(2), 'Transfer-Encoding: chunked', '7\\r\\n'), mark=lidx(S(2), '0\\r\\n'), kv=KV([['每块', '长度(十六进制)+ 内容'], ['结束', '0\\r\\n\\r\\n']], ['结束'])),
+    step("stream_with_context:生成器里访问 request。直接 Response(gen()) 时,第一块 start; 正常发出,第二块访问 request.path 时请求上下文已经被弹出,服务器日志里出现 Error handling request 与 RuntimeError(unbound),客户端只收到 start;;用 Response(stream_with_context(gen())) 包装后两块都正常:start;path=/ctx-good。", t=tl(S(3)), done=lidx(S(3), 'GET /ctx-good'), mark=lidx(S(3), 'GET /ctx-bad', '服务器日志里的错误行'), kv=KV([['不包装', '第二块时 RuntimeError,响应被截断'], ['stream_with_context', '请求上下文保持到流结束']], ['stream_with_context'])),
+    step(f"内存(下载 300 MB,gunicorn 单 worker,每 20 ms 采样 RSS):流式生成(每块 1 MB)峰值约 {sm[0]} MiB(基线 {R['base']} MiB);先造出 300 MB 的 bytes 再返回峰值约 {bg[0]} MiB。耗时分别是 {sm[1]} 与 {bg[1]}(本机回环网络)。大响应用生成器,内存几乎不涨。", t=tl(S(4)), b=bars([['流式(每块 1 MB)', sm[0], f'{sm[0]} MiB'], ['一次性 bytes', bg[0], f'{bg[0]} MiB']], bg[0], done=[0, 1]), kv=KV([['流式', f'{sm[0]} MiB'], ['一次性 300 MB', f'{bg[0]} MiB'], ['基线', f"{R['base']} MiB"]], ['一次性 300 MB'])),
+    step("客户端中途断开:curl --max-time 0.5 在 0.5 秒时退出(退出码 28)后,服务器端的生成器收到 GeneratorExit,先记录「generator closed by server (client disconnected)」,finally 块也执行了(记录「finally 执行了」)。流式响应里的资源释放要放在 finally 里。", t=tl(S(5)), done=lidx(S(5), 'curl --max-time 0.5'), kv=KV([['客户端断开', '生成器收到 GeneratorExit'], ['finally', '会执行']], ['finally'])),
+]
+A = mkartf('f42', 42, 'Flask,流式响应,stream_with_context,chunked,真实验证,动画演示',
+    f'用真实 gunicorn 验证流式响应:生成器返回 chunked、第一块立刻到达(对比拼好再返回要等 {al[0]} 秒);线路上的分块格式;stream_with_context 保住请求上下文;300 MB 响应流式峰值内存约 {sm[0]} MiB、一次性约 {bg[0]} MiB;客户端断开时生成器的 finally 会执行。',
+    '大文件、实时日志、逐行输出怎么返回?生成器响应在线路上是什么样?为什么生成器里访问 request 会出错?客户端断开会发生什么?这篇起真实的 gunicorn 把这些都测一遍。',
+    [(f'{sm[0]} vs {bg[0]} MiB', '300 MB 响应:流式 vs 一次性构造的 worker 峰值内存'), ('chunked', '生成器响应的传输方式(没有 Content-Length)'), ('GeneratorExit', '客户端断开时生成器收到的异常')],
+    [('流式响应的头与到达时间', '<p>上一篇:<a href="flask-custom-response-class.html">自定义 Response Class</a>;下一篇:<a href="flask-send-file.html">send_file() 与 send_from_directory()</a>;流式 JSON:<a href="flask-streaming-json.html">Streaming JSON</a>;Server-Sent Events:<a href="flask-server-sent-events.html">Server-Sent Events</a>。</p>'), ('chunked 的线路格式', None), ('stream_with_context', None), ('内存对比', None), ('客户端中途断开', None)],
+    steps, [ENV_F + '。gunicorn 默认的同步 worker;ps 采样的 RSS 只是粗略估计', '没有验证:gthread/gevent worker 下的流式行为与并发、Nginx 反向代理的缓冲(proxy_buffering)对流式的影响(见第 174 篇)、HTTP/2 下的分块、gunicorn worker timeout 对长时间流的影响(见第 166 篇)'], '流式响应')

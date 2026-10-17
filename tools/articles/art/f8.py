@@ -1,0 +1,16 @@
+from lib import *
+S = SS('f8')
+R = J('f8'); sc = R['sc']
+steps = [
+    step("同一组钩子(2 个 before、2 个 after、2 个 teardown)在 7 种请求下的实测:正常请求 before_1 → before_2 → view → after_2 → after_1 → teardown_2(None) → teardown_1(None)。abort(403) 的流程与正常相同(得到 403,teardown 收到 None)。视图抛 ValueError:得到 500,after_request 照样执行,teardown 收到 ValueError。before 里直接返回响应:视图被跳过,但 after 与 teardown 照样执行。before 里抛异常:视图被跳过,after 仍执行,teardown 收到 RuntimeError。路径不存在(404)与不存在的静态文件:before 与 after 钩子照样执行。", t=tl(S(1)), done=lidx(S(1), '正常 GET /', 'abort(403)'), mark=lidx(S(1), '视图里 ValueError', 'before 里直接返回响应', '路径不存在(404)', '静态文件'), kv=KV([['before 返回响应', '跳过视图,after / teardown 仍执行'], ['视图抛异常', 'after 仍执行,teardown 收到异常'], ['404', 'before / after 仍执行']], ['404'])),
+    step("after_request 必须返回响应:让最后执行的 after_request 返回 None,test_client 直接抛出 TypeError: 'NoneType' object is not callable(wsgi_app 对返回值做 response(environ, start_response))。after_request_funcs 按注册顺序存放、执行时倒序。", t=tl(S(2)), mark=lidx(S(2), 'TypeError'), kv=KV([['返回 None', "TypeError: 'NoneType' object is not callable"]], ['返回 None'])),
+    step("3 个同类钩子的顺序(实测):before_0 → before_1 → before_2(按注册顺序);after_2 → after_1 → after_0 与 teardown_2 → teardown_1 → teardown_0(按注册的相反顺序)。", t=tl(S(3)), mark=lidx(S(3), 'before_0'), kv=KV([['before_request', '注册顺序'], ['after_request', '注册的相反顺序'], ['teardown_request', '注册的相反顺序']], ['after_request'])),
+    step("蓝图里的钩子:GET /in-bp 的顺序是 app.before_request → bp.before_app_request → bp.before_request → view(bp) → bp.after_request → app.after_request;GET /in-app 只有 app.before_request 与 bp.before_app_request(蓝图自己的 before_request 不执行),after 只有 app.after_request;GET /nope(404)里 bp.before_app_request 也执行了(它是应用级的),bp.before_request 没有。", t=tl(S(4)), done=lidx(S(4), '/in-bp', '/in-app'), mark=lidx(S(4), '/nope'), kv=KV([['bp.before_request', '只对蓝图自己的路由'], ['bp.before_app_request', '对整个应用,包括 404']], ['bp.before_app_request'])),
+    step("异常没有被任何处理器处理、且 TESTING=True 时,异常向外抛:before_1 → before_2 → view → teardown_2(ValueError) → teardown_1(ValueError),after_request 没有执行,teardown_request 一定执行并收到异常。", t=tl(S(5)), mark=lidx(S(5), 'test_client 向上抛出了', 'view → teardown_2'), kv=KV([['after_request', '没执行'], ['teardown_request', '执行并收到 ValueError']], ['teardown_request'])),
+]
+A = mkartf('f8', 8, 'Flask,before_request,after_request,teardown_request,真实验证,动画演示',
+    '实测 before_request / after_request / teardown_request:正常、abort、视图异常、before 直接返回、404、静态文件各种情况下谁执行;多个钩子的先后顺序;蓝图钩子的作用范围;after_request 返回 None 会 TypeError;TESTING 时异常传出则 after_request 不执行。',
+    '三类钩子什么时候触发、触发几次、顺序如何、出了异常还跑不跑?这篇把各种请求都跑一遍,用事件顺序说话。',
+    [('7', '本篇对比的请求类型数'), ('0 → 2', 'before_request 返回响应时被跳过的视图执行次数 vs 钩子之外(after、teardown)仍执行的钩子数'), ('after 倒序', 'after_request 与 teardown_request 按注册的相反顺序执行')],
+    [('各种请求下的触发顺序', '<p>上一篇:<a href="flask-request-lifecycle.html">请求进入 Flask 后的完整生命周期</a>;下一篇:<a href="flask-before-first-request.html">before_first_request 的变化与替代方案</a>。</p>'), ('after_request 返回 None', None), ('多个钩子的顺序', None), ('蓝图里的钩子', None), ('TESTING 下的异常', None)],
+    steps, [ENV_F + '。404 与 500 的错误页本身由错误处理器生成,见第 10 篇', '没有验证:流式响应(生成器)里 after_request 与 teardown 的时机(见第 42 篇)、异步视图里的钩子、before_request 在 OPTIONS 预检请求上的表现(见第 24、112 篇)、蓝图嵌套时钩子的顺序'], '钩子顺序')

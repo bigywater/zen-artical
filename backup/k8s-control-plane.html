@@ -1,0 +1,542 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>K8s 控制平面:谁也不直接找谁</title>
+<meta name="description" content="真实源码追踪一个 Pod 从 kubectl apply 到 Running 的完整链路:reflector 的 List-Watch、kubelet 的字段选择器、scheduler 的客户端过滤与 Binding 写回。">
+<link rel="canonical" href="https://bigywater.tech/k8s-control-plane.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="K8s 控制平面:谁也不直接找谁">
+<meta property="og:description" content="真实源码追踪一个 Pod 从 kubectl apply 到 Running 的完整链路:reflector 的 List-Watch、kubelet 的字段选择器、scheduler 的客户端过滤与 Binding 写回。">
+<meta property="og:url" content="https://bigywater.tech/k8s-control-plane.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="K8s 控制平面:谁也不直接找谁">
+<meta name="twitter:description" content="真实源码追踪一个 Pod 从 kubectl apply 到 Running 的完整链路:reflector 的 List-Watch、kubelet 的字段选择器、scheduler 的客户端过滤与 Binding 写回。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F6F5F8; --paper:#FFFFFF; --ink:#221E2C; --ink-dim:#655D71; --line:#E2DEEB;
+  --k8s-c:#5D4A9C; --k8s-c-soft:#ECE7F7;
+  --node-c:#1F7A6B; --node-c-soft:#E0F0EC;
+  --skip-c:#A8425E; --skip-c-soft:#F7E4EA;
+  --code-bg:#211C2E; --code-ink:#EDE9F5;
+  --shadow: 0 1px 2px rgba(30,20,45,.06), 0 8px 24px -12px rgba(30,20,45,.16);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#141019; --paper:#1E1928; --ink:#EDE9F5; --ink-dim:#B0A8C4; --line:#332C45;
+    --k8s-c:#9C87E0; --k8s-c-soft:#2C2447;
+    --node-c:#5FCBB4; --node-c-soft:#153330;
+    --skip-c:#E58AA3; --skip-c-soft:#3B1F28;
+    --code-bg:#120F1A; --code-ink:#E9E4F5;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#141019; --paper:#1E1928; --ink:#EDE9F5; --ink-dim:#B0A8C4; --line:#332C45;
+  --k8s-c:#9C87E0; --k8s-c-soft:#2C2447;
+  --node-c:#5FCBB4; --node-c-soft:#153330;
+  --skip-c:#E58AA3; --skip-c-soft:#3B1F28;
+  --code-bg:#120F1A; --code-ink:#E9E4F5;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--k8s-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--k8s-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--k8s-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--k8s-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(2,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.a .tag{background:var(--k8s-c-soft); color:var(--k8s-c);}
+.card.b .tag{background:var(--node-c-soft); color:var(--node-c);}
+.card.c .tag{background:var(--skip-c-soft); color:var(--skip-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+.comptable{width:100%; border-collapse:collapse; margin:20px 0; font-size:.88rem;}
+.comptable th{text-align:left; color:var(--ink-dim); font-weight:600; font-size:.76rem; text-transform:uppercase; letter-spacing:.04em; padding:8px 12px; border-bottom:1px solid var(--line);}
+.comptable td{padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top;}
+.comptable tr:last-child td{border-bottom:none;}
+.comptable td.name{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-weight:700; color:var(--k8s-c); white-space:nowrap;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#B0A8C4; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#C3B3F0;}
+
+.callout{border-left:3px solid var(--k8s-c); background:var(--k8s-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--node-c); background:var(--node-c-soft);}
+.callout.c{border-color:var(--skip-c); background:var(--skip-c-soft);}
+
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem; display:flex; justify-content:space-between; align-items:center;}
+.demo-head .step-badge{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; color:var(--k8s-c); background:var(--k8s-c-soft); padding:3px 9px; border-radius:6px; font-weight:600;}
+.demo-narration{min-height:48px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--k8s-c-soft); color:var(--k8s-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:20px 20px 6px;}
+.apiserver-row{border:1px solid var(--line); border-radius:10px; padding:12px 16px; background:var(--bg); margin-bottom:16px;}
+.apiserver-row .lbl{font-size:.72rem; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-dim); margin-bottom:6px;}
+.apiserver-row .val{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88rem;}
+.lanes{display:grid; grid-template-columns:1fr 1fr; gap:14px;}
+@media (max-width:640px){.lanes{grid-template-columns:1fr;}}
+.lane{border:1px solid var(--line); border-radius:10px; padding:12px 14px; background:var(--bg); min-height:130px;}
+.lane .lane-title{font-size:.78rem; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-dim); font-weight:700; margin-bottom:8px; display:flex; justify-content:space-between;}
+.lane.scheduler .lane-title{color:var(--k8s-c);}
+.lane.kubelet .lane-title{color:var(--node-c);}
+.inbox-item{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.78rem; padding:5px 8px; border-radius:6px; margin-bottom:5px; background:var(--paper); border:1px solid var(--line);}
+.inbox-item.skip{background:var(--skip-c-soft); color:var(--skip-c); border-color:var(--skip-c); text-decoration:line-through; opacity:.85;}
+.inbox-empty{font-size:.8rem; color:var(--ink-dim); font-style:italic;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--k8s-c); color:var(--k8s-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--k8s-c); border-color:var(--k8s-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--k8s-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Kubernetes 系列 · 第一篇</div>
+    <h1>K8s 控制平面:谁也不直接找谁</h1>
+    <p>Kubernetes 的控制平面看起来有好几个"角色"——apiserver、etcd、scheduler、controller-manager,分工不同。但支撑这一整套系统的,其实是一条特别硬的规则:<b>没有任何一个组件会直接调用另一个组件</b>。scheduler 不会给 kubelet 打电话说"这个 Pod 归你了",kubelet 也不会去问 scheduler "有没有新任务"。所有人都只做一件事:盯着 apiserver,看 etcd 里的数据变了没有。</p>
+    <p>这一篇不依赖能跑起来的集群,而是直接读 Kubernetes v1.37.0 的真实源码,把"一个 Pod 从 <span class="mono">kubectl apply</span> 到真正跑起来"这条链路上,每个组件到底在等什么、看到了什么、看不到什么,一步步过一遍。</p>
+    <div class="hero-fact">
+      <div><div class="num">4 处真实源码</div><div class="lbl">reflector 的 List-Watch、kubelet 的字段选择器、scheduler 的客户端过滤、Binding 子资源写入</div></div>
+      <div><div class="num">0 次组件间直接调用</div><div class="lbl">全部经过 apiserver 中转,这是贯穿全文的核心结论</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <h2>控制平面有哪些角色</h2>
+  <p class="h2-sub">先认清每个组件具体是谁,后面追踪 Pod 的生命周期时才知道"现在轮到谁在动"。</p>
+  <table class="comptable">
+    <tr><th>组件</th><th>做什么</th></tr>
+    <tr><td class="name">kube-apiserver</td><td>唯一对外暴露的入口,处理认证、鉴权、准入控制,是所有读写 etcd 的唯一通道——包括其它控制平面组件自己也不能绕过它直接碰 etcd。</td></tr>
+    <tr><td class="name">etcd</td><td>唯一的数据存储,一个基于 Raft 的分布式 KV。整个集群的状态(所有 Pod、Node、Service……的定义和状态)都在这里,除了 apiserver,没有别的组件直接连它。</td></tr>
+    <tr><td class="name">kube-scheduler</td><td>决定新 Pod 该跑在哪个 Node 上。本质是 apiserver 的一个客户端:监听未调度的 Pod,算完之后把结果写回 apiserver。</td></tr>
+    <tr><td class="name">kube-controller-manager</td><td>一堆 controller 的集合(Deployment controller、Node controller……),每个都在做同一件事:观察"现状"和"期望状态"的差距,然后调用 apiserver 把现状往期望状态上拉。</td></tr>
+    <tr><td class="name">kubelet</td><td>跑在每个 Node 上(严格说不算控制平面,是节点组件),只关心"分配给我这个 Node 的 Pod",负责把它们真正跑起来、汇报状态。</td></tr>
+  </table>
+  <div class="cards">
+    <div class="card a">
+      <span class="tag">共同点</span>
+      <h3>都是 apiserver 的客户端</h3>
+      <p>scheduler、controller-manager、kubelet,包括你敲的 <span class="mono">kubectl</span>,在架构图上地位是一样的——都只是"连到 apiserver 上的一个客户端",没有谁比谁更特殊。</p>
+    </div>
+    <div class="card b">
+      <span class="tag">交互方式</span>
+      <h3>List-Watch,不是轮询</h3>
+      <p>每个客户端先做一次 List 拿到当前全量数据和一个 resourceVersion,再从这个版本开始 Watch,之后只推增量变化——不用短轮询,也不会错过变化。</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>真实源码:所有人共用的同一套机制——List-Watch</h2>
+  <p class="h2-sub">client-go 的 <span class="mono">Reflector</span> 是这套机制的通用实现,scheduler、kubelet、controller-manager 内部全在用它,不是各自造轮子。</p>
+  <blockquote class="src">
+    <span class="path">staging/src/k8s.io/client-go/tools/cache/reflector.go · <a href="https://github.com/kubernetes/kubernetes/blob/v1.37.0/staging/src/k8s.io/client-go/tools/cache/reflector.go#L467" target="_blank" rel="noopener">kubernetes @ v1.37.0, L467</a></span>
+// ListAndWatchWithContext first lists all items and get the resource version at the moment of call,
+// and then use the resource version to watch.
+func (r *Reflector) ListAndWatchWithContext(ctx context.Context) error {
+    ...
+    if fallbackToList {
+        err = r.list(ctx)
+        if err != nil {
+            return err
+        }
+    }
+    logger.V(2).Info("Caches populated", ...)
+    return r.watchWithResync(ctx, w)
+}
+  </blockquote>
+  <p>先 List 拿一份完整快照(和一个此刻的 resourceVersion),再从这个版本开始 Watch——这样即使 Watch 连接中途断了,重连时用记住的 resourceVersion 继续接着看,不会有"断线期间的变化全部丢掉"这种事。这是 K8s 里几乎所有"谁在关心什么资源"的通用底层实现。</p>
+</section>
+
+<section>
+  <h2>真实源码:kubelet 只看得到自己的 Pod</h2>
+  <p class="h2-sub">kubelet 的 watch 带了一个服务端过滤条件——不是"apiserver 把所有 Pod 都推过来,kubelet 自己再挑",而是 apiserver 压根不会把无关的 Pod 发过来。</p>
+  <blockquote class="src">
+    <span class="path">pkg/kubelet/config/apiserver.go · <a href="https://github.com/kubernetes/kubernetes/blob/v1.37.0/pkg/kubelet/config/apiserver.go#L35" target="_blank" rel="noopener">kubernetes @ v1.37.0, L35</a></span>
+// NewSourceApiserver creates a config source that watches and pulls from the apiserver.
+func NewSourceApiserver(logger klog.Logger, c clientset.Interface, nodeName types.NodeName, ...) {
+    lw := cache.NewListWatchFromClient(c.CoreV1().RESTClient(), "pods", metav1.NamespaceAll,
+        fields.OneTermEqualSelector("spec.nodeName", string(nodeName)))
+    ...
+}
+  </blockquote>
+  <p><span class="mono">fields.OneTermEqualSelector("spec.nodeName", nodeName)</span> 是个字段选择器,作为 Watch 请求的一部分发给 apiserver——过滤发生在服务端。一个 1000 个 Pod 的集群,某个 Node 上的 kubelet 大概率只需要关心其中几十个,字段选择器让它压根不用收到、也不用处理另外几百个跟自己无关的 Pod 事件。</p>
+</section>
+
+<section>
+  <h2>真实源码:scheduler 反而是"来者不拒",自己过滤</h2>
+  <p class="h2-sub">和 kubelet 不一样,scheduler 的 Pod watch 没有字段选择器——它先收下所有 Pod 事件,再用代码自己判断要不要处理。</p>
+  <blockquote class="src">
+    <span class="path">pkg/scheduler/eventhandlers.go · <a href="https://github.com/kubernetes/kubernetes/blob/v1.37.0/pkg/scheduler/eventhandlers.go#L458" target="_blank" rel="noopener">kubernetes @ v1.37.0, L458</a></span>
+// assignedPod selects pods that are assigned (scheduled and running).
+func assignedPod(pod *v1.Pod) bool {
+    return len(pod.Spec.NodeName) != 0
+}
+
+func (sched *Scheduler) addPod(obj interface{}) {
+    pod, ok := obj.(*v1.Pod)
+    ...
+    if responsibleForPod(pod, sched.Profiles) && (!assignedPod(pod) || isPodDeferred) {
+        sched.addPodToSchedulingQueue(pod)
+    }
+    if assignedPod(pod) {
+        sched.addAssignedPodToCache(pod)
+    }
+}
+  </blockquote>
+  <div class="callout">
+    这不是疏忽,是真实的设计取舍:kubelet 只需要"跟自己相关"的一小撮 Pod,字段选择器很划算;scheduler 恰恰需要看到<b>全局</b>状态才能做出合理的调度决策(比如统计每个 Node 上已经跑了多少 Pod、资源占用多少),它没法用一个简单的字段选择器表达"我需要全局视图",干脆全收下来,在内存里自己维护缓存和判断逻辑。
+  </div>
+</section>
+
+<section>
+  <h2>真实源码:scheduler 怎么把结果"告诉"kubelet——它不告诉,它写回去</h2>
+  <p class="h2-sub">调度决策做完之后,scheduler 并不会去连 kubelet 的某个接口,而是把决策包成一个 Binding 对象,像发起任何别的 API 请求一样 POST 给 apiserver。</p>
+  <blockquote class="src">
+    <span class="path">pkg/scheduler/framework/plugins/defaultbinder/default_binder.go · <a href="https://github.com/kubernetes/kubernetes/blob/v1.37.0/pkg/scheduler/framework/plugins/defaultbinder/default_binder.go#L51" target="_blank" rel="noopener">kubernetes @ v1.37.0, L51</a></span>
+// Bind binds pods to nodes using the k8s client.
+func (b DefaultBinder) Bind(ctx context.Context, state fwk.CycleState, p *v1.Pod, nodeName string) *fwk.Status {
+    binding := &v1.Binding{
+        ObjectMeta: metav1.ObjectMeta{Namespace: p.Namespace, Name: p.Name, UID: p.UID},
+        Target:     v1.ObjectReference{Kind: "Node", Name: nodeName},
+    }
+    ...
+    err := util.BindPod(ctx, b.handle.ClientSet(), binding)
+    ...
+}
+  </blockquote>
+  <p><span class="mono">util.BindPod</span> 用的是普通的 <span class="mono">clientset</span>,和 kubectl、controller 用的是同一套客户端库——scheduler 在这一刻和其它任何 apiserver 客户端没有区别。这次写入实际改的是 Pod 的 <span class="mono">spec.nodeName</span> 字段。而这个字段,恰好就是上一节 kubelet 那条 watch 用来过滤的字段——写完这一下,kubelet 的 watch 才第一次开始"看得见"这个 Pod。</p>
+</section>
+
+<section>
+  <h2>演示:一个 Pod 从创建到跑起来,两个 watcher 各自看到了什么</h2>
+  <p class="h2-sub">左边是 scheduler 的收件箱(无过滤,来者不拒),右边是 kubelet 的收件箱(带字段选择器)。同一次 apiserver 写入,两边收到的东西可能完全不一样。</p>
+  <div class="demo" id="cpDemo">
+    <div class="demo-head"><span>控制平面事件流</span><span class="step-badge" id="cpStep">未开始</span></div>
+    <div class="demo-narration" id="cpNarration">点击"下一步"或"播放"开始。</div>
+    <div class="demo-body">
+      <div class="apiserver-row">
+        <div class="lbl">apiserver / etcd 里 Pod 的当前状态</div>
+        <div class="val" id="cpPodState">(尚未创建)</div>
+      </div>
+      <div class="lanes">
+        <div class="lane scheduler">
+          <div class="lane-title"><span>scheduler 收件箱</span><span>无字段选择器</span></div>
+          <div id="cpSchedInbox"><span class="inbox-empty">空</span></div>
+        </div>
+        <div class="lane kubelet">
+          <div class="lane-title"><span>kubelet(node-1)收件箱</span><span>spec.nodeName==node-1</span></div>
+          <div id="cpKubeletInbox"><span class="inbox-empty">空</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="cpReset">⏮ 重来</button>
+      <button class="btn" id="cpPrev">‹ 上一步</button>
+      <button class="btn primary" id="cpNext">下一步 ›</button>
+      <button class="btn" id="cpPlay">▶ 自动播放</button>
+      <span class="step-counter" id="cpCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">事件数据由 Python 脚本生成,精确复现上面两段真实源码里的过滤规则(kubelet 按 <span class="mono">spec.nodeName</span> 服务端过滤、scheduler 无过滤 + 客户端 <span class="mono">assignedPod()</span> 判断),并用一套独立重新实现的过滤逻辑逐事件重放校验过,断言全部通过后才用于渲染。</p>
+</section>
+
+<section>
+  <h2>这条链路说明了什么</h2>
+  <p>从 <span class="mono">kubectl apply</span> 到 Pod 真正 Running,中间没有任何一步是"A 组件调用 B 组件的接口"。每一步都是"某个组件观察到 apiserver 里的数据变了,做点什么,再把结果写回 apiserver"。这样设计的好处很直接:</p>
+  <div class="cards">
+    <div class="card a">
+      <span class="tag">组件可替换</span>
+      <h3>换个调度器,不用改 kubelet 一行代码</h3>
+      <p>只要新调度器也遵守"读 apiserver、写 Binding"这套协议,kubelet 完全无感——这也是自定义调度器、多调度器共存能够成立的原因。</p>
+    </div>
+    <div class="card b">
+      <span class="tag">状态可恢复</span>
+      <h3>任何组件重启,靠 List 就能恢复现场</h3>
+      <p>没有组件在内存里维护"只有它自己知道"的关键状态——真相永远在 etcd 里,重启后重新 List 一遍就能接着干活,不需要复杂的组件间状态同步协议。</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文源码引用(<span class="mono">Reflector.ListAndWatchWithContext</span>、kubelet 的字段选择器、scheduler 的 <span class="mono">assignedPod</span>/<span class="mono">addPod</span>、<span class="mono">DefaultBinder.Bind</span>)均取自 <span class="mono">kubernetes/kubernetes</span> 仓库 <span class="mono">v1.37.0</span> 标签(2026-08-26 发布的最新稳定版),直接从 GitHub 拉取源文件核对过函数签名和关键逻辑,未做删改,仅作篇幅裁剪。</li>
+      <li>这一篇没有本机真实集群实验:环境里 Docker Desktop 的虚拟机网络出不了外网,拉不了 <span class="mono">kind</span> 需要的节点镜像,退而求其次改成"真实源码 + Python 独立验证过的行为模拟"。演示数据的自检包括:kubelet 收件箱严格是 scheduler 收件箱的子集(只少了 Pod 还没分配节点的那一条)、两条收件箱的内容用一套完全独立重写的过滤规则重新推导过一遍并核对一致。</li>
+      <li>没有涉及:kube-apiserver 内部的认证/鉴权/准入控制链路细节、etcd 的 Raft 共识与 MVCC(计划单独写)、controller-manager 内部 controller 的 reconcile 循环细节(下一篇 informer/controller 模式会展开)、Watch 连接本身的 HTTP chunked / WebSocket 传输细节。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="k8s-controller-informer.html">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">controller / informer 模式:reconcile 循环到底在循环什么</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Kubernetes 系列 · 第一篇 · 控制平面架构 · 源码引用自 kubernetes/kubernetes v1.37.0</footer>
+
+<script>
+const DATA = {"my_node": "node-1", "events": [{"type": "write", "actor": "kubectl-apply", "resourceVersion": 1, "pod": {"name": "web-7f9d", "nodeName": "", "phase": "Pending", "resourceVersion": 1}}, {"type": "deliver", "watcher": "scheduler", "resourceVersion": 1, "reason": "scheduler watch has no field selector -- sees every pod write"}, {"type": "skip", "watcher": "kubelet", "resourceVersion": 1, "reason": "spec.nodeName == '''' does not match field selector 'node-1' -- apiserver never forwards this event to kubelet at all"}, {"type": "scheduler-queue", "action": "enqueue", "reason": "not yet assigned to a node"}, {"type": "schedule-decision", "chosenNode": "node-1", "note": "Filter + Score phases run entirely in scheduler memory, no apiserver call yet"}, {"type": "write", "actor": "scheduler-bind", "resourceVersion": 2, "pod": {"name": "web-7f9d", "nodeName": "node-1", "phase": "Pending", "resourceVersion": 2}}, {"type": "deliver", "watcher": "scheduler", "resourceVersion": 2, "reason": "scheduler watch has no field selector -- sees every pod write"}, {"type": "deliver", "watcher": "kubelet", "resourceVersion": 2, "reason": "spec.nodeName == 'node-1' matches this watcher's field selector"}, {"type": "scheduler-queue", "action": "remove-if-present", "reason": "pod is now assigned; no longer a scheduling target"}, {"type": "kubelet-sync", "action": "pull-image-and-start-container", "node": "node-1"}, {"type": "write", "actor": "kubelet-status-report", "resourceVersion": 3, "pod": {"name": "web-7f9d", "nodeName": "node-1", "phase": "Running", "resourceVersion": 3}}, {"type": "deliver", "watcher": "scheduler", "resourceVersion": 3, "reason": "scheduler watch has no field selector -- sees every pod write"}, {"type": "deliver", "watcher": "kubelet", "resourceVersion": 3, "reason": "spec.nodeName == 'node-1' matches this watcher's field selector"}, {"type": "done", "final_pod": {"name": "web-7f9d", "nodeName": "node-1", "phase": "Running", "resourceVersion": 3}}]};
+
+(function(){
+  const events = DATA.events;
+  const myNode = DATA.my_node;
+  const narration = document.getElementById('cpNarration');
+  const stepBadge = document.getElementById('cpStep');
+  const podStateEl = document.getElementById('cpPodState');
+  const schedInboxEl = document.getElementById('cpSchedInbox');
+  const kubeletInboxEl = document.getElementById('cpKubeletInbox');
+  const counter = document.getElementById('cpCounter');
+  let idx = -1, playing = false, playTimer = null;
+
+  function fmtPod(p){
+    return `name=${p.name} nodeName=${p.nodeName===''?'(空)':p.nodeName} phase=${p.phase} rv=${p.resourceVersion}`;
+  }
+
+  function computeState(upto){
+    let pod = null;
+    const schedInbox = [];
+    const kubeletInbox = [];
+    for(let i=0;i<=upto && i<events.length;i++){
+      const e = events[i];
+      if(e.type === 'write'){ pod = e.pod; }
+      if(e.type === 'deliver' && e.watcher === 'scheduler'){
+        schedInbox.push({ rv: e.resourceVersion, skip: false });
+      }
+      if(e.type === 'deliver' && e.watcher === 'kubelet'){
+        kubeletInbox.push({ rv: e.resourceVersion, skip: false });
+      }
+      if(e.type === 'skip' && e.watcher === 'kubelet'){
+        kubeletInbox.push({ rv: e.resourceVersion, skip: true });
+      }
+    }
+    return { pod, schedInbox, kubeletInbox };
+  }
+
+  function describe(e){
+    if(e.type === 'write') return `<span class="k">${e.actor}</span> 写入 apiserver:resourceVersion → ${e.resourceVersion}。`;
+    if(e.type === 'deliver' && e.watcher === 'scheduler') return `scheduler 的 watch 收到这次变化——${e.reason}`;
+    if(e.type === 'deliver' && e.watcher === 'kubelet') return `kubelet(${myNode})的 watch 收到这次变化——${e.reason}`;
+    if(e.type === 'skip') return `kubelet(${myNode})<b>没有</b>收到这次变化——${e.reason}`;
+    if(e.type === 'scheduler-queue') return e.action === 'enqueue'
+      ? `scheduler 客户端判断:${e.reason},放入待调度队列。`
+      : `scheduler 客户端判断:${e.reason},从待调度队列移除。`;
+    if(e.type === 'schedule-decision') return `scheduler 在内存里跑完 Filter + Score,选中 <span class="k">${e.chosenNode}</span>。${e.note}。`;
+    if(e.type === 'kubelet-sync') return `kubelet(${e.node})开始处理:${e.action}。`;
+    if(e.type === 'done') return `全部完成。最终状态:${fmtPod(e.final_pod)}`;
+    return '';
+  }
+
+  function render(){
+    idx = Math.max(-1, Math.min(events.length-1, idx));
+    if(idx < 0){
+      narration.textContent = '点击"下一步"或"播放"开始。';
+      stepBadge.textContent = '未开始';
+      podStateEl.textContent = '(尚未创建)';
+      schedInboxEl.innerHTML = '<span class="inbox-empty">空</span>';
+      kubeletInboxEl.innerHTML = '<span class="inbox-empty">空</span>';
+    } else {
+      const e = events[idx];
+      narration.innerHTML = describe(e);
+      stepBadge.textContent = `第 ${idx+1} / ${events.length} 步`;
+      const s = computeState(idx);
+      podStateEl.textContent = s.pod ? fmtPod(s.pod) : '(尚未创建)';
+
+      schedInboxEl.innerHTML = s.schedInbox.length
+        ? s.schedInbox.map(x => `<div class="inbox-item">rv=${x.rv} 已接收</div>`).join('')
+        : '<span class="inbox-empty">空</span>';
+
+      kubeletInboxEl.innerHTML = s.kubeletInbox.length
+        ? s.kubeletInbox.map(x => x.skip
+            ? `<div class="inbox-item skip">rv=${x.rv} 未推送(不匹配)</div>`
+            : `<div class="inbox-item">rv=${x.rv} 已接收</div>`).join('')
+        : '<span class="inbox-empty">空</span>';
+    }
+    counter.textContent = `${idx+1} / ${events.length}`;
+    document.getElementById('cpPrev').disabled = idx <= -1;
+    document.getElementById('cpNext').disabled = idx >= events.length - 1;
+  }
+
+  document.getElementById('cpNext').onclick = () => { idx++; render(); stopPlay(); };
+  document.getElementById('cpPrev').onclick = () => { idx--; render(); stopPlay(); };
+  document.getElementById('cpReset').onclick = () => { idx = -1; render(); stopPlay(); };
+  function stopPlay(){ playing = false; clearInterval(playTimer); document.getElementById('cpPlay').textContent = '▶ 自动播放'; }
+  document.getElementById('cpPlay').onclick = () => {
+    if(playing){ stopPlay(); return; }
+    playing = true; document.getElementById('cpPlay').textContent = '⏸ 暂停';
+    playTimer = setInterval(() => {
+      if(idx >= events.length - 1){ stopPlay(); return; }
+      idx++; render();
+    }, 1400);
+  };
+  render();
+})();
+</script>
+
+</body>
+</html>

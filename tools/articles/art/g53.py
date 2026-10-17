@@ -1,0 +1,20 @@
+from lib import *
+S = SS('g53')
+steps = [
+    step("用 GODEBUG=schedtrace=1000(GOMAXPROCS=4)每秒看一次调度器。完全空闲时:idleprocs=4,threads=5,idlethreads=3,schedticks 在 1 s、2 s、3 s 三次都是 [ 2 0 2 3 ],没有变化。每个 P 上都有一个空转 goroutine 时:idleprocs=0,needspinning=1,schedticks 从 [ 37 35 36 37 ] 到 [ 71 69 70 71 ] 再到 [ 106 104 105 105 ],每个 P 每秒大约增加 34–35 次。(每秒约 35 次的原因我没有查。)", t=tl(S(1)), done=lidx(S(1), 'SCHED 1011ms', 'SCHED 2017ms', 'SCHED 3019ms'), mark=lidx(S(1), 'SCHED 1010ms', 'SCHED 2018ms', 'SCHED 3028ms'), b=bars([['空闲:3 秒内 schedticks 增量(P0)', 0, '0'], ['空转:每个 P 约每秒增量', 35, '≈35']], 35, done=[0], mark=[1]), kv=KV([['空闲', 'idleprocs=4,schedticks 不变'], ['空转', 'idleprocs=0,needspinning=1'], ['注意', 'schedtrace 本身会让 sysmon 不进深睡(源码注释)']], ['注意'])),
+    step("空闲进程的 CPU 成本:完全空闲 3.5 秒,用 getrusage 读自己用掉的 CPU 时间,重复 3 次都是 0.000 秒(不到半毫秒)。源码里 sysmon 在所有 P 都空闲时会 notetsleep 睡到下一个定时器或最多 forcegcperiod/2(一分钟),所以空闲的程序基本不被它打扰。", t=tl(S(2)), done=lidx(S(2), '用掉的 CPU 时间 0.000 秒'), kv=KV([['完全空闲 3.5 秒', 'CPU 时间 0.000 秒(3 次)'], ['原因(源码)', '全部 P 空闲时 sysmon 深睡'], ['未验证', '没有直接观察 sysmon 线程的睡眠']], ['未验证'])),
+    step("空闲进程会被强制 GC 吗?进程 A 从没调用过 runtime.GC(),什么都不做空闲 130 秒:NumGC 始终是 0。进程 B 先调用一次 runtime.GC(),再空闲 130 秒:gctrace 在 @120.014s 打出 “GC forced” 和 gc 2,NumGC=2。源码里 gcTriggerTime 的条件是 lastgc != 0 && t.now-lastgc > forcegcperiod,forcegcperiod = 2 分钟——必须已经发生过一次 GC 才计时。", t=tl(S(3)), done=lidx(S(3), '[B', 'GC forced', 'gc 2 @120.014s', 'NumGC=2'), mark=lidx(S(3), '[A', '130 秒后 NumGC=0'), kv=KV([['A:从没 GC 过', '130 秒 NumGC=0'], ['B:先 GC 一次', '@120.014s 强制 GC,NumGC=2'], ['条件', 'lastgc != 0 && 距上次 GC > 2 分钟']], ['条件'])),
+    step("读 sysmon 函数里的几件事(runtime/proc.go):①如果 10 ms 没有人轮询网络,它自己非阻塞地 netpoll;②GOMAXPROCS 的更新“at most once per second”;③有人请求时叫醒 scavenger(scavenger.wake);④“retake P's blocked in syscalls and preempt long running G's”;⑤满足 gcTriggerTime 时唤醒 forcegc 的 goroutine。forcegcperiod 的注释:如果这么久没有 GC,就强制一次。", t=tl(S(4)), done=lidx(S(4), 'poll network if not polled', 'at most once per second', 'Kick the scavenger awake'), mark=lidx(S(4), 'retake P', 'check if we need to force a GC', 'forcegcperiod nanoseconds', 'lastgc != 0 && t.now-lastgc'), kv=KV([['网络', '10 ms 没人轮询就自己 netpoll(0)'], ['GOMAXPROCS', '每秒最多更新一次'], ['scavenger', '被请求时叫醒'], ['系统调用与长 G', 'retake / 抢占'], ['强制 GC', '2 分钟,且之前已发生过 GC']], ['强制 GC'])),
+]
+A = mkartg('g53', 53, 'Go,sysmon,调度器,强制GC,schedtrace,真实验证,动画演示',
+    '在 Go 1.27.1 里观察后台监控线程 sysmon 的工作:schedtrace 下空闲与空转的调度器状态对比;完全空闲 3.5 秒 CPU 时间 0.000 秒;空闲进程只有在已发生过一次 GC 之后才会在 2 分钟时被强制 GC(@120.014s),从没 GC 过的进程 130 秒 NumGC 仍是 0;并读 sysmon 源码里的五件事:轮询网络、更新 GOMAXPROCS、叫醒 scavenger、retake、强制 GC。',
+    'Go 程序里有一个不占 P 的后台线程 sysmon。它在干什么、空闲时会不会白白耗电、一个什么都不做的程序到底会不会被强制 GC?这篇用 schedtrace、getrusage 和 130 秒的 gctrace 实测,再对着源码逐项读。',
+    [('@120.014s', '先 GC 过一次的空闲进程被强制 GC 的时刻,forcegcperiod 是 2 分钟'), ('0.000 秒', '完全空闲 3.5 秒,进程用掉的 CPU 时间'), ('5 件事', '读源码看到 sysmon 周期性做的事:轮询网络、更新 GOMAXPROCS、叫醒 scavenger、retake、强制 GC')],
+    [('空闲和忙的样子', '<p><code>schedtrace</code> 每秒打印一次调度器快照。空闲时 4 个 P 全空闲、<code>schedticks</code> 不再变化;每个 P 上都有空转 goroutine 时没有空闲 P,<code>schedticks</code> 每秒增加约 35 次。注意源码注释说开启 schedtrace 会让 sysmon 不进入深睡,所以这个观察本身改变了 sysmon 的行为。</p>'),
+     ('空闲的程序几乎不被打扰', '<p>完全空闲 3.5 秒,进程自己读到的 CPU 时间是 0.000 秒(三次)。源码里所有 P 都空闲时 sysmon 会睡到下一个定时器到期,或者最多 <code>forcegcperiod/2</code>。我没有直接观察 sysmon 线程,这个解释来自源码。</p>'),
+     ('强制 GC 有前提', '<p>很多文章说“Go 每 2 分钟强制 GC 一次”。实测:程序从没发生过 GC 时,空闲 130 秒也不会;先发生过一次 GC 之后,在 @120.014s 触发了强制 GC。源码里的条件正是 <code>lastgc != 0 &amp;&amp; now-lastgc &gt; forcegcperiod</code>。</p>'),
+     ('sysmon 的清单', '<p>函数里依次是:睡眠(20 µs 起、最长 10 ms,见上一篇系统调用的文章)、必要时深睡、10 ms 没人轮询就自己轮询网络、每秒一次检查 GOMAXPROCS、叫醒 scavenger、retake 系统调用中的 P 并抢占运行太久的 G、满足条件时唤醒强制 GC 的 goroutine。其中 scavenger 被叫醒后具体怎么归还内存,我没有实验(试过一次分配 400 MB 再释放,10 秒内只多归还了约 2 MB,没有得出结论,所以没有写进来)。</p>')],
+    steps,
+    [ENV_G + '。schedtrace 与 gctrace 由 GODEBUG 打开;CPU 时间用 syscall.Getrusage 读自己;强制 GC 的两个进程同时跑 130 秒,GOMAXPROCS 为默认的 10;读过的源码:runtime/proc.go 的 sysmon 与 forcegcperiod,runtime/mgc.go 的 gcTrigger.test',
+     '没有验证:sysmon 线程自身的 CPU 占用与唤醒次数(没有直接观测)、scavenger 被 sysmon 叫醒后的行为、网络轮询 10 ms 的触发场景、Linux 上的表现、schedticks 每秒约 35 次的原因、空闲 GOMAXPROCS 更大时的 idlethreads 数量'],
+    'sysmon')

@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>幂等 Producer：Producer ID 和 Sequence Number</title>
+<meta name="description" content="开启幂等后，Broker 靠两样东西识别重复：Producer ID（PID，每个 Producer 实例一个）和每个分区上单调递增的序列号（Sequence Number）。这次先直接看日志文件里这两个字段长什么样，再看幂等对配置的强制要求，最后在的 Leader 宕机场景下，对比开启和关闭幂">
+<link rel="canonical" href="https://bigywater.tech/kafka-idempotent-producer.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="幂等 Producer：Producer ID 和 Sequence Number">
+<meta property="og:description" content="开启幂等后，Broker 靠两样东西识别重复：Producer ID（PID，每个 Producer 实例一个）和每个分区上单调递增的序列号（Sequence Number）。这次先直接看日志文件里这两个字段长什么样，再看幂等对配置的强制要求，最后在的 Leader 宕机场景下，对比开启和关闭幂">
+<meta property="og:url" content="https://bigywater.tech/kafka-idempotent-producer.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="幂等 Producer：Producer ID 和 Sequence Number">
+<meta name="twitter:description" content="开启幂等后，Broker 靠两样东西识别重复：Producer ID（PID，每个 Producer 实例一个）和每个分区上单调递增的序列号（Sequence Number）。这次先直接看日志文件里这两个字段长什么样，再看幂等对配置的强制要求，最后在的 Leader 宕机场景下，对比开启和关闭幂">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#2F6F8F; --series-c-soft:#E5F1F7;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#72B7D6; --series-c-soft:#173444;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#72B7D6; --series-c-soft:#173444;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Kafka 内部原理 · 35</div>
+  <h1>幂等 Producer：Producer ID 和 Sequence Number</h1>
+  <p>开启幂等后，Broker 靠两样东西识别重复：Producer ID（PID，每个 Producer 实例一个）和每个分区上单调递增的序列号（Sequence Number）。这次先直接看日志文件里这两个字段长什么样，再看幂等对配置的强制要求，最后在的 Leader 宕机场景下，对比开启和关闭幂等时 topic 里的重复和乱序情况。</p>
+  <div class="hero-fact">
+    <div><div class="num">验证：日志里每个批次都带着 PID 和序列号，换一个 Producer 实例就换一个 PID、序列号从 0 重新开始</div><div class="lbl">同一个 Producer 实例写入的每个批次，baseSequence 严格按 0、1、2……递增，PID 不变；</div></div>
+    <div><div class="num">验证：开启幂等时对配置有强制要求，不满足就直接创建失败</div><div class="lbl">这个版本的默认值里 enable.idempotence 已经是 true，同时默认 acks=all、max.in.f</div></div>
+  </div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="kafka-exactly-once.html">Kafka 能不能做到 Exactly Once</a></div>
+<section style="padding-top:8px;">
+  <h2>验证：日志里每个批次都带着 PID 和序列号，换一个 Producer 实例就换一个 PID、序列号从 0 重新开始</h2>
+  <blockquote class="src">
+    <span class="path">命令 · shell</span>
+# 三个 Producer 实例依次往同一个分区各同步发送 25 条：
+#   runA: 默认配置（幂等）；runB: 另一个默认配置的实例；runC: enable.idempotence=false, acks=1
+$ kafka-dump-log.sh --files /private/tmp/kafka-lab/node1/idem-demo-0/00000000000000000000.log | grep baseOffset
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测 · 本机执行输出</span>
+<pre class="code">baseOffset: 0   baseSequence: 0   producerId: 14011  producerEpoch: 0
+baseOffset: 24  baseSequence: 24  producerId: 14011  producerEpoch: 0
+baseOffset: 25  baseSequence: 0   producerId: 16002  producerEpoch: 0     &lt;- runB：新的 PID，序列号从 0 重来
+baseOffset: 26  baseSequence: 1   producerId: 16002  producerEpoch: 0
+baseOffset: 49  baseSequence: 24  producerId: 16002  producerEpoch: 0
+baseOffset: 50  baseSequence: -1  producerId: -1     producerEpoch: -1    &lt;- runC：关闭幂等，没有 PID 也没有序列号
+baseOffset: 74  baseSequence: -1  producerId: -1     producerEpoch: -1
+
+各 producerId 出现的批数：25 个 -1，25 个 14011，25 个 16002</pre></div>
+  <p>同一个 Producer 实例写入的每个批次，<span class="mono">baseSequence</span> 严格按 0、1、2……递增，PID 不变；第二个实例拿到了另一个 PID（16002），序列号从 0 重新开始；关闭幂等的实例写入的批次，PID 和序列号都是 -1，Broker 对它们没有任何去重信息可用。这里因为是同步逐条发送，每个批次只有 1 条消息，所以 <span class="mono">baseSequence</span> 恰好等于这个实例内的消息序号；批次里有多条消息时，<span class="mono">baseSequence</span> 是这个批次第一条的序号。Broker 就是靠&quot;PID 加分区加序列号&quot;这个三元组判断一条消息是不是重复，以及是不是按顺序到达。</p>
+</section>
+<section>
+  <h2>验证：开启幂等时对配置有强制要求，不满足就直接创建失败</h2>
+  <blockquote class="src">
+    <span class="path">命令 · java</span>
+new KafkaProducer&lt;&gt;(props);   // 分别设置几种冲突配置
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测 · 本机执行输出</span>
+<pre class="code">默认 enable.idempotence = true，默认 acks = all，默认 max.in.flight.requests.per.connection = 5，默认 retries = 2147483647
+enable.idempotence=true + acks=1        -&gt; ConfigException: Must set acks to all in order to use the idempotent producer.
+enable.idempotence=true + max.in.flight=6 -&gt; ConfigException: ... max.in.flight.requests.per.connection must be set to at most 5. Current value is 6.
+enable.idempotence=true + retries=0     -&gt; ConfigException: Must set retries to non-zero when using the idempotent producer.
+enable.idempotence=false + acks=1 + max.in.flight=6 -&gt; 创建成功
+只设置 acks=1（不显式设置幂等） -&gt; 创建成功</pre></div>
+  <p>这个版本的默认值里 <span class="mono">enable.idempotence</span> 已经是 <span class="mono">true</span>，同时默认 <span class="mono">acks=all</span>、<span class="mono">max.in.flight.requests.per.connection=5</span>、<span class="mono">retries</span> 是最大整数——也就是说不做任何配置，Producer 默认就是幂等的。显式开启幂等的同时，把 <span class="mono">acks</span> 改成 1、把并发请求数改成 6、或者把重试次数设成 0，都会在创建 Producer 时被拒绝。最后一行值得注意：只设置了 <span class="mono">acks=1</span> 而不显式设置幂等时，Producer 可以正常创建。我没有去确认此时幂等是否被悄悄关闭了，只知道创建没有报错；结合上一节日志里 runC 的 PID 是 -1（那次显式关闭了幂等），这个场景下的实际 PID 状态没有单独查。</p>
+</section>
+<section>
+  <h2>验证：Leader 宕机时，关闭幂等会出现乱序和重复，开启幂等三次都是零</h2>
+  <blockquote class="src">
+    <span class="path">命令 · java</span>
+// 同一个程序：异步发送 30000 条 &quot;seq-N&quot;（max.in.flight=5, acks=all, batch.size=2000, 每 50 条 sleep 1ms），
+// 发到第 6000 条时 kill -9 分区的 Leader 所在 Broker；发送结束后从头消费，统计重复条数和乱序次数
+// （乱序 = 出现了比前面已经见过的序号更小的序号）；每次都让 bootstrap 不包含被杀的 Broker
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测 · 本机执行输出</span>
+<pre class="code">关闭幂等:
+  第 1 次: 回调成功 30000 / 失败 0   topic 共 30000 条，重复   0 条，乱序 150 次
+  第 2 次: 回调成功 30000 / 失败 0   topic 共 30100 条，重复 100 条，乱序 450 次
+  第 3 次: 回调成功 30000 / 失败 0   topic 共 30100 条，重复 100 条，乱序 400 次
+开启幂等:
+  第 1 次: 回调成功 30000 / 失败 0   topic 共 30000 条，重复   0 条，乱序   0 次
+  第 2 次: 回调成功 30000 / 失败 0   topic 共 30000 条，重复   0 条，乱序   0 次
+  第 3 次: 回调成功 30000 / 失败 0   topic 共 30000 条，重复   0 条，乱序   0 次</pre></div>
+  <p>六次运行里，Producer 的回调都报告&quot;成功 30000、失败 0&quot;，从客户端看不出任何区别。差别在 topic 里：关闭幂等的三次都出现了乱序（150、450、400 次），其中两次还多出 100 条重复的消息（30100 条，唯一 30000）；开启幂等的三次，重复和乱序都是 0。乱序的原因是 Leader 被杀后，多个在途的批次被重试，先失败的批次可能在后面的批次之后才被写入；重复来自&quot;消息其实已经写入但确认没有回到客户端，于是重发&quot;。这两个解释是按现象和机制的推断，我没有单独抓取重试日志去逐条证实。每组只有三次，重复条数两次都恰好是 100，这个数字的原因我没有去查（可能与批次大小有关，但没有验证）。</p>
+</section>
+<section>
+  <h2>结论</h2>
+  <p>幂等 Producer 的机制是&quot;PID 加序列号&quot;：日志里每个批次都记录着 PID 和 baseSequence，Broker 据此拒绝重复和乱序的批次。在这次 Leader 宕机的对照里，关闭幂等的三次都出现了乱序，其中两次有 100 条重复，开启幂等的三次没有任何重复和乱序。这个版本默认已经开启幂等，但它对 <span class="mono">acks</span>、<span class="mono">max.in.flight.requests.per.connection</span>、<span class="mono">retries</span> 有硬性要求。幂等只覆盖&quot;同一个 Producer 实例在一个分区上的重试&quot;，换一个实例就是新的 PID，不受这个保护。</p>
+</section>
+<section>
+  <h2>分步演示：三个Producer实例的PID，和的Leader宕机对照</h2>
+  <p>每一步都是本文上面几节用kafka-dump-log.sh读取日志、kill -9 Leader后统计得到的原始结果。</p>
+<div class="demo" id="demo"><div class="demo-head">PID+序列号是怎么让Leader宕机场景下不再重复不再乱序的</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>这一步新验证的实验</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>
+(function(){
+const D = {"panels":[{"id":"kv","kind":"kv","label":"实验结果（逐步累加）"},{"id":"info","kind":"text","label":"这一步发生了什么"}],"steps":[{"note":"runA（第一个Producer实例，默认幂等）同步发送25条：每个批次PID=14011不变，baseSequence严格从0递增到24。","s":{"kv":{"items":[["runA: PID / baseSequence范围","PID=14011，序列号0→24"]],"hl":["runA: PID / baseSequence范围"]},"info":{"text":"runA（第一个Producer实例，默认幂等）同步发送25条：每个批次PID=14011不变，baseSequence严格从0递增到24。"}}},{"note":"runB（第二个独立的Producer实例）同样发送25条：拿到了不同的PID=16002，baseSequence又从0重新开始——幂等的保护范围是\"同一个实例\"，换实例就是全新的PID。","s":{"kv":{"items":[["runA: PID / baseSequence范围","PID=14011，序列号0→24"],["runB: PID / baseSequence范围","PID=16002（全新），序列号重新从0开始"]],"hl":["runB: PID / baseSequence范围"]},"info":{"text":"runB（第二个独立的Producer实例）同样发送25条：拿到了不同的PID=16002，baseSequence又从0重新开始——幂等的保护范围是\"同一个实例\"，换实例就是全新的PID。"}}},{"note":"runC（显式关闭幂等，enable.idempotence=false）发送25条：PID和序列号全部是-1——Broker对这些批次没有任何去重信息可用。","s":{"kv":{"items":[["runA: PID / baseSequence范围","PID=14011，序列号0→24"],["runB: PID / baseSequence范围","PID=16002（全新），序列号重新从0开始"],["runC: PID / baseSequence(关闭幂等)","PID=-1，序列号=-1（无去重信息）"]],"hl":["runC: PID / baseSequence(关闭幂等)"]},"info":{"text":"runC（显式关闭幂等，enable.idempotence=false）发送25条：PID和序列号全部是-1——Broker对这些批次没有任何去重信息可用。"}}},{"note":"场景：Leader宕机测试，关闭幂等，跑3次。第1次：0条重复，150次乱序。第2次：100条重复，450次乱序。","s":{"kv":{"items":[["runA: PID / baseSequence范围","PID=14011，序列号0→24"],["runB: PID / baseSequence范围","PID=16002（全新），序列号重新从0开始"],["runC: PID / baseSequence(关闭幂等)","PID=-1，序列号=-1（无去重信息）"],["关闭幂等-Leader宕机: 第1、2次结果","(0重复,150乱序) / (100重复,450乱序)"]],"hl":["关闭幂等-Leader宕机: 第1、2次结果"]},"info":{"text":"场景：Leader宕机测试，关闭幂等，跑3次。第1次：0条重复，150次乱序。第2次：100条重复，450次乱序。"}}},{"note":"第3次：100条重复，400次乱序——关闭幂等的三次全部出现了乱序，其中两次还有100条重复。","s":{"kv":{"items":[["runA: PID / baseSequence范围","PID=14011，序列号0→24"],["runB: PID / baseSequence范围","PID=16002（全新），序列号重新从0开始"],["runC: PID / baseSequence(关闭幂等)","PID=-1，序列号=-1（无去重信息）"],["关闭幂等-Leader宕机: 第1、2次结果","(0重复,150乱序) / (100重复,450乱序)"],["关闭幂等-Leader宕机: 第3次结果","(100重复,400乱序)"]],"hl":["关闭幂等-Leader宕机: 第3次结果"]},"info":{"text":"第3次：100条重复，400次乱序——关闭幂等的三次全部出现了乱序，其中两次还有100条重复。"}}},{"note":"换成开启幂等，同样的Leader宕机场景跑3次：全部是0条重复、0次乱序——PID+序列号这套机制让Broker能精确识别并拒绝重复/乱序的批次。","s":{"kv":{"items":[["runA: PID / baseSequence范围","PID=14011，序列号0→24"],["runB: PID / baseSequence范围","PID=16002（全新），序列号重新从0开始"],["runC: PID / baseSequence(关闭幂等)","PID=-1，序列号=-1（无去重信息）"],["关闭幂等-Leader宕机: 第1、2次结果","(0重复,150乱序) / (100重复,450乱序)"],["关闭幂等-Leader宕机: 第3次结果","(100重复,400乱序)"],["开启幂等-Leader宕机: 三次结果","全部(0重复,0乱序)"]],"hl":["开启幂等-Leader宕机: 三次结果"]},"info":{"text":"换成开启幂等，同样的Leader宕机场景跑3次：全部是0条重复、0次乱序——PID+序列号这套机制让Broker能精确识别并拒绝重复/乱序的批次。"}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1000); };
+go(0);
+})();
+</script>
+</section>
+<section>
+  <div class="refs"><h3>参考与说明</h3><ul>
+    <li>数据来自本机 3 节点 Kafka 4.3.1 集群；故障注入实验的 topic 都是 1 分区 3 副本，每次杀掉当前分区 Leader 所在的 Broker 进程（<span class="mono">kill -9</span>），并在下一次实验前重启它。我先跑了一对（关闭幂等、开启幂等）后，又用不同的 topic 和 Leader 补跑了两对，上表是这三对。</li>
+    <li>中间我的补跑脚本第一次启动得太早：当时 broker2 还没有重启完成，杀 Leader 会让 KRaft 失去多数派，我发现后立刻中止并重启了 broker2，再用新的 topic 名重新开始，被中止的那次没有采用任何数据。</li>
+    <li>和《Kafka 能不能做到 Exactly Once》一起看：那篇用事务把&quot;消费—处理—生产&quot;整体原子化，事务型 Producer 是否同样使用 PID 和序列号，这里没有单独验证。</li>
+    <li>没有验证：Broker 端拒绝重复批次时返回的具体错误码（<span class="mono">DuplicateSequenceException</span> 在客户端被当作成功处理，这里没有抓取）；PID 过期（<span class="mono">transactional.id.expiration.ms</span>、<span class="mono">producer.id.expiration.ms</span>）之后的行为；多分区下序列号是按分区独立计数的（日志里只看了单分区）。</li>
+  </ul></div>
+</section>
+<section>
+  <a class="next-post" href="kafka-kafka-transaction.html">
+    <div>
+      <div class="t1">下一篇 · KAFKA 内部原理 36</div>
+      <div class="t2">Kafka Transaction：多 Partition 原子写入</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Kafka 内部原理 · 幂等 Producer：Producer ID 和 Sequence Number · 数据来自本机 3 节点 Kafka 4.3.1 集群，kafka-dump-log 读取 PID 与序列号，并在 Leader kill -9 下对比幂等开关三次</footer>
+</body>
+</html>

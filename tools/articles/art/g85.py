@@ -1,0 +1,22 @@
+from lib import *
+S = SS('g85')
+steps = [
+    step("Write、fsync、Sync 各要多久(内置 SSD,每项 200 次):追加写 4 KiB(f.Write,只进内核页缓存)最小 14 µs / 中位 27 µs / 最大 219 µs;写完调用 syscall.Fsync(fd)(macOS 上的 fsync)最小 38 µs / 中位 63 µs / 最大 481 µs;写完调用 f.Sync()(Go 在 macOS 上用 F_FULLFSYNC)最小 990 µs / 中位 2876 µs / 最大 9112 µs。", t=tl(S(1)), done=lidx(S(1), '追加写 4 KiB', 'syscall.Fsync'), mark=lidx(S(1), 'f.Sync()'), b=bars([['f.Write 中位 (µs)', 27, '27'], ['syscall.Fsync 中位', 63, '63'], ['f.Sync()(F_FULLFSYNC)中位', 2876, '2876']], 2876, done=[0, 1], mark=[2]), kv=KV([['Write', '27 µs(页缓存)'], ['syscall.Fsync', '63 µs'], ['f.Sync()', '2876 µs,约 45 倍于 fsync'], ['含义', 'macOS 上两个“同步”不是一回事']], ['含义'])),
+    step("Write 返回之后别的读者能看到数据吗:f.Write 之后没有 Sync、没有 Close,另一个文件句柄立刻读到 \"hello\"(5 字节)。数据对别的读者已经可见,但还没有保证落盘。", t=tl(S(2)), mark=lidx(S(2), '立刻读到'), kv=KV([['可见性', 'Write 返回即对其它读者可见'], ['持久性', '没有 Sync 就不保证落盘']], ['持久性'])),
+    step("追加 300 条各 100 字节的日志,几种同步策略:不 Sync 总耗时 1.3 ms(每条 4.4 µs);每条都 f.Sync() 721.7 ms(每条 2405.6 µs);每 10 条 f.Sync() 一次 73.6 ms(每条 245.4 µs);每 100 条 f.Sync() 一次 4.6 ms(每条 15.4 µs);打开时加 os.O_SYNC 11.2 ms(每条 37.5 µs)。", t=tl(S(3)), done=lidx(S(3), '不 Sync', '每 100 条', 'os.O_SYNC'), mark=lidx(S(3), '每条都 f.Sync()', '每 10 条'), b=bars([['不 Sync (µs/条)', 4.4, '4.4'], ['每 100 条 Sync', 15.4, '15.4'], ['O_SYNC', 37.5, '37.5'], ['每 10 条 Sync', 245.4, '245.4'], ['每条都 Sync', 2405.6, '2405.6']], 2405.6, done=[0, 1, 2], mark=[3, 4]), kv=KV([['每条 Sync', '2405.6 µs/条,比不 Sync 慢约 550 倍'], ['批量 100 条', '15.4 µs/条'], ['O_SYNC', '37.5 µs/条,比 f.Sync 便宜得多——我推测它在 macOS 上没有 F_FULLFSYNC 的力度,没有验证']], ['O_SYNC'])),
+    step("“写临时文件 → Sync → 重命名 → 同步目录”各步骤的成本(50 次):创建 + 写入 中位 160 µs;f.Sync() 中位 2840 µs;os.Rename 中位 215 µs;目录 Sync() 中位 2655 µs。整个流程的大头是两次 Sync(合计约 5.5 ms)。", t=tl(S(4)), mark=lidx(S(4), 'f.Sync()', '目录 Sync()'), done=lidx(S(4), '创建 + 写入', 'os.Rename'), b=bars([['创建 + 写入 (µs)', 160, '160'], ['f.Sync()', 2840, '2840'], ['os.Rename', 215, '215'], ['目录 Sync()', 2655, '2655']], 2840, done=[0, 2], mark=[1, 3]), kv=KV([['两次 Sync', '约 5.5 ms'], ['其它步骤', '约 0.4 ms'], ['含义', '“原子替换文件”的成本几乎全在 Sync']], ['含义'])),
+    step("源码与文档:internal/poll/fd_fsync_darwin.go 的注释写着 Fsync 调用 SYS_FCNTL 的 F_FULLFSYNC,因为在 OS X 上 SYS_FSYNC 并没有把内容完全刷到磁盘(见 issue #26650 和 macOS 上 fsync 的手册);os.File.Sync 的文档:Sync 把文件的当前内容提交到稳定存储,通常意味着把文件系统内存中最近写入的数据刷到磁盘。", t=tl(S(5)), done=lidx(S(5), 'SYS_FULLFSYNC', 'SYS_FSYNC'), mark=lidx(S(5), 'Sync commits'), kv=KV([['macOS 的 fsync', '不保证刷到磁盘'], ['Go 的 f.Sync()', '改用 F_FULLFSYNC'], ['代价', '毫秒级']], ['Go 的 f.Sync()'])),
+]
+A = mkartg('g85', 85, 'Go,fsync,文件写入,持久性,F_FULLFSYNC,真实验证,动画演示',
+    '在 Go 1.27.1(arm64 macOS)里量文件写入的持久化:f.Write 只要 27 µs(进页缓存,别的读者立刻可见);syscall.Fsync 63 µs;而 Go 的 f.Sync() 在 macOS 上用 F_FULLFSYNC,要 2876 µs;追加日志每条都 Sync 比不 Sync 慢约 550 倍,批量每 100 条 Sync 一次可降到 15.4 µs/条;“临时文件 + Sync + 重命名 + 目录 Sync” 的成本几乎全在两次 Sync(约 5.5 ms)。',
+    'Write 返回了,数据就落盘了吗?不一定:它只是进了操作系统的页缓存。这篇在 macOS 上量 Write、fsync、Go 的 Sync 各要多久,比较不同的同步策略,并读源码里为什么 Go 在 macOS 上不直接用 fsync。',
+    [('27 µs vs 2876 µs', 'f.Write 与 f.Sync()(F_FULLFSYNC)的中位耗时'), ('2405.6 vs 15.4 µs/条', '追加日志:每条都 Sync 与每 100 条 Sync 一次'), ('约 5.5 ms', '“写临时文件→Sync→重命名→目录 Sync” 里两次 Sync 的合计耗时')],
+    [('Write 只是进了页缓存', '<p>Write 一次 4 KiB 中位 27 µs,而且另一个文件句柄立刻就能读到刚写的内容——对别的读者可见,不等于落盘。掉电或系统崩溃时,没有 Sync 的数据可能丢。</p>'),
+     ('macOS 上的两种“同步”', '<p><code>syscall.Fsync</code> 中位 63 µs,<code>f.Sync()</code> 中位 2876 µs,差约 45 倍。源码注释说明:Go 在 macOS 上让 <code>Sync</code> 调用 <code>fcntl(F_FULLFSYNC)</code>,因为 macOS 的 <code>fsync</code> 并没有把内容完全刷到磁盘。Linux 上的数字会不同,我没有测。</p>'),
+     ('同步策略的代价', '<p>300 条 100 字节的日志,每条都 <code>Sync</code> 要 721.7 ms,不 <code>Sync</code> 只要 1.3 ms;每 10 条一次 73.6 ms,每 100 条一次 4.6 ms。数据库的“组提交”就是这个道理:把多条记录合并成一次同步。代价是崩溃时可能丢掉最后一批。<code>O_SYNC</code> 的每条只要 37.5 µs,比 <code>f.Sync()</code> 便宜得多,我推测它在 macOS 上没有 <code>F_FULLFSYNC</code> 的力度,但没有验证。</p>'),
+     ('安全替换文件', '<p>写临时文件、<code>Sync</code>、重命名、再 <code>Sync</code> 目录,是常见的原子替换写法。实验里创建、写入、重命名合起来不到 0.4 ms,两次 <code>Sync</code> 约 5.5 ms。我没有模拟崩溃去验证每一步的必要性,这些步骤来自通用经验而不是本文的实验。</p>'),
+     ('读文档', '<p><code>os.File.Sync</code> 的文档说它把数据提交到稳定存储,通常意味着刷新文件系统缓存;具体平台上怎么做,要看 <code>internal/poll</code> 里的实现。</p>')],
+    steps,
+    [ENV_G + '。机器是带内置 SSD 的 Mac(具体型号与文件系统没有记录);每个延迟项 200 次,日志策略各一次(300 条),原子替换流程 50 次;读过的源码与文档:internal/poll/fd_fsync_darwin.go,go doc os.File.Sync',
+     '没有验证:真实的掉电/崩溃后数据是否丢失(无法在这里模拟)、Linux 上的 fsync/fdatasync 成本、不同文件系统的差别、O_SYNC 与 F_FULLFSYNC 在持久性上的真实差异、SSD 型号对延迟的影响、目录 Sync 的必要性'],
+    '文件写入与 fsync')

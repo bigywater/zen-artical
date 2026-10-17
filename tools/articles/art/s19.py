@@ -1,0 +1,24 @@
+from lib import *
+S = SS('s19')
+steps = [
+    step("2.19 的默认值:RETRY_ENABLED = True,RETRY_TIMES = 2(原请求 + 2 次重试 = 3 次),RETRY_HTTP_CODES = [500, 502, 503, 504, 522, 524, 408, 429],RETRY_PRIORITY_ADJUST = -1,放弃时的日志级别 RETRY_GIVE_UP_LOG_LEVEL = ERROR。RETRY_EXCEPTIONS 是一串异常:CannotResolveHostError、DownloadConnectionRefusedError、DownloadFailedError、DownloadTimeoutError、ResponseDataLossError(都在 scrapy.exceptions)、Twisted 的 ConnectionDone / ConnectError / ConnectionLost、OSError 和 TunnelError。", t=tl(S(1)), mark=lidx(S(1), 'RETRY_HTTP_CODES', 'RETRY_EXCEPTIONS'), kv=KV([['RETRY_TIMES', '2(共 3 次请求)'], ['状态码', '500 502 503 504 522 524 408 429'], ['优先级调整', '-1'], ['放弃日志', 'ERROR']], ['RETRY_TIMES'])),
+    step("一个请求,服务器永远返回同一个状态码:500、502、503、504、522、524、408、429 都是服务器收到 3 次(retry/count = 2、retry/max_reached = 1),最终回调没被调用,errback 收到 HttpError;404、403、400、301(关了重定向)只收到 1 次,不重试。三次请求之间只隔 1 ms、1 ms,完全没有退避。stats 记 retry/reason_count/500 Internal Server Error = 2;放弃时 ERROR 日志 “Gave up retrying <GET …> (failed 3 times)”。", t=tl(S(2)), mark=lidx(S(2), '500  ', '429  ', '重试之间'), done=lidx(S(2), '404  ', '403  ', '400  ', '301  '), kv=KV([['可重试状态码', '请求 3 次,最后 errback(HttpError)'], ['404 / 403 / 400', '1 次,不重试'], ['重试间隔', '1 ms,没有退避'], ['stats', 'retry/count = 2,max_reached = 1']], ['重试间隔'])),
+    step("异常也会重试:连接被拒(DownloadConnectionRefusedError)、读取超时(服务器睡 2 s、DOWNLOAD_TIMEOUT = 0.5,DownloadTimeoutError,服务器收到 3 次)、服务器收到请求后直接断开(DownloadFailedError,服务器收到 3 次)、DNS 失败(CannotResolveHostError)都是 retry/count = 2,reason_count 按异常类名记。最终 errback 拿到的就是这些异常。", t=tl(S(3)), mark=lidx(S(3), '读取超时', '收到请求后断开'), done=lidx(S(3), '连接被拒', 'DNS 失败'), kv=KV([['连接被拒', '重试 2 次'], ['读取超时', '服务器收到 3 次'], ['断开连接', 'DownloadFailedError,3 次'], ['DNS 失败', '重试 2 次']], ['读取超时'])),
+    step("用 meta 控制单个请求(服务器永远返回 500):默认 3 次;dont_retry = True 只发 1 次;max_retry_times = 5 发 6 次(1 + 5);max_retry_times = 0 发 1 次。", t=tl(S(4)), mark=lidx(S(4), 'default=3'), b=bars([['默认', 3, '3 次'], ['dont_retry', 1, '1 次'], ['max_retry_times=5', 6, '6 次'], ['max_retry_times=0', 1, '1 次']], 6, mark=[2], done=[0, 1, 3]), kv=KV([['默认', '3 次'], ['dont_retry = True', '1 次'], ['max_retry_times = 5', '6 次'], ['max_retry_times = 0', '1 次']], ['max_retry_times = 5'])),
+    step("重试请求优先级 −1(RETRY_PRIORITY_ADJUST)并且重新进调度器:并发 1,a 返回 500、b c d 正常,服务器收到的顺序是 a b c d a a——重试被排到所有正常请求之后;把 RETRY_PRIORITY_ADJUST 改成 +10,顺序变成 a a a b c d,重试立刻抢在前面。重试请求还是 dont_filter = True(否则被去重吃掉)。", t=tl(S(5)), mark=lidx(S(5), '默认 RETRY_PRIORITY_ADJUST', '+10'), kv=KV([['默认 -1', 'a b c d a a(重试排在后面)'], ['+10', 'a a a b c d(重试插队)'], ['dont_filter', '重试请求自动 True']], ['默认 -1'])),
+    step("回调里手动重试用 get_retry_request(response.request, spider=self, reason='empty'):200 但内容为空的页面,每次返回新请求(retry_times 0→1→2,new_priority -1、-2,dont_filter = True),第三次返回 None(放弃),服务器共收到 3 次;stats 是 retry/count = 2、retry/max_reached = 1、retry/reason_count/empty = 2,放弃时同样打 ERROR 日志 “Gave up retrying … (failed 3 times): empty”。", t=tl(S(6)), mark=lidx(S(6), "'放弃'", 'Gave up'), done=lidx(S(6), "'retry'"), kv=KV([['get_retry_request', '重试次数、优先级、stats 与中间件一致'], ['第 3 次', '返回 None(放弃)'], ['reason', '写进 retry/reason_count/empty']], ['get_retry_request'])),
+]
+A = mkarts('s19', 19, 'Scrapy,RetryMiddleware,重试,RETRY_TIMES,get_retry_request,真实验证,动画演示',
+    '实测 RetryMiddleware:默认 RETRY_TIMES = 2(共 3 次请求);8 个状态码(500、502、503、504、522、524、408、429)和连接被拒/超时/断开/DNS 失败都会重试,404/403/400 不重试;重试之间只隔 1 ms 没有退避;重试请求优先级 -1 排到所有正常请求之后;meta 的 dont_retry、max_retry_times 可逐请求控制;get_retry_request 可在回调里手动重试。',
+    '请求失败了 Scrapy 会重试几次?哪些状态码和异常会重试?两次重试之间等多久?重试的请求排在什么位置?这篇用能随意返回状态码、断开连接、变慢的服务器把 RetryMiddleware 的每个开关实测一遍。',
+    [('3 次', '默认设置下一个总是 500 的请求,服务器收到的次数(原请求 + 2 次重试)'), ('1 ms', '两次重试之间的间隔(没有退避)'), ('a b c d a a', '并发 1 时 a 返回 500 的请求顺序(重试排在最后,优先级 -1)')],
+    [('什么会重试', '<p><code>RETRY_HTTP_CODES</code> 里的状态码和 <code>RETRY_EXCEPTIONS</code> 里的异常会触发重试;404、403、400 这类不会。</p>'),
+     ('重试次数', '<p><code>RETRY_TIMES = 2</code> 是重试次数,不含原请求;用尽后放弃,响应(或异常)继续交给后面的流程,通常是 <code>HttpError</code> 到 errback。</p>'),
+     ('没有退避', '<p>重试紧接着失败发生,间隔只有 1 毫秒。需要退避就得自己写中间件或用 <code>DOWNLOAD_DELAY</code> / AutoThrottle。</p>'),
+     ('重试请求的特性', '<p>重试请求是原请求的副本:优先级 +<code>RETRY_PRIORITY_ADJUST</code>(默认 -1)、<code>dont_filter = True</code>、meta 里多了 <code>retry_times</code>,并回到调度器重新排队。</p>'),
+     ('逐请求控制', '<p><code>dont_retry</code>、<code>max_retry_times</code>、<code>priority_adjust</code>、<code>give_up_log_level</code> 这些 meta 键可以覆盖设置。</p>'),
+     ('回调里重试', '<p><code>get_retry_request()</code> 和中间件共用同一套规则与 stats,适合“200 但内容不对”的情况。</p>')],
+    steps,
+    [ENV_Y + '。状态码实验用只返回该状态码的服务器;断开连接用原始套接字服务器(读到请求就关闭连接);重试间隔取自服务器端到达时间;除状态码和异常实验外,顺序实验并发为 1',
+     '没有验证:POST 请求的重试(请求体是否原样重发);Retry-After 头(Scrapy 不处理);代理场景下 TunnelError 的重试;重试与 HTTP 缓存的组合;stats 里 retry/reason_count 对自定义异常的命名;RETRY_EXCEPTIONS 里 OSError 的具体命中范围'],
+    '重试')

@@ -1,0 +1,464 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>go:embed:文件是怎么被打进二进制并通过 fs.FS 读出来的</title>
+<meta name="description" content="在 Go 1.27.1 里验证 go:embed:string、[]byte、embed.FS 三种变量;目录嵌入默认跳过 . 与 _ 开头的文件,all: 前缀才包含;embed.FS 只读、按名字排序、修改时间为零(http.FS 因此没有 Last-Modified);ReadFile 拷贝内容(2 次分配,57 ns),string 变量零成本;嵌入的数据在可执行文件里:[]byte 在数据段、string 在只读段,各占一份(1 MiB 文件两种声明共增加 2.02 MiB);各种写错时的编译错误。">
+<link rel="canonical" href="https://bigywater.tech/go-embed-fs.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="go:embed:文件是怎么被打进二进制并通过 fs.FS 读出来的">
+<meta property="og:description" content="在 Go 1.27.1 里验证 go:embed:string、[]byte、embed.FS 三种变量;目录嵌入默认跳过 . 与 _ 开头的文件,all: 前缀才包含;embed.FS 只读、按名字排序、修改时间为零(http.FS 因此没有 Last-Modified);ReadFile 拷贝内容(2 次分配,57 ns),string 变量零成本;嵌入的数据在可执行文件里:[]byte 在数据段、string 在只读段,各占一份(1 MiB 文件两种声明共增加 2.02 MiB);各种写错时的编译错误。">
+<meta property="og:url" content="https://bigywater.tech/go-embed-fs.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="go:embed:文件是怎么被打进二进制并通过 fs.FS 读出来的">
+<meta name="twitter:description" content="在 Go 1.27.1 里验证 go:embed:string、[]byte、embed.FS 三种变量;目录嵌入默认跳过 . 与 _ 开头的文件,all: 前缀才包含;embed.FS 只读、按名字排序、修改时间为零(http.FS 因此没有 Last-Modified);ReadFile 拷贝内容(2 次分配,57 ns),string 变量零成本;嵌入的数据在可执行文件里:[]byte 在数据段、string 在只读段,各占一份(1 MiB 文件两种声明共增加 2.02 MiB);各种写错时的编译错误。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">1966</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">40</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#00799A; --series-c-soft:#D9F1F8;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#4FC3E8; --series-c-soft:#0B2A33;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#4FC3E8; --series-c-soft:#0B2A33;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Go · 41</div>
+  <h1>go:embed:文件是怎么被打进二进制并通过 fs.FS 读出来的</h1>
+  <p>go:embed 让二进制自带静态资源,不用再带一个 assets 目录部署。这篇逐项验证它的规则:怎么写、哪些文件被嵌进去、embed.FS 里的文件长什么样、配合 net/http 的表现、读取成本,以及数据在二进制里的位置与体积,最后列出常见的编译错误。</p>
+  <div class="hero-fact">
+<div><div class="num">3 / 7 / 5</div><div class="lbl">同一个 assets 目录,三种写法嵌入的文件数:默认 3 个,all: 前缀 7 个,通配符 5 个</div></div><div><div class="num">2.02 MiB</div><div class="lbl">嵌入 1 MiB 文件,同时声明 []byte 与 string 时二进制增加的大小</div></div><div><div class="num">57.48 ns</div><div class="lbl">embed.FS.ReadFile 的耗时(2 次分配);string 变量是 1.92 ns</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="go-cgo-overhead.html">cgo 调用的开销:一次 C 调用比 Go 调用慢多少</a></div>
+<section>
+  <h2>三种变量与目录规则</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  string 变量:"hello, embed";[]byte 变量:"hello, embed"(len 12);embed.FS 单文件:"hello, embed"
+  //go:embed assets                  3 个文件:assets/a.txt assets/b.txt assets/sub/c.md
+  //go:embed all:assets              7 个文件:assets/.hidden assets/_under.txt assets/a.txt assets/b.txt assets/sub/.secret assets/sub/_x.md assets/sub/c.md
+  //go:embed assets/*.txt assets/sub/*.md 5 个文件:assets/_under.txt assets/a.txt assets/b.txt assets/sub/_x.md assets/sub/c.md</pre></div>
+  <p>单个文件可以嵌到 <code>string</code>、<code>[]byte</code> 或 <code>embed.FS</code>;目录或多个文件只能嵌到 <code>embed.FS</code>。目录模式默认排除以 <code>.</code> 或 <code>_</code> 开头的文件(防止把 <code>.env</code> 一类文件打进去),要包含就加 <code>all:</code> 前缀;通配符匹配到的文件不受这条限制。</p>
+</section>
+<section>
+  <h2>embed.FS 里的文件</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  ReadDir("assets") 的顺序:a.txt b.txt sub(sort.StringsAreSorted = true)
+  Stat(assets/a.txt):Size = 7,Mode = -r--r--r--,ModTime.IsZero() = true
+  读不存在的文件:open assets/不存在.txt: file does not exist
+  路径带前导斜杠:open /assets/a.txt: file does not exist
+  fs.Sub(dirFS, "assets") 后读 sub/c.md:"# c\n"
+  修改 []byte 变量(helloBytes[0] = 'J'):"Jello, embed";再从 embed.FS 读:"hello, embed"</pre></div>
+  <p>它实现了 <code>fs.FS</code>(并有 <code>ReadFile</code>、<code>ReadDir</code>),文件只读(<code>-r--r--r--</code>)、按名字排序、修改时间为零值。路径用不带前导斜杠的 <code>/</code> 分隔形式。<code>[]byte</code> 变量是数据段里的副本,可以修改,但不影响 <code>embed.FS</code> 里的内容。</p>
+</section>
+<section>
+  <h2>配合 http.FS</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  GET /a.txt     → 200,Content-Type "text/plain; charset=utf-8",Last-Modified "",Content-Length "7",正文前 20 字节 "file a\n"
+  GET /sub/c.md  → 200,Content-Type "text/plain; charset=utf-8",Last-Modified "",Content-Length "4",正文前 20 字节 "# c\n"
+  GET /missing   → 404,Content-Type "text/plain; charset=utf-8",Last-Modified "",Content-Length "",正文前 20 字节 "404 page not found\n"
+  GET /          → 200,Content-Type "text/html; charset=utf-8",Last-Modified "",Content-Length "",正文前 20 字节 "&lt;!doctype html&gt;\n&lt;met"</pre></div>
+  <p><code>http.FS</code> 把 <code>fs.FS</code> 变成 <code>http.FileSystem</code>,静态文件服务一行搞定。因为修改时间是零值,响应没有 <code>Last-Modified</code>,浏览器就不会做基于时间的条件请求;要缓存控制得自己加 <code>Cache-Control</code>/<code>ETag</code>(本文没有试)。</p>
+</section>
+<section>
+  <h2>读取成本</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  使用 string 变量(无读取)                    中位 1.95 ns/op(最小 1.91 / 最大 2.21)
+  embed.FS.ReadFile("hello.txt")       中位 54.85 ns/op(最小 54.72 / 最大 55.38)
+  fs.ReadFile(dirFS, "assets/a.txt")   中位 84.56 ns/op(最小 83.87 / 最大 86.50)
+  dirFS.Open + Stat + Close            中位 70.31 ns/op(最小 68.69 / 最大 84.23)
+  AllocsPerRun:ReadFile 2 次;使用 string 变量 0 次</pre></div>
+  <p><code>ReadFile</code> 要把内容拷贝到新分配的切片里(2 次分配),约 57 ns;直接用 <code>string</code> 变量没有任何运行时成本。内容很小但读得很频繁时,优先嵌成 <code>string</code>。</p>
+</section>
+<section>
+  <h2>在二进制里</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  不嵌入的同类程序 2429698 字节;嵌入 1 MiB(1048576 字节)文件,同时用 []byte 与 string 各声明一次:4543330 字节,增加 2113632 字节(约 2.02 MiB)
+  go tool nm -size 里 ≥ 1 MiB 的符号:
+    &lt;地址&gt;    1085352 R runtime.rodata
+    &lt;地址&gt;    1085352 R go:string.*
+    &lt;地址&gt;    1048576 D main..gobytes.1
+  同一个文件用 []byte 与 string 各声明一次,体积共多 2.02 MiB:[]byte 的数据在可写的数据段(符号类型 D),string 在只读段(R),各占一份,没有合并</pre></div>
+  <p>嵌入的内容就是二进制的一部分:体积直接增加文件大小。实验里同一个文件声明了 <code>[]byte</code> 与 <code>string</code> 两次,符号表里就有两份 1 MiB 的数据(只读段的 <code>go:string.*</code> 与数据段的 <code>main..gobytes.1</code>),所以不要为同一个文件重复声明。</p>
+</section>
+<section>
+  <h2>编译错误</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  匹配不到文件:
+    main.go:7:12: pattern nothing.txt: no matching files found
+  写到模块之外(../):
+    main.go:7:12: pattern ../a.txt: invalid pattern syntax
+  在函数里声明:
+    main.go:8:4: go:embed cannot apply to var inside func
+  变量类型是 int:
+    main.go:8:5: go:embed cannot apply to var of type int
+  string 变量没有导入 embed 包:
+    main.go:3:3: go:embed requires import "embed" (or import _ "embed", if package is not used)
+  把含两个文件的目录嵌进 string:
+    main.go:8:5: invalid go:embed: multiple files for type string
+  把只含 1 个文件(内容 "xx")的目录嵌进 string:编译 rc=0;运行输出 len, s = '2 xx'</pre></div>
+  <p>写错的信息都很直接。有一个容易忽略的特例:把一个<b>只含一个文件</b>的目录嵌进 <code>string</code> 是允许的(得到那个文件的内容),文件变成两个就报错,所以对目录用 <code>embed.FS</code> 更不容易出意外。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">go:embed</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "b", "kind": "bars", "label": "数字对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "三种变量类型都能嵌入单个文件 hello.txt:string 与 []byte 得到 \"hello, embed\",embed.FS 用 ReadFile 读到同样的内容。目录规则://go:embed assets 只嵌入 3 个文件(assets/a.txt、assets/b.txt、assets/sub/c.md)——名字以 . 或 _ 开头的文件被排除;//go:embed all:assets 嵌入 7 个文件(包括 .hidden、_under.txt、sub/.secret、sub/_x.md);通配 assets/*.txt assets/sub/*.md 嵌入 5 个文件(通配符匹配到的 _ 开头文件会包含进来)。", "s": {"t": {"lines": ["  string 变量:\"hello, embed\";[]byte 变量:\"hello, embed\"(len 12);embed.FS 单文件:\"hello, embed\"", "  //go:embed assets                  3 个文件:assets/a.txt assets/b.txt assets/sub/c.md", "  //go:embed all:assets              7 个文件:assets/.hidden assets/_under.txt assets/a.txt assets/b.txt assets/sub/.secret assets/sub/_x.md assets/sub/c.md", "  //go:embed assets/*.txt assets/sub/*.md 5 个文件:assets/_under.txt assets/a.txt assets/b.txt assets/sub/_x.md assets/sub/c.md"], "cur": [], "mark": [], "done": []}, "done": [0, 1], "mark": [2, 3], "kv": {"items": [["//go:embed assets", "3 个文件:跳过 . 与 _ 开头的"], ["//go:embed all:assets", "7 个文件:全部"], ["//go:embed assets/*.txt assets/sub/*.md", "5 个文件:通配符匹配到的 _ 开头文件也会包含"], ["string / []byte / embed.FS", "单个文件三种都行"]], "hl": ["//go:embed all:assets"]}}}, {"note": "embed.FS 里的文件:ReadDir(\"assets\") 的顺序是 a.txt、b.txt、sub(按名字排序);Stat 得到 Size = 7、Mode = -r--r--r--、ModTime.IsZero() = true;读不存在的文件:open assets/不存在.txt: file does not exist;路径带前导斜杠也是 file does not exist;fs.Sub(dirFS, \"assets\") 之后读 sub/c.md 得到 \"# c\\n\";修改 []byte 变量(helloBytes[0] = 'J')得到 \"Jello, embed\",再从 embed.FS 读仍是 \"hello, embed\"。", "s": {"t": {"lines": ["  ReadDir(\"assets\") 的顺序:a.txt b.txt sub(sort.StringsAreSorted = true)", "  Stat(assets/a.txt):Size = 7,Mode = -r--r--r--,ModTime.IsZero() = true", "  读不存在的文件:open assets/不存在.txt: file does not exist", "  路径带前导斜杠:open /assets/a.txt: file does not exist", "  fs.Sub(dirFS, \"assets\") 后读 sub/c.md:\"# c\\n\"", "  修改 []byte 变量(helloBytes[0] = 'J'):\"Jello, embed\";再从 embed.FS 读:\"hello, embed\""], "cur": [], "mark": [], "done": []}, "done": [0, 1], "mark": [3, 4, 5], "kv": {"items": [["ReadDir", "按名字排序"], ["Stat", "Mode -r--r--r--,ModTime 为零"], ["路径", "不能有前导斜杠"], ["[]byte 变量", "可以修改,不影响 embed.FS 里的内容"]], "hl": ["[]byte 变量"]}}}, {"note": "配合 net/http:http.FileServer(http.FS(sub)):GET /a.txt → 200,Content-Type text/plain; charset=utf-8,Content-Length 7,没有 Last-Modified;GET /sub/c.md → 200,Content-Length 4;GET /missing → 404 page not found;GET / → 200,text/html 的目录列表。embed.FS 的修改时间为零,所以响应里没有 Last-Modified。", "s": {"t": {"lines": ["  GET /a.txt     → 200,Content-Type \"text/plain; charset=utf-8\",Last-Modified \"\",Content-Length \"7\",正文前 20 字节 \"file a\\n\"", "  GET /sub/c.md  → 200,Content-Type \"text/plain; charset=utf-8\",Last-Modified \"\",Content-Length \"4\",正文前 20 字节 \"# c\\n\"", "  GET /missing   → 404,Content-Type \"text/plain; charset=utf-8\",Last-Modified \"\",Content-Length \"\",正文前 20 字节 \"404 page not found\\n\"", "  GET /          → 200,Content-Type \"text/html; charset=utf-8\",Last-Modified \"\",Content-Length \"\",正文前 20 字节 \"<!doctype html>\\n<met\""], "cur": [], "mark": [], "done": []}, "done": [0, 1], "mark": [2, 3], "kv": {"items": [["GET /a.txt", "200,text/plain,没有 Last-Modified"], ["GET /missing", "404"], ["GET /", "200,目录列表(text/html)"], ["原因", "ModTime 为零 → 不发 Last-Modified"]], "hl": ["原因"]}}}, {"note": "读取成本(7 轮取中位数):使用 string 变量 1.92 ns/op、0 次分配;embed.FS.ReadFile 57.48 ns/op,fs.ReadFile(dirFS, \"assets/a.txt\")86.50 ns/op,都是 2 次分配(拷贝内容);Open + Stat + Close 70.56 ns/op。要频繁使用就直接嵌成 string,不要每次 ReadFile。", "s": {"t": {"lines": ["  使用 string 变量(无读取)                    中位 1.95 ns/op(最小 1.91 / 最大 2.21)", "  embed.FS.ReadFile(\"hello.txt\")       中位 54.85 ns/op(最小 54.72 / 最大 55.38)", "  fs.ReadFile(dirFS, \"assets/a.txt\")   中位 84.56 ns/op(最小 83.87 / 最大 86.50)", "  dirFS.Open + Stat + Close            中位 70.31 ns/op(最小 68.69 / 最大 84.23)", "  AllocsPerRun:ReadFile 2 次;使用 string 变量 0 次"], "cur": [], "mark": [], "done": []}, "done": [0, 4], "mark": [1, 2, 4], "b": {"items": [["string 变量", 1.92, "1.92"], ["embed.FS.ReadFile", 57.48, "57.48"], ["Open+Stat+Close", 70.56, "70.56"], ["fs.ReadFile(dirFS)", 86.5, "86.50"]], "max": 86.5, "cur": [], "mark": [1, 2, 3], "done": [0]}, "kv": {"items": [["string 变量", "1.92 ns,0 次分配"], ["embed.FS.ReadFile", "57.48 ns,2 次分配"], ["fs.ReadFile(dirFS, …)", "86.50 ns"]], "hl": ["embed.FS.ReadFile"]}}}, {"note": "二进制里:不嵌入的同类程序 2429698 字节;嵌入 1 MiB 随机文件、同时用 []byte 与 string 各声明一次,变成 4543330 字节,增加 2113632 字节(约 2.02 MiB)。go tool nm -size 里 ≥ 1 MiB 的符号:R go:string.*(1085352 字节,只读段,放 string)与 D main..gobytes.1(1048576 字节,数据段,放 []byte)。两种声明各占一份,没有合并。", "s": {"t": {"lines": ["  不嵌入的同类程序 2429698 字节;嵌入 1 MiB(1048576 字节)文件,同时用 []byte 与 string 各声明一次:4543330 字节,增加 2113632 字节(约 2.02 MiB)", "  go tool nm -size 里 ≥ 1 MiB 的符号:", "    <地址>    1085352 R runtime.rodata", "    <地址>    1085352 R go:string.*", "    <地址>    1048576 D main..gobytes.1", "  同一个文件用 []byte 与 string 各声明一次,体积共多 2.02 MiB:[]byte 的数据在可写的数据段(符号类型 D),string 在只读段(R),各占一份,没有合并"], "cur": [], "mark": [], "done": []}, "done": [0, 1], "mark": [3, 4, 5], "b": {"items": [["不嵌入(MiB)", 2.32, "2.32"], ["嵌入 1 MiB 两次声明(MiB)", 4.33, "4.33"]], "max": 4.33, "cur": [], "mark": [1], "done": [0]}, "kv": {"items": [["不嵌入", "2429698 字节"], ["嵌入并声明 []byte 与 string", "4543330 字节(+2.02 MiB)"], ["string 的数据", "只读段 R go:string.*"], ["[]byte 的数据", "数据段 D main..gobytes.1"]], "hl": ["嵌入并声明 []byte 与 string"]}}}, {"note": "写错时编译器的报错:匹配不到文件:pattern nothing.txt: no matching files found;写到模块之外:pattern ../a.txt: invalid pattern syntax;在函数里声明:go:embed cannot apply to var inside func;变量类型是 int:go:embed cannot apply to var of type int;没有导入 embed 包:go:embed requires import \"embed\" (or import _ \"embed\", if package is not used);把含两个文件的目录嵌进 string:invalid go:embed: multiple files for type string;而只含 1 个文件(\"xx\")的目录嵌进 string 能编译,运行得到 len = 2、内容 xx。", "s": {"t": {"lines": ["  匹配不到文件:", "    main.go:7:12: pattern nothing.txt: no matching files found", "  写到模块之外(../):", "    main.go:7:12: pattern ../a.txt: invalid pattern syntax", "  在函数里声明:", "    main.go:8:4: go:embed cannot apply to var inside func", "  变量类型是 int:", "    main.go:8:5: go:embed cannot apply to var of type int", "  string 变量没有导入 embed 包:", "    main.go:3:3: go:embed requires import \"embed\" (or import _ \"embed\", if package is not used)", "  把含两个文件的目录嵌进 string:", "    main.go:8:5: invalid go:embed: multiple files for type string", "  把只含 1 个文件(内容 \"xx\")的目录嵌进 string:编译 rc=0;运行输出 len, s = '2 xx'"], "cur": [], "mark": [], "done": []}, "mark": [1, 3, 5, 7, 9, 11, 12], "kv": {"items": [["不存在的文件", "no matching files found"], ["../ 路径", "invalid pattern syntax"], ["函数里 / 类型不对", "cannot apply to var …"], ["目录嵌进 string", "多个文件:multiple files for type string;只有 1 个文件时可以"]], "hl": ["目录嵌进 string"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / Go 1.27.1(brew);用 go run / go build / go test 直接编译运行,需要第三方库时经代理从 proxy.golang.org 下载;计时用 time.Now / testing.B,数字每次运行会有小幅抖动。所有输出来自真实运行;http 部分用 httptest 直接调用 handler;体积数字来自 go build 的默认选项;符号来自 go tool nm -size</li><li>没有验证:嵌入符号链接与其它特殊文件的规则、go:embed 对构建缓存与增量编译的影响、与 //go:generate 配合生成资源的流程、大文件(几百 MiB)对链接时间与内存的影响、压缩后嵌入(如 gzip)的做法</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="go-build-tags.html">
+    <div>
+      <div class="t1">下一篇 · GO 42</div>
+      <div class="t2">构建标签与条件编译:文件后缀和 //go:build 的匹配规则</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Go · go:embed:文件是怎么被打进二进制并通过 fs.FS 读出来的 · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

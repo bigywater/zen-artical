@@ -1,0 +1,574 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>Gin 路由树:一棵压缩前缀树是怎么把 URL 匹配做到跟路由总数无关的</title>
+<meta name="description" content="本机真实拉取 gin-gonic/gin v1.12.0,用 unsafe.Pointer + 反射挖出未导出的路由树结构,验证路径压缩、参数冲突 panic、priority 优先级重排,并实测查找耗时跟路由总数无关,对照真实源码。">
+<link rel="canonical" href="https://bigywater.tech/gin-router.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Gin 路由树:一棵压缩前缀树是怎么把 URL 匹配做到跟路由总数无关的">
+<meta property="og:description" content="本机真实拉取 gin-gonic/gin v1.12.0,用 unsafe.Pointer + 反射挖出未导出的路由树结构,验证路径压缩、参数冲突 panic、priority 优先级重排,并实测查找耗时跟路由总数无关,对照真实源码。">
+<meta property="og:url" content="https://bigywater.tech/gin-router.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Gin 路由树:一棵压缩前缀树是怎么把 URL 匹配做到跟路由总数无关的">
+<meta name="twitter:description" content="本机真实拉取 gin-gonic/gin v1.12.0,用 unsafe.Pointer + 反射挖出未导出的路由树结构,验证路径压缩、参数冲突 panic、priority 优先级重排,并实测查找耗时跟路由总数无关,对照真实源码。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F5F8F9; --paper:#FFFFFF; --ink:#17232A; --ink-dim:#5C7078; --line:#DCE7EA;
+  --go-c:#0097B2; --go-c-soft:#DCF1F4;
+  --warn-c:#C9762E; --warn-c-soft:#F7EADB;
+  --live-c:#2E8B57; --live-c-soft:#E1F2E7;
+  --code-bg:#0F1B20; --code-ink:#E6F2F4;
+  --shadow: 0 1px 2px rgba(10,30,35,.06), 0 8px 24px -12px rgba(10,30,35,.16);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0D1518; --paper:#151F23; --ink:#E6F2F4; --ink-dim:#9DB4BB; --line:#293C42;
+    --go-c:#3FC9E0; --go-c-soft:#123138;
+    --warn-c:#E0A15C; --warn-c-soft:#3A2A16;
+    --live-c:#6FC996; --live-c-soft:#173327;
+    --code-bg:#0A1215; --code-ink:#E2F0F2;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0D1518; --paper:#151F23; --ink:#E6F2F4; --ink-dim:#9DB4BB; --line:#293C42;
+  --go-c:#3FC9E0; --go-c-soft:#123138;
+  --warn-c:#E0A15C; --warn-c-soft:#3A2A16;
+  --live-c:#6FC996; --live-c-soft:#173327;
+  --code-bg:#0A1215; --code-ink:#E2F0F2;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--go-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--go-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--go-c);}
+h1{font-size:2.1rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--go-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#9DB4BB; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#8FE0D4;}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--go-c-soft); color:var(--go-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .ok{color:#7DD0A0;}
+.term pre.code{margin:0 0 10px; color:#8FE0D4; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem; display:flex; justify-content:space-between; align-items:center;}
+.demo-head .step-badge{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; color:var(--go-c); background:var(--go-c-soft); padding:3px 9px; border-radius:6px; font-weight:600;}
+.demo-narration{min-height:52px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-body{padding:20px;}
+.tree-row{display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-bottom:16px;}
+@media (max-width:700px){.tree-row{grid-template-columns:1fr;}}
+.tree-box{border:1.5px solid var(--line); border-radius:10px; padding:10px; background:var(--bg); text-align:center; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.76rem;}
+.tree-box .nt{font-weight:700; margin-bottom:4px;}
+.tree-box[data-state="set"]{border-color:var(--go-c); background:var(--go-c-soft); color:var(--go-c); font-weight:700;}
+.tree-box[data-state="clear"]{border-color:var(--line); background:var(--bg);}
+.tree-box[data-state="win"]{border-color:var(--live-c); background:var(--live-c-soft); color:var(--live-c); font-weight:700;}
+.query-line{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.83rem; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px 14px; margin-bottom:16px; overflow-x:auto; white-space:pre;}
+.checks{display:flex; flex-direction:column; gap:8px; margin-bottom:16px;}
+.check{border:1.5px solid var(--line); border-radius:10px; padding:10px 14px; background:var(--bg); font-size:.85rem; display:flex; justify-content:space-between; align-items:center; gap:10px; transition:background .2s,border-color .2s;}
+.check .label{flex:1;}
+.check .verdict{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; font-weight:700; padding:2px 9px; border-radius:6px;}
+.check[data-verdict="pass"]{border-color:var(--go-c); background:var(--go-c-soft);}
+.check[data-verdict="pass"] .verdict{background:var(--go-c); color:#fff;}
+.check[data-verdict="fail"]{border-color:var(--warn-c); background:var(--warn-c-soft);}
+.check[data-verdict="fail"] .verdict{background:var(--warn-c); color:#fff;}
+.result-row{display:flex; align-items:center; gap:10px; margin-bottom:14px; flex-wrap:wrap;}
+.result-badge{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; font-weight:700; padding:6px 14px; border-radius:8px;}
+.result-badge.good{background:var(--go-c); color:#fff;}
+.result-badge.warn{background:var(--warn-c); color:#fff;}
+.evidence-line{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.78rem; color:var(--ink-dim); background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px 14px; white-space:pre-wrap; word-break:break-word;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--go-c); color:var(--go-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--go-c); border-color:var(--go-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--go-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Gin 框架内部原理 · 第一篇</div>
+    <h1>Gin 路由树:一棵压缩前缀树是怎么把 URL 匹配做到跟路由总数无关的</h1>
+    <p>项目里的路由从几十条涨到几千条,请求匹配速度会变慢吗?这一篇直接读 <span class="mono">gin</span> 的路由树源码(<span class="mono">tree.go</span>,fork 自 <span class="mono">julienschmidt/httprouter</span>)搞清楚三件事:公共前缀是怎么被压缩进同一个节点的;节点自己维护的那个 <span class="mono">indices</span> 字符串是怎么做到"看一眼首字节就知道往哪个子节点走"的;还有一个容易被忽略的机制——<span class="mono">priority</span> 字段会让"挂载路由更多"的分支被排到更靠前的位置去优先尝试。另外用真实的 <span class="mono">unsafe.Pointer</span> + 反射技巧,把 <span class="mono">gin.Engine</span> 内部完全没有导出的路由树结构整棵挖出来打印了一遍。</p>
+    <p>延续 Go 标准库系列的方法论:本机真实拉取 <span class="mono">gin-gonic/gin</span>,pin 到本机 <span class="mono">go.mod</span> 解析出的真实版本,全部实验都是本机真实执行的 Go 程序,不是伪代码。</p>
+    <div class="hero-fact">
+      <div><div class="num">4 个真实 Go 程序</div><div class="lbl">本机真实 go run,验证路径压缩、冲突 panic、优先级重排、查找复杂度</div></div>
+      <div><div class="num">gin-gonic/gin v1.12.0</div><div class="lbl">本机 go get 拉取解析出的真实版本,源码引用逐行核对</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <h2>真实源码:每个节点是一段路径前缀,不是一个字符</h2>
+  <blockquote class="src">
+    <span class="path">gin-gonic/gin@v1.12.0(本机 go.mod 解析版本) · tree.go L99</span>
+type node struct {
+    path      string
+    indices   string
+    wildChild bool
+    nType     nodeType
+    priority  uint32
+    children  []*node
+    handlers  HandlersChain
+    fullPath  string
+}
+  </blockquote>
+  <p><span class="mono">path</span> 存的是一段可能跨越多个字符的公共前缀,不是单个字符——这就是"压缩"前缀树(radix tree)和普通 trie 树的区别。<span class="mono">indices</span> 是一个字符串,第 i 个字符对应 <span class="mono">children[i]</span> 路径的第一个字节,查找时不需要遍历比较每个子节点的完整路径,只要拿请求路径当前位置的那个字节去 <span class="mono">indices</span> 里做一次线性(字符数很少,通常几个到十几个)扫描。<span class="mono">priority</span> 记录了"这个节点下面挂了多少条路由",<span class="mono">tree.go</span> 顶部注释明确写着这份代码 fork 自 <span class="mono">julienschmidt/httprouter</span>。</p>
+</section>
+
+<section>
+  <h2>真实实验:亲手把 gin.Engine 里完全没有导出的路由树挖出来打印</h2>
+  <p class="h2-sub"><span class="mono">gin.Engine.trees</span> 是未导出字段,正常代码访问不到。用 <span class="mono">reflect.NewAt(v.Type(), unsafe.Pointer(v.UnsafeAddr()))</span> 在每一层都重新"解锁"只读标记——跟上一篇 sync 里读 <span class="mono">Mutex</span> 内部状态字是同一个思路的延伸。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">r := gin.New()
+r.GET("/api/v1/users", h)
+r.GET("/api/v1/users/:id", h)
+r.GET("/api/v1/users/:id/posts", h)
+r.GET("/api/v1/posts", h)
+r.GET("/api/v1/posts/:id", h)
+r.GET("/static/*filepath", h)</pre>
+<span class="ok">path="/"        type=root  indices="as" priority=6 fullPath="/"
+  path="api/v1/"    type=static indices="up" priority=5 fullPath="/api/v1/"
+    path="users"        type=static indices="/" priority=3 handler=true  fullPath="/api/v1/users"
+      path="/"              wildChild=true                  fullPath="/api/v1/users/:id"
+        path=":id"            type=param  priority=2 handler=true  fullPath="/api/v1/users/:id"
+          path="/posts"          priority=1 handler=true  fullPath="/api/v1/users/:id/posts"
+    path="posts"        type=static indices="/" priority=2 handler=true  fullPath="/api/v1/posts"
+      path="/"              wildChild=true                  fullPath="/api/v1/posts/:id"
+        path=":id"            type=param  priority=1 handler=true  fullPath="/api/v1/posts/:id"
+  path="static"      type=static indices="/" priority=1 fullPath="/static/*filepath"
+    path=""             type=catchAll wildChild=true         fullPath="/static/*filepath"
+      path="/*filepath"    type=catchAll priority=1 handler=true fullPath="/static/*filepath"</span>
+  </div>
+  <p>注册了 6 条路由,真实打印出来的树只有 12 个节点,而不是每个 URL 段一个节点。最直观的是 <span class="mono">"api/v1/"</span> 被压缩成了单独一个节点(而不是拆成 <span class="mono">a→p→i→/→v→1→/</span> 七层)——因为这一整段前缀被 <span class="mono">/api/v1/users</span>、<span class="mono">/api/v1/users/:id</span> 等 5 条路由完全共享,直到 "users" 和 "posts" 才第一次出现分叉,这时 <span class="mono">indices</span> 才第一次变成两个字符 <span class="mono">"up"</span>。<span class="mono">priority</span> 也精确对得上:根节点是 6(全部路由都经过根),<span class="mono">"api/v1/"</span> 节点是 5(除了 <span class="mono">/static/*filepath</span> 之外的全部路由都经过它)。</p>
+</section>
+
+<section>
+  <h2>真实实验:同一位置注册两个不同名字的参数,是真实 panic,不是静默覆盖</h2>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">r := gin.New()
+r.GET("/user/:id", h)
+r.GET("/user/:name", h) // 同一位置,参数名不一样</pre>
+<span class="ok">real panic: ':name' in new path '/user/:name' conflicts with existing wildcard ':id' in existing prefix '/user/:id'</span>
+
+<pre class="code">r := gin.New()
+r.GET("/dup", h)
+r.GET("/dup", h) // 完全相同的路径注册两次</pre>
+<span class="ok">real panic: handlers are already registered for path '/dup'</span>
+
+<pre class="code">r := gin.New()
+r.GET("/user/:id", h)
+r.GET("/user/:id/posts", h) // 同一个参数名,但在更深的位置 —— 这个不冲突</pre>
+<span class="ok">no panic: /user/:id and /user/:id/posts coexist fine</span>
+  </div>
+  <p>树的同一个位置只能有一种"分叉方式"——要么是一段确定的静态前缀,要么是唯一确定名字的参数节点,两者不能共存,同名参数在不同深度出现也完全没问题。这也是为什么"两个团队各自往同一个前缀底下加路由,一个用 <span class="mono">:id</span> 一个用 <span class="mono">:userId</span>"这种情况在真实项目里会直接把服务启动阶段炸掉,而不是运行时才发现路由匹配错了对象——<span class="mono">panic</span> 发生在 <span class="mono">r.GET()</span> 调用的那一刻,也就是启动阶段。</p>
+</section>
+
+<section>
+  <h2>真实实验:priority 字段会把"挂载路由更多"的分支往前挪</h2>
+  <blockquote class="src">
+    <span class="path">gin-gonic/gin@v1.12.0(本机 go.mod 解析版本) · tree.go L110</span>
+// Increments priority of the given child and reorders if necessary
+func (n *node) incrementChildPrio(pos int) int {
+    cs := n.children
+    cs[pos].priority++
+    prio := cs[pos].priority
+    // 找到新的位置(往前挪),边挪边交换 indices 和 children 的顺序
+    newPos := pos
+    for ; newPos &gt; 0 &amp;&amp; cs[newPos-1].priority &lt; prio; newPos-- { ... }
+    return newPos
+}
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">r.GET("/a", h); r.GET("/b", h); r.GET("/c", h)
+// root.indices = ?
+
+for i := 1; i &lt;= 5; i++ {
+    r.GET(fmt.Sprintf("/c/x%d", i), h) // 再往 /c/... 底下塞 5 条路由
+}
+// root.indices = ?</pre>
+<span class="ok">after /a /b /c (顺序注册):        root.indices="abc"  priorities=[1 1 1]
+after 5 more routes under /c/...:  root.indices="cab"  priorities=[6 1 1]</span>
+  </div>
+  <p>一开始按 a、b、c 的顺序注册,<span class="mono">indices</span> 就是 <span class="mono">"abc"</span>;往 <span class="mono">/c</span> 底下又塞了 5 条路由之后,<span class="mono">c</span> 这个分支的 <span class="mono">priority</span> 从 1 涨到 6,<span class="mono">incrementChildPrio</span> 把它往前挪到了第一位,<span class="mono">indices</span> 变成了 <span class="mono">"cab"</span>。效果是:请求量最大、挂载路由最多的那个分支,在匹配时会被优先尝试——这是一个静态的、基于"路由注册数量"的启发式优化,不是运行时基于真实请求频率动态调整的。</p>
+</section>
+
+<section>
+  <h2>真实实验:查找耗时只取决于路径深度,跟总共注册了多少条路由无关</h2>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">rSmall := gin.New(); rSmall.GET("/api/v1/users/:id", h)          // 只有 1 条路由
+
+rBig := gin.New(); rBig.GET("/api/v1/users/:id", h)
+for i := 0; i &lt; 3000; i++ { rBig.GET(fmt.Sprintf("/api/v1/%s/%d/detail", randPrefix(), i), h) }  // 再塞 3000 条无关路由
+
+// 各自查找同一个 "/api/v1/users/42" 20 万次</pre>
+<span class="ok">1 route registered:     675.7ns/lookup
+3001 routes registered: 600.6ns/lookup
+ratio: 0.89x
+
+(第二次独立运行: 704.7ns vs 626.0ns, ratio: 0.89x —— 完全一致)</span>
+  </div>
+  <p>多注册 3000 条完全无关的路由之后,查找同一条已存在路由的耗时不但没有变慢,反而在测量误差范围内几乎一样(两次独立运行的比值都是 0.89x)。这正是压缩前缀树的核心价值:查找一条路径的成本只跟这条路径本身的深度/长度有关,跟路由表里总共注册了多少条路由无关——如果 Gin 用的是线性遍历所有路由做正则匹配这种朴素实现,3000 条无关路由必然会让每次查找显著变慢。</p>
+</section>
+
+<section>
+  <h2>交互演示:路由树构建 + 冲突检测 + 优先级重排的真实数据回放</h2>
+  <p class="h2-sub">把上面几组真实实验按发生顺序串成一条演示。</p>
+  <div class="demo" id="ginDemo">
+    <div class="demo-head"><span>Gin 路由树实录</span><span class="step-badge" id="giStep">未开始</span></div>
+    <div class="demo-narration" id="giNarration">点击"下一步"或"播放"开始。</div>
+    <div class="demo-body">
+      <div class="query-line" id="giQuery">—</div>
+      <div class="tree-row" id="giTree"></div>
+      <div class="checks" id="giChecks"></div>
+      <div class="result-row">
+        <span class="result-badge" id="giResultBadge">—</span>
+      </div>
+      <div class="evidence-line" id="giEvidence"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="giReset">⏮ 重来</button>
+      <button class="btn" id="giPrev">‹ 上一步</button>
+      <button class="btn primary" id="giNext">下一步 ›</button>
+      <button class="btn" id="giPlay">▶ 自动播放</button>
+      <span class="step-counter" id="giCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">全部数据来自本机真实 <span class="mono">go run</span> 的输出(<span class="mono">tree_dump.go</span> 的完整树结构、<span class="mono">conflict.go</span> 的真实 panic 消息、<span class="mono">priority.go</span> 的重排前后 indices、<span class="mono">lookup_bench.go</span> 的两次独立计时),Python 脚本重新解析了真实树结构文本,独立核对了每个非叶子节点的 priority 是否精确等于它下面挂载的真实路由数;并且用一份独立重写的 <span class="mono">incrementChildPrio</span> 前移模型,从 "abc" 推导出了 "cab",跟真实输出逐字符一致。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文源码引用(<span class="mono">node</span> 结构体、<span class="mono">addRoute</span>、<span class="mono">incrementChildPrio</span>、冲突检测的 panic 分支)均取自本机通过 <span class="mono">go get github.com/gin-gonic/gin</span> 真实拉取、由本机 <span class="mono">go.mod</span> 解析锁定的 <span class="mono">v1.12.0</span> 版本源码(<span class="mono">$GOMODCACHE/github.com/gin-gonic/gin@v1.12.0/tree.go</span>)。<span class="mono">tree.go</span> 文件头部注释注明这份代码 fork 自 <span class="mono">julienschmidt/httprouter</span>。</li>
+      <li>全部实验(<span class="mono">tree_dump.go</span>、<span class="mono">conflict.go</span>、<span class="mono">priority.go</span>、<span class="mono">lookup_bench.go</span>)均为本机真实 <span class="mono">go run</span> 产生的输出,未做删改。挖未导出字段用的是只读的 <span class="mono">reflect.NewAt</span> + <span class="mono">unsafe.Pointer</span> 技巧,没有修改 gin 或标准库的任何代码。</li>
+      <li>演示数据的自检:真实树结构文本被 Python 脚本重新解析,独立验证了"非叶子节点 priority = 其下真实注册的路由数"这一不变量对根节点、<span class="mono">/api/v1/</span> 节点、<span class="mono">/static/*filepath</span> 节点均成立;优先级重排结果用独立重写的模型从初始状态推导,和真实输出逐字符匹配;查找耗时比值(0.89x)在两次独立运行里完全一致。</li>
+      <li>没有涉及:<span class="mono">RedirectTrailingSlash</span>/<span class="mono">RedirectFixedPath</span> 的路径修正逻辑、大小写不敏感匹配、<span class="mono">HandleMethodNotAllowed</span> 的 405 判断路径。这些留给以后有需要时再单独展开。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="gin-middleware.html">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">Gin 中间件链:c.Next()/c.Abort() 的洋葱模型到底是怎么实现的</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Gin 框架内部原理 · 第一篇 · 路由树 · 源码取自本机真实拉取的 gin-gonic/gin v1.12.0,实验数据来自本机真实 go run</footer>
+
+<script>
+const DATA = {"scenarios": [
+  {
+    "narration": "注册 6 条真实路由后,用 unsafe.Pointer + 反射挖出 gin.Engine 内部未导出的路由树。'api/v1/' 被 5 条路由共享,压缩成了单独一个节点。",
+    "query_display": "r.GET(\"/api/v1/users\"...) x5, r.GET(\"/static/*filepath\", h)",
+    "tree": [
+      {"name":"root \"/\" (indices=as)","state":"clear"},
+      {"name":"\"api/v1/\" priority=5","state":"set"},
+      {"name":"\"static\" priority=1","state":"clear"}
+    ],
+    "check_label": "5 条共享前缀的路由,是否被压缩进同一个 'api/v1/' 节点,而不是拆成一层层单字符节点?",
+    "verdict": "pass",
+    "result_badge": "priority=5,对应真实挂载的 5 条路由",
+    "result_class": "good",
+    "evidence": "真实输出: path=\"api/v1/\" priority=5 fullPath=\"/api/v1/\"(单节点,不是7层单字符节点)"
+  },
+  {
+    "narration": "根节点的 indices 字符串精确等于两个子节点路径的首字符:'a' 对应 api/v1/,'s' 对应 static。",
+    "query_display": "root.indices",
+    "tree": [
+      {"name":"root indices=\"as\"","state":"set"},
+      {"name":"children[0]=\"api/v1/\"","state":"clear"},
+      {"name":"children[1]=\"static\"","state":"clear"}
+    ],
+    "check_label": "root 节点的 indices 是否精确等于两个子节点路径的首字符?",
+    "verdict": "pass",
+    "result_badge": "indices=\"as\" 精确对应两个子节点首字符",
+    "result_class": "good",
+    "evidence": "真实输出: indices=\"as\"; children[0].path 以 'a' 开头, children[1].path 以 's' 开头"
+  },
+  {
+    "narration": "同一位置注册两个不同名字的参数路由(:id 和 :name),源码在插入阶段就检测到冲突并真实 panic;完全重复的路径注册两次也会 panic;但同名参数在不同深度出现完全没问题。",
+    "query_display": "r.GET(\"/user/:id\",h); r.GET(\"/user/:name\",h)",
+    "tree": [],
+    "check_label": "同一位置注册冲突的参数名,是否会在注册阶段(而不是运行时匹配阶段)就真实 panic?",
+    "verdict": "pass",
+    "result_badge": "真实 panic,启动阶段直接失败",
+    "result_class": "good",
+    "evidence": "真实输出: \":name\" 与已存在的通配符 \":id\" 冲突;/dup 重复注册也真实 panic;:id 在不同深度复用不冲突"
+  },
+  {
+    "narration": "先按 a、b、c 顺序注册 3 条路由,root.indices=\"abc\";再往 /c/... 底下塞 5 条新路由,c 分支的 priority 从 1 涨到 6,incrementChildPrio 把它前移到第一位。",
+    "query_display": "r.GET(\"/a\"); r.GET(\"/b\"); r.GET(\"/c\") → 再加 5 条 /c/x1..x5",
+    "tree": [
+      {"name":"c priority=6","state":"win"},
+      {"name":"a priority=1","state":"clear"},
+      {"name":"b priority=1","state":"clear"}
+    ],
+    "check_label": "priority 从 1 涨到 6 后,c 分支是否被真实重排到 indices 字符串的最前面?",
+    "verdict": "pass",
+    "result_badge": "indices: \"abc\" → \"cab\"",
+    "result_class": "good",
+    "evidence": "真实输出: 重排前 root.indices=\"abc\" priorities=[1 1 1];重排后 root.indices=\"cab\" priorities=[6 1 1]"
+  },
+  {
+    "narration": "最后验证查找复杂度:同一条路由,一次只在只有 1 条路由的树里查找,一次在混入了 3000 条无关路由的树里查找,各测 20 万次。",
+    "query_display": "rSmall(1 route) vs rBig(3001 routes), 同一目标路径各查找 200,000 次",
+    "tree": [],
+    "check_label": "多注册 3000 条无关路由后,查找同一条已存在路由的耗时是否基本不受影响(路由总数不决定查找耗时)?",
+    "verdict": "pass",
+    "result_badge": "0.89x(几乎无差异,两次独立运行完全一致)",
+    "result_class": "good",
+    "evidence": "真实测得: 1条路由 675.7ns/lookup vs 3001条路由 600.6ns/lookup, ratio=0.89x;独立重跑一次同样是 0.89x"
+  }
+]};
+
+(function(){
+  const scenarios = DATA.scenarios;
+  const narration = document.getElementById('giNarration');
+  const stepBadge = document.getElementById('giStep');
+  const queryLine = document.getElementById('giQuery');
+  const treeEl = document.getElementById('giTree');
+  const checksEl = document.getElementById('giChecks');
+  const resultBadge = document.getElementById('giResultBadge');
+  const evidenceEl = document.getElementById('giEvidence');
+  const counter = document.getElementById('giCounter');
+  let idx = -1, playing = false, playTimer = null;
+
+  function render(){
+    idx = Math.max(-1, Math.min(scenarios.length - 1, idx));
+    if(idx < 0){
+      narration.textContent = '点击"下一步"或"播放"开始。';
+      stepBadge.textContent = '未开始';
+      queryLine.textContent = '—';
+      treeEl.innerHTML = '';
+      checksEl.innerHTML = '';
+      resultBadge.textContent = '—';
+      resultBadge.className = 'result-badge';
+      evidenceEl.textContent = '';
+      counter.textContent = `0 / ${scenarios.length}`;
+      document.getElementById('giPrev').disabled = true;
+      document.getElementById('giNext').disabled = false;
+      return;
+    }
+
+    const s = scenarios[idx];
+    narration.textContent = s.narration;
+    stepBadge.textContent = `第 ${idx+1} / ${scenarios.length} 步`;
+    queryLine.textContent = s.query_display;
+
+    treeEl.innerHTML = '';
+    s.tree.forEach(n => {
+      const box = document.createElement('div');
+      box.className = 'tree-box';
+      box.dataset.state = n.state;
+      const nt = document.createElement('div');
+      nt.className = 'nt';
+      nt.textContent = n.name;
+      const st = document.createElement('div');
+      st.textContent = n.state === 'win' ? '优先级最高' : (n.state === 'set' ? '关键节点' : '');
+      box.appendChild(nt); box.appendChild(st);
+      treeEl.appendChild(box);
+    });
+
+    checksEl.innerHTML = '';
+    const row = document.createElement('div');
+    row.className = 'check';
+    row.dataset.verdict = s.verdict;
+    const label = document.createElement('span');
+    label.className = 'label';
+    label.textContent = s.check_label;
+    const verdict = document.createElement('span');
+    verdict.className = 'verdict';
+    verdict.textContent = s.verdict === 'pass' ? '成立' : '不成立';
+    row.appendChild(label); row.appendChild(verdict);
+    checksEl.appendChild(row);
+
+    resultBadge.textContent = s.result_badge;
+    resultBadge.className = 'result-badge ' + s.result_class;
+    evidenceEl.textContent = s.evidence;
+
+    counter.textContent = `${idx+1} / ${scenarios.length}`;
+    document.getElementById('giPrev').disabled = idx <= -1;
+    document.getElementById('giNext').disabled = idx >= scenarios.length - 1;
+  }
+
+  document.getElementById('giNext').onclick = () => { idx++; render(); stopPlay(); };
+  document.getElementById('giPrev').onclick = () => { idx--; render(); stopPlay(); };
+  document.getElementById('giReset').onclick = () => { idx = -1; render(); stopPlay(); };
+  function stopPlay(){ playing = false; clearInterval(playTimer); document.getElementById('giPlay').textContent = '▶ 自动播放'; }
+  document.getElementById('giPlay').onclick = () => {
+    if(playing){ stopPlay(); return; }
+    playing = true; document.getElementById('giPlay').textContent = '⏸ 暂停';
+    playTimer = setInterval(() => {
+      if(idx >= scenarios.length - 1){ stopPlay(); return; }
+      idx++; render();
+    }, 2200);
+  };
+
+  render();
+})();
+</script>
+
+</body>
+</html>

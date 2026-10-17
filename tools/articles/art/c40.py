@@ -1,0 +1,18 @@
+from lib import *
+S = SS('c40')
+steps = [
+    step("默认容器里 root 用户的 capability(读 /proc/self/status 的 CapEff 并解码):共 14 个——chown、dac_override、fowner、fsetid、kill、setgid、setuid、setpcap、net_bind_service、net_raw、sys_chroot、mknod、audit_write、setfcap;CapBnd(边界集合)也是同样 14 个。没有 sys_admin、net_admin、sys_ptrace、sys_time 等。", t=tl(S(1)), done=lidx(S(1), 'CapEff'), mark=lidx(S(1), 'CapBnd'), b=bars([['默认 CapEff 个数', 14, '14'], ['解码名字表里的 capability', 41, '41']], 41, done=[0], mark=[1]), kv=KV([['有', 'chown、dac_override、kill、setuid、net_bind_service、net_raw、mknod 等 14 个'], ['没有', 'sys_admin、net_admin、sys_time、sys_ptrace 等']], ['没有'])),
+    step("root 用户在不同配置下(chown 给 uid 1234 / 绑定 80 端口 / ICMP raw socket / mknod 字符设备 / 读别的用户 0600 的文件):默认全部成功;--cap-drop ALL → chown EPERM、raw socket EPERM、mknod EPERM、读文件 EACCES,但绑定 80 仍成功;再 --cap-add CHOWN → chown 恢复成功,其它仍失败;只 --cap-drop NET_RAW → 只有 raw socket 变 EPERM;只 --cap-drop MKNOD → 只有 mknod 变 EPERM。每个 capability 对应一类操作,root 不等于什么都能做。", t=tl(S(2)), done=lidx(S(2), '默认:uid=0', '--cap-drop ALL --cap-add CHOWN'), mark=lidx(S(2), '--cap-drop ALL:', '--cap-drop NET_RAW', '--cap-drop MKNOD'), kv=KV([['--cap-drop ALL', 'chown、raw socket、mknod、读他人文件都被拒绝'], ['--cap-add CHOWN', '只恢复 chown'], ['绑定 80', 'root 丢光 capability 后仍成功']], ['绑定 80'])),
+    step("普通用户 uid 1000:CapEff 是 0 个(CapBnd 仍是 14 个),但默认能绑定 80 端口,即使 --cap-drop NET_BIND_SERVICE 也一样成功——因为容器网络命名空间里 net.ipv4.ip_unprivileged_port_start 默认已经放开。加 --sysctl net.ipv4.ip_unprivileged_port_start=1024 后,uid 1000 绑定 80 → EACCES。--cap-add SYS_ADMIN 后 CapEff 从 14 个变成 15 个。", t=tl(S(3)), done=lidx(S(3), '默认:uid=1000', 'NET_BIND_SERVICE'), mark=lidx(S(3), 'ip_unprivileged_port_start=1024', 'uid 1000 的 capability', 'SYS_ADMIN'), kv=KV([['uid 1000 的 CapEff', '0 个'], ['绑定 80(默认)', '成功,与 NET_BIND_SERVICE 无关'], ['ip_unprivileged_port_start=1024', 'EACCES']], ['绑定 80(默认)'])),
+]
+A = mkartc('c40', 40, 'Docker,capabilities,cap-drop,cap-add,root权限,真实验证,动画演示',
+    '在 Docker Engine 29.8.2 里实测 Linux capability:默认容器 root 有 14 个(chown、dac_override、kill、net_bind_service、net_raw、mknod 等),--cap-drop ALL 后 chown、raw socket、mknod、读他人 0600 文件都被拒绝;uid 1000 的 CapEff 是 0 个,却默认能绑定 80 端口,因为容器里 ip_unprivileged_port_start 已放开,与 NET_BIND_SERVICE 无关。',
+    '容器里的 root 到底有多大权限?--cap-drop 和 --cap-add 具体改变什么?为什么非 root 用户也能绑定 80 端口?这篇解码容器的 capability 集合,并逐个操作验证。',
+    [('14 个', '默认容器里 root 的 capability 个数(解码用的名字表里列了 41 个)'), ('EPERM / EACCES', '--cap-drop ALL 后 root 的 chown、ICMP raw socket、mknod 返回 EPERM,读别人的 0600 文件返回 EACCES'), ('绑定 80 仍成功', 'uid 1000 即使 --cap-drop NET_BIND_SERVICE 也能绑定 80,因为 ip_unprivileged_port_start 默认已放开')],
+    [('默认的 14 个', '<p>解码 <code>/proc/self/status</code> 的 CapEff:chown、dac_override、fowner、fsetid、kill、setgid、setuid、setpcap、net_bind_service、net_raw、sys_chroot、mknod、audit_write、setfcap。没有 sys_admin 这类危险的。</p>'),
+     ('逐项验证', '<p>每一项 capability 对应一类操作:丢掉 NET_RAW 只影响 ICMP raw socket,丢掉 MKNOD 只影响 mknod,--cap-drop ALL 后 root 连读别的用户的 0600 文件都不行(缺 DAC_OVERRIDE)。--cap-drop ALL 再 --cap-add 需要的那几个,是最小权限的做法;但应用实际要用到哪些,要自己试。</p>'),
+     ('绑定 80 端口', '<p>普通用户默认就能绑定 80,即使丢掉 NET_BIND_SERVICE:Docker 在容器的网络命名空间里把 <code>net.ipv4.ip_unprivileged_port_start</code> 放开了(我没有读出它的默认值,但加 <code>--sysctl net.ipv4.ip_unprivileged_port_start=1024</code> 之后绑定 80 就是 EACCES,说明确实是这个参数在起作用)。</p>')],
+    steps,
+    [ENV_C + '。capability 来自 /proc/self/status 的 CapEff / CapBnd(Python 里按位解码);操作用 Python 的 os.chown、socket.bind、socket.SOCK_RAW、os.mknod、open 实测,errno 取自异常;每种配置运行一次;实验后已删除容器和镜像',
+     '没有验证:ambient / inheritable capability、文件 capability(setcap)、user namespace 里的 capability、各个 capability 的完整语义、seccomp 与 capability 同时限制的组合(见 c39)、Docker Desktop 以外的内核'],
+    'Linux capability')

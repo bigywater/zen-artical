@@ -1,0 +1,507 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>HashMap 扩容全过程:第 13 个 put 才触发,节点按 hash 的一位拆成两桶,预设容量省掉 18 次扩容</title>
+<meta name="description" content=" HashMap 的扩容有几个流传很广的说法:默认容量 16、负载因子 0.75、放到第 13 个元素扩容、扩容后节点&quot;重新计算位置&quot;。这次不背，全部在本机的 OpenJDK 17 里用反射读 HashMap 内部的 table 和 threshold 字段，逐个 put 地看：table 什么时候">
+<link rel="canonical" href="https://bigywater.tech/java-hashmap.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="HashMap 扩容全过程:第 13 个 put 才触发,节点按 hash 的一位拆成两桶,预设容量省掉 18 次扩容">
+<meta property="og:description" content=" HashMap 的扩容有几个流传很广的说法:默认容量 16、负载因子 0.75、放到第 13 个元素扩容、扩容后节点&quot;重新计算位置&quot;。这次不背，全部在本机的 OpenJDK 17 里用反射读 HashMap 内部的 table 和 threshold 字段，逐个 put 地看：table 什么时候">
+<meta property="og:url" content="https://bigywater.tech/java-hashmap.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="HashMap 扩容全过程:第 13 个 put 才触发,节点按 hash 的一位拆成两桶,预设容量省掉 18 次扩容">
+<meta name="twitter:description" content=" HashMap 的扩容有几个流传很广的说法:默认容量 16、负载因子 0.75、放到第 13 个元素扩容、扩容后节点&quot;重新计算位置&quot;。这次不背，全部在本机的 OpenJDK 17 里用反射读 HashMap 内部的 table 和 threshold 字段，逐个 put 地看：table 什么时候">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#E76F00; --series-c-soft:#FBEADA;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#FF9A44; --series-c-soft:#3A2914;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#FF9A44; --series-c-soft:#3A2914;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.lang-tabs{margin:20px 0; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper);}
+.lang-tabs .tab-bar{display:flex; flex-wrap:wrap; gap:0; border-bottom:1px solid var(--line); background:var(--bg);}
+.lang-tabs .tab{appearance:none; border:none; background:transparent; color:var(--ink-dim); padding:10px 16px; font-size:.88rem; cursor:pointer; border-bottom:2px solid transparent; font-family:inherit;}
+.lang-tabs .tab.active{color:var(--series-c); border-bottom-color:var(--series-c); font-weight:600;}
+.lang-tabs .tab-panel{display:none; padding:4px 16px 12px;}
+.lang-tabs .tab-panel.active{display:block;}
+.lang-tabs blockquote.src{margin:14px 0 8px;}
+.lang-tabs .term{margin:8px 0 4px;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Java 内部原理 · 集合</div>
+  <h1>HashMap 扩容全过程:第 13 个 put 才触发,节点按 hash 的一位拆成两桶,预设容量省掉 18 次扩容</h1>
+  <p>HashMap 的扩容有几个流传很广的说法:默认容量 16、负载因子 0.75、放到第 13 个元素扩容、扩容后节点&quot;重新计算位置&quot;。这次不背，全部在本机的 OpenJDK 17 里用反射读 <span class="mono">HashMap</span> 内部的 <span class="mono">table</span> 和 <span class="mono">threshold</span> 字段，逐个 put 地看：table 什么时候才被创建；什么时候变长；扩容时每个节点到底去了哪个桶，规则是什么；指定初始容量之后表长为什么常常不是你传的数；以及预设容量到底能省掉多少次扩容和多少时间。最后是一个分步演示，每一帧都是同一段真实程序在每次 put 之后读出的 table 快照。</p>
+  <div class="hero-fact"><div><div class="num">16 → 32</div><div class="lbl">第 13 个元素放进去之后才扩容；196596 个节点的搬家规则全部符合</div></div><div><div class="num">15 步</div><div class="lbl">分步演示，每一帧都是反射读出的 HashMap.table 真实状态</div></div></div>
+</div></div>
+<div class="wrap">
+<section style="padding-top:8px;">
+  <h2>环境与方法</h2>
+  <p>所有实验都是一个 Java 源文件，用反射读取 <span class="mono">java.util.HashMap</span> 的私有字段。JDK 17 默认不允许反射访问 <span class="mono">java.base</span> 里的私有字段，需要显式加 <span class="mono">--add-opens</span>。堆固定为 2g，是为了减少实验五里 GC 对计时的干扰。</p>
+  <blockquote class="src">
+    <span class="path">真实命令 · shell</span>
+$ java -version
+$ java -Xms2g -Xmx2g --add-opens java.base/java.util=ALL-UNNAMED HashMapExp.java
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测 · 本机执行输出</span>
+<pre class="code">openjdk version &quot;17.0.20.1&quot; 2026-08-18
+OpenJDK Runtime Environment Temurin-17.0.20.1+1 (build 17.0.20.1+1)
+OpenJDK 64-Bit Server VM Temurin-17.0.20.1+1 (build 17.0.20.1+1, mixed mode, sharing)
+
+java.version = 17.0.20.1，OpenJDK 64-Bit Server VM，aarch64</pre></div>
+  <p>反射读字段的核心代码（完整源码见文末说明）：</p>
+  <blockquote class="src">
+    <span class="path">真实命令 · java</span>
+Field table = HashMap.class.getDeclaredField(&quot;table&quot;);          // Node&lt;K,V&gt;[] table
+Field threshold = HashMap.class.getDeclaredField(&quot;threshold&quot;);   // 下一次扩容的阈值
+Class&lt;?&gt; node = Class.forName(&quot;java.util.HashMap$Node&quot;);
+Field next = node.getDeclaredField(&quot;next&quot;), hash = node.getDeclaredField(&quot;hash&quot;), key = node.getDeclaredField(&quot;key&quot;);
+// 全部 setAccessible(true)，之后 table.get(map) 得到桶数组，node 的 next 字段串起一个桶里的链表
+  </blockquote>
+</section>
+<section>
+  <h2>真实验证:new HashMap&lt;&gt;() 之后 table 还是 null,第一次 put 才建表</h2>
+  <div class="term"><span class="real-tag">真实实测 · 本机执行输出</span>
+<pre class="code">new HashMap&lt;&gt;() 之后:        size=0  table=null  threshold=0
+put(1, 1) 之后:              size=1  table=长度 16  threshold=12</pre></div>
+  <p>构造之后 <span class="mono">table</span> 是 <span class="mono">null</span>、<span class="mono">threshold</span> 是 0，第一次 <span class="mono">put</span> 才分配长度 16 的数组，同时把 <span class="mono">threshold</span> 设为 12（16 × 0.75）。也就是说，<span class="mono">new HashMap&lt;&gt;()</span> 本身几乎不占内存，&quot;默认容量 16&quot;是第一次 put 才兑现的。</p>
+</section>
+<section>
+  <h2>真实验证:阈值是 12,但扩容发生在放进第 13 个之后——size 超过 threshold 才扩</h2>
+  <div class="term"><span class="real-tag">真实实测 · 本机执行输出</span>
+<pre class="code">put 第   1 个之后: 表长 0 -&gt; 16，threshold = 12
+put 第  13 个之后: 表长 16 -&gt; 32，threshold = 24
+put 第  25 个之后: 表长 32 -&gt; 64，threshold = 48
+put 第  49 个之后: 表长 64 -&gt; 128，threshold = 96
+put 第  97 个之后: 表长 128 -&gt; 256，threshold = 192
+put 第 193 个之后: 表长 256 -&gt; 512，threshold = 384
+put 第 11 个之后: size=11  table=长度 16  threshold=12
+put 第 12 个之后: size=12  table=长度 16  threshold=12
+put 第 13 个之后: size=13  table=长度 32  threshold=24</pre></div>
+  <p>表长每次翻倍：16 → 32 → 64 → 128 → 256 → 512，触发扩容的 put 依次是第 13、25、49、97、193 个，正好是 <span class="mono">threshold</span> 加一（12+1、24+1、48+1、96+1、192+1）。第 12 个放完时 <span class="mono">size = 12</span>，没有超过 <span class="mono">threshold = 12</span>，表长还是 16；第 13 个放完 <span class="mono">size = 13 &gt; 12</span>，表长变成 32，<span class="mono">threshold</span> 变成 24。</p>
+  <p>对照 JDK 17.0.20.1 自带的源码（<span class="mono">lib/src.zip</span> 里的 <span class="mono">java.base/java/util/HashMap.java</span>），<span class="mono">putVal</span> 的结尾：</p>
+  <blockquote class="src">
+    <span class="path">真实命令 · shell</span>
+$ unzip -p $JAVA_HOME/lib/src.zip java.base/java/util/HashMap.java | sed -n &#x27;659,662p&#x27;
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测 · 本机执行输出</span>
+<pre class="code">        ++modCount;
+        if (++size &gt; threshold)
+            resize();
+        afterNodeInsertion(evict);</pre></div>
+  <p>判断是 <span class="mono">++size &gt; threshold</span>，先把新节点放进去、再加一、再和阈值比较，所以是&quot;放进第 13 个之后才扩&quot;，与上面观察到的完全一致。这里有一个容易被忽略的推论：元素是先插入到旧表，然后整体搬到新表的（下一节的演示里你能看到这次 put 的键最终落在新表里的哪个桶）。</p>
+</section>
+<section>
+  <h2>真实验证:所有键挤在同一个桶里时,不用等到第 13 个就会扩容,原因是树化之前先扩容</h2>
+  <div class="term"><span class="real-tag">真实实测 · 本机执行输出</span>
+<pre class="code">-- 对照：键全部落在同一个桶里（键 = 16 的倍数 + 1，对 16、32、64… 取余都得到同一个桶）--
+put 第   1 个之后: 表长 0 -&gt; 16，threshold = 12，size = 1
+    put 第  8 个之后: 表长 16，桶 1 的第一个节点的类 = Node，桶里节点数 = 8
+put 第   9 个之后: 表长 16 -&gt; 32，threshold = 24，size = 9
+    put 第  9 个之后: 表长 32，桶 1 的第一个节点的类 = Node，桶里节点数 = 9
+put 第  10 个之后: 表长 32 -&gt; 64，threshold = 48，size = 10
+    put 第 10 个之后: 表长 64，桶 1 的第一个节点的类 = Node，桶里节点数 = 10
+    put 第 11 个之后: 表长 64，桶 1 的第一个节点的类 = TreeNode，桶里节点数 = 11
+    put 第 12 个之后: 表长 64，桶 1 的第一个节点的类 = TreeNode，桶里节点数 = 12</pre></div>
+  <p>这一组键都是 64 的倍数加 1，无论表长是 16、32 还是 64，它们都落在桶 1。结果：第 9 个 put 之后表长就从 16 变成 32（此时 <span class="mono">size</span> 才 9，远没到阈值 12），第 10 个之后又变成 64；到第 11 个，桶 1 的第一个节点的类变成了 <span class="mono">TreeNode</span>，也就是链表变成了红黑树。这个现象来自 <span class="mono">treeifyBin</span>：</p>
+  <blockquote class="src">
+    <span class="path">真实命令 · shell</span>
+$ unzip -p $JAVA_HOME/lib/src.zip java.base/java/util/HashMap.java | sed -n &#x27;753,757p&#x27;
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测 · 本机执行输出</span>
+<pre class="code">    final void treeifyBin(Node&lt;K,V&gt;[] tab, int hash) {
+        int n, index; Node&lt;K,V&gt; e;
+        if (tab == null || (n = tab.length) &lt; MIN_TREEIFY_CAPACITY)
+            resize();
+        else if ((e = tab[index = (n - 1) &amp; hash]) != null) {</pre></div>
+  <p>链表长度达到阈值想树化时，如果表长还小于 <span class="mono">MIN_TREEIFY_CAPACITY</span>（64），不树化，而是先扩容。所以这里表长到 64 之后才真正变树。&quot;到底是第几个元素才树化&quot;是另一篇文章的主题（见<a href="https://bigywater.tech/java-hashmap-treeify.html" target="_blank" rel="noopener">HashMap 树化</a>），这里只借它说明：扩容不一定是因为 <span class="mono">size</span> 超过阈值。</p>
+</section>
+<section>
+  <h2>真实验证:扩容时每个节点只可能留在原桶,或者搬到「旧下标 + 旧容量」,由 hash 的一位决定</h2>
+  <div class="term"><span class="real-tag">真实实测 · 本机执行输出</span>
+<pre class="code">插入 100000 个字符串键，共触发 14 次扩容，扩容时被重新分配的节点共 196596 个
+  位置不变: 98447，搬到「旧下标 + 旧容量」: 98149
+  「新下标 ∈ {旧下标, 旧下标+旧容量}，且是否搬走恰好等于 (hash &amp; 旧容量) != 0」成立的节点: 196596 / 196596</pre></div>
+  <p>我用 10 万个随机字符串键，在每次扩容前先读出所有节点的桶下标和 <span class="mono">hash</span>，扩容后再读一遍：一共触发了 14 次扩容，被重新分配的旧节点共 196596 个，其中 98447 个留在原下标，98149 个搬到「旧下标 + 旧容量」，两边各约一半。并且对每一个节点都验证了：新下标要么等于旧下标，要么等于旧下标加旧容量，而且&quot;是否搬走&quot;恰好等于 <span class="mono">(hash &amp; 旧容量) != 0</span>——196596 个节点全部成立。</p>
+  <p>源码里的对应部分（<span class="mono">resize()</span> 拆分链表的地方）：</p>
+  <blockquote class="src">
+    <span class="path">真实命令 · shell</span>
+$ unzip -p $JAVA_HOME/lib/src.zip java.base/java/util/HashMap.java | sed -n &#x27;719p&#x27;
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测 · 本机执行输出</span>
+<pre class="code">                            if ((e.hash &amp; oldCap) == 0) {</pre></div>
+  <p>为什么可以这样：表长是 2 的幂，桶下标是 <span class="mono">(n - 1) &amp; hash</span>，即 hash 的低 log₂(n) 位。表长翻倍后多用了 hash 的下一位，这一位就是 <span class="mono">oldCap</span> 对应的那一位：是 0，新下标 = 旧下标；是 1，新下标 = 旧下标 + oldCap。所以扩容不需要对每个节点重新算 hash，只需要看这一位；一个桶里的链表会被拆成&quot;低位链&quot;和&quot;高位链&quot;两条。</p>
+</section>
+<section>
+  <h2>真实验证:new HashMap&lt;&gt;(n) 的表长是「不小于 n 的最小 2 的幂」,想放 13 个元素传 13 仍然会扩容</h2>
+  <div class="term"><span class="real-tag">真实实测 · 本机执行输出</span>
+<pre class="code">new HashMap&lt;&gt;(   0): 构造后 threshold =    1；第一次 put 后 表长 =    2，threshold =    1
+new HashMap&lt;&gt;(   1): 构造后 threshold =    1；第一次 put 后 表长 =    2，threshold =    1
+new HashMap&lt;&gt;(   2): 构造后 threshold =    2；第一次 put 后 表长 =    2，threshold =    1
+new HashMap&lt;&gt;(   3): 构造后 threshold =    4；第一次 put 后 表长 =    4，threshold =    3
+new HashMap&lt;&gt;(   5): 构造后 threshold =    8；第一次 put 后 表长 =    8，threshold =    6
+new HashMap&lt;&gt;(  12): 构造后 threshold =   16；第一次 put 后 表长 =   16，threshold =   12
+new HashMap&lt;&gt;(  13): 构造后 threshold =   16；第一次 put 后 表长 =   16，threshold =   12
+new HashMap&lt;&gt;(  16): 构造后 threshold =   16；第一次 put 后 表长 =   16，threshold =   12
+new HashMap&lt;&gt;(  17): 构造后 threshold =   32；第一次 put 后 表长 =   32，threshold =   24
+new HashMap&lt;&gt;( 100): 构造后 threshold =  128；第一次 put 后 表长 =  128，threshold =   96
+new HashMap&lt;&gt;(1000): 构造后 threshold = 1024；第一次 put 后 表长 = 1024，threshold =  768
+想放 13 个元素不触发扩容：new HashMap&lt;&gt;(13) 表长 = 32；new HashMap&lt;&gt;(17) 表长 = 32；new HashMap&lt;&gt;((int)(13 / 0.75f) + 1) = new HashMap&lt;&gt;(18) 表长 = 32</pre></div>
+  <p>传入的 <span class="mono">n</span> 会被 <span class="mono">tableSizeFor</span> 换成不小于它的最小 2 的幂，存进 <span class="mono">threshold</span>，第一次 put 才据此建表：<span class="mono">new HashMap&lt;&gt;(13)</span> 得到表长 16、<span class="mono">threshold</span> 12；<span class="mono">new HashMap&lt;&gt;(17)</span> 得到表长 32、<span class="mono">threshold</span> 24；<span class="mono">new HashMap&lt;&gt;(1000)</span> 得到 1024、768。对应源码：</p>
+  <blockquote class="src">
+    <span class="path">真实命令 · shell</span>
+$ unzip -p $JAVA_HOME/lib/src.zip java.base/java/util/HashMap.java | sed -n &#x27;377,380p&#x27;
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测 · 本机执行输出</span>
+<pre class="code">    static final int tableSizeFor(int cap) {
+        int n = -1 &gt;&gt;&gt; Integer.numberOfLeadingZeros(cap - 1);
+        return (n &lt; 0) ? 1 : (n &gt;= MAXIMUM_CAPACITY) ? MAXIMUM_CAPACITY : n + 1;
+    }</pre></div>
+  <p>最后一行输出说明了一个常见的坑：打算放 13 个元素就传 13，结果 <span class="mono">new HashMap&lt;&gt;(13)</span> 建出的表长是 16、<span class="mono">threshold</span> 是 12，放第 13 个时照样触发一次扩容，最终表长 32。想要&quot;一次都不扩容&quot;，需要传入的容量除以 0.75 之后再向上取，例如 <span class="mono">(int)(13 / 0.75f) + 1 = 18</span>（表长 32、<span class="mono">threshold</span> 24）。另外注意一个小细节：<span class="mono">new HashMap&lt;&gt;(0)</span> 和 <span class="mono">new HashMap&lt;&gt;(1)</span> 第一次 put 后表长是 2，<span class="mono">threshold</span> 只有 1，再放第二个元素就会扩容——极小的容量参数没有意义。</p>
+</section>
+<section>
+  <h2>真实验证:放 200 万个 Integer,不预设容量扩容了 18 次;预设之后是 0 次,中位耗时更少但抖动很大</h2>
+  <div class="term"><span class="real-tag">真实实测 · 本机执行输出</span>
+<pre class="code">默认容量：扩容 18 次；预设 (int)(n/0.75f)+1：扩容 0 次
+11 轮（含前几轮热身），单位 ms（堆固定为 2g，减少 GC 抖动）:
+  默认容量  最快 31  中位 97  最慢 213
+  预设容量  最快 14  中位 83  最慢 168</pre></div>
+  <p>不预设容量时，200 万个键从 16 一路翻倍到 4194304，共扩容 18 次（每次都要把所有已有节点搬一遍）；预设 <span class="mono">(int)(n / 0.75f) + 1</span> 之后是 0 次。计时的部分我做了 11 轮（前几轮包含 JIT 热身），每个 JVM 进程内取最快、中位、最慢。为了确认单次运行不是巧合，我另外独立启动了 3 次 JVM，只看最后两行：</p>
+  <blockquote class="src">
+    <span class="path">真实命令 · shell</span>
+$ for i in 1 2 3; do java -Xms2g -Xmx2g --add-opens java.base/java.util=ALL-UNNAMED HashMapExp.java | tail -2; done
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测 · 本机执行输出</span>
+<pre class="code">--- 第 1 次独立启动 JVM ---
+  默认容量  最快 104  中位 186  最慢 234
+  预设容量  最快 89  中位 126  最慢 195
+--- 第 2 次独立启动 JVM ---
+  默认容量  最快 22  中位 95  最慢 230
+  预设容量  最快 17  中位 53  最慢 179
+--- 第 3 次独立启动 JVM ---
+  默认容量  最快 21  中位 82  最慢 170
+  预设容量  最快 15  中位 36  最慢 106</pre></div>
+  <p>四次独立运行（含上面主实验那次）里，预设容量的中位耗时都比默认小：83 对 97、126 对 186、53 对 95、36 对 82 毫秒，少了大约 14% 到 56%。但抖动很大：同一个配置下最快和最慢相差 2 到 12 倍，不同次运行的中位数也差了一倍以上，所以这里只能说&quot;预设容量在这个场景下稳定地更快，幅度大概是一成到一半&quot;，不能给出一个精确的倍数。这个数字也包含了 Integer 装箱、GC 的开销，它不是单独的扩容开销。</p>
+</section>
+<section>
+  <h2>分步演示:13 个键逐个 put,table 每一步的真实样子</h2>
+  <p>下面的演示把前面的现象串在一起：键依次是 <span class="mono">1、17、33、2、3、4、5、6、7、8、9、10、49</span>，其中 1、17、33、49 在 16 长的表里都落在桶 1（它们对 16 取余都是 1）。每一帧都是同一段真实程序在每次 put 之后用反射读出的 <span class="mono">table</span>、<span class="mono">size</span>、<span class="mono">threshold</span>，不是手工画的。注意最后一步：第 13 个键 49 放进去之后 <span class="mono">size</span> 超过了阈值，表从 16 扩成 32，桶 1 里的 <span class="mono">1、17、33、49</span> 按 hash 的第 4 位（值 16）被拆开：17 和 49 搬到桶 17，1 和 33 留在桶 1。</p>
+<div class="demo" id="demo"><div class="demo-head">HashMap 逐个 put：table 的真实变化（数据来自 OpenJDK 17 里对 HashMap.table 的反射读取）</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>这次 put 的键所在的桶</span><span><i class="mark"></i>扩容时被重新分配了节点的桶</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>
+(function(){
+const D = {"title": "HashMap 逐个 put：table 的真实变化（数据来自 OpenJDK 17 里对 HashMap.table 的反射读取）", "panels": [{"id": "tab", "kind": "cells", "label": "table 数组（每个格子是一个桶，里面是按链表顺序排列的键；· 表示空桶）"}, {"id": "st", "kind": "kv", "label": "HashMap 的内部字段"}, {"id": "info", "kind": "text", "label": "这一步发生了什么"}], "legend": [["cur", "这次 put 的键所在的桶"], ["mark", "扩容时被重新分配了节点的桶"]], "caption": "", "steps": [{"note": "开始：new HashMap<>() 之后 table 还是 null（延迟初始化），size = 0，threshold = 0。第一次 put 才会建表", "s": {"tab": {"values": [], "cur": [], "done": [], "mark": [], "dim": [], "ptr": {}}, "st": {"items": [["size", "0"], ["table.length", "null"], ["threshold", "0"]], "hl": []}, "info": {"text": "空 HashMap"}}}, {"note": "put(1)：table 为 null，先建表：长度 16，threshold = 12；hash = 1，下标 = (16-1) & 1 = 1，桶 1 是空的，直接放入", "s": {"tab": {"values": ["·", "1", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·"], "cur": [1], "done": [], "mark": [], "dim": [], "ptr": {}}, "st": {"items": [["size", "1"], ["table.length", "16"], ["threshold", "12"]], "hl": ["table.length"]}, "info": {"text": "put(1)：table 为 null，先建表：长度 16，threshold = 12；hash = 1，下标 = (16-1) & 1 = 1，桶 1 是空的，直接放入"}}}, {"note": "put(17)：hash = 17，下标 = (16-1) & 17 = 1，桶 1 里已经有 [1]，键不同（发生哈希冲突），追加到链表末尾，桶里现在是 [1, 17]；size 变成 2，没有超过 threshold = 12，不扩容", "s": {"tab": {"values": ["·", "1,17", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·"], "cur": [1], "done": [], "mark": [], "dim": [], "ptr": {}}, "st": {"items": [["size", "2"], ["table.length", "16"], ["threshold", "12"]], "hl": []}, "info": {"text": "put(17)：hash = 17，下标 = (16-1) & 17 = 1，桶 1 里已经有 [1]，键不同（发生哈希冲突），追加到链表末尾，桶里现在是 [1, 17]；size 变成 2，没有超过 threshold = 12，不扩容"}}}, {"note": "put(33)：hash = 33，下标 = (16-1) & 33 = 1，桶 1 里已经有 [1, 17]，键不同（发生哈希冲突），追加到链表末尾，桶里现在是 [1, 17, 33]；size 变成 3，没有超过 threshold = 12，不扩容", "s": {"tab": {"values": ["·", "1,17,33", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·"], "cur": [1], "done": [], "mark": [], "dim": [], "ptr": {}}, "st": {"items": [["size", "3"], ["table.length", "16"], ["threshold", "12"]], "hl": []}, "info": {"text": "put(33)：hash = 33，下标 = (16-1) & 33 = 1，桶 1 里已经有 [1, 17]，键不同（发生哈希冲突），追加到链表末尾，桶里现在是 [1, 17, 33]；size 变成 3，没有超过 threshold = 12，不扩容"}}}, {"note": "put(2)：hash = 2，下标 = (16-1) & 2 = 2，桶 2 是空的，直接放入；size 变成 4，没有超过 threshold = 12，不扩容", "s": {"tab": {"values": ["·", "1,17,33", "2", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·"], "cur": [2], "done": [], "mark": [], "dim": [], "ptr": {}}, "st": {"items": [["size", "4"], ["table.length", "16"], ["threshold", "12"]], "hl": []}, "info": {"text": "put(2)：hash = 2，下标 = (16-1) & 2 = 2，桶 2 是空的，直接放入；size 变成 4，没有超过 threshold = 12，不扩容"}}}, {"note": "put(3)：hash = 3，下标 = (16-1) & 3 = 3，桶 3 是空的，直接放入；size 变成 5，没有超过 threshold = 12，不扩容", "s": {"tab": {"values": ["·", "1,17,33", "2", "3", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·"], "cur": [3], "done": [], "mark": [], "dim": [], "ptr": {}}, "st": {"items": [["size", "5"], ["table.length", "16"], ["threshold", "12"]], "hl": []}, "info": {"text": "put(3)：hash = 3，下标 = (16-1) & 3 = 3，桶 3 是空的，直接放入；size 变成 5，没有超过 threshold = 12，不扩容"}}}, {"note": "put(4)：hash = 4，下标 = (16-1) & 4 = 4，桶 4 是空的，直接放入；size 变成 6，没有超过 threshold = 12，不扩容", "s": {"tab": {"values": ["·", "1,17,33", "2", "3", "4", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·"], "cur": [4], "done": [], "mark": [], "dim": [], "ptr": {}}, "st": {"items": [["size", "6"], ["table.length", "16"], ["threshold", "12"]], "hl": []}, "info": {"text": "put(4)：hash = 4，下标 = (16-1) & 4 = 4，桶 4 是空的，直接放入；size 变成 6，没有超过 threshold = 12，不扩容"}}}, {"note": "put(5)：hash = 5，下标 = (16-1) & 5 = 5，桶 5 是空的，直接放入；size 变成 7，没有超过 threshold = 12，不扩容", "s": {"tab": {"values": ["·", "1,17,33", "2", "3", "4", "5", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·"], "cur": [5], "done": [], "mark": [], "dim": [], "ptr": {}}, "st": {"items": [["size", "7"], ["table.length", "16"], ["threshold", "12"]], "hl": []}, "info": {"text": "put(5)：hash = 5，下标 = (16-1) & 5 = 5，桶 5 是空的，直接放入；size 变成 7，没有超过 threshold = 12，不扩容"}}}, {"note": "put(6)：hash = 6，下标 = (16-1) & 6 = 6，桶 6 是空的，直接放入；size 变成 8，没有超过 threshold = 12，不扩容", "s": {"tab": {"values": ["·", "1,17,33", "2", "3", "4", "5", "6", "·", "·", "·", "·", "·", "·", "·", "·", "·"], "cur": [6], "done": [], "mark": [], "dim": [], "ptr": {}}, "st": {"items": [["size", "8"], ["table.length", "16"], ["threshold", "12"]], "hl": []}, "info": {"text": "put(6)：hash = 6，下标 = (16-1) & 6 = 6，桶 6 是空的，直接放入；size 变成 8，没有超过 threshold = 12，不扩容"}}}, {"note": "put(7)：hash = 7，下标 = (16-1) & 7 = 7，桶 7 是空的，直接放入；size 变成 9，没有超过 threshold = 12，不扩容", "s": {"tab": {"values": ["·", "1,17,33", "2", "3", "4", "5", "6", "7", "·", "·", "·", "·", "·", "·", "·", "·"], "cur": [7], "done": [], "mark": [], "dim": [], "ptr": {}}, "st": {"items": [["size", "9"], ["table.length", "16"], ["threshold", "12"]], "hl": []}, "info": {"text": "put(7)：hash = 7，下标 = (16-1) & 7 = 7，桶 7 是空的，直接放入；size 变成 9，没有超过 threshold = 12，不扩容"}}}, {"note": "put(8)：hash = 8，下标 = (16-1) & 8 = 8，桶 8 是空的，直接放入；size 变成 10，没有超过 threshold = 12，不扩容", "s": {"tab": {"values": ["·", "1,17,33", "2", "3", "4", "5", "6", "7", "8", "·", "·", "·", "·", "·", "·", "·"], "cur": [8], "done": [], "mark": [], "dim": [], "ptr": {}}, "st": {"items": [["size", "10"], ["table.length", "16"], ["threshold", "12"]], "hl": []}, "info": {"text": "put(8)：hash = 8，下标 = (16-1) & 8 = 8，桶 8 是空的，直接放入；size 变成 10，没有超过 threshold = 12，不扩容"}}}, {"note": "put(9)：hash = 9，下标 = (16-1) & 9 = 9，桶 9 是空的，直接放入；size 变成 11，没有超过 threshold = 12，不扩容", "s": {"tab": {"values": ["·", "1,17,33", "2", "3", "4", "5", "6", "7", "8", "9", "·", "·", "·", "·", "·", "·"], "cur": [9], "done": [], "mark": [], "dim": [], "ptr": {}}, "st": {"items": [["size", "11"], ["table.length", "16"], ["threshold", "12"]], "hl": []}, "info": {"text": "put(9)：hash = 9，下标 = (16-1) & 9 = 9，桶 9 是空的，直接放入；size 变成 11，没有超过 threshold = 12，不扩容"}}}, {"note": "put(10)：hash = 10，下标 = (16-1) & 10 = 10，桶 10 是空的，直接放入；size 变成 12，没有超过 threshold = 12，不扩容", "s": {"tab": {"values": ["·", "1,17,33", "2", "3", "4", "5", "6", "7", "8", "9", "10", "·", "·", "·", "·", "·"], "cur": [10], "done": [], "mark": [], "dim": [], "ptr": {}}, "st": {"items": [["size", "12"], ["table.length", "16"], ["threshold", "12"]], "hl": []}, "info": {"text": "put(10)：hash = 10，下标 = (16-1) & 10 = 10，桶 10 是空的，直接放入；size 变成 12，没有超过 threshold = 12，不扩容"}}}, {"note": "put(49)：size 变成 13，超过了 threshold = 12，触发 resize：表长 16 → 32，threshold 12 → 24。所有节点重新分配：hash 的第 4 位（值 16）是 1 的节点搬到「旧下标 + 16」，是 0 的留在原桶。这次共有 1 个旧节点搬家：17（桶 1 → 桶 17）；刚插入的 49 按新表长算下标是 (32-1) & 49 = 17（在旧表里它会落在桶 1），也落在桶 17", "s": {"tab": {"values": ["·", "1,33", "2", "3", "4", "5", "6", "7", "8", "9", "10", "·", "·", "·", "·", "·", "·", "17,49", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·"], "cur": [17], "done": [], "mark": [1, 17], "dim": [], "ptr": {}}, "st": {"items": [["size", "13"], ["table.length", "32"], ["threshold", "24"]], "hl": ["table.length", "threshold"]}, "info": {"text": "put(49)：size 变成 13，超过了 threshold = 12，触发 resize：表长 16 → 32，threshold 12 → 24。所有节点重新分配：hash 的第 4 位（值 16）是 1 的节点搬到「旧下标 + 16」，是 0 的留在原桶。这次共有 1 个旧节点搬家：17（桶 1 → 桶 17）；刚插入的 49 按新表长算下标是 (32-1) & 49 = 17（在旧表里它会落在桶 1），也落在桶 17"}}}, {"note": "演示结束：13 个键中有 4 个（1、17、33、49）在 16 长的表里挤在同一个桶 1，扩容到 32 后被分到了桶 1 和桶 17，链表变短了", "s": {"tab": {"values": ["·", "1,33", "2", "3", "4", "5", "6", "7", "8", "9", "10", "·", "·", "·", "·", "·", "·", "17,49", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·"], "cur": [], "done": [], "mark": [1, 17], "dim": [], "ptr": {}}, "st": {"items": [["size", "13"], ["table.length", "32"], ["threshold", "24"]], "hl": []}, "info": {"text": "扩容不只是「表变大」，还会把长链表拆开"}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1000); };
+go(0);
+})();
+</script>
+</section>
+<section>
+  <h2>结论</h2>
+  <ul>
+    <li><span class="mono">new HashMap&lt;&gt;()</span> 不建表，第一次 put 才建长度 16、阈值 12 的表；放进第 13 个之后（<span class="mono">++size &gt; threshold</span>）才扩容，表长翻倍、阈值翻倍（16/12 → 32/24 → 64/48 …）。</li>
+    <li>扩容时每个节点只需要看 hash 的一位：<span class="mono">(hash &amp; oldCap) == 0</span> 留在原桶，否则搬到「旧下标 + oldCap」，10 万个节点、14 次扩容里 196596 个节点全部符合这个规则。</li>
+    <li>表长小于 64 时，一个桶里链表长了会先扩容，而不是树化，所以扩容也可能发生在 <span class="mono">size</span> 远没到阈值的时候。</li>
+    <li><span class="mono">new HashMap&lt;&gt;(n)</span> 的表长是不小于 n 的最小 2 的幂，<span class="mono">threshold</span> 是它的 0.75 倍；想放 13 个元素传 13 仍然会扩容，需要传 <span class="mono">(int)(13 / 0.75f) + 1</span>。</li>
+    <li>放 200 万个键时，不预设容量要扩容 18 次，预设是 0 次；四次独立运行里预设的中位耗时都更小，但计时抖动很大。</li>
+  </ul>
+</section>
+<section>
+  <div class="refs"><h3>参考与说明</h3><ul>
+    <li>环境：本机 OpenJDK 17.0.20.1（Temurin，<span class="mono">JAVA_HOME</span> 指向它的安装目录），aarch64，macOS；所有源码行号均来自这个版本自带的 <span class="mono">lib/src.zip</span>，其他 JDK 版本的行号和细节可能不同。</li>
+    <li>实验源码 <span class="mono">HashMapExp.java</span> 和生成演示数据的 <span class="mono">HashMapDemo.java</span> 都在本机的实验目录里，用反射读取私有字段，所以需要 <span class="mono">--add-opens java.base/java.util=ALL-UNNAMED</span>；数据全部来自这两个程序的真实输出。</li>
+    <li>没有验证：并发场景（多线程 put 触发的扩容，另见 ConcurrentHashMap 一篇）；红黑树桶（<span class="mono">TreeNode</span>）在扩容时的拆分（<span class="mono">split</span>）；JDK 8、11、21 的行为差异；负载因子不是默认 0.75 时的表现。</li>
+    <li>相关文章:<a href="https://bigywater.tech/java-hashmap-treeify.html" target="_blank" rel="noopener">HashMap 树化:真实测出是插入第 9 个才变红黑树,不是第 8 个</a>（同一个 <span class="mono">treeifyBin</span> 的另一个角度）。</li>
+  </ul></div>
+</section>
+<section>
+  <a class="next-post" href="java-string.html" target="_blank" rel="noopener" style="text-decoration:none; color:inherit;">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">String 内部:coder 决定 1 字节还是 2 字节,「不可变」只是约定——反射改一个字节,字面量、HashMap 全被改了</div>
+    </div>
+    <div style="font-size:1.5rem;">→</div>
+  </a>
+</section>
+</div>
+<footer>Java 内部原理 · 集合 · 数据来自本机 OpenJDK 17.0.20.1（aarch64）的真实实验</footer>
+</body>
+</html>

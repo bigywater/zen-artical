@@ -1,0 +1,601 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>分布式锁的 watchdog</title>
+<meta name="description" content="本机真实实测 watchdog 续期机制:没有续期会双持锁、PEXPIRE 是重置不是叠加、崩溃自愈、迟到续期为何不破坏新主人的锁,以及续期解决不了的残留风险。">
+<link rel="canonical" href="https://bigywater.tech/watchdog.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="分布式锁的 watchdog">
+<meta property="og:description" content="本机真实实测 watchdog 续期机制:没有续期会双持锁、PEXPIRE 是重置不是叠加、崩溃自愈、迟到续期为何不破坏新主人的锁,以及续期解决不了的残留风险。">
+<meta property="og:url" content="https://bigywater.tech/watchdog.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="分布式锁的 watchdog">
+<meta name="twitter:description" content="本机真实实测 watchdog 续期机制:没有续期会双持锁、PEXPIRE 是重置不是叠加、崩溃自愈、迟到续期为何不破坏新主人的锁,以及续期解决不了的残留风险。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F7F5F3; --paper:#FFFFFF; --ink:#211A19; --ink-dim:#6B5D5A; --line:#E3DAD6;
+  --redis-c:#C6302B; --redis-c-soft:#FBE7E5;
+  --mem-c:#B8791E; --mem-c-soft:#F6ECD9;
+  --type-c:#2C6E49; --type-c-soft:#E1EFE6;
+  --code-bg:#241C1B; --code-ink:#F0E7E4;
+  --shadow: 0 1px 2px rgba(40,20,18,.06), 0 8px 24px -12px rgba(40,20,18,.16);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#17100F; --paper:#231A19; --ink:#F0E7E4; --ink-dim:#B3A19D; --line:#3A2C29;
+    --redis-c:#F0736A; --redis-c-soft:#3A211F;
+    --mem-c:#E0AC5C; --mem-c-soft:#382C18;
+    --type-c:#6FC492; --type-c-soft:#1B3327;
+    --code-bg:#120D0C; --code-ink:#EFE4E1;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#17100F; --paper:#231A19; --ink:#F0E7E4; --ink-dim:#B3A19D; --line:#3A2C29;
+  --redis-c:#F0736A; --redis-c-soft:#3A211F;
+  --mem-c:#E0AC5C; --mem-c-soft:#382C18;
+  --type-c:#6FC492; --type-c-soft:#1B3327;
+  --code-bg:#120D0C; --code-ink:#EFE4E1;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--redis-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--redis-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--redis-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--redis-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.a .tag{background:var(--redis-c-soft); color:var(--redis-c);}
+.card.b .tag{background:var(--mem-c-soft); color:var(--mem-c);}
+.card.c .tag{background:var(--type-c-soft); color:var(--type-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#B3A19D; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#F0A6A0;}
+
+.callout{border-left:3px solid var(--redis-c); background:var(--redis-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+.callout.c{border-color:var(--type-c); background:var(--type-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--redis-c-soft); color:var(--redis-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#F0A6A0;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#F0736A;}
+.term .cm{color:#8B7F7C;}
+.term pre.code{margin:0 0 10px; color:#F0A6A0; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem; display:flex; justify-content:space-between; align-items:center;}
+.demo-head .phase-badge{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; color:var(--redis-c); background:var(--redis-c-soft); padding:3px 9px; border-radius:6px; font-weight:600;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--mem-c-soft); color:var(--mem-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:22px 20px; overflow-x:auto;}
+.wd-track{position:relative; min-width:520px; height:56px; border-radius:8px; background:repeating-linear-gradient(45deg, var(--bg), var(--bg) 8px, var(--line) 8px, var(--line) 9px); border:1px solid var(--line); overflow:hidden;}
+.wd-window{position:absolute; top:0; bottom:0; background:var(--type-c-soft); border-left:2px solid var(--type-c); border-right:2px solid var(--type-c); transition:left .3s, width .3s, background .3s, border-color .3s;}
+.wd-window.gone{background:var(--redis-c-soft); border-color:var(--redis-c);}
+.wd-marker{position:absolute; top:-6px; bottom:-6px; width:2px; transition:left .3s;}
+.wd-marker .flag{position:absolute; top:-22px; left:-40px; width:80px; text-align:center; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.62rem; padding:1px 3px; border-radius:4px;}
+.wd-marker.ok{background:var(--type-c);}
+.wd-marker.ok .flag{background:var(--type-c); color:#fff;}
+.wd-marker.miss{background:var(--redis-c);}
+.wd-marker.miss .flag{background:var(--redis-c); color:#fff;}
+.wd-labels{display:flex; justify-content:space-between; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.7rem; color:var(--ink-dim); margin-top:6px; min-width:520px;}
+.stat-row{display:flex; gap:16px; flex-wrap:wrap; margin:14px 0 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem;}
+.stat{border:1px solid var(--line); border-radius:8px; padding:8px 12px; background:var(--bg);}
+.stat b{color:var(--redis-c); display:block; font-size:1rem; font-variant-numeric:tabular-nums;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--redis-c); color:var(--redis-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--redis-c); border-color:var(--redis-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{display:flex; align-items:center; gap:10px; margin-bottom:24px; font-size:.88rem; color:var(--ink-dim); flex-wrap:wrap;}
+.prev-post a{font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--redis-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Redis 系列 · 第八篇</div>
+    <h1>分布式锁的 watchdog</h1>
+    <p>分布式锁给一个不长的 TTL,是为了防止持锁进程真的崩溃时锁被永久占用;但任务到底要跑多久是猜不准的——TTL 短了,任务还没做完锁就没了;TTL 长了,崩溃时大家要陪着等很久。这个两难就是 watchdog(续期协程)存在的理由:只要持锁方还活着,就不断把锁的死线往后推——注意是"往后推",不是"变长",任务跑多久就续多久;进程真崩溃了,续期跟着停摆,锁按最后一次续期设定的死线自然过期。</p>
+    <p>这一篇在本机 Redis 8.10.1 上,把"没有 watchdog 会出什么问题"和"watchdog 具体怎么工作、还有哪些防不住的角落"都实测了一遍。</p>
+    <div class="hero-fact">
+      <div><div class="num">5 组实验</div><div class="lbl">本机 redis-cli,从"没有 watchdog 会双持锁"到"迟到续期为什么不会破坏别人的锁"</div></div>
+      <div><div class="num">1 个残留风险</div><div class="lbl">无界暂停(GC/调度延迟)导致的过期,watchdog 本身解决不了,需要 fencing token 兜底</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <div class="prev-post">← 接上篇 <a href="repl.html" target="_blank" rel="noopener">Redis 主从复制:全量同步与部分重同步</a></div>
+  <h2>为什么需要 watchdog:固定 TTL 的两难</h2>
+  <p class="h2-sub">分布式锁靠 TTL 兜底"进程崩溃后锁不会永久占用",但 TTL 该设多长,是个两头为难的选择——这正是 watchdog 要解决的问题。</p>
+  <div class="cards">
+    <div class="card a">
+      <span class="tag">TTL 设短了</span>
+      <h3>任务比预期慢,锁提前消失</h3>
+      <p>这不是小概率的极端情况,是必然会发生的事——你没法精确预测一个任务到底要跑多久。任务还没做完,锁先到期了,别人就会正常抢到这把"看起来空闲"的锁。</p>
+    </div>
+    <div class="card b">
+      <span class="tag">TTL 设长了</span>
+      <h3>进程真崩溃时,大家要陪着等</h3>
+      <p>为了防止任务跑得久锁就先没了,把 TTL 设得很长——代价是一旦持锁进程真的崩溃(没有走到正常释放这一步),这把锁要等满整个超长 TTL 才会被释放,别的调用方全程等着。</p>
+    </div>
+    <div class="card c">
+      <span class="tag">watchdog</span>
+      <h3>让 TTL 只对"崩溃"负责</h3>
+      <p>TTL 设得比较短,但只要持锁方还活着,就用一个后台协程不断续期——任务跑多久就续多久,TTL 只在进程真的崩溃、没人续期时才发挥作用。</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>真实实测(一):没有 watchdog,会真的双持锁</h2>
+  <p class="h2-sub">A 加锁处理一笔订单,TTL 设 2000ms,但订单处理实际耗时 3500ms,期间没有任何续期。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ redis-cli SET lock:order "CLIENT-A" NX PX 2000
+$ # t=0ms: A 加锁成功, 开始处理订单(预计耗时 3500ms, 没有 watchdog)</pre>
+<span class="cm"># t=2100ms, 订单还没处理完, 查一下锁的状态:</span>
+<span class="cmd">$ redis-cli GET lock:order</span>
+<span class="bad">(nil)   # 已经是空的 —— TTL 到了自动释放, A 的业务逻辑完全不知道</span>
+
+<span class="cm"># t=2100ms, B 认为锁是空闲的, 正常拿到锁:</span>
+<span class="cmd">$ redis-cli SET lock:order "CLIENT-B" NX PX 5000</span>
+<span class="ok">OK</span>
+
+<span class="cm"># t=3500ms, A 的订单处理这时候才做完, 执行释放锁(用自己的 token 判断该不该删):</span>
+<span class="cmd">$ redis-cli --eval release.lua lock:order , "CLIENT-A"</span>
+<span class="bad">(integer) 0   # 没删成功 —— 当前值已经是 B 的 token, 不是 A 的了</span>
+  </div>
+  <p>t=2100ms 到 t=3500ms 这 1400ms 里,A 和 B 都以为自己独占着这把锁,同时在处理同一笔订单——这不是理论推演,是本机跑出来的结果。A 直到最后释放锁时才发现"咦,删不掉,已经不是我的了",但那时候双重处理已经发生了。</p>
+</section>
+
+<section>
+  <h2>真实实测(二):有 watchdog,任务跑多久锁就活多久</h2>
+  <p class="h2-sub">同样的场景,加一个后台续期协程:每隔 TTL 的 1/3 左右,用 Lua 脚本原子地"先确认锁还是不是自己的,再续期"。</p>
+  <blockquote class="src">
+    <span class="path">renew.lua · 本文实验脚本</span>
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+  return redis.call("PEXPIRE", KEYS[1], ARGV[2])
+else
+  return 0
+end
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ redis-cli SET lock:res "TOKEN-A" NX PX 3000
+$ # 任务预计耗时 7000ms, TTL 只有 3000ms, watchdog 每 1000ms 续期一次</pre>
+<span class="ok">[watchdog] 第1次续期, 返回=1, 此时 TTL=2985ms
+[watchdog] 第2次续期, 返回=1, 此时 TTL=2986ms
+[watchdog] 第3次续期, 返回=1, 此时 TTL=2986ms
+[watchdog] 第4次续期, 返回=1, 此时 TTL=2988ms
+[watchdog] 第5次续期, 返回=1, 此时 TTL=2980ms
+[watchdog] 第6次续期, 返回=1, 此时 TTL=2985ms</span>
+<span class="cm"># 任务在 t=7000ms 结束, 此时锁是否还在:</span>
+<span class="cmd">$ redis-cli GET lock:res; redis-cli PTTL lock:res</span>
+<span class="ok">TOKEN-A
+2213</span>
+  </div>
+  <p>整个 7 秒里,锁的 TTL 一直被"续"回接近 3000ms,没有因为超过了初始的 3s TTL 而消失。</p>
+</section>
+
+<section>
+  <h2>续期不是"变长",PEXPIRE 是重置,不是叠加</h2>
+  <p class="h2-sub">一个容易搞错的地方:每 1s 续 3s,跑 7 次会不会变成 21s?不会——每次续期是把死线重新定到"现在 + 3s",不是在原来的死线上再加 3s。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ redis-cli SET demo v PX 3000</pre>
+<span class="ok">刚设置:              TTL = 2995ms</span>
+<span class="cm">$ sleep 1</span>
+<span class="ok">1秒后(还没续期):      TTL = 1975ms   # 自然倒计时, 从3000掉到约2000</span>
+<span class="cmd">$ redis-cli PEXPIRE demo 3000</span>
+<span class="ok">续期后:               TTL = 2992ms   # 直接重置回~3000, 不是 2000+3000=5000</span>
+<span class="cm">$ sleep 1; redis-cli PEXPIRE demo 3000</span>
+<span class="ok">再续期一次后:          TTL = 2989ms   # 还是重置回~3000, 没有累加</span>
+  </div>
+  <p><span class="mono">PEXPIRE key 3000</span> 的语义是"从现在起 3000ms 后过期",跟它之前还剩多少 TTL 无关。整个续期过程是一个**滑动窗口**:锁剩余的存活时间始终维持在"最近一次续期 + 3s"附近,不会因为续了很多次就越滚越大。</p>
+</section>
+
+<section>
+  <h2>真实实测(三):进程崩溃,watchdog 停摆,锁必须能自愈</h2>
+  <p class="h2-sub">watchdog 不能变成"续上了就再也不会释放"——这是它必须守住的安全底线。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ redis-cli SET lock:res "TOKEN-B" NX PX 3000
+$ # watchdog 只续期了1次(t=1000ms), 然后被强行杀掉(模拟进程崩溃)</pre>
+<span class="cm"># 之后每隔1秒查一次锁的状态:</span>
+<span class="ok">第0s 后: GET lock:res = 'TOKEN-B'
+第1s 后: GET lock:res = 'TOKEN-B'</span>
+<span class="bad">第2s 后: GET lock:res = ''
+第3s 后: GET lock:res = ''</span>
+  </div>
+  <p>watchdog 被杀掉后,没人再续期,锁按最后一次续期设定的死线正常过期,没有变成永久占用的死锁——进程真的崩溃了,安全网照样生效。</p>
+</section>
+
+<section>
+  <h2>真实实测(四):迟到的续期,撞见了新主人</h2>
+  <p class="h2-sub">如果续期请求因为 GC 暂停、调度延迟而迟到,恰好错过了自己的过期时刻,甚至等它真正到达 Redis 时,锁已经被别人抢走了,会发生什么?</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ redis-cli SET lock:res "TOKEN-A" NX PX 1000
+$ # t=0: A 加锁, TTL=1000ms, 之后被 GC 卡住, 没能按时续期</pre>
+<span class="cm"># t=1200ms: 锁应该已经自然过期了, 检查:</span>
+<span class="bad">(nil)   # 确实是空的, B 现在可以正常抢到</span>
+<span class="cmd">$ redis-cli SET lock:res "TOKEN-B" NX PX 5000</span>
+<span class="ok">OK   # B 成功抢到锁</span>
+
+<span class="cm"># t=1500ms: A 才从卡顿里恢复过来, 它的 watchdog 才执行到续期这一步(用的还是自己的 TOKEN-A):</span>
+<span class="cmd">$ redis-cli --eval renew.lua lock:res , "TOKEN-A" 3000</span>
+<span class="bad">(integer) 0   # 续期失败 —— GET 到的是 TOKEN-B, 跟 A 自己的 token 对不上</span>
+<span class="cmd">$ redis-cli GET lock:res</span>
+<span class="ok">TOKEN-B   # B 的锁完好无损, A 迟到的续期没有破坏它</span>
+  </div>
+  <p>token 比对保护了 <b>数据层面</b> 的安全——A 的续期不会误伤 B 的锁。但保护不了 <b>A 自己的认知</b>:从 t=1000ms(锁真正过期)到 t=1500ms(A 通过续期返回值 0 才发现自己已经不再持有锁)这 500ms 里,如果 A 的业务逻辑没有在每一步检查"我还持有锁吗",它会一直以为自己安全地持有锁,继续操作那份资源——这段时间里 B 可能也在操作同一份资源。</p>
+  <div class="callout">
+    这不是这套实现写得不够好,是所有基于 TTL 租约(lease)的锁共有的结构性局限:进程可能因为一次不可控的暂停(GC 全局停顿、CPU 调度延迟、网络分区、Redis 主从切换)导致锁在自己"活着"但没在正常运行时真的过期——而暂停能有多长,理论上是没有上限的。watchdog 能把这个窗口的<b>概率</b>压得很低(续得越勤,窗口越小),但没法把它压到 0。
+  </div>
+</section>
+
+<section>
+  <h2>演示:五组实验合并成一条时间线</h2>
+  <p class="h2-sub">每个色块代表"这把锁距离真正过期还剩多久"——续期会把它重新推远,过期会让它归零。</p>
+  <div class="demo" id="wdDemo">
+    <div class="demo-head"><span>watchdog 生命周期演示</span><span class="phase-badge" id="wdPhase">—</span></div>
+    <div class="demo-narration" id="wdNarration"></div>
+    <div class="demo-body">
+      <div class="wd-track" id="wdTrack"></div>
+      <div class="wd-labels"><span id="wdLabelLeft"></span><span id="wdLabelRight"></span></div>
+      <div class="stat-row" id="wdStats"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="wdReset">⏮ 重来</button>
+      <button class="btn" id="wdPrev">‹ 上一步</button>
+      <button class="btn primary" id="wdNext">下一步 ›</button>
+      <button class="btn" id="wdPlay">▶ 自动播放</button>
+      <span class="step-counter" id="wdCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">绿色窗口是当前持有者距离真正过期还剩的时间;发生续期/加锁/释放,会有一个绿色(成功)或红色(失败)的旗标标出。数据由 Python 独立生成并用一套完全独立重写的状态机交叉验证过——每一步的成功/失败判断,都和"只根据 token 是否匹配、死线是否已过"这两条最基本规则独立算出来的结果核对一致。</p>
+</section>
+
+<section>
+  <h2>watchdog 解决了什么,没解决什么</h2>
+  <table class="mono">
+    <tr><th>问题</th><th>watchdog 能不能解决</th></tr>
+    <tr><td>任务耗时不可预测,固定 TTL 猜不准</td><td style="color:var(--type-c);">能——只要进程正常运行,续期就能让锁活到任务真正做完</td></tr>
+    <tr><td>持锁进程真的崩溃,锁要不要永久占用</td><td style="color:var(--type-c);">能——watchdog 跟着进程一起消失,锁按最后一次续期的死线自然过期</td></tr>
+    <tr><td>进程没崩溃,但被无界暂停(GC/调度/网络)卡住,续期迟到</td><td style="color:var(--redis-c);">不能——这是租约机制的结构性局限,只能靠更勤的续期降低概率,压不到 0</td></tr>
+  </table>
+  <p>最后一行的残留风险,真正的解法不在锁这一层,而在被保护的资源那一层:给每次加锁发一个单调递增的编号(fencing token),操作真正的资源时把编号一起带上,让资源自己拒绝"编号比它见过的最大值还小"的请求——这样即使 A 真的在锁过期后又操作了一次,资源层会因为编号过期而拒绝这次操作,不必依赖锁本身做到绝对不出错。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文全部实验(无 watchdog 双持锁、watchdog 续期存活、PEXPIRE 重置语义、进程崩溃自愈、迟到续期撞见新主人)均在本机运行的 Redis 8.10.1 上用 <span class="mono">redis-cli</span> 完成,输出为结果,仅做了裁剪。</li>
+      <li><span class="mono">renew.lua</span>/<span class="mono">release.lua</span> 是本文实验用的续期/释放脚本,采用"先 GET 比对 token,再 PEXPIRE/DEL"的比较后操作模式,这也是 Redisson 等成熟分布式锁库 watchdog 机制的通用实现思路,不是某一家库的专属写法。</li>
+      <li>"演示:五组实验合并成一条时间线"的数据由 Python 脚本生成:先按实验的时间线手工编排 26 个事件,再用一套完全独立重新实现的状态机(只依据"token 是否匹配当前持有者"和"当前时间是否超过死线"这两条最基本规则)逐事件重放校验,断言全部通过后才用于渲染——不是照抄源码,而是复现了 SET NX PX / PEXPIRE / GET 比对这几个命令组合起来的行为规则。</li>
+      <li>没有涉及:Redlock(多个独立 Redis 实例的多数派加锁算法)本身的正确性争议、生产环境里 watchdog 的具体调度实现(比如 Redisson 用 Netty 定时任务而不是本文这种简化的轮询)、fencing token 在存储层的落地方式。</li>
+    </ul>
+  </div>
+
+  <div class="next-post">
+    <div>
+      <div class="t1">下一篇 · 即将发布</div>
+      <div class="t2">Redis 内部数据结构系列,持续更新</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </div>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Redis 系列 · 第八篇 · 分布式锁 watchdog · 数据来自本机运行的 Redis 8.10.1</footer>
+
+<script>
+const DATA = {"events": [{"type": "phase", "title": "\u6ca1\u6709 watchdog:TTL \u5230\u671f,A \u548c B \u540c\u65f6\u4ee5\u4e3a\u81ea\u5df1\u6301\u6709\u9501"}, {"type": "acquire", "holder": "A", "token": "TOKEN-A", "ttl": 2000, "now": 0, "deadline": 2000, "ok": true}, {"type": "expire", "now": 2000, "expired_token": "TOKEN-A", "note": "A \u8fd8\u5728\u5904\u7406\u8ba2\u5355,\u4f46 TTL \u5230\u4e86,\u81ea\u52a8\u91ca\u653e"}, {"type": "acquire", "holder": "B", "token": "TOKEN-B", "ttl": 5000, "now": 2100, "deadline": 7100, "ok": true}, {"type": "release", "holder": "A", "token": "TOKEN-A", "now": 3500, "ok": false}, {"type": "expire", "now": 7100, "expired_token": "TOKEN-B", "note": "(\u573a\u666f\u5207\u6362)B \u81ea\u5df1\u7684\u9501\u4e5f\u5230\u671f\u91ca\u653e, \u4e0d\u662f\u672c\u6587\u91cd\u70b9, \u53ea\u662f\u6e05\u7a7a\u821e\u53f0"}, {"type": "phase", "title": "\u6709 watchdog:\u4efb\u52a1\u8017\u65f6 7000ms,\u521d\u59cb TTL \u53ea\u6709 3000ms"}, {"type": "acquire", "holder": "C", "token": "TOKEN-C", "ttl": 3000, "now": 8000, "deadline": 11000, "ok": true}, {"type": "renew", "holder": "C", "token": "TOKEN-C", "ttl": 3000, "now": 9000, "ok": true, "deadline": 12000}, {"type": "renew", "holder": "C", "token": "TOKEN-C", "ttl": 3000, "now": 10000, "ok": true, "deadline": 13000}, {"type": "renew", "holder": "C", "token": "TOKEN-C", "ttl": 3000, "now": 11000, "ok": true, "deadline": 14000}, {"type": "renew", "holder": "C", "token": "TOKEN-C", "ttl": 3000, "now": 12000, "ok": true, "deadline": 15000}, {"type": "renew", "holder": "C", "token": "TOKEN-C", "ttl": 3000, "now": 13000, "ok": true, "deadline": 16000}, {"type": "renew", "holder": "C", "token": "TOKEN-C", "ttl": 3000, "now": 14000, "ok": true, "deadline": 17000}, {"type": "release", "holder": "C", "token": "TOKEN-C", "now": 15000, "ok": true}, {"type": "phase", "title": "\u5d29\u6e83\u573a\u666f:watchdog \u8ddf\u7740\u8fdb\u7a0b\u4e00\u8d77\u6d88\u5931,\u9501\u5fc5\u987b\u80fd\u81ea\u6108"}, {"type": "acquire", "holder": "D", "token": "TOKEN-D", "ttl": 3000, "now": 16000, "deadline": 19000, "ok": true}, {"type": "renew", "holder": "D", "token": "TOKEN-D", "ttl": 3000, "now": 17000, "ok": true, "deadline": 20000}, {"type": "crash", "holder": "D", "now": 17500}, {"type": "expire", "now": 20000, "expired_token": "TOKEN-D", "note": "\u6700\u540e\u4e00\u6b21\u7eed\u671f\u8bbe\u5b9a\u7684\u6b7b\u7ebf\u5230\u4e86, \u6ca1\u4eba\u7eed\u671f, \u81ea\u52a8\u91ca\u653e"}, {"type": "phase", "title": "\u8fdf\u5230\u7684\u7eed\u671f:E \u88ab\u6682\u505c\u592a\u4e45, F \u5df2\u7ecf\u62a2\u5230\u65b0\u9501"}, {"type": "acquire", "holder": "E", "token": "TOKEN-E", "ttl": 1000, "now": 21000, "deadline": 22000, "ok": true}, {"type": "expire", "now": 22000, "expired_token": "TOKEN-E", "note": "E \u8fd8\u6ca1\u9192\u8fc7\u6765, \u9501\u5df2\u7ecf\u5230\u671f"}, {"type": "acquire", "holder": "F", "token": "TOKEN-F", "ttl": 5000, "now": 22300, "deadline": 27300, "ok": true}, {"type": "renew", "holder": "E", "token": "TOKEN-E", "ttl": 3000, "now": 22600, "ok": false, "deadline": null}, {"type": "done"}]};
+
+(function(){
+  const rawEvents = DATA.events;
+
+  // group into phases, computing per-phase relative time
+  const phases = [];
+  let cur = null;
+  rawEvents.forEach(e => {
+    if (e.type === 'phase') {
+      cur = { title: e.title, items: [] };
+      phases.push(cur);
+    } else if (e.type === 'done') {
+      // no-op marker
+    } else {
+      cur.items.push(e);
+    }
+  });
+
+  // flatten into a display list, each carrying phaseIndex + relative now
+  const steps = [];
+  phases.forEach((p, pi) => {
+    const start = p.items.length ? p.items[0].now : 0;
+    p.items.forEach(e => {
+      steps.push(Object.assign({}, e, { phaseIndex: pi, phaseTitle: p.title, rel: e.now - start }));
+    });
+  });
+
+  const track = document.getElementById('wdTrack');
+  const windowEl = document.createElement('div');
+  windowEl.className = 'wd-window';
+  track.appendChild(windowEl);
+  const markerEl = document.createElement('div');
+  markerEl.className = 'wd-marker';
+  markerEl.style.display = 'none';
+  const flagEl = document.createElement('div');
+  flagEl.className = 'flag';
+  markerEl.appendChild(flagEl);
+  track.appendChild(markerEl);
+
+  const labelLeft = document.getElementById('wdLabelLeft');
+  const labelRight = document.getElementById('wdLabelRight');
+  const statsBox = document.getElementById('wdStats');
+  const narration = document.getElementById('wdNarration');
+  const counter = document.getElementById('wdCounter');
+  const phaseBadge = document.getElementById('wdPhase');
+  let idx = 0, playing = false, playTimer = null;
+
+  function holderState(upto) {
+    // replay from the start of the CURRENT phase up to `upto` to find current holder/deadline
+    const phaseIdx = steps[upto].phaseIndex;
+    let holder = null, token = null, deadline = null;
+    for (let i = 0; i <= upto; i++) {
+      const e = steps[i];
+      if (e.phaseIndex !== phaseIdx) continue;
+      if (e.type === 'acquire' && e.ok) { holder = e.holder; token = e.token; deadline = e.deadline; }
+      else if (e.type === 'renew' && e.ok) { deadline = e.deadline; }
+      else if (e.type === 'release' && e.ok) { holder = null; token = null; deadline = null; }
+      else if (e.type === 'expire') { holder = null; token = null; deadline = null; }
+    }
+    return { holder, token, deadline };
+  }
+
+  function describe(e) {
+    if (e.type === 'acquire') return `<span class="k">${e.holder}</span> 加锁成功(token=${e.token}),TTL=${e.ttl}ms。`;
+    if (e.type === 'renew') return e.ok
+      ? `<span class="k">${e.holder}</span> 续期成功,死线推到 now+${e.ttl}。`
+      : `<span class="k">${e.holder}</span> 续期失败 —— 当前锁已经不是它的 token 了(迟到的续期撞见新主人)。`;
+    if (e.type === 'release') return e.ok
+      ? `<span class="k">${e.holder}</span> 主动释放锁。`
+      : `<span class="k">${e.holder}</span> 想释放锁,但已经删不掉了 —— 锁早就是别人的了。`;
+    if (e.type === 'expire') return `锁到期,自动释放(${e.note || ''})。`;
+    if (e.type === 'crash') return `<span class="k">${e.holder}</span> 崩溃,watchdog 跟着消失,不会再有续期了。`;
+    return '';
+  }
+
+  function render() {
+    idx = Math.max(0, Math.min(steps.length - 1, idx));
+    const e = steps[idx];
+    phaseBadge.textContent = e.phaseTitle;
+    narration.innerHTML = describe(e);
+
+    const st = holderState(idx);
+    const now = e.rel;
+    let deadlineRel = null;
+    if (st.deadline !== null) {
+      const phaseStart = e.now - e.rel;
+      deadlineRel = st.deadline - phaseStart;
+    }
+
+    const axisMax = Math.max(deadlineRel || 0, now, 1000) * 1.15;
+    const span = axisMax || 1;
+
+    if (deadlineRel !== null && deadlineRel > now) {
+      const leftPct = now / span * 100;
+      const rightPct = 100 - (deadlineRel / span * 100);
+      windowEl.style.left = leftPct + '%';
+      windowEl.style.right = rightPct + '%';
+      windowEl.classList.remove('gone');
+    } else {
+      windowEl.style.left = (now / span * 100) + '%';
+      windowEl.style.right = (100 - (now / span * 100)) + '%';
+      windowEl.classList.add('gone');
+    }
+
+    if (e.type === 'acquire' || e.type === 'renew' || e.type === 'release') {
+      const pct = now / span * 100;
+      markerEl.style.display = 'block';
+      markerEl.style.left = pct + '%';
+      markerEl.className = 'wd-marker ' + (e.ok ? 'ok' : 'miss');
+      flagEl.textContent = e.holder + (e.ok ? ' OK' : ' 失败');
+    } else {
+      markerEl.style.display = 'none';
+    }
+
+    labelLeft.textContent = `t=${Math.round(now)}ms(本阶段内)`;
+    labelRight.textContent = `轴上限 ≈ ${Math.round(axisMax)}ms`;
+
+    statsBox.innerHTML =
+      `<div class="stat">当前持有者<b>${st.holder || '(空)'}</b></div>` +
+      `<div class="stat">剩余存活时间<b>${deadlineRel !== null ? Math.max(0, Math.round(deadlineRel - now)) + 'ms' : '0ms'}</b></div>`;
+
+    counter.textContent = `${idx + 1} / ${steps.length}`;
+    document.getElementById('wdPrev').disabled = idx === 0;
+    document.getElementById('wdNext').disabled = idx === steps.length - 1;
+  }
+
+  document.getElementById('wdPrev').onclick = () => { idx--; render(); stopPlay(); };
+  document.getElementById('wdNext').onclick = () => { idx++; render(); stopPlay(); };
+  document.getElementById('wdReset').onclick = () => { idx = 0; render(); stopPlay(); };
+  function stopPlay() { playing = false; clearInterval(playTimer); document.getElementById('wdPlay').textContent = '▶ 自动播放'; }
+  document.getElementById('wdPlay').onclick = () => {
+    if (playing) { stopPlay(); return; }
+    playing = true; document.getElementById('wdPlay').textContent = '⏸ 暂停';
+    playTimer = setInterval(() => {
+      if (idx >= steps.length - 1) { stopPlay(); return; }
+      idx++; render();
+    }, 1000);
+  };
+  render();
+})();
+</script>
+
+</body>
+</html>

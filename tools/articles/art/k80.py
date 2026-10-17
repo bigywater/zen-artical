@@ -1,0 +1,25 @@
+from lib import *
+S = SS('k80')
+F1 = [['iso 的 side', 'PID 1 = sleep 3601,只有自己'], ['shared 的 side', 'PID 1 = /pause'], ['shared 里的进程', 'sleep 3600(7)、sleep 3601(17)']]
+F2 = [['/proc/7/root', '读到 app 的根目录'], ['kill -TERM 7', 'app 容器被杀并重启'], ['iso 里 kill 1', '被忽略,容器没事']]
+F3 = [['5 个孤儿进程', '父进程立刻退出'], ['iso:PID 1=sleep', '5 个僵尸 Z'], ['shared:PID 1=pause', '0 个僵尸']]
+F4 = [['spec.shareProcessNamespace', 'true'], ['容器重启', 'PID 7 → 62'], ['读 /proc/62/environ', '能读到环境变量']]
+PANELS = [('f', 'flow', '共享 PID 命名空间'), ('t', 'term', '实测输出'), ('kv', 'kv', '要点')]
+steps = [
+    step("对照 Pod iso(默认)和 shared(shareProcessNamespace: true),各有 app 和 side 两个容器。iso 的 side 里 ps 只有 PID 1 = sleep 3601 和 ps 自己;shared 的 side 里 ps 有 PID 1 = /pause、PID 7 = sleep 3600(app 容器的进程)、PID 17 = sleep 3601(side 自己)——pause 成了整个 Pod 的 init,容器进程的 PID 不再从 1 开始。", f=fl(F1, cur=[1, 2], done=[0]), t=tl(S(1), mark=lidx(S(1), 'shared 的 side 容器里 ps'), done=lidx(S(1), 'iso 的 side 容器里 ps', 'pause 成了')), kv=KV([['默认', '每个容器自己的 PID 命名空间,自己的进程是 PID 1'], ['shareProcessNamespace', '同一个 PID 空间,pause 是 PID 1'], ['PID 变了', '依赖 PID 1 的脚本要小心']], ['shareProcessNamespace'])),
+    step("在 shared 的 side 容器里:通过 /proc/7/root 能看到 app 容器的根目录(bin dev etc home),/proc/7/cwd 指向 /;kill -TERM 7 杀掉 app 的 sleep 进程,app 容器 restartCount=1(lastState terminated),side 的 restartCount=0——跨容器发信号可行,被杀的容器由 kubelet 按 restartPolicy 重启。对照 iso 的 side 里对自己的 PID 1(sleep)kill -TERM:进程仍在,restartCount=0,容器里的 PID 1 对没有处理函数的信号默认忽略。", f=fl(F2, cur=[0, 1], done=[2]), t=tl(S(2), mark=lidx(S(2), '/proc/7/root', 'kill -TERM app'), done=lidx(S(2), '对照 iso 的 side')), kv=KV([['能做的', '看文件、发信号、用 ptrace 调试(需要权限)'], ['隔离被打破', '容器之间不再互相保护进程'], ['PID 1 的特殊性', '没有处理函数的信号会被忽略']], ['隔离被打破'])),
+    step("在 app 容器里起 5 个“孤儿”短命进程(父进程立刻退出,孤儿被 PID 1 收养,结束后需要 PID 1 来 wait):iso 里 PID 1 是 sleep,不会 wait,留下 5 个僵尸(ps 里 Z 状态的 [sh]);shared 里 PID 1 是 pause,会 wait 回收,僵尸 0 个。", f=fl(F3, cur=[1, 2], done=[0]), t=tl(S(3), mark=lidx(S(3), 'iso(PID 1 是 sleep', '5 个“孤儿”'), done=lidx(S(3), 'shared(PID 1 是 pause', 'iso 里的僵尸')), b=bars([['iso 的僵尸', 5, '5'], ['shared 的僵尸', 0, '0']], 5, done=[1], mark=[0]), kv=KV([['孤儿进程', '被 PID 1 收养,结束后要它 wait'], ['sleep 不 wait', '僵尸会堆积直到容器重启'], ['pause 会 wait', '共享 PID 命名空间附带的好处']], ['pause 会 wait'])),
+    step("shareProcessNamespace=true 记录在 Pod spec 里。app 容器重启后 sleep 3600 的 PID 从 7 变成 62(PID 不稳定,别写死);side 能读 app 的 /proc/62/environ,拿到 PATH、HOSTNAME=shared 等环境变量——同为 root。", f=fl(F4, cur=[1], done=[0, 2]), t=tl(S(4), mark=lidx(S(4), '容器重启后 PID 会变'), done=lidx(S(4), '读 app 的')), kv=KV([['PID 会变', '容器重启后换一个'], ['环境变量可见', '同 UID 能读 /proc/PID/environ'], ['密码别放环境变量', '共享进程命名空间时更容易泄露']], ['环境变量可见'])),
+]
+A = mkartk('k80', 80, 'Kubernetes,shareProcessNamespace,PID 命名空间,pause,僵尸进程,真实验证,动画演示',
+    '在 kind 集群里对照默认 Pod 和 shareProcessNamespace: true 的 Pod:共享后 PID 1 变成 /pause,app 的 sleep 是 PID 7;side 容器可以通过 /proc/7/root 读 app 的文件系统,可以 kill 它;孤儿短命进程在默认下留下 5 个僵尸,共享后因为 pause 会 wait 而是 0 个;容器重启后 PID 会变(7 → 62)且环境变量可被同 UID 的邻居读到。',
+    '容器之间默认互相看不到进程,打开 shareProcessNamespace 之后会发生什么?pause 在这里多了什么职责?僵尸进程从哪来、谁来收?这篇用两个对照 Pod 把 ps、kill、僵尸和环境变量都实际跑一遍。',
+    [('PID 1 = /pause', '共享进程命名空间后,Pod 里所有容器进程的 PID 不再从 1 开始'), ('5 vs 0', '在 app 容器里制造 5 个孤儿进程后的僵尸数:默认(PID 1 是 sleep)5 个,共享(PID 1 是 pause)0 个'), ('7 → 62', '容器重启后 app 进程的 PID 变化')],
+    [('ps 看到什么', '<p>对照 Pod <code>iso</code>(默认)和 <code>shared</code>(<code>shareProcessNamespace: true</code>),各有 <code>app</code> 和 <code>side</code> 两个容器。<code>iso</code> 的 side 里 <code>ps</code> 只有 PID 1 = <code>sleep 3601</code> 和 <code>ps</code> 自己;<code>shared</code> 的 side 里有 PID 1 = <code>/pause</code>、PID 7 = <code>sleep 3600</code>(app 容器的进程)、PID 17 = <code>sleep 3601</code>(自己)。pause 成了整个 Pod 的 init,容器进程的 PID 不再从 1 开始。</p>'),
+     ('隔离被打破', '<p>在 shared 的 side 里:<code>/proc/7/root</code> 能看到 app 容器的根目录,<code>/proc/7/cwd</code> 指向 <code>/</code>;<code>kill -TERM 7</code> 杀掉 app 的进程后,app 容器 <code>restartCount=1</code>(lastState terminated),side 仍是 0——跨容器发信号可行,被杀的容器由 kubelet 按 <code>restartPolicy</code> 重启。对照 iso 的 side 里对自己的 PID 1(<code>sleep</code>)<code>kill -TERM</code>:进程仍在,<code>restartCount=0</code>,容器里的 PID 1 对没有处理函数的信号默认忽略。</p>'),
+     ('僵尸进程', '<p>在 app 容器里起 5 个“孤儿”短命进程(父进程立刻退出,孤儿被 PID 1 收养,结束后需要 PID 1 去 <code>wait</code>):<code>iso</code> 里 PID 1 是 <code>sleep</code>,不会 wait,留下 5 个僵尸(<code>ps</code> 里 Z 状态的 <code>[sh]</code>);<code>shared</code> 里 PID 1 是 <code>pause</code>,会回收,僵尸 0 个。共享 PID 命名空间的一个附带好处,是 pause 当了 init。</p>'),
+     ('限制', '<p>app 容器重启后 <code>sleep 3600</code> 的 PID 从 7 变成 62——PID 不稳定,脚本里不要写死。side 能读 app 的 <code>/proc/62/environ</code>,拿到 <code>PATH</code>、<code>HOSTNAME=shared</code> 等环境变量(两者都是 root);放在环境变量里的密码在共享进程命名空间下更容易被邻居容器读到。</p>')],
+    steps,
+    [ENV_K + '。三节点 kind 集群 kx-main(Kubernetes v1.37.0);两个 Pod 各有 busybox 的 app(sleep 3600)与 side(sleep 3601)两个容器,shared 设置 shareProcessNamespace: true;ps、kill、/proc 读取都通过 kubectl exec 在容器里执行;“孤儿进程”用 5 次 (sleep 0.1 &) 子 shell 制造,统计 ps 里的 Z 状态;每种情形各一次',
+     '没有验证:不同 UID(非 root)的容器之间 /proc 访问与 ptrace 的权限边界;SYS_PTRACE 能力在调试中的用法;Kubernetes 文档里 shareProcessNamespace 与 hostPID 的组合;容器内的 init(tini / dumb-init)与 pause 回收僵尸的差别;大量僵尸时对 PID 上限(pids.max)的影响'],
+    '共享进程命名空间', PANELS)

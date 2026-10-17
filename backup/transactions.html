@@ -1,0 +1,534 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>事务与 on_commit():post_save 信号里干的事,可能比事务提交还早发生</title>
+<meta name="description" content="真实实测 on_commit() 在没有事务时会立刻执行、嵌套 atomic() 用 savepoint 隔离回滚、内层回滚会让注册在其中的 on_commit 回调被直接丢弃,以及用 bigywater 项目自己的 Post 模型证明 post_save 信号在事务提交前就已经真实执行,回滚后数据库记录消失但信号写的文件还留在磁盘上。">
+<link rel="canonical" href="https://bigywater.tech/transactions.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="事务与 on_commit():post_save 信号里干的事,可能比事务提交还早发生">
+<meta property="og:description" content="真实实测 on_commit() 在没有事务时会立刻执行、嵌套 atomic() 用 savepoint 隔离回滚、内层回滚会让注册在其中的 on_commit 回调被直接丢弃,以及用 bigywater 项目自己的 Post 模型证明 post_save 信号在事务提交前就已经真实执行,回滚后数据库记录消失但信号写的文件还留在磁盘上。">
+<meta property="og:url" content="https://bigywater.tech/transactions.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="事务与 on_commit():post_save 信号里干的事,可能比事务提交还早发生">
+<meta name="twitter:description" content="真实实测 on_commit() 在没有事务时会立刻执行、嵌套 atomic() 用 savepoint 隔离回滚、内层回滚会让注册在其中的 on_commit 回调被直接丢弃,以及用 bigywater 项目自己的 Post 模型证明 post_save 信号在事务提交前就已经真实执行,回滚后数据库记录消失但信号写的文件还留在磁盘上。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F4F7F4; --paper:#FFFFFF; --ink:#132119; --ink-dim:#5C6B61; --line:#DCE6DE;
+  --dj-c:#0C4B33; --dj-c-soft:#E1EEE6;
+  --mem-c:#B8791E; --mem-c-soft:#F6ECD9;
+  --meta-c:#7B4FA8; --meta-c-soft:#EFE6F7;
+  --err-c:#B23B3B; --err-c-soft:#F7E3E1;
+  --code-bg:#12211A; --code-ink:#E7F0EA;
+  --shadow: 0 1px 2px rgba(15,30,20,.06), 0 8px 24px -12px rgba(15,30,20,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0E1712; --paper:#18251E; --ink:#E7F0EA; --ink-dim:#9DB0A4; --line:#2C3B32;
+    --dj-c:#5FBF95; --dj-c-soft:#1B3327;
+    --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+    --meta-c:#B08AE0; --meta-c-soft:#332545;
+    --err-c:#E08585; --err-c-soft:#3A1F1F;
+    --code-bg:#0B120D; --code-ink:#DCE9E0;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0E1712; --paper:#18251E; --ink:#E7F0EA; --ink-dim:#9DB0A4; --line:#2C3B32;
+  --dj-c:#5FBF95; --dj-c-soft:#1B3327;
+  --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+  --meta-c:#B08AE0; --meta-c-soft:#332545;
+  --err-c:#E08585; --err-c-soft:#3A1F1F;
+  --code-bg:#0B120D; --code-ink:#DCE9E0;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--dj-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--dj-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--dj-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--dj-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.a .tag{background:var(--dj-c-soft); color:var(--dj-c);}
+.card.b .tag{background:var(--mem-c-soft); color:var(--mem-c);}
+.card.c .tag{background:var(--meta-c-soft); color:var(--meta-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#8FB0A0; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#9FE0C3;}
+
+.callout{border-left:3px solid var(--dj-c); background:var(--dj-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+.callout.c{border-color:var(--meta-c); background:var(--meta-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--dj-c-soft); color:var(--dj-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#9FE0C3;}
+.term pre.code{margin:0 0 10px; color:#9FE0C3; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+.term .cm{color:#7C9C8C;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--mem-c-soft); color:var(--mem-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:22px 20px;}
+.stack-wrap{display:flex; flex-direction:column; gap:8px;}
+.stack-box{border:2px solid var(--line); border-radius:12px; padding:14px 16px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; color:var(--ink-dim); transition:border-color .2s, background .2s, opacity .2s;}
+.stack-box.outer{margin-right:0;}
+.stack-box.inner{margin-left:28px; margin-right:28px;}
+.stack-box.active{border-color:var(--dj-c); background:var(--dj-c-soft); color:var(--dj-c); font-weight:700;}
+.stack-box.committed{border-color:var(--dj-c); color:var(--dj-c);}
+.stack-box.rolledback{border-color:var(--err-c); background:var(--err-c-soft); color:var(--err-c); font-weight:700;}
+.stack-box .hooks{font-size:.76rem; margin-top:6px; opacity:.85;}
+.stat-row{display:flex; gap:16px; flex-wrap:wrap; margin:14px 0 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem;}
+.stat{border:1px solid var(--line); border-radius:8px; padding:8px 12px; background:var(--bg);}
+.stat b{color:var(--dj-c); display:block; font-size:1rem; font-variant-numeric:tabular-nums;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--dj-c); color:var(--dj-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--dj-c); border-color:var(--dj-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{display:flex; align-items:center; gap:10px; margin-bottom:24px; font-size:.88rem; color:var(--ink-dim); flex-wrap:wrap;}
+.prev-post a{font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--dj-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Django 系列 · 第八篇</div>
+    <h1><span class="mono">post_save</span> 信号里干的事,可能比事务提交还早发生——本机真实用 bigywater 自己的数据证明了这件事</h1>
+    <p>前几篇给 bigywater 项目挂了一组信号做文章的"双保险"文件备份,这一篇本机真实验证了一个直接影响这套备份正不正确的问题:<span class="mono">post_save</span> 信号是在 <span class="mono">save()</span> 内部同步触发的,不会等外层事务真的提交;而 <span class="mono">transaction.on_commit()</span> 才是真正"等提交了再执行"的机制,并且它自己也有一个容易被忽略的分支——没有事务的时候,注册进去的回调会立刻执行。</p>
+    <div class="hero-fact">
+      <div><div class="num">立刻执行</div><div class="lbl">本机真实实测:没有 atomic() 包裹时调用 on_commit(),回调不是被推迟,而是当场就跑了</div></div>
+      <div><div class="num">文件还在,记录没了</div><div class="lbl">本机真实实测:bigywater 自己的 Post 在事务里创建又回滚,数据库记录消失,但 signals.py 写的备份文件真实留在了磁盘上</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <div class="prev-post">← 接上篇 <a href="forms.html" target="_blank" rel="noopener">Forms 校验流水线:一个字段挂了,其它字段会不会被跳过?clean() 里忘记判空为什么会真实抛 KeyError</a></div>
+  <h2>真实实测:on_commit() 没有事务时,立刻执行</h2>
+  <p class="h2-sub"><span class="mono">on_commit()</span> 这个名字容易让人以为它"总是会推迟执行",真实源码不是这么写的。</p>
+  <blockquote class="src">
+    <span class="path">django/db/backends/base/base.py · <a href="https://github.com/django/django/blob/6.0.7/django/db/backends/base/base.py#L727" target="_blank" rel="noopener">django @ 6.0.7, L727</a></span>
+def on_commit(self, func, robust=False):
+    if self.in_atomic_block:
+        # Transaction in progress; save for execution on commit.
+        self.run_on_commit.append((set(self.savepoint_ids), func, robust))
+    elif not self.get_autocommit():
+        raise TransactionManagementError(...)
+    else:
+        # No transaction in progress and in autocommit mode; execute
+        # immediately.
+        func()
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">log = []
+transaction.on_commit(lambda: log.append('callback ran'))   # 前面没有任何 atomic() 包裹
+print(log)</pre>
+<span class="ok">['callback ran']</span>
+  </div>
+  <p>没有活跃事务(默认的自动提交模式下),<span class="mono">on_commit()</span> 判断出"根本没有可以等待的提交时刻",于是直接原地调用 <span class="mono">func()</span>——跟直接写 <span class="mono">func()</span> 没有任何区别。只有真的处在 <span class="mono">atomic()</span> 块里,回调才会被存进 <span class="mono">connection.run_on_commit</span> 列表,推迟到之后执行:</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">log = []
+with transaction.atomic():
+    transaction.on_commit(lambda: log.append('callback ran'))
+    print('atomic 块内部:', log)
+print('atomic 块退出后:', log)</pre>
+<span class="ok">atomic 块内部: []
+atomic 块退出后: ['callback ran']</span>
+  </div>
+</section>
+
+<section>
+  <h2>真实实测:事务回滚,回调根本不会跑</h2>
+  <p class="h2-sub">这才是 <span class="mono">on_commit()</span> 真正的价值——如果事务最终没有提交,注册进去的回调会被直接丢弃,一次都不会执行。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">log = []
+try:
+    with transaction.atomic():
+        transaction.on_commit(lambda: log.append('callback ran'))
+        raise ValueError('boom')
+except ValueError:
+    pass
+print('回滚之后:', log)</pre>
+<span class="ok">回滚之后: []</span>
+  </div>
+  <p>嵌套的 <span class="mono">atomic()</span> 更细一层:内层用 <span class="mono">savepoint</span> 实现,如果内层的异常被捕获、只回滚到 savepoint,外层事务照样能提交——但内层里注册的 <span class="mono">on_commit()</span> 回调,会跟着那个被回滚掉的 savepoint 一起被清除,不会因为外层最终提交了就"捡回来":</p>
+  <blockquote class="src">
+    <span class="path">django/db/backends/base/base.py · <a href="https://github.com/django/django/blob/6.0.7/django/db/backends/base/base.py#L404" target="_blank" rel="noopener">django @ 6.0.7, L404</a></span>
+def savepoint_rollback(self, sid):
+    ...
+    self._savepoint_rollback(sid)
+    # Remove any callbacks registered while this savepoint was active.
+    self.run_on_commit = [
+        (sids, func, robust)
+        for (sids, func, robust) in self.run_on_commit
+        if sid not in sids                 # 回调注册时记录的 savepoint 集合里,只要含有被回滚的这个 sid,就被过滤掉
+    ]
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">log = []
+with transaction.atomic():                  # 外层
+    transaction.on_commit(lambda: log.append('outer callback'))
+    try:
+        with transaction.atomic():          # 内层,用 savepoint
+            transaction.on_commit(lambda: log.append('inner callback'))
+            raise ValueError('inner boom')
+    except ValueError:
+        pass                                  # 只回滚到 savepoint,外层继续
+print('外层退出后:', log)</pre>
+<span class="ok">外层退出后: ['outer callback']</span>
+  </div>
+  <p><span class="mono">inner callback</span> 干干净净地消失了,<span class="mono">outer callback</span> 正常执行——跟内层那次失败的操作被回滚的范围完全对应,粒度精确到 savepoint 级别,不是"整个事务要么全跑要么全不跑"这么粗糙。</p>
+</section>
+
+<section>
+  <h2>真实实测:post_save 信号不等事务提交,直接同步执行</h2>
+  <p class="h2-sub">回到 <a href="signal.html" target="_blank" rel="noopener">Signal 那篇</a>讲过的源码——<span class="mono">Model.save_base()</span> 里的 <span class="mono">post_save.send()</span> 是普通的函数调用,不是注册进 <span class="mono">on_commit()</span>。用 bigywater 项目自己真实的 <span class="mono">Post</span> 模型和真实的 <span class="mono">article/signals.py</span>(会在保存时把文章内容写成磁盘文件)直接验证:</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">try:
+    with transaction.atomic():
+        p = Post.objects.create(title='事务测试', url='zz-txn-demo.html', series=s,
+                                 date='2026-09-25', description='d',
+                                 content_html='&lt;html&gt;&lt;head&gt;&lt;/head&gt;&lt;body&gt;x&lt;/body&gt;&lt;/html&gt;')
+        print('事务还没提交,文件已经被 signals.py 写到磁盘了吗:', os.path.exists(path))
+        raise RuntimeError('模拟这次事务后面失败了,要整体回滚')
+except RuntimeError:
+    pass
+
+print('数据库里这条 Post 还在吗:', Post.objects.filter(url='zz-txn-demo.html').exists())
+print('磁盘上的文件还在吗:', os.path.exists(path))</pre>
+<span class="bad">事务还没提交,文件已经被 signals.py 写到磁盘了吗: True
+数据库里这条 Post 还在吗: False
+磁盘上的文件还在吗: True</span>
+  </div>
+  <p>三行输出连起来就是一个真实的数据不一致:<span class="mono">Post.objects.create()</span> 一执行完,<span class="mono">post_save</span> 就已经同步触发了 <span class="mono">article/signals.py</span> 里的 <span class="mono">write_post_file()</span>,文件被真实写到了磁盘上——这时候外层事务连提交都还没发生。等到 <span class="mono">RuntimeError</span> 真的把这次事务整体回滚,数据库里那条 <span class="mono">Post</span> 记录干干净净地消失了,但已经落盘的文件不会跟着"回滚"——它就是一个普通的文件系统写操作,不受数据库事务保护。</p>
+  <div class="callout">
+    这不是 <span class="mono">article/signals.py</span> 写错了,而是选择 <span class="mono">post_save</span> 这个时机本身就带着这个假设上的风险:只要调用 <span class="mono">Post.save()</span> 的地方有可能处在一个之后会失败回滚的事务里(比如以后 admin 里加一个"批量导入"的 action,中途某一篇校验失败要整体回滚),文件备份就会比数据库记录更"乐观"——数据库如实回到了没保存过的状态,文件却已经真实存在了。
+  </div>
+</section>
+
+<section>
+  <h2>怎么修:把有副作用的操作挪进 on_commit() 里</h2>
+  <p class="h2-sub">既然 <span class="mono">on_commit()</span> 天生就是"等这次数据库改动真的成功了再做",把文件写入包一层就行,不需要改信号的连接方式。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">from django.db import transaction
+
+def _export_post(sender, instance, **kwargs):
+    old_url = getattr(instance, '_old_url', None)
+    def do_backup():
+        if old_url and old_url != instance.url:
+            backup.delete_post_file(old_url)
+        backup.write_post_file(instance)
+        backup.rebuild_manifest()
+    transaction.on_commit(do_backup)   # 唯一的改动:把原来直接执行的三行,包进 on_commit()
+
+# 重新跑一遍同样的实验
+try:
+    with transaction.atomic():
+        p = Post.objects.create(title='事务测试2', url='zz-txn-demo2.html', ...)
+        print('事务还没提交,文件写了吗:', os.path.exists(path2))
+        raise RuntimeError('模拟回滚')
+except RuntimeError:
+    pass
+print('回滚之后,文件写了吗:', os.path.exists(path2))</pre>
+<span class="ok">事务还没提交,文件写了吗: False
+回滚之后,文件写了吗: False</span>
+  </div>
+  <p>包上 <span class="mono">on_commit()</span> 之后,文件写入被推迟到事务真正提交的那一刻才发生;这次事务从头到尾都没提交,回调根本没有机会执行,磁盘上什么都不会多出来——跟数据库的状态第一次真正保持一致。副作用是:如果外层调用方压根没用 <span class="mono">atomic()</span>(比如普通的 admin 表单保存,Django 默认每次 <span class="mono">save()</span> 都在自动提交模式下,单条语句提交即成功),<span class="mono">on_commit()</span> 会走前面讲的"没有事务、立刻执行"那条分支——效果和现在的写法完全一样,不会有任何延迟或额外开销。</p>
+</section>
+
+<section>
+  <h2>演示:嵌套事务下,on_commit 回调谁被丢弃、谁被保留</h2>
+  <p class="h2-sub">对应上面"内层 savepoint 回滚、外层提交"的真实实验,把两层事务的生命周期和各自注册的回调可视化。</p>
+  <div class="demo" id="txnDemo">
+    <div class="demo-head">嵌套 atomic() · on_commit 回调演示</div>
+    <div class="demo-narration" id="txnNarration"></div>
+    <div class="demo-body">
+      <div class="stack-wrap" id="txnStack"></div>
+      <div class="stat-row" id="txnStats"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="txnReset">⏮ 重来</button>
+      <button class="btn" id="txnPrev">‹ 上一步</button>
+      <button class="btn primary" id="txnNext">下一步 ›</button>
+      <button class="btn" id="txnPlay">▶ 自动播放</button>
+      <span class="step-counter" id="txnCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">数据直接对应上面真实实测的嵌套事务实验(外层提交、内层因异常回滚到 savepoint),演示动画只是把"回调注册在哪个 savepoint 集合里、那个集合有没有被回滚"这条规则可视化,最终结果(<span class="mono">outer callback</span> 执行、<span class="mono">inner callback</span> 被丢弃)和真实输出一致。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文全部真实实验(<span class="mono">on_commit()</span> 无事务时立即执行、<span class="mono">atomic()</span> 内推迟执行、回滚后回调被丢弃、嵌套事务 savepoint 级别的回调隔离、<span class="mono">post_save</span> 信号同步执行导致的文件/数据库不一致、用 <span class="mono">on_commit()</span> 修复后的效果)均在本机真实运行的 Django 6.0.7 + bigywater 项目自己的 <span class="mono">Post</span> 模型和真实 SQLite 数据库上完成(用于验证的测试文章保存后已从数据库和磁盘清理干净),数据未做删改。</li>
+      <li>源码引用(<span class="mono">django/db/transaction.py</span> 的 <span class="mono">on_commit</span>/<span class="mono">Atomic</span>、<span class="mono">django/db/backends/base/base.py</span> 的 <span class="mono">BaseDatabaseWrapper.on_commit</span>/<span class="mono">savepoint_rollback</span>/<span class="mono">run_and_clear_commit_hooks</span>)取自本机通过 pip 安装的 Django 6.0.7 包本身,并逐字节比对确认与 <span class="mono">django/django</span> 仓库 <span class="mono">6.0.7</span> 标签完全一致。</li>
+      <li>演示动画的嵌套事务模型(savepoint 归属、回调集合过滤)由 Python 独立实现并交叉验证过——参数直接取自真实实测的嵌套 <span class="mono">atomic()</span> 实验结果,最终状态核对过与真实输出一致。</li>
+      <li>没有涉及:<span class="mono">durable=True</span> 参数禁止事务嵌套的场景、<span class="mono">robust=True</span> 时 <span class="mono">on_commit()</span> 回调抛异常会被记日志而不是继续往外抛、<span class="mono">TestCase</span> 用 <span class="mono">captureOnCommitCallbacks()</span> 在测试里手动触发回调的机制、跨数据库(<span class="mono">using=</span> 参数)时多个连接各自独立的事务状态。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="cbv.html" target="_blank" rel="noopener">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">as_view():一个类怎么变成一个函数视图,dispatch() 又是怎么反射调出对应方法的</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Django 系列 · 第八篇 · 事务与 on_commit() · 数据来自本机真实运行的 Django 6.0.7</footer>
+
+<script>
+const DATA = {"events": [
+  {"type": "enter", "level": "outer"},
+  {"type": "register", "level": "outer", "label": "outer callback"},
+  {"type": "enter", "level": "inner"},
+  {"type": "register", "level": "inner", "label": "inner callback"},
+  {"type": "rollback", "level": "inner"},
+  {"type": "commit", "level": "outer"}
+]};
+
+(function(){
+  const events = DATA.events;
+  const totalSteps = events.length;
+  const stack = document.getElementById('txnStack');
+  const narration = document.getElementById('txnNarration');
+  const statsBox = document.getElementById('txnStats');
+  const counter = document.getElementById('txnCounter');
+  let idx = 0, playing=false, playTimer=null;
+
+  function describe(i){
+    const e = events[i];
+    if (e.type === 'enter') return `进入 <span class="k">${e.level}</span> atomic() 块${e.level === 'inner' ? '(创建一个 savepoint)' : ''}。`;
+    if (e.type === 'register') return `在 <span class="k">${e.level}</span> 块里注册 on_commit(<span class="k">${e.label}</span>)。`;
+    if (e.type === 'rollback') return `<span class="k">${e.level}</span> 块因为异常回滚到 savepoint——注册在这个 savepoint 里的回调被<b>直接丢弃</b>。`;
+    if (e.type === 'commit') return `<span class="k">${e.level}</span> 块正常提交——此时才真正执行还留着的 on_commit 回调。`;
+    return e.type;
+  }
+
+  function replayUpTo(uptoIdx){
+    const hooks = {outer: [], inner: []};
+    let outerState = 'pending', innerState = 'pending';
+    let executed = [];
+    for (let i = 0; i <= uptoIdx; i++){
+      const e = events[i];
+      if (e.type === 'register') hooks[e.level].push(e.label);
+      if (e.type === 'rollback'){ innerState = 'rolledback'; hooks.inner = []; }
+      if (e.type === 'commit'){ outerState = 'committed'; executed = hooks.outer.slice(); }
+    }
+    return {hooks, outerState, innerState, executed};
+  }
+
+  function render(){
+    idx = Math.max(0, Math.min(totalSteps-1, idx));
+    narration.innerHTML = describe(idx);
+    const {hooks, outerState, innerState, executed} = replayUpTo(idx);
+    const e = events[idx];
+
+    const outerActive = e.level === 'outer' && (e.type === 'enter' || e.type === 'register');
+    const innerActive = e.level === 'inner' && (e.type === 'enter' || e.type === 'register');
+    const outerCls = outerState === 'committed' ? 'committed' : (outerActive ? 'active' : '');
+    const innerCls = innerState === 'rolledback' ? 'rolledback' : (innerActive ? 'active' : '');
+
+    stack.innerHTML = `
+      <div class="stack-box outer ${outerCls}">outer atomic()
+        <div class="hooks">on_commit 队列: [${hooks.outer.join(', ') || '(空)'}]</div>
+      </div>
+      <div class="stack-box inner ${innerCls}">inner atomic()(savepoint)
+        <div class="hooks">on_commit 队列: [${hooks.inner.join(', ') || '(空)'}]</div>
+      </div>`;
+
+    statsBox.innerHTML = `<div class="stat">outer 状态<b>${outerState === 'committed' ? '已提交' : '进行中'}</b></div><div class="stat">inner 状态<b>${innerState === 'rolledback' ? '已回滚' : '进行中'}</b></div><div class="stat">已执行的回调<b>[${executed.join(', ') || '(无)'}]</b></div>`;
+
+    counter.textContent = `${idx+1} / ${totalSteps}`;
+    document.getElementById('txnPrev').disabled = idx===0;
+    document.getElementById('txnNext').disabled = idx===totalSteps-1;
+  }
+  document.getElementById('txnPrev').onclick=()=>{idx--;render();stopPlay();};
+  document.getElementById('txnNext').onclick=()=>{idx++;render();stopPlay();};
+  document.getElementById('txnReset').onclick=()=>{idx=0;render();stopPlay();};
+  function stopPlay(){ playing=false; clearInterval(playTimer); document.getElementById('txnPlay').textContent='▶ 自动播放'; }
+  document.getElementById('txnPlay').onclick=()=>{
+    if(playing){ stopPlay(); return; }
+    playing=true; document.getElementById('txnPlay').textContent='⏸ 暂停';
+    playTimer = setInterval(()=>{
+      if(idx>=totalSteps-1){ stopPlay(); return; }
+      idx++; render();
+    }, 1200);
+  };
+  render();
+})();
+</script>
+
+</body>
+</html>

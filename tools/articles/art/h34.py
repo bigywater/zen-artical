@@ -1,0 +1,20 @@
+from lib import *
+S = SS('h34')
+steps = [
+    step("服务端关闭时,一个正在处理的调用(handler 要 500 ms,关闭发生在调用开始后约 100 ms)。Stop():调用本身 0.2 ms 就返回,客户端的在途调用立刻失败:Unavailable,“error reading from server: EOF”,102.7 ms 后返回;GracefulStop():调用本身用了 400.4 ms(等剩下的 400 ms),客户端的调用成功,501.6 ms 后返回。Stop 是直接断开所有连接,GracefulStop 是不再接新请求、等在途的做完再关(第 11 篇看过它发的两个 GOAWAY)。", t=tl(S(1)), done=lidx(S(1), 'GracefulStop()'), mark=lidx(S(1), 'Stop()'), b=bars([['Stop():调用本身用时 ms', 0.2, '0.2'], ['GracefulStop():调用本身用时 ms', 400.4, '400.4']], 420, mark=[0], done=[1]), kv=KV([['Stop()', '在途调用立刻 Unavailable'], ['GracefulStop()', '在途调用做完,返回 501.6 ms'], ['区别', '断开 vs 等待']], ['区别'])),
+    step("GracefulStop 会一直等到所有在途的流结束:有一个永不结束的服务端流时,GracefulStop 等了 2002.1 ms 仍然没有返回(它没有内置的超时)。这时再调用 Stop(),GracefulStop 在 2002.8 ms 后返回,长流的客户端得到 Unavailable(“closing transport due to: connection error …”)。所以生产里的惯用做法是“先 GracefulStop,设一个超时,超时了就 Stop”,否则一个不肯结束的客户端流就能让服务永远关不掉。", t=tl(S(2)), done=lidx(S(2), '再调用 Stop()'), mark=lidx(S(2), 'GracefulStop 等了'), b=bars([['GracefulStop 等待时间 ms(仍未返回)', 2002.1, '2002.1'], ['Stop() 之后返回的时刻 ms', 2002.8, '2002.8']], 2100, mark=[0], done=[1]), kv=KV([['长流不结束', 'GracefulStop 一直等'], ['超时后 Stop()', 'GracefulStop 立即返回'], ['长流客户端', 'Unavailable']], ['超时后 Stop()'])),
+    step("滚动重启的失败数:2 个后端 + round_robin(带 healthCheckConfig),16 个 goroutine 连续调用(handler 20 ms),1 秒时关掉后端 0,共 3 秒。Stop():总调用 2184,失败 8(都是 Unavailable,“error reading from server: EOF”——关闭时正在处理的调用);GracefulStop():总调用 2208,失败 0,关闭动作用了 15.7 ms;先 health.Shutdown、等 300 ms、再 GracefulStop():总调用 2400,失败 0,关闭动作用了 301.0 ms。三种方式关闭之后,后端 0 都没有再收到请求,流量都转到后端 1。GracefulStop 已经做到 0 失败;先让健康检查把自己摘掉,是为了让没有主动摘除功能的负载均衡器(比如按健康检查摘除节点的)也有时间发现。", t=tl(S(3)), done=lidx(S(3), '先 health.Shutdown'), mark=lidx(S(3), 'Stop()   '), b=bars([['Stop():失败调用', 8, '8'], ['GracefulStop():失败调用', 0, '0'], ['health.Shutdown + GracefulStop:失败调用', 0, '0']], 9, mark=[0], done=[1, 2]), kv=KV([['Stop()', '总 2184,失败 8'], ['GracefulStop()', '总 2208,失败 0'], ['health.Shutdown + 等 300 ms + GracefulStop', '总 2400,失败 0']], ['GracefulStop()'])),
+    step("Stop() 默认不等 handler 返回:handler 里 time.Sleep(1 秒) 且不看 ctx,Stop() 0.1 ms 就返回,返回时仍有 1 个 handler 在运行;加上 grpc.WaitForHandlers(true)(实验性选项),Stop() 用了 802.3 ms,返回时仍在运行的 handler 是 0 个。所以 Stop() 返回之后,进程里可能还有 handler 在跑(可能在使用你已经关闭的数据库连接);关机流程里要么用 WaitForHandlers,要么自己等 handler 结束。", t=tl(S(4)), done=lidx(S(4), 'WaitForHandlers(true'), mark=lidx(S(4), 'WaitForHandlers(false'), b=bars([['默认:Stop() 返回时仍在运行的 handler', 1, '1'], ['WaitForHandlers(true):Stop() 用时 ms', 802.3, '802.3']], 820, mark=[0], done=[1]), kv=KV([['默认', 'Stop() 立即返回,handler 可能还在跑'], ['WaitForHandlers(true)', 'Stop() 等 handler 返回(802.3 ms)'], ['后果', '否则关机后 handler 还可能访问已关闭的资源']], ['后果'])),
+]
+A = mkarth('h34', 34, 'gRPC,优雅停机,GracefulStop,Stop,滚动重启,WaitForHandlers,health,Go,真实验证,动画演示',
+    '实测 grpc-go 的优雅停机:Stop 立即让在途调用失败,GracefulStop 等到做完;一个不结束的流能让 GracefulStop 永远等下去;负载下滚动重启 Stop 失败 8 个而 GracefulStop 0 个;Stop 默认不等 handler 返回,WaitForHandlers 才等。',
+    '服务发版重启时怎么才能不丢请求?Stop 和 GracefulStop 差在哪?会不会关不掉?关闭之后 handler 还在跑吗?这篇用 16 路持续负载把每一种关闭方式的失败数都数出来。',
+    [('失败 8 个 vs 0 个', '负载下关掉一个后端:Stop() 与 GracefulStop() 的失败调用数'), ('2002.1 ms 没返回', '有一个永不结束的流时,GracefulStop 等了这么久仍未返回'), ('Stop() 返回时仍有 handler 在跑', '默认情况下 Stop() 不等 handler;加 WaitForHandlers(true) 才等')],
+    [('两种关闭', '<p>Stop 立刻断开所有连接,在途调用失败。GracefulStop 先不再接受新请求(发 GOAWAY),等在途的调用做完再关,在途调用成功。</p>'),
+     ('可能关不掉', '<p>GracefulStop 没有超时。有不结束的长流时它一直等。常见做法:GracefulStop 加超时,超时后再 Stop。</p>'),
+     ('滚动重启', '<p>在持续负载下,Stop 会让关闭时正在处理的调用失败;GracefulStop 做到 0 失败。先把健康状态设为 NOT_SERVING 再 GracefulStop,让依赖健康检查的负载均衡器有时间摘掉节点。</p>'),
+     ('handler 是否结束', '<p>Stop 默认不等 handler 返回,Stop 之后 handler 可能仍在运行。需要的话用 WaitForHandlers(true)(实验性选项),或自己等待。</p>')],
+    steps,
+    [ENV_H + '。负载是本机 16 个 goroutine 在 round_robin 上连续调用(handler 睡 20 ms);失败数是 3 秒内客户端观察到的非 nil 错误;时间是本机测量,每种关闭方式只跑了一次(失败数 8 这样的数字每次运行会有差别)',
+     '没有验证:客户端不使用 healthCheckConfig 和 round_robin 时(pick_first)的重启表现;服务注册/发现系统里“先注销再关闭”的流程;在 Kubernetes 里 preStop 钩子和 terminationGracePeriodSeconds 的配合;流式 RPC 在 GracefulStop 期间的客户端重连;WaitForHandlers 的行为在更多场景下的验证'],
+    '优雅停机')

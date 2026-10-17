@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>复合索引的列顺序,为什么不能随便排</title>
+<meta name="description" content="最左前缀原则背后,复合索引在 B+树里的排序方式。">
+<link rel="canonical" href="https://bigywater.tech/prefix.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="复合索引的列顺序,为什么不能随便排">
+<meta property="og:description" content="最左前缀原则背后,复合索引在 B+树里的排序方式。">
+<meta property="og:url" content="https://bigywater.tech/prefix.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="复合索引的列顺序,为什么不能随便排">
+<meta name="twitter:description" content="最左前缀原则背后,复合索引在 B+树里的排序方式。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#EFF1F3; --paper:#FFFFFF; --ink:#1B1F24; --ink-dim:#5B6470; --line:#D8DCE1;
+  --node-c:#1F6FA8; --node-c-soft:#E4EFF6;
+  --key-c:#8B5A2B; --key-c-soft:#F3E9DD;
+  --io-c:#A13D3D; --io-c-soft:#F7E7E5;
+  --code-bg:#1B1F24; --code-ink:#E7EAED;
+  --shadow: 0 1px 2px rgba(20,25,30,.06), 0 8px 24px -12px rgba(20,25,30,.15);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#12151A; --paper:#1A1E24; --ink:#E7EAED; --ink-dim:#9AA4B0; --line:#2B3138;
+    --node-c:#5FA8DE; --node-c-soft:#1D2C38;
+    --key-c:#D6A15C; --key-c-soft:#332619;
+    --io-c:#E27A7A; --io-c-soft:#3A2323;
+    --code-bg:#0E1013; --code-ink:#DCE1E6;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#12151A; --paper:#1A1E24; --ink:#E7EAED; --ink-dim:#9AA4B0; --line:#2B3138;
+  --node-c:#5FA8DE; --node-c-soft:#1D2C38;
+  --key-c:#D6A15C; --key-c-soft:#332619;
+  --io-c:#E27A7A; --io-c-soft:#3A2323;
+  --code-bg:#0E1013; --code-ink:#DCE1E6;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--node-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--node-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--node-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--node-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.node .tag{background:var(--node-c-soft); color:var(--node-c);}
+.card.key .tag{background:var(--key-c-soft); color:var(--key-c);}
+.card.io .tag{background:var(--io-c-soft); color:var(--io-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#8B95A1; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#8FC7EA;}
+
+.callout{border-left:3px solid var(--node-c); background:var(--node-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.io{border-color:var(--io-c); background:var(--io-c-soft);}
+.callout.key{border-color:var(--key-c); background:var(--key-c-soft);}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.88rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.78rem; padding:8px 10px; border-bottom:1px solid var(--line);}
+td{padding:9px 10px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+.yes{color:var(--node-c); font-weight:600;}
+.no{color:var(--io-c); font-weight:600;}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;}
+.demo-title{font-weight:600; font-size:.95rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--key-c-soft); color:var(--key-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:22px 20px; overflow-x:auto;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--node-c); color:var(--node-c);}
+.btn.primary{background:var(--node-c); border-color:var(--node-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.leaf-row{display:flex; gap:8px; flex-wrap:nowrap; align-items:center; margin-bottom:14px;}
+.leafbox{flex:0 0 auto; min-width:96px; border-radius:8px; border:1.5px solid var(--line); background:var(--paper); padding:8px 10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.76rem; text-align:center;}
+.leafbox.touched{border-color:var(--key-c); background:var(--key-c-soft);}
+.leafbox.matched{border-color:var(--node-c); background:var(--node-c-soft); font-weight:600;}
+.leafbox .lbl{font-size:.65rem; color:var(--ink-dim); margin-bottom:3px;}
+.leaf-arrow{color:var(--ink-dim); font-size:.9rem;}
+.tally{display:flex; gap:16px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; flex-wrap:wrap;}
+.tally b{color:var(--node-c); font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{display:flex; align-items:center; gap:10px; margin-bottom:24px; font-size:.88rem; color:var(--ink-dim); flex-wrap:wrap;}
+.prev-post a{font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--node-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>MySQL / InnoDB 存储引擎系列 · 第七篇</div>
+    <h1>同一个复合索引,换一下查询条件的列,为什么直接从"能用"变"完全用不上"?</h1>
+    <p>第一篇讲过:B+树的叶子是按索引列排好序、串成一条链的。这篇把这句话用在<b>复合索引</b>上——索引 <span class="mono">(a, b, c)</span> 的叶子是按 <span class="mono">a, b, c</span> 依次排序的,不是三个独立的索引凑在一起。这个顺序决定了:从最左边的列开始、连续地给条件,索引才能真正帮上忙;跳过第一列直接查后面的列,索引基本上就是摆设。</p>
+    <p>下面全部是本机建表、 <span class="mono">EXPLAIN</span> 跑出来的结果。</p>
+    <div class="hero-fact">
+      <div><div class="num">4 → 8 → 12</div><div class="lbl">测出的 key_len(字节),对应用上 1/2/3 个索引列</div></div>
+      <div><div class="num">ALL</div><div class="lbl">跳过第一列查询时, EXPLAIN 里的访问类型——索引完全没用上</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <div class="prev-post">← 接上篇 <a href="deadlock.html" target="_blank" rel="noopener">InnoDB 是怎么发现并解开死锁的</a></div>
+  <h2>复合索引是"一棵树",不是"三个索引"</h2>
+  <p class="h2-sub">建一个 <span class="mono">KEY idx_abc (a,b,c)</span>,物理上只有一棵 B+树,叶子节点按 <span class="mono">(a,b,c)</span> 这个元组整体排序——先比 a,a 相等再比 b,b 也相等才比 c。</p>
+  <div class="cards">
+    <div class="card node">
+      <span class="tag">按元组排序</span>
+      <h3>(1,5) 排在 (2,1) 前面</h3>
+      <p>哪怕 5 &gt; 1,只要 a 那一位 1&lt;2,整个元组就排在前面——这和字典排序完全一样,先比第一个字,后面的字再重要也没用。</p>
+    </div>
+    <div class="card key">
+      <span class="tag">最左前缀</span>
+      <h3>只能从头开始"够得着"</h3>
+      <p>要利用这种排序做范围收缩,查询条件必须从 <span class="mono">a</span> 开始、连续地给,中间不能空——空了一列,后面的列在排好序的意义上就是"随机打散"的。</p>
+    </div>
+    <div class="card io">
+      <span class="tag">store_length</span>
+      <h3>索引用了几个列,数字说了算</h3>
+      <p>MySQL 每个索引列在源码里都有一个 <span class="mono">store_length</span>(占用字节数),用了几个列,<span class="mono">EXPLAIN</span> 里的 <span class="mono">key_len</span> 就是这些字节数的和——不用猜,数字直接告诉你。</p>
+    </div>
+  </div>
+  <blockquote class="src">
+    <span class="path">sql/key.h · <a href="https://github.com/mysql/mysql-server/blob/mysql-9.7.1/sql/key.h#L57" target="_blank" rel="noopener">mysql-server @ mysql-9.7.1, L57</a></span>
+class KEY_PART_INFO { /* Info about a key part */
+ public:
+  Field *field;
+  ...
+  /* Length of key part in bytes, excluding NULL flag and length bytes */
+  uint16 length;
+  /* Number of bytes required to store the keypart value ... */
+  uint16 store_length;
+  ...
+};
+  </blockquote>
+</section>
+
+<section>
+  <h2>真实实测:同一张表,六种查询条件</h2>
+  <p class="h2-sub">表 <span class="mono">t(a,b,c,d)</span>,20 万行,复合索引 <span class="mono">idx_abc (a,b,c)</span>,全部是 <span class="mono">INT NOT NULL</span>(每列 4 字节,不需要额外的 NULL 标记字节)。</p>
+  <table class="mono">
+    <tr><th>查询</th><th>type</th><th>key_len</th><th>Extra</th><th>是否用上索引narrow范围</th></tr>
+    <tr><td>WHERE a=5</td><td>ref</td><td>4</td><td>—</td><td class="yes">是(1 列)</td></tr>
+    <tr><td>WHERE a=5 AND b=10</td><td>ref</td><td>8</td><td>—</td><td class="yes">是(2 列)</td></tr>
+    <tr><td>WHERE a=5 AND b=10 AND c=100</td><td>ref</td><td>12</td><td>—</td><td class="yes">是(3 列,全用上)</td></tr>
+    <tr><td>WHERE a=5 AND c=100(跳过 b)</td><td>ref</td><td>4</td><td>Using index condition</td><td class="no">否,c 只能靠 ICP 过滤,不能收缩范围</td></tr>
+    <tr><td>WHERE b=10(不带 a)</td><td>ALL</td><td>NULL</td><td>Using where</td><td class="no">否,索引完全没用上,全表扫描</td></tr>
+  </table>
+  <p>第四行最能说明问题:条件里明明写了 <span class="mono">a</span> 和 <span class="mono">c</span> 两个索引列,但 <span class="mono">key_len</span> 还是只有 4——只有 <span class="mono">a</span> 真正参与了缩小索引扫描范围。<span class="mono">c</span> 能不能帮上忙,靠的是另一个机制:<b>索引条件下推(ICP)</b>——在 <span class="mono">a=5</span> 圈定的这 2000 行索引记录里,顺便把 <span class="mono">c=100</span> 也判断一遍,省下几趟不必要的回表,但没办法真正把索引扫描范围收窄到"只查 c=100 相关的记录"——因为在 <span class="mono">a=5</span> 内部,记录是按 <span class="mono">b</span> 排的,<span class="mono">c</span> 值是打散的。</p>
+  <p>第五行更直接:<span class="mono">b</span> 不是索引的第一列,单独拿 <span class="mono">b</span> 做条件,<span class="mono">idx_abc</span> 直接不在候选索引里——<span class="mono">type=ALL</span>,全表扫描 199,920 行。</p>
+  <div class="callout io">
+    这不是"MySQL 不够聪明"。B+树的叶子只有一种物理排列方式(按 a、再按 b、再按 c),一旦确定了这个顺序,"能不能利用排序快速缩小范围"这件事就是纯粹的物理约束,不是优化器可以绕过去的。
+  </div>
+</section>
+
+<section>
+  <h2>演示:为什么跳过第一列,索引就"扫描不动"</h2>
+  <p class="h2-sub">用一棵玩具 B+树(键是 (a,b) 元组)直观看这件事:同样是"查一个值",从最左边的 a 开始查,和跳过 a 直接查 b,访问的叶子数量差多少。</p>
+  <div class="demo" id="prefixDemo">
+    <div class="demo-head">
+      <div class="demo-title">选择查询方式</div>
+      <div>
+        <button class="btn primary" id="btnA">WHERE a=2</button>
+        <button class="btn" id="btnB">WHERE b=5(跳过 a)</button>
+      </div>
+    </div>
+    <div class="demo-narration" id="pxNarration"></div>
+    <div class="demo-body">
+      <div class="leaf-row" id="pxLeaves"></div>
+      <div class="tally" id="pxTally"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="pxReset">⏮ 重来</button>
+      <button class="btn" id="pxPrev">‹ 上一步</button>
+      <button class="btn primary" id="pxNext">下一步 ›</button>
+      <span class="step-counter" id="pxCounter"></span>
+    </div>
+  </div>
+  <p>玩具树一共 5 个叶子。<span class="mono">WHERE a=2</span> 能先用二分找到第一个可能匹配的叶子,然后只沿着链表往右走,一旦某个叶子里再也找不到 <span class="mono">a=2</span> 就立刻停下——因为排序保证了后面不会再出现;<span class="mono">WHERE b=5</span> 没有这种"停下来"的依据,<span class="mono">b=5</span> 的记录可能出现在任意一个叶子里,只能把 5 个叶子全部看一遍。</p>
+</section>
+
+<section>
+  <h2>顺带的好处:排序也能"免费"拿到</h2>
+  <p class="h2-sub">上一节的排序性质不只是帮着缩小扫描范围,还能省掉一次显式排序。</p>
+  <table class="mono">
+    <tr><th>查询</th><th>Extra</th></tr>
+    <tr><td>WHERE a=5 ORDER BY b</td><td class="yes">(无 filesort——叶子里 a=5 的记录本来就按 b 排好了)</td></tr>
+    <tr><td>WHERE a=5 ORDER BY c</td><td class="no">Using filesort</td></tr>
+    <tr><td>SELECT a,b,c WHERE a=5</td><td class="yes">Using index(覆盖索引,连聚簇索引都不用碰——第二篇的话题)</td></tr>
+  </table>
+  <p><span class="mono">ORDER BY b</span> 不需要额外排序,因为 <span class="mono">a=5</span> 圈定的这段叶子记录,本来就是按 <span class="mono">b</span> 排好的——这是索引结构的副产品,不用额外花代价。但 <span class="mono">ORDER BY c</span> 就不行了:固定 <span class="mono">a</span> 之后,<span class="mono">b</span> 还在变化,<span class="mono">c</span> 只在"a 和 b 都固定"的情况下才有序,所以还是得老老实实排一次序。</p>
+</section>
+
+<section>
+  <h2>怎么给复合索引排列顺序</h2>
+  <p class="h2-sub">结合前面几篇的内容,一个实用的排列思路:</p>
+  <div class="callout key">
+    <b>1.</b> 等值查询的列放前面——能作为"精确匹配"的列,排列顺序随便调整都不影响是否走索引,优先把选择性最高(能过滤掉最多行)的放最前。<br><br>
+    <b>2.</b> 需要范围查询(<span class="mono">BETWEEN</span>、<span class="mono">&gt;</span>)或排序的列放在等值列后面、其余列前面——一旦遇到范围条件,后面的列就没法再用来收缩索引范围了(这点本文没有展开实验,是最左前缀规则的直接推论:范围条件之后,记录已经不再按后续列整体有序)。<br><br>
+    <b>3.</b> 如果高频查询要 <span class="mono">SELECT</span> 某几个字段,考虑把它们也纳入索引——换来覆盖索引,彻底跳过回表(第二篇)。
+  </div>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>所有 EXPLAIN 结果均在本机运行的 MySQL 9.7.1 上,针对同一张 20 万行的表(<span class="mono">a=n%100, b=n%500, c=n%5000</span>,已 <span class="mono">ANALYZE TABLE</span>)执行,未做任何删改。</li>
+      <li><span class="mono">KEY_PART_INFO</span> 的引用取自 <span class="mono">mysql/mysql-server</span> 仓库 <span class="mono">mysql-9.7.1</span> 标签(commit <span class="mono">a26ea1a2</span>)的 <span class="mono">sql/key.h</span>,与本机安装的 MySQL 9.7.1 完全一致;这是 SQL 层(优化器)的代码,和本系列此前引用的 <span class="mono">storage/innobase/</span> 存储引擎层代码是两个不同的层次——最左前缀规则本身是索引物理结构决定的,但"要不要用、怎么用"的判断发生在优化器这一层。</li>
+      <li>演示动画的玩具 B+树延续第一篇的实现和规则(阶为 4),最左前缀扫描逻辑(二分定位 + 沿链表走到匹配结束为止)是"ref 访问"策略的简化建模,用于可视化,不是逐行照抄优化器源码。</li>
+      <li>没有涉及:范围条件之后的列为什么不能再用于索引收缩(只给出了结论,没有单独实验验证)、多个候选索引之间优化器如何用代价模型选择、索引合并(index merge)。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="changebuf.html" target="_blank" rel="noopener" style="text-decoration:none; color:inherit;">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">Change Buffer 是怎么把随机写攒成批量写的</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>InnoDB B+树系列 · 第七篇 · 最左前缀原则与索引选择 · 数据来自本机 MySQL 9.7.1 真实实测</footer>
+
+<script>
+const DATA = {"rows": [[2, 5], [1, 3], [3, 1], [1, 7], [2, 2], [3, 9], [1, 1], [2, 8], [3, 4], [1, 5], [2, 1], [3, 7]], "finalSnapshot": {"rootId": 8, "nodes": {"8": {"id": 8, "leaf": false, "keys": [[3, 1]], "children": [3, 7], "next": null}, "7": {"id": 7, "leaf": false, "keys": [[3, 7]], "children": [5, 6], "next": null}, "6": {"id": 6, "leaf": true, "keys": [[3, 7], [3, 9]], "children": [], "next": null}, "5": {"id": 5, "leaf": true, "keys": [[3, 1], [3, 4]], "children": [], "next": 6}, "3": {"id": 3, "leaf": false, "keys": [[1, 7], [2, 5]], "children": [1, 4, 2], "next": null}, "2": {"id": 2, "leaf": true, "keys": [[2, 5], [2, 8]], "children": [], "next": 5}, "4": {"id": 4, "leaf": true, "keys": [[1, 7], [2, 1], [2, 2]], "children": [], "next": 2}, "1": {"id": 1, "leaf": true, "keys": [[1, 1], [1, 3], [1, 5]], "children": [], "next": 4}}}, "events": [{"label": "WHERE a=2", "touchedLeaves": [4, 2, 5], "matchedLeaves": [4, 2], "totalLeaves": 5, "narrowed": true, "type": "scan"}, {"label": "WHERE b=5", "touchedLeaves": [1, 4, 2, 5, 6], "matchedLeaves": [1, 2], "totalLeaves": 5, "narrowed": false, "type": "scan"}]};
+
+function keyLabel(k){ return `(${k[0]},${k[1]})`; }
+
+function leafOrder(snapshot){
+  const nodes = snapshot.nodes;
+  let node = nodes[String(snapshot.rootId)];
+  while(!node.leaf){ node = nodes[String(node.children[0])]; }
+  const out = [];
+  while(node){ out.push(node); node = node.next!=null ? nodes[String(node.next)] : null; }
+  return out;
+}
+
+(function(){
+  const leaves = leafOrder(DATA.finalSnapshot);
+  const leavesBox = document.getElementById('pxLeaves');
+  const narration = document.getElementById('pxNarration');
+  const tally = document.getElementById('pxTally');
+  const counter = document.getElementById('pxCounter');
+  let currentEvent = DATA.events[0];
+  let idx = 0;
+
+  function stepsFor(e){
+    // build a step-by-step reveal: one step per touched leaf
+    return e.touchedLeaves.map((leafId, i) => ({
+      leafId, touchedSoFar: e.touchedLeaves.slice(0, i+1), matchedSoFar: e.matchedLeaves.filter(m=>e.touchedLeaves.slice(0,i+1).includes(m))
+    }));
+  }
+  let steps = stepsFor(currentEvent);
+
+  function render(){
+    idx = Math.max(0, Math.min(steps.length-1, idx));
+    const s = steps[idx];
+    const leaf = leaves.find(l=>l.id===s.leafId);
+    const isMatch = currentEvent.matchedLeaves.includes(s.leafId);
+    narration.innerHTML = `${currentEvent.label}:检查叶子 #${s.leafId} [${leaf.keys.map(keyLabel).join(' ')}] —— ${isMatch ? '<span class="k">命中</span>' : (currentEvent.narrowed && currentEvent.matchedLeaves.some(m=>steps.slice(0,idx).map(x=>x.leafId).includes(m)) ? '<span class="k">不再命中,停止扫描</span>' : '未命中')}`;
+
+    let html = '';
+    leaves.forEach((l,i)=>{
+      const touched = s.touchedSoFar.includes(l.id);
+      const matched = s.matchedSoFar.includes(l.id);
+      let cls = 'leafbox' + (touched?' touched':'') + (matched?' matched':'');
+      html += `<div class="${cls}"><div class="lbl">leaf #${l.id}</div>${l.keys.map(keyLabel).join('<br>')}</div>`;
+      if(i<leaves.length-1) html += `<span class="leaf-arrow">→</span>`;
+    });
+    leavesBox.innerHTML = html;
+
+    tally.innerHTML = `<span>已检查叶子: <b>${s.touchedSoFar.length}</b> / ${currentEvent.totalLeaves}</span><span>命中叶子: <b>${s.matchedSoFar.length}</b></span>`;
+    counter.textContent = `${idx+1} / ${steps.length}`;
+    document.getElementById('pxPrev').disabled = idx===0;
+    document.getElementById('pxNext').disabled = idx===steps.length-1;
+  }
+  document.getElementById('pxPrev').onclick=()=>{idx--;render();};
+  document.getElementById('pxNext').onclick=()=>{idx++;render();};
+  document.getElementById('pxReset').onclick=()=>{idx=0;render();};
+  const btnA = document.getElementById('btnA'), btnB = document.getElementById('btnB');
+  btnA.onclick=()=>{ currentEvent = DATA.events[0]; steps = stepsFor(currentEvent); idx=0; render(); btnA.classList.add('primary'); btnB.classList.remove('primary'); };
+  btnB.onclick=()=>{ currentEvent = DATA.events[1]; steps = stepsFor(currentEvent); idx=0; render(); btnB.classList.add('primary'); btnA.classList.remove('primary'); };
+  render();
+})();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,16 @@
+from lib import *
+S = SS('f179')
+R = J('f179'); pb = R['probe']; bz = R['busy']; hg = R['hang']; lg = R['log']; hd = R['head']
+kb = list(bz); kh = list(hg); kl = list(lg)
+steps = [
+    step(f"两个接口回答不同的问题。/healthz(存活)只返回 ok,/readyz(就绪)去连依赖(这里是一个 TCP 服务,发 PING 要求回 PONG)。依赖正常:两者都 200;依赖被杀掉:/healthz 仍是 {pb['依赖被杀掉'][0][0]},/readyz 变成 {pb['依赖被杀掉'][1][0]},body 里的 checks 写明 {pb['依赖被杀掉'][1][1]};依赖重新起来后 /readyz 又回到 {pb['依赖重新起来'][1][0]}。依赖挂了,应用进程本身没有问题——重启它没有用,只该让它暂时不接流量。所以存活探针不要检查依赖,否则依赖一抖,所有实例被一起重启。HEAD /healthz 返回 {hd[0]},正文 {hd[1]} 字节、Content-Length {hd[2]}(Flask 自动给 GET 路由加了 HEAD)。", t=tl(S(1)), done=lidx(S(1), '依赖正常', '重新起来'), mark=lidx(S(1), '依赖被杀掉  ', 'HEAD'), kv=KV([['/healthz', '只看进程能不能回应'], ['/readyz', '检查依赖,失败 503'], ['依赖挂了', '/healthz 200,/readyz 503']], ['/readyz'])),
+    step(f"健康检查走的是和业务请求同一批 worker。一个 /slow 请求(3 秒)正在占着 worker 时去请求 /healthz:1 个 sync worker → {bz[kb[0]][1]} ms(要排队等 /slow 结束);2 个 sync worker → {bz[kb[1]][1]} ms;gthread 1 进程 4 线程 → {bz[kb[2]][1]} ms。如果探针的超时是 1 秒,第一种配置下这个探针会失败——应用其实没坏,只是 worker 不够。探针超时、worker 数和线程数要一起考虑。", t=tl(S(2)), done=lidx(S(2), 'sync ×2', 'gthread'), mark=lidx(S(2), 'sync ×1'), b=bars([[k, bz[k][1], f'{bz[k][1]} ms'] for k in kb], 3000, mark=[0], done=[1, 2]), kv=KV([[k, f'{bz[k][1]} ms'] for k in kb], [kb[0]])),
+    step(f"就绪检查里调用依赖一定要设超时。依赖接受连接却不回复时:不设超时,/readyz 一直不返回,探针客户端 8 秒后自己放弃({hg[kh[0]][1]});同时 /healthz 仍然 {200}(这个服务有 2 个 worker,另一个 worker 还空着);设 0.5 秒超时,/readyz 在 {hg[kh[1]][1]} ms 返回 {hg[kh[1]][0]},checks 里写明 TimeoutError。没有超时的检查会把一个 worker 一直占住,探针一多,所有 worker 都被占满。", t=tl(S(3)), done=lidx(S(3), '超时 0.5'), mark=lidx(S(3), '不设超时', '(同时)'), kv=KV([['不设超时', '一直等,8 秒后探针放弃'], ['0.5 秒超时', f'{hg[kh[1]][1]} ms 返回 503']], ['0.5 秒超时'])),
+    step(f"探针每几秒一次,访问日志会被刷满。10 轮 /healthz+/readyz 加 2 次真实请求:默认访问日志 {lg[kl[0]][0]} 行,其中探针 {lg[kl[0]][1]} 行;用自定义 gunicorn logger_class(继承 gunicorn.glogging.Logger,在 access() 里遇到这两个路径就直接 return)之后只剩 {lg[kl[1]][0]} 行,探针 {lg[kl[1]][1]} 行。注意这只是不记访问日志,请求照常处理;错误和慢请求要靠别的方式发现。", t=tl(S(4)), done=lidx(S(4), 'QuietHealth'), mark=lidx(S(4), '默认 accesslog'), b=bars([[kl[0], lg[kl[0]][0], f'{lg[kl[0]][0]} 行'], [kl[1], lg[kl[1]][0], f'{lg[kl[1]][0]} 行']], 24, mark=[0], done=[1]), kv=KV([['默认', f'{lg[kl[0]][0]} 行,探针 {lg[kl[0]][1]}'], ['logger_class', f'{lg[kl[1]][0]} 行']], ['logger_class'])),
+]
+A = mkartf('f179', 179, 'Flask,健康检查,readiness,liveness,gunicorn,真实验证,动画演示',
+    f'用真实的 gunicorn 验证健康检查的几个细节:依赖挂掉时 /healthz 仍 200、/readyz 返回 503;sync worker 被慢请求占满时探针等了 {bz[kb[0]][1]} ms;依赖卡住时不设超时探针永远等不到结果、设 0.5 秒超时 {hg[kh[1]][1]} ms 返回 503;自定义 logger_class 让探针不再刷满访问日志。',
+    '健康检查接口看起来最简单,却有几个常见的坑:存活和就绪该分开,检查依赖要设超时,探针和业务请求共用 worker,探针的访问日志会把日志淹没。这篇用真实的 gunicorn 一项项量出来(数据库连接的健康检查见第 188 篇,容器信号见第 189 篇)。',
+    [('503', '依赖不可用时 /readyz 的状态码(此时 /healthz 仍是 200)'), (f'{bz[kb[0]][1]} ms', '1 个 sync worker 被慢请求占着时,/healthz 的耗时'), (f'{lg[kl[0]][0]} → {lg[kl[1]][0]}', '22 次请求(其中 20 次探针)的访问日志行数:默认 vs 自定义 logger_class')],
+    [('存活与就绪', '<p>上一篇:<a href="flask-docker-deploy.html">Docker 部署 Flask</a>;下一篇:<a href="flask-graceful-shutdown.html">优雅关闭</a>。</p><p>依赖是一个自己起的 TCP 小服务(PING/PONG),不是真实数据库。</p>'), ('探针与 worker', None), ('依赖超时', None), ('探针日志', None)],
+    steps, [ENV_F + '。gunicorn(sync、gthread 两种 worker),依赖是自己写的 TCP 服务', '没有验证:Kubernetes 的 liveness/readiness/startupProbe 的实际行为(本篇没有运行 K8s)、负载均衡器的健康检查参数、检查真实数据库或 Redis、就绪接口的缓存、探针的鉴权'], '健康检查接口')

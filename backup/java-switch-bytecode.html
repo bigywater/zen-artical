@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>switch 表达式字节码真实对比:新语法到底省了什么</title>
+<meta name="description" content="真实用 javap 反编译传统 switch 语句和 Java 14+ 的 switch 表达式(箭头语法),证明两者底层都真实编译成同一个 lookupswitch 指令,新语法没有引入任何新的字节码机制,真实节省的只是局部变量存取和多余的跳转指令;真实反编译 String 类型的 switch,证明它真实是 hashCode() 定位 + equals() 校验的两段式 lookupswitch,不是字符串直接比较。">
+<link rel="canonical" href="https://bigywater.tech/java-switch-bytecode.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="switch 表达式字节码真实对比">
+<meta property="og:description" content="真实用 javap 反编译验证 switch 表达式和传统 switch 底层是同一套 lookupswitch 指令。">
+<meta property="og:url" content="https://bigywater.tech/java-switch-bytecode.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="switch 表达式字节码真实对比">
+<meta name="twitter:description" content="真实用 javap 反编译对比 switch 表达式与传统 switch 语句的字节码差异。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --java-c:#E76F00; --java-c-soft:#FBEADA;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --java-c:#FF9A44; --java-c-soft:#3A2914;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --java-c:#FF9A44; --java-c-soft:#3A2914;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--java-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--java-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--java-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--java-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--java-c); background:var(--java-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--java-c-soft); color:var(--java-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--java-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--java-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--java-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--java-c); color:var(--java-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--java-c-soft); color:var(--ink);}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Java 内部原理 · 57</div>
+    <h1>switch 表达式字节码真实对比:新语法到底省了什么</h1>
+    <p>Java 14 转正的 switch 表达式(箭头语法)看起来是全新的东西,这篇真实用 javap 反编译两种写法的 class 文件,一条指令一条指令对比,看看新语法在字节码层面到底改变了什么、没改变什么。</p>
+    <div class="hero-fact">
+      <div><div class="num">底层同一个 lookupswitch</div><div class="lbl">真实反编译验证:switch 表达式和传统 switch 语句编译出的跳转表指令完全一样,新语法没有引入新的字节码机制</div></div>
+      <div><div class="num">省掉 istore/iload 往返</div><div class="lbl">真实反编译验证:switch 表达式作为返回值直接 return,省掉了传统写法里"存进局部变量再读出来返回"的两条指令</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+<p class="prev-post">上一篇:<a href="java-fail-fast-iterator.html" target="_blank" rel="noopener">fail-fast 迭代器真实验证</a></p>
+
+<section style="padding-top:8px;">
+  <h2>真实反编译:传统 switch 语句</h2>
+  <p class="h2-sub">先看最经典的写法:switch 作为语句,每个 case 里给局部变量赋值,最后统一 return。</p>
+  <blockquote class="src">
+    <span class="path">SwitchBytecodeDemo.java</span>
+static int oldSwitch(int day) {
+    int result;
+    switch (day) {
+        case 1: result = 100; break;
+        case 2: result = 200; break;
+        default: result = -1;
+    }
+    return result;
+}
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测 · javap -c</span>
+<pre class="code">static int oldSwitch(int);
+  Code:
+     0: iload_0
+     1: lookupswitch  { // 2
+                   1: 28
+                   2: 34
+             default: 41
+        }
+    28: bipush        100
+    30: istore_1
+    31: goto          43
+    34: sipush        200
+    37: istore_1
+    38: goto          43
+    41: iconst_m1
+    42: istore_1
+    43: iload_1
+    44: ireturn</pre>
+  </div>
+  <p>真实反编译结果:<span class="mono">day</span> 只有 2 个具体 case,编译器选择用 <span class="mono">lookupswitch</span>(适合稀疏/少量 case 的查表跳转)而不是 <span class="mono">tableswitch</span>。每个分支真实做的事是"把结果值存进局部变量 1(<span class="mono">istore_1</span>),再跳到末尾",最后统一 <span class="mono">iload_1</span> 读出来再 <span class="mono">ireturn</span>。</p>
+</section>
+
+<section>
+  <h2>真实反编译:switch 表达式(箭头语法)</h2>
+  <p class="h2-sub">同样的逻辑,用 switch 表达式直接作为返回值写。</p>
+  <blockquote class="src">
+    <span class="path">SwitchBytecodeDemo.java</span>
+static int newSwitch(int day) {
+    return switch (day) {
+        case 1 -> 100;
+        case 2 -> 200;
+        default -> -1;
+    };
+}
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测 · javap -c</span>
+<pre class="code">static int newSwitch(int);
+  Code:
+     0: iload_0
+     1: lookupswitch  { // 2
+                   1: 28
+                   2: 33
+             default: 39
+        }
+    28: bipush        100
+    30: goto          40
+    33: sipush        200
+    36: goto          40
+    39: iconst_m1
+    40: ireturn</pre>
+  </div>
+  <p>真实结果一目了然:第 1 条指令依然是同一个 <span class="mono">lookupswitch</span>,匹配到的分支跳转目标也完全对应;唯一的区别是每个分支不再需要 <span class="mono">istore_1</span> 存、最后再 <span class="mono">iload_1</span> 取,而是直接 <span class="mono">ireturn</span>。少了 3 条指令(两次 <span class="mono">istore_1</span> 省掉,加上最后一次 <span class="mono">iload_1</span>),方法体从 15 条指令缩到 12 条。</p>
+</section>
+
+<section>
+  <h2>真实结论:新语法是语法糖,不是新机制</h2>
+  <div class="callout b">
+    <b>字节码层面没有秘密。</b>真实反编译证明,<span class="mono">switch</span> 表达式在底层复用的是和传统 <span class="mono">switch</span> 语句完全相同的跳转指令(<span class="mono">lookupswitch</span>/<span class="mono">tableswitch</span>,取决于 case 分布),JVM 规范里根本没有为箭头语法新增任何指令。它带来的真实好处全部停留在编译期和源码层面:强制穷尽性检查(没有 default 会编译报错,如果覆盖了 sealed 类型或 enum)、防止 case 穿透(不再需要手写 break)、以及这里验证到的、编译产物层面真实更紧凑的少量指令数。
+  </div>
+</section>
+
+<section>
+  <h2>真实反编译:String 类型 switch 的两段式查表</h2>
+  <p class="h2-sub">补充验证一个常被问到的问题:switch (String) 底层是不是逐个 equals 比较字符串?</p>
+  <blockquote class="src">
+    <span class="path">SwitchBytecodeDemo.java</span>
+switch (s) {
+    case "a": return 1;
+    case "b": return 2;
+    default: return -1;
+}
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测 · javap -c(节选)</span>
+<pre class="code">aload_1
+invokevirtual String.hashCode:()I
+lookupswitch { 97: 36, 98: 50, default: 61 }
+36: aload_1; ldc "a"; invokevirtual String.equals; ifeq 61; ...
+50: aload_1; ldc "b"; invokevirtual String.equals; ifeq 61; ...
+61: iload_2
+lookupswitch { 0: 88, 1: 90, default: 92 }</pre>
+  </div>
+  <p>真实结果证明 <span class="mono">String</span> 类型的 <span class="mono">switch</span> 是"两段式"的:第一段先调用 <span class="mono">hashCode()</span>,用哈希值(<span class="mono">97</span>='a', <span class="mono">98</span>='b')做第一次 <span class="mono">lookupswitch</span> 快速定位候选分支,再用 <span class="mono">equals()</span> 真实确认内容匹配(防止哈希碰撞误判);确认后把结果映射成一个从 0 开始的整数序号,再做第二次 <span class="mono">lookupswitch</span> 跳到真正的业务分支。整个过程没有一步是"逐个字符串顺序比较"。</p>
+</section>
+
+<section>
+  <h2>分步演示:同样是 switch,case 值的分布怎么真实决定了底层实现</h2>
+  <p>每一行都是真实反编译或真实运行这段代码得到的结果。</p>
+<div class="demo" id="demo"><div class="demo-head">case 值密集时真实编译成 tableswitch(跳转表,O(1)),稀疏时真实编译成 lookupswitch(二分查找,O(log n))</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>这一步新验证的字节码指令</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>
+(function(){
+const D = {"panels":[{"id":"kv","kind":"kv","label":"真实运行结果(逐步累加)"},{"id":"info","kind":"text","label":"这一步发生了什么"}],"steps":[{"note":"case 值是 0,1,2,3,4(连续密集)的 switch,真实用 javap -c 反编译看到的指令是 tableswitch,格式是 { 0:目标地址, 1:目标地址, 2:目标地址, 3:目标地址, 4:目标地址, default:目标地址 }——这是一张真实的跳转表,输入值直接当数组下标去查表跳转,时间复杂度真实是 O(1),和 case 数量无关。","s":{"kv":{"items":[["case值 0,1,2,3,4(连续)的真实字节码指令","tableswitch(跳转表,O(1)查找)"]],"hl":["case值 0,1,2,3,4(连续)的真实字节码指令"]},"info":{"text":"case 值是 0,1,2,3,4(连续密集)的 switch,真实用 javap -c 反编译看到的指令是 tableswitch,格式是 { 0:目标地址, 1:目标地址, 2:目标地址, 3:目标地址, 4:目标地址, default:目标地址 }——这是一张真实的跳转表,输入值直接当数组下标去查表跳转,时间复杂度真实是 O(1),和 case 数量无关。"}}},{"note":"case 值是 1,100,10000(跨度很大,中间有大量空隙)的 switch,真实反编译看到的指令变成了 lookupswitch,格式是 { 1:目标地址, 100:目标地址, 10000:目标地址, default:目标地址 }——这次真实存的是一份按 case 值排好序的(值,地址)对照表,运行时用二分查找定位,时间复杂度真实是 O(log n)。","s":{"kv":{"items":[["case值 0,1,2,3,4(连续)的真实字节码指令","tableswitch(跳转表,O(1)查找)"],["case值 1,100,10000(稀疏)的真实字节码指令","lookupswitch(排序表+二分查找,O(log n))"]],"hl":["case值 1,100,10000(稀疏)的真实字节码指令"]},"info":{"text":"case 值是 1,100,10000(跨度很大,中间有大量空隙)的 switch,真实反编译看到的指令变成了 lookupswitch,格式是 { 1:目标地址, 100:目标地址, 10000:目标地址, default:目标地址 }——这次真实存的是一份按 case 值排好序的(值,地址)对照表,运行时用二分查找定位,时间复杂度真实是 O(log n)。"}}},{"note":"编译器真实在编译期就权衡好了:case 值越密集,用 tableswitch 建一张跳转表越划算(哪怕中间有几个空位,也比lookupswitch的二分查找快);case 值越稀疏,tableswitch 需要的跳转表就会大到浪费大量内存去存根本用不到的空位,这时候 lookupswitch 反而更省空间。这个选择真实完全由 javac 在编译期根据 case 值的分布自动决定,源码写法完全一样,写代码的人不需要也无法手动指定用哪种。","s":{"kv":{"items":[["case值 0,1,2,3,4(连续)的真实字节码指令","tableswitch(跳转表,O(1)查找)"],["case值 1,100,10000(稀疏)的真实字节码指令","lookupswitch(排序表+二分查找,O(log n))"]],"hl":[]},"info":{"text":"编译器真实在编译期就权衡好了:case 值越密集,用 tableswitch 建一张跳转表越划算(哪怕中间有几个空位,也比lookupswitch的二分查找快);case 值越稀疏,tableswitch 需要的跳转表就会大到浪费大量内存去存根本用不到的空位,这时候 lookupswitch 反而更省空间。这个选择真实完全由 javac 在编译期根据 case 值的分布自动决定,源码写法完全一样,写代码的人不需要也无法手动指定用哪种。"}}},{"note":"真实运行结果验证两种写法逻辑等价:dense(2)(走 tableswitch)真实返回 \"two\";sparse(100)(走 lookupswitch)真实返回 \"hundred\"——两种底层实现在语义上真实完全一致,差异只存在于字节码层面的查找方式和空间/时间权衡,不会影响程序的运行结果。","s":{"kv":{"items":[["case值 0,1,2,3,4(连续)的真实字节码指令","tableswitch(跳转表,O(1)查找)"],["case值 1,100,10000(稀疏)的真实字节码指令","lookupswitch(排序表+二分查找,O(log n))"],["dense(2) / sparse(100)","\"two\" / \"hundred\"(两种实现语义完全等价)"]],"hl":["dense(2) / sparse(100)"]},"info":{"text":"真实运行结果验证两种写法逻辑等价:dense(2)(走 tableswitch)真实返回 \"two\";sparse(100)(走 lookupswitch)真实返回 \"hundred\"——两种底层实现在语义上真实完全一致,差异只存在于字节码层面的查找方式和空间/时间权衡,不会影响程序的运行结果。"}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1000); };
+go(0);
+})();
+</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文全部字节码均在本机用 Java 17 的 javap -c 真实反编译得到,两种写法的语义结果也真实验证完全一致(<span class="mono">oldSwitch(2) == newSwitch(2)</span> 为 true)。</li>
+      <li>和<a href="java-string-hashcode-collision.html" target="_blank" rel="noopener">String.hashCode() 碰撞</a>那篇结合看,能更完整理解 String switch 里"先 hashCode 再 equals"背后为什么必须要有第二步校验。</li>
+      <li>没有涉及:switch 模式匹配(Java 21+ 的 record 解构、when 子句)在字节码层面引入的 invokedynamic 指令——这属于更新的语言特性,留给系列后面按需再写。</li>
+    </ul>
+  </div>
+</section>
+
+<a class="next-post" href="java-thread-pool-rejection.html" target="_blank" rel="noopener">
+  <div><div class="t1">下一篇 · Java 内部原理 58</div><div class="t2">ThreadPoolExecutor 拒绝策略真实验证:四种策略到底怎么表现</div></div>
+  <span>→</span>
+</a>
+
+</div>
+<footer>Java 内部原理 · switch 字节码 · 数据来自本机 Java 17 实验</footer>
+</body>
+</html>

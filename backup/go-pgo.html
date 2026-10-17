@@ -1,0 +1,465 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>PGO:用 profile 引导编译优化,真实能快多少</title>
+<meta name="description" content="在 Go 1.27.1(arm64)上真实测 PGO:用五种工作负载的 CPU profile 合并成 default.pgo 重新编译,编译器把代价 146 的 score 在热调用点内联、把接口调用的热目标内联;但 5 种工作负载里只有 regexp 明显变快(471 → 433 ms,8.1%),接口调用、直接调用、compress/flate 几乎没变,接口加较长函数的组合反而慢 2.0%——PGO 不保证变快;-pgo=auto 的默认行为。">
+<link rel="canonical" href="https://bigywater.tech/go-pgo.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="PGO:用 profile 引导编译优化,真实能快多少">
+<meta property="og:description" content="在 Go 1.27.1(arm64)上真实测 PGO:用五种工作负载的 CPU profile 合并成 default.pgo 重新编译,编译器把代价 146 的 score 在热调用点内联、把接口调用的热目标内联;但 5 种工作负载里只有 regexp 明显变快(471 → 433 ms,8.1%),接口调用、直接调用、compress/flate 几乎没变,接口加较长函数的组合反而慢 2.0%——PGO 不保证变快;-pgo=auto 的默认行为。">
+<meta property="og:url" content="https://bigywater.tech/go-pgo.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="PGO:用 profile 引导编译优化,真实能快多少">
+<meta name="twitter:description" content="在 Go 1.27.1(arm64)上真实测 PGO:用五种工作负载的 CPU profile 合并成 default.pgo 重新编译,编译器把代价 146 的 score 在热调用点内联、把接口调用的热目标内联;但 5 种工作负载里只有 regexp 明显变快(471 → 433 ms,8.1%),接口调用、直接调用、compress/flate 几乎没变,接口加较长函数的组合反而慢 2.0%——PGO 不保证变快;-pgo=auto 的默认行为。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">2013</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">87</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#00799A; --series-c-soft:#D9F1F8;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#4FC3E8; --series-c-soft:#0B2A33;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#4FC3E8; --series-c-soft:#0B2A33;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Go · 48</div>
+  <h1>PGO:用 profile 引导编译优化,真实能快多少</h1>
+  <p>PGO(profile 引导优化)据说能让程序快 2% 到 14%。这篇自己做一遍:收集 profile、重新编译、看编译器的决定改了什么,然后在五种工作负载上对照运行时间。结果不全是好消息,这正是值得记录的地方。</p>
+  <div class="hero-fact">
+<div><div class="num">8.1%</div><div class="lbl">regexp 匹配在 PGO 构建下的提升(471 → 433 ms)</div></div><div><div class="num">0% 与 -2.0%</div><div class="lbl">其它四种负载的结果:接口调用、直接调用、flate 几乎不变,接口加较长函数的组合慢了 2.0%</div></div><div><div class="num">146 → 可内联</div><div class="lbl">score 的代价 146 超过默认预算 80,PGO 下在热调用点被内联</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="go-bounds-check.html">边界检查消除:哪些写法能让编译器省掉检查</a></div>
+<section>
+  <h2>没有 profile 时</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  main.go:26:6: cannot inline score: function too complex: cost 146 exceeds budget 80</pre></div>
+  <p>默认构建下,<code>-gcflags=-m=2</code> 的诊断是:<code>cannot inline score: function too complex: cost 146 exceeds budget 80</code>——函数的内联代价 146,超过了默认预算 80,所以不会被内联。这是后面对照的起点。</p>
+</section>
+<section>
+  <h2>收集与使用 profile</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  mode=iface:total=14093400583.312 elapsed_ms=1447;profile 862 字节
+  mode=inline:total=4953580481961.155 elapsed_ms=373;profile 607 字节
+  mode=both:total=320842445200.226 elapsed_ms=516;profile 675 字节
+  mode=flate:total=73400320.000 elapsed_ms=91;profile 1567 字节
+  mode=regexp:total=1500000.000 elapsed_ms=470;profile 1392 字节
+  合并后的 default.pgo 3295 字节
+  go tool pprof -top(前几行):
+    Showing nodes accounting for 2590ms, 91.84% of 2820ms total
+    Dropped 31 nodes (cum &lt;= 14.10ms)
+    Showing top 6 nodes out of 25
+    flat flat% sum% cum cum%
+    1420ms 50.35% 50.35% 1420ms 50.35% main.runIface
+    610ms 21.63% 71.99% 640ms 22.70% main.score
+    200ms 7.09% 79.08% 200ms 7.09% regexp/syntax.(*Inst).MatchRunePos
+    160ms 5.67% 84.75% 490ms 17.38% main.runBoth</pre></div>
+  <p>profile 就是普通的 CPU profile(<code>runtime/pprof</code> 或 <code>go test -cpuprofile</code> 产生),多个 profile 可以用 <code>go tool pprof -proto</code> 合并。命名为 <code>default.pgo</code> 放在 main 包目录里,<code>go build</code> 默认(<code>-pgo=auto</code>)就会使用;<code>-pgo=off</code> 关闭。这个实验里每个 profile 很小(几百字节到 1.5 KB)——工作负载只跑了不到几秒。</p>
+</section>
+<section>
+  <h2>编译器改变了什么</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  main.go:26:6: can inline score with cost 146 as: func(float64, float64, float64) float64 { a := x * x + y * y; b := y * y + z * z; c := z * z + x * x; if a &gt; b { a, b = b, a }; if b &gt; c { b,
+  main.go:46:17: inlining call to score
+  main.go:59:41: inlining call to score
+  &lt;autogenerated&gt;:1: inlining call to Circle.Area
+  &lt;autogenerated&gt;:1: inlining call to Square.Area
+  &lt;autogenerated&gt;:1: inlining call to Tri.Area</pre></div>
+  <p>从 <code>-m=2</code> 的诊断能直接看到:<code>score</code> 的代价仍是 146,但在 profile 里的热调用点上内联预算被放宽,所以被内联了;接口调用 <code>s.Area()</code> 的热目标也被内联(实现上是在调用点先判断具体类型再直接调用,这是我对“Circle.Area 等被内联”这一诊断的解释,没有读生成的汇编)。</p>
+</section>
+<section>
+  <h2>结果:不保证更快</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  只有接口调用 s.Area()(95% 是 Circle)(n = 400000000):
+    基线:[1422, 1423, 1423, 1423, 1424, 1426, 1429];中位 1423
+    PGO :[1419, 1421, 1422, 1422, 1422, 1426, 1451];中位 1422
+    PGO 比基线快 0.1%(中位数)
+  只有直接调用较长的 score()(n = 100000000):
+    基线:[353, 353, 353, 353, 354, 354, 358];中位 353
+    PGO :[353, 353, 353, 353, 353, 353, 353];中位 353
+    PGO 比基线慢 0.0%(中位数)
+  接口调用 + 较长的 score()(n = 100000000):
+    基线:[507, 507, 507, 507, 508, 509, 511];中位 507
+    PGO :[516, 516, 516, 517, 520, 520, 524];中位 517
+    PGO 比基线慢 2.0%(中位数)
+  compress/flate 压缩 3.6 MB 重复文本(n = 20):
+    基线:[80, 80, 80, 81, 81, 81, 82];中位 81
+    PGO :[81, 81, 81, 81, 81, 82, 82];中位 81
+    PGO 比基线慢 0.0%(中位数)
+  regexp 匹配邮箱格式(n = 3000000):
+    基线:[468, 469, 471, 471, 472, 472, 477];中位 471
+    PGO :[432, 433, 433, 433, 434, 434, 434];中位 433
+    PGO 比基线快 8.1%(中位数)
+  二进制大小:基线 3239922 字节,PGO 3256354 字节</pre></div>
+  <p>五种负载里只有 <code>regexp</code> 的匹配循环有明显提升(8.1%)。接口调用与直接调用的两个微基准几乎没变,<code>compress/flate</code> 也没变,而同时有接口调用与较长函数的组合反而慢了 2%。我没有去查慢的原因(代码布局、寄存器分配都有可能),只能说:<b>PGO 的收益取决于程序,需要拿自己的负载测</b>,官方给的“几个百分点”不是保证,微基准更容易得到 0。另外这些数字是 arm64 单机上的结果,二进制也略有变大。</p>
+</section>
+<section>
+  <h2>默认行为</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  默认 go build 的产物里的构建信息:build	-pgo=&lt;gtmp&gt;/pg1/default.pgo
+  -pgo=off 的产物:构建信息里没有 -pgo</pre></div>
+  <p>因为 <code>-pgo=auto</code> 是默认,往 main 包目录里放一个 <code>default.pgo</code>,所有人构建的结果都会变——所以有这个文件时,要把它当作构建输入对待(纳入版本控制、定期更新),并在 CI 里确认没有性能退化。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">PGO</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "b", "kind": "bars", "label": "数字对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "没有 profile 时,编译器的默认判断:score(一个较长的热点函数)cannot inline score: function too complex: cost 146 exceeds budget 80。程序里有五种工作负载(iface 接口调用、inline 直接调用较长的 score、both 两者结合、flate 压缩、regexp 匹配邮箱格式)。", "s": {"t": {"lines": ["  main.go:26:6: cannot inline score: function too complex: cost 146 exceeds budget 80"], "cur": [], "mark": [], "done": []}, "mark": [0], "kv": {"items": [["score 的代价", "146"], ["默认预算", "80"], ["结论", "默认构建里 score 不会被内联"]], "hl": ["结论"]}}}, {"note": "收集 CPU profile:把五种 mode 各跑一遍,每个 profile 只有 607–1567 字节,用 go tool pprof -proto 合并成 default.pgo(3295 字节)。go tool pprof -top:main.runIface 1420ms(50.35%)、main.score 610ms(21.63%)、regexp/syntax.(*Inst).MatchRunePos 200ms(7.09%)、main.runBoth 160ms(5.67%)。", "s": {"t": {"lines": ["  mode=iface:total=14093400583.312 elapsed_ms=1447;profile 862 字节", "  mode=inline:total=4953580481961.155 elapsed_ms=373;profile 607 字节", "  mode=both:total=320842445200.226 elapsed_ms=516;profile 675 字节", "  mode=flate:total=73400320.000 elapsed_ms=91;profile 1567 字节", "  mode=regexp:total=1500000.000 elapsed_ms=470;profile 1392 字节", "  合并后的 default.pgo 3295 字节", "  go tool pprof -top(前几行):", "    Showing nodes accounting for 2590ms, 91.84% of 2820ms total", "    Dropped 31 nodes (cum <= 14.10ms)", "    Showing top 6 nodes out of 25", "    flat flat% sum% cum cum%", "    1420ms 50.35% 50.35% 1420ms 50.35% main.runIface", "    610ms 21.63% 71.99% 640ms 22.70% main.score", "    200ms 7.09% 79.08% 200ms 7.09% regexp/syntax.(*Inst).MatchRunePos", "    160ms 5.67% 84.75% 490ms 17.38% main.runBoth"], "cur": [], "mark": [], "done": []}, "done": [0, 1, 2, 3, 4], "mark": [5, 11, 12], "kv": {"items": [["profile 来源", "每种 mode 跑一遍的 CPU profile"], ["合并", "go tool pprof -proto a b c > default.pgo(3295 字节)"], ["热点", "runIface 50.35%、score 21.63%、regexp 的 MatchRunePos 7.09%"]], "hl": ["合并"]}}}, {"note": "用 -pgo=default.pgo 重新编译,编译器改变了决定:score 变成 can inline score with cost 146(代价没变,预算被热点调高了),并且在两个热调用点被内联(main.go:46 与 59 的 inlining call to score);接口方法 Circle.Area、Square.Area、Tri.Area 也都被内联(<autogenerated>:1: inlining call to …Area)——热调用点上的接口调用被改成“先判断具体类型再直接调用”。", "s": {"t": {"lines": ["  main.go:26:6: can inline score with cost 146 as: func(float64, float64, float64) float64 { a := x * x + y * y; b := y * y + z * z; c := z * z + x * x; if a > b { a, b = b, a }; if b > c { b,", "  main.go:46:17: inlining call to score", "  main.go:59:41: inlining call to score", "  <autogenerated>:1: inlining call to Circle.Area", "  <autogenerated>:1: inlining call to Square.Area", "  <autogenerated>:1: inlining call to Tri.Area"], "cur": [], "mark": [], "done": []}, "done": [0, 1, 2], "mark": [3, 4, 5], "kv": {"items": [["score(代价 146)", "PGO 下可以内联:两个热调用点都内联了"], ["接口方法 Area", "Circle、Square、Tri 的 Area 都被内联"], ["含义", "热点调用的预算与接口调用的去虚拟化由 profile 决定"]], "hl": ["含义"]}}}, {"note": "运行时间(每种 mode 各跑 7 次,中位数):iface(n = 4 亿)基线 1423 ms、PGO 1422 ms(快 0.1%);inline(n = 1 亿)都是 353 ms;both 基线 507 ms、PGO 517 ms(慢 2.0%);flate 压缩 都是 81 ms;regexp 基线 471 ms、PGO 433 ms(快 8.1%)。二进制大小:基线 3239922 字节,PGO 3256354 字节。只有 regexp 这一项有明显收益。", "s": {"t": {"lines": ["  只有接口调用 s.Area()(95% 是 Circle)(n = 400000000):", "    基线:[1422, 1423, 1423, 1423, 1424, 1426, 1429];中位 1423", "    PGO :[1419, 1421, 1422, 1422, 1422, 1426, 1451];中位 1422", "    PGO 比基线快 0.1%(中位数)", "  只有直接调用较长的 score()(n = 100000000):", "    基线:[353, 353, 353, 353, 354, 354, 358];中位 353", "    PGO :[353, 353, 353, 353, 353, 353, 353];中位 353", "    PGO 比基线慢 0.0%(中位数)", "  接口调用 + 较长的 score()(n = 100000000):", "    基线:[507, 507, 507, 507, 508, 509, 511];中位 507", "    PGO :[516, 516, 516, 517, 520, 520, 524];中位 517", "    PGO 比基线慢 2.0%(中位数)", "  compress/flate 压缩 3.6 MB 重复文本(n = 20):", "    基线:[80, 80, 80, 81, 81, 81, 82];中位 81", "    PGO :[81, 81, 81, 81, 81, 82, 82];中位 81", "    PGO 比基线慢 0.0%(中位数)", "  regexp 匹配邮箱格式(n = 3000000):", "    基线:[468, 469, 471, 471, 472, 472, 477];中位 471", "    PGO :[432, 433, 433, 433, 434, 434, 434];中位 433", "    PGO 比基线快 8.1%(中位数)", "  二进制大小:基线 3239922 字节,PGO 3256354 字节"], "cur": [], "mark": [], "done": []}, "done": [0, 4, 12], "mark": [8, 16, 20], "b": {"items": [["iface(PGO 更快)", 0.1, "快 0.1%"], ["inline", 0.0, "0.0%"], ["both(PGO 更慢)", 2.0, "慢 2.0%"], ["flate", 0.0, "0.0%"], ["regexp(PGO 更快)", 8.1, "快 8.1%"]], "max": 8.1, "cur": [], "mark": [2], "done": [0, 1, 3, 4]}, "kv": {"items": [["iface", "1423 → 1422 ms(+0.1%)"], ["inline", "353 → 353 ms(0.0%)"], ["both", "507 → 517 ms(慢 2.0%)"], ["flate", "81 → 81 ms(0.0%)"], ["regexp", "471 → 433 ms(快 8.1%)"]], "hl": ["regexp"]}}}, {"note": "-pgo=auto 是默认行为:main 包目录里放了 default.pgo,普通的 go build 就会用上,go version -m 的构建信息里能看到 build -pgo=<目录>/default.pgo;-pgo=off 构建出来的产物里没有这一项。", "s": {"t": {"lines": ["  默认 go build 的产物里的构建信息:build\t-pgo=<gtmp>/pg1/default.pgo", "  -pgo=off 的产物:构建信息里没有 -pgo"], "cur": [], "mark": [], "done": []}, "done": [0], "mark": [1], "kv": {"items": [["go build(目录里有 default.pgo)", "自动使用,go version -m 里有 -pgo=…"], ["-pgo=off", "关闭,构建信息里没有 -pgo"]], "hl": ["go build(目录里有 default.pgo)"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / Go 1.27.1(brew);用 go run / go build / go test 直接编译运行,需要第三方库时经代理从 proxy.golang.org 下载;计时用 time.Now / testing.B,数字每次运行会有小幅抖动。基准是自己写的 5 种负载(带 -mode 参数的同一个程序);每种 mode 各跑 7 次取中位数;profile 来自基线构建的 runtime/pprof CPU profile,用 go tool pprof -proto 合并;编译器的决定来自 -gcflags=-m=2</li><li>没有验证:更大、更真实的服务端程序上的收益、profile 的质量(采样时长、负载代表性)对结果的影响、PGO 构建的编译时间、慢 2.0% 的原因、PGO 在 amd64 上的结果、profile 随代码演进过期后的表现</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="go-gc-tricolor.html">
+    <div>
+      <div class="t1">下一篇 · GO 49</div>
+      <div class="t2">三色标记与写屏障:并发标记期间新指针怎么不丢对象</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Go · PGO:用 profile 引导编译优化,真实能快多少 · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

@@ -1,0 +1,518 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>KeyGenerator:生成对称密钥的参数边界</title>
+<meta name="description" content="在 JDK 17 / 21 / 27 上验证 KeyGenerator:24 个 SunJCE 服务;AES 默认长度 JDK 17 为 128 位而 JDK 21 / 27 为 256 位;各算法 init(int) 接受的长度与拒绝时的异常(DES 只收 56、HMAC 至少 40 位);随机源由调用者决定,种子固定的 SHA1PRNG 会生成相同的密钥;DES 的奇偶校验位;8 线程共用同一个实例 20 万个密钥无重复。">
+<link rel="canonical" href="https://bigywater.tech/java-key-generator.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="KeyGenerator:生成对称密钥的参数边界">
+<meta property="og:description" content="在 JDK 17 / 21 / 27 上验证 KeyGenerator:24 个 SunJCE 服务;AES 默认长度 JDK 17 为 128 位而 JDK 21 / 27 为 256 位;各算法 init(int) 接受的长度与拒绝时的异常(DES 只收 56、HMAC 至少 40 位);随机源由调用者决定,种子固定的 SHA1PRNG 会生成相同的密钥;DES 的奇偶校验位;8 线程共用同一个实例 20 万个密钥无重复。">
+<meta property="og:url" content="https://bigywater.tech/java-key-generator.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="KeyGenerator:生成对称密钥的参数边界">
+<meta name="twitter:description" content="在 JDK 17 / 21 / 27 上验证 KeyGenerator:24 个 SunJCE 服务;AES 默认长度 JDK 17 为 128 位而 JDK 21 / 27 为 256 位;各算法 init(int) 接受的长度与拒绝时的异常(DES 只收 56、HMAC 至少 40 位);随机源由调用者决定,种子固定的 SHA1PRNG 会生成相同的密钥;DES 的奇偶校验位;8 线程共用同一个实例 20 万个密钥无重复。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">1862</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">359</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#B85C00; --series-c-soft:#FBE7D1;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#F29A4A; --series-c-soft:#3B2208;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#F29A4A; --series-c-soft:#3B2208;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Java · 360</div>
+  <h1>KeyGenerator:生成对称密钥的参数边界</h1>
+  <p>生成一个对称密钥看起来是两行代码,但默认长度会随 JDK 版本变化,各算法接受的长度各不相同,随机源也完全由调用者决定。这篇逐项实测。</p>
+  <div class="hero-fact">
+<div><div class="num">128 → 256 位</div><div class="lbl">AES 不调用 init 时的默认密钥长度:JDK 17 与 JDK 21 / 27</div></div><div><div class="num">同一个密钥</div><div class="lbl">种子固定的 SHA1PRNG 作为随机源时,两个全新的 KeyGenerator 生成的 AES 密钥</div></div><div><div class="num">0 个重复</div><div class="lbl">8 线程共用一个 KeyGenerator 生成的 20 万个密钥中的重复数</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="java-ssl-session-context.html">SSLSessionContext:管理 TLS 会话缓存</a></div>
+<section>
+  <h2>有哪些 KeyGenerator</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [services]
+    JDK 21.0.12.1;KeyGenerator 服务 24 个:[SunJCE:AES, SunJCE:ARCFOUR, SunJCE:Blowfish, SunJCE:ChaCha20, SunJCE:DES, SunJCE:DESede, SunJCE:HmacMD5, SunJCE:HmacSHA1, SunJCE:HmacSHA224, SunJCE:HmacSHA256, SunJCE:HmacSHA3-224, SunJCE:HmacSHA3-256, SunJCE:HmacSHA3-384, SunJCE:HmacSHA3-512, SunJCE:HmacSHA384, SunJCE:HmacSHA512, SunJCE:HmacSHA512/224, SunJCE:HmacSHA512/256, SunJCE:RC2, SunJCE:SunTls12Prf, Su
+    Cipher.getMaxAllowedKeyLength("AES") = 2147483647</pre></div>
+</section>
+<section>
+  <h2>默认密钥长度</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [defaults]
+        AES              → 默认密钥 32 字节(256 位);getAlgorithm = AES;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        DES              → 默认密钥 8 字节(64 位);getAlgorithm = DES;getFormat = RAW;provider = SunJCE;类 DESKey
+        DESede           → 默认密钥 24 字节(192 位);getAlgorithm = DESede;getFormat = RAW;provider = SunJCE;类 DESedeKey
+        Blowfish         → 默认密钥 16 字节(128 位);getAlgorithm = Blowfish;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        RC2              → 默认密钥 16 字节(128 位);getAlgorithm = RC2;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        ARCFOUR          → 默认密钥 16 字节(128 位);getAlgorithm = ARCFOUR;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        ChaCha20         → 默认密钥 32 字节(256 位);getAlgorithm = ChaCha20;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        HmacMD5          → 默认密钥 64 字节(512 位);getAlgorithm = HmacMD5;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        HmacSHA1         → 默认密钥 64 字节(512 位);getAlgorithm = HmacSHA1;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        HmacSHA224       → 默认密钥 28 字节(224 位);getAlgorithm = HmacSHA224;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        HmacSHA256       → 默认密钥 32 字节(256 位);getAlgorithm = HmacSHA256;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        HmacSHA384       → 默认密钥 48 字节(384 位);getAlgorithm = HmacSHA384;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        HmacSHA512       → 默认密钥 64 字节(512 位);getAlgorithm = HmacSHA512;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        HmacSHA3-256     → 默认密钥 32 字节(256 位);getAlgorithm = HmacSHA3-256;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        HmacSHA512/256   → 默认密钥 32 字节(256 位);getAlgorithm = HmacSHA512/256;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        SunTls12Prf      → IllegalStateException: TlsPrfGenerator must be initialized
+  [JDK 17(只看 AES / HmacSHA256 / DESede)]
+        AES              → 默认密钥 16 字节(128 位);getAlgorithm = AES;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        DES              → 默认密钥 8 字节(64 位);getAlgorithm = DES;getFormat = RAW;provider = SunJCE;类 DESKey
+        DESede           → 默认密钥 24 字节(192 位);getAlgorithm = DESede;getFormat = RAW;provider = SunJCE;类 DESedeKey
+        Blowfish         → 默认密钥 16 字节(128 位);getAlgorithm = Blowfish;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        RC2              → 默认密钥 16 字节(128 位);getAlgorithm = RC2;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        ARCFOUR          → 默认密钥 16 字节(128 位);getAlgorithm = ARCFOUR;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        ChaCha20         → 默认密钥 32 字节(256 位);getAlgorithm = ChaCha20;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        HmacMD5          → 默认密钥 64 字节(512 位);getAlgorithm = HmacMD5;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        HmacSHA1         → 默认密钥 64 字节(512 位);getAlgorithm = HmacSHA1;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        HmacSHA224       → 默认密钥 28 字节(224 位);getAlgorithm = HmacSHA224;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        HmacSHA256       → 默认密钥 32 字节(256 位);getAlgorithm = HmacSHA256;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        HmacSHA384       → 默认密钥 48 字节(384 位);getAlgorithm = HmacSHA384;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        HmacSHA512       → 默认密钥 64 字节(512 位);getAlgorithm = HmacSHA512;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        HmacSHA3-256     → 默认密钥 32 字节(256 位);getAlgorithm = HmacSHA3-256;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        HmacSHA512/256   → 默认密钥 32 字节(256 位);getAlgorithm = HmacSHA512/256;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        SunTls12Prf      → IllegalStateException: TlsPrfGenerator must be initialized
+  [JDK 27(只看 AES / HmacSHA256 / DESede)]
+        AES              → 默认密钥 32 字节(256 位);getAlgorithm = AES;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        DES              → 默认密钥 8 字节(64 位);getAlgorithm = DES;getFormat = RAW;provider = SunJCE;类 DESKey
+        DESede           → 默认密钥 24 字节(192 位);getAlgorithm = DESede;getFormat = RAW;provider = SunJCE;类 DESedeKey
+        Blowfish         → 默认密钥 16 字节(128 位);getAlgorithm = Blowfish;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        RC2              → 默认密钥 16 字节(128 位);getAlgorithm = RC2;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        ARCFOUR          → 默认密钥 16 字节(128 位);getAlgorithm = ARCFOUR;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        ChaCha20         → 默认密钥 32 字节(256 位);getAlgorithm = ChaCha20;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        HmacMD5          → 默认密钥 64 字节(512 位);getAlgorithm = HmacMD5;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        HmacSHA1         → 默认密钥 64 字节(512 位);getAlgorithm = HmacSHA1;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        HmacSHA224       → 默认密钥 28 字节(224 位);getAlgorithm = HmacSHA224;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        HmacSHA256       → 默认密钥 32 字节(256 位);getAlgorithm = HmacSHA256;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        HmacSHA384       → 默认密钥 48 字节(384 位);getAlgorithm = HmacSHA384;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        HmacSHA512       → 默认密钥 64 字节(512 位);getAlgorithm = HmacSHA512;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        HmacSHA3-256     → 默认密钥 32 字节(256 位);getAlgorithm = HmacSHA3-256;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        HmacSHA512/256   → 默认密钥 32 字节(256 位);getAlgorithm = HmacSHA512/256;getFormat = RAW;provider = SunJCE;类 SecretKeySpec
+        SunTls12Prf      → IllegalStateException: TlsPrfGenerator must be initialized</pre></div>
+</section>
+<section>
+  <h2>init(int) 的边界</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [sizes]
+        AES        接受:[128→16B, 192→24B, 256→32B]
+                   第一个被拒绝的:0: InvalidParameterException: Wrong keysize: must be equal to 128, 192 or 256
+        DES        接受:[56→8B]
+                   第一个被拒绝的:0: InvalidParameterException: Wrong keysize: must be equal to 56
+        DESede     接受:[112→24B, 168→24B]
+                   第一个被拒绝的:0: InvalidParameterException: Wrong keysize: must be equal to 112 or 168
+        Blowfish   接受:[40→5B, 56→7B, 64→8B, 112→14B, 128→16B, 168→21B, 192→24B, 200→25B, 256→32B, 384→48B, 448→56B]
+                   第一个被拒绝的:0: InvalidParameterException: Keysize must be multiple of 8, and can only range from 32 to 448 (inclusive)
+        RC2        接受:[40→5B, 56→7B, 64→8B, 100→13B, 112→14B, 128→16B, 168→21B, 192→24B, 200→25B, 256→32B, 384→48B, 448→56B, 512→64B, 1024→128B]
+                   第一个被拒绝的:0: InvalidParameterException: Key length for RC2 must be between 40 and 1024 bits
+        ARCFOUR    接受:[40→5B, 56→7B, 64→8B, 100→13B, 112→14B, 128→16B, 168→21B, 192→24B, 200→25B, 256→32B, 384→48B, 448→56B, 512→64B, 1024→128B]
+                   第一个被拒绝的:0: InvalidParameterException: Key length for ARCFOUR must be between 40 and 1024 bits
+        ChaCha20   接受:[256→32B]
+                   第一个被拒绝的:0: InvalidParameterException: Key length for ChaCha20 must be 256 bits
+        HmacSHA256 接受:[40→5B, 56→7B, 64→8B, 100→13B, 112→14B, 128→16B, 168→21B, 192→24B, 200→25B, 256→32B, 384→48B, 448→56B, 512→64B, 1024→128B, 2048→256B]
+                   第一个被拒绝的:0: InvalidParameterException: Key length must be at least 40 bits
+    DES init(56) 与 init(64) 生成的密钥长度:InvalidParameterException: Wrong keysize: must be equal to 56
+    DESede init(112) 与 init(168) 的密钥长度:24 / 24
+    init(AlgorithmParameterSpec):AES → InvalidAlgorithmParameterException: AES key generation does not take any parameters;HmacSHA256 → InvalidAlgorithmParameterException: HmacSHA256 key generation does not take any parameters
+    没有调用 init 就 generateKey 的密钥长度见上一节(使用默认长度);init 两次,后一次生效:256 位
+    不存在的算法:NoSuchAlgorithmException: AES256 KeyGenerator not available;名字大小写:aes;指定不存在的提供者:NoSuchProviderException: no such provider: Nope</pre></div>
+</section>
+<section>
+  <h2>随机性与随机源</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [random]
+    同一个 KeyGenerator 连续生成 100000 个 AES-256 密钥:重复 0 个
+    20000 个密钥共 5120000 位,其中 1 的比例 0.4998(期望 0.5)
+    用 SHA1PRNG(种子 42)作为 SecureRandom 生成的密钥(第 1 个新生成器):d50ac288b90ede2e311b02376bca7c70
+    用 SHA1PRNG(种子 42)作为 SecureRandom 生成的密钥(第 2 个新生成器):d50ac288b90ede2e311b02376bca7c70
+    new SecureRandom(种子 1 字节) 默认实现(NativePRNG)生成的两个密钥是否相同:false
+    默认 SecureRandom 的算法:NativePRNG;KeyGenerator 默认使用它的提供者:SunJCE
+    自定义 SecureRandom 总是填 0x07:生成的密钥 = 07070707070707070707070707070707(KeyGenerator 直接使用调用者给的随机源,不做检查)
+    DES 在随机源给 0x07 时的密钥字节:0707070707070707;是否是弱密钥由 provider 处理?(这里看到的就是返回值)</pre></div>
+</section>
+<section>
+  <h2>DES 的校验位与弱密钥</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [des]
+    DES 密钥每个字节的奇校验位:10000 个密钥里有 0 个含偶数个 1 的字节
+    DESKeySpec.isWeak(01 01 01 01 01 01 01 01) = true;随机生成的密钥是弱密钥的有 0 / 20000
+    SecretKeySpec(01 02 … 08)的类 SecretKeySpec;经 SecretKeyFactory(DES) 转出的 DESKey;原始字节 0102030405060708;转出后字节 0102020404070708;相同? false
+    DESKeySpec.isParityAdjusted(原始字节) = false;isParityAdjusted(转出后字节) = true
+    用两个密钥加密同一段明文,密文是否相同(DES 忽略校验位):true</pre></div>
+</section>
+<section>
+  <h2>并发与耗时</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [thread]
+    8 个线程共用同一个 KeyGenerator 各生成 25000 个 AES-128 密钥:重复 0 个,异常 0 个,不同密钥数 200000
+        AES        generateKey 约 263 ns / 次
+        HmacSHA256 generateKey 约 276 ns / 次
+        DESede     generateKey 约 518 ns / 次
+        ChaCha20   generateKey 约 262 ns / 次
+        KeyGenerator.getInstance("AES") 约 325 ns / 次(自写计时,不是 JMH;sink=true)</pre></div>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">KeyGenerator</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "JDK 21 里 KeyGenerator 服务共 24 个,全部来自 SunJCE:AES、ARCFOUR、Blowfish、ChaCha20、DES、DESede、RC2、HmacMD5/SHA1/SHA224/SHA256/SHA384/SHA512、HmacSHA3-224/256/384/512、HmacSHA512/224、HmacSHA512/256、SunTls12Prf 等。Cipher.getMaxAllowedKeyLength(\"AES\") = 2147483647(没有长度限制的加密强度策略)。", "s": {"t": {"lines": ["  [services]", "    JDK 21.0.12.1;KeyGenerator 服务 24 个:[SunJCE:AES, SunJCE:ARCFOUR, SunJCE:Blowfish, SunJCE:ChaCha20, SunJCE:DES, SunJCE:DESede, SunJCE:HmacMD5, SunJCE:HmacSHA1, SunJCE:HmacSHA224, SunJCE:HmacSHA256, SunJCE:HmacSHA3-224, SunJCE:HmacSHA3-256, SunJCE:HmacSHA3-384, SunJCE:HmacSHA3-512, SunJCE:HmacSHA384, SunJCE:HmacSHA512, SunJCE:HmacSHA512/224, SunJCE:HmacSHA512/256, SunJCE:RC2, SunJCE:SunTls12Prf, Su", "    Cipher.getMaxAllowedKeyLength(\"AES\") = 2147483647"], "cur": [], "mark": [], "done": []}, "done": [1], "mark": [1, 2], "kv": {"items": [["KeyGenerator 服务", "24 个,都来自 SunJCE"], ["最大允许密钥长度(AES)", "2147483647"]], "hl": ["KeyGenerator 服务"]}}}, {"note": "不调用 init 时的默认长度(JDK 21):AES 32 字节(256 位)、DES 8 字节、DESede 24 字节、Blowfish / RC2 / ARCFOUR 16 字节、ChaCha20 32 字节;HMAC 系列:HmacMD5 与 HmacSHA1 是 64 字节(512 位),HmacSHA224 28、HmacSHA256 32、HmacSHA384 48、HmacSHA512 64;SunTls12Prf 未初始化 → IllegalStateException: TlsPrfGenerator must be initialized。AES 默认长度随 JDK 版本变化:JDK 17 默认 16 字节(128 位),JDK 21 与 27 默认 32 字节(256 位)。密钥对象的类:AES 等是 SecretKeySpec,DES 是 DESKey,DESede 是 DESedeKey;getFormat 都是 RAW。", "s": {"t": {"lines": ["  [defaults]", "        AES              → 默认密钥 32 字节(256 位);getAlgorithm = AES;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        DES              → 默认密钥 8 字节(64 位);getAlgorithm = DES;getFormat = RAW;provider = SunJCE;类 DESKey", "        DESede           → 默认密钥 24 字节(192 位);getAlgorithm = DESede;getFormat = RAW;provider = SunJCE;类 DESedeKey", "        Blowfish         → 默认密钥 16 字节(128 位);getAlgorithm = Blowfish;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        RC2              → 默认密钥 16 字节(128 位);getAlgorithm = RC2;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        ARCFOUR          → 默认密钥 16 字节(128 位);getAlgorithm = ARCFOUR;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        ChaCha20         → 默认密钥 32 字节(256 位);getAlgorithm = ChaCha20;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        HmacMD5          → 默认密钥 64 字节(512 位);getAlgorithm = HmacMD5;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        HmacSHA1         → 默认密钥 64 字节(512 位);getAlgorithm = HmacSHA1;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        HmacSHA224       → 默认密钥 28 字节(224 位);getAlgorithm = HmacSHA224;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        HmacSHA256       → 默认密钥 32 字节(256 位);getAlgorithm = HmacSHA256;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        HmacSHA384       → 默认密钥 48 字节(384 位);getAlgorithm = HmacSHA384;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        HmacSHA512       → 默认密钥 64 字节(512 位);getAlgorithm = HmacSHA512;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        HmacSHA3-256     → 默认密钥 32 字节(256 位);getAlgorithm = HmacSHA3-256;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        HmacSHA512/256   → 默认密钥 32 字节(256 位);getAlgorithm = HmacSHA512/256;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        SunTls12Prf      → IllegalStateException: TlsPrfGenerator must be initialized", "  [JDK 17(只看 AES / HmacSHA256 / DESede)]", "        AES              → 默认密钥 16 字节(128 位);getAlgorithm = AES;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        DES              → 默认密钥 8 字节(64 位);getAlgorithm = DES;getFormat = RAW;provider = SunJCE;类 DESKey", "        DESede           → 默认密钥 24 字节(192 位);getAlgorithm = DESede;getFormat = RAW;provider = SunJCE;类 DESedeKey", "        Blowfish         → 默认密钥 16 字节(128 位);getAlgorithm = Blowfish;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        RC2              → 默认密钥 16 字节(128 位);getAlgorithm = RC2;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        ARCFOUR          → 默认密钥 16 字节(128 位);getAlgorithm = ARCFOUR;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        ChaCha20         → 默认密钥 32 字节(256 位);getAlgorithm = ChaCha20;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        HmacMD5          → 默认密钥 64 字节(512 位);getAlgorithm = HmacMD5;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        HmacSHA1         → 默认密钥 64 字节(512 位);getAlgorithm = HmacSHA1;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        HmacSHA224       → 默认密钥 28 字节(224 位);getAlgorithm = HmacSHA224;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        HmacSHA256       → 默认密钥 32 字节(256 位);getAlgorithm = HmacSHA256;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        HmacSHA384       → 默认密钥 48 字节(384 位);getAlgorithm = HmacSHA384;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        HmacSHA512       → 默认密钥 64 字节(512 位);getAlgorithm = HmacSHA512;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        HmacSHA3-256     → 默认密钥 32 字节(256 位);getAlgorithm = HmacSHA3-256;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        HmacSHA512/256   → 默认密钥 32 字节(256 位);getAlgorithm = HmacSHA512/256;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        SunTls12Prf      → IllegalStateException: TlsPrfGenerator must be initialized", "  [JDK 27(只看 AES / HmacSHA256 / DESede)]", "        AES              → 默认密钥 32 字节(256 位);getAlgorithm = AES;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        DES              → 默认密钥 8 字节(64 位);getAlgorithm = DES;getFormat = RAW;provider = SunJCE;类 DESKey", "        DESede           → 默认密钥 24 字节(192 位);getAlgorithm = DESede;getFormat = RAW;provider = SunJCE;类 DESedeKey", "        Blowfish         → 默认密钥 16 字节(128 位);getAlgorithm = Blowfish;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        RC2              → 默认密钥 16 字节(128 位);getAlgorithm = RC2;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        ARCFOUR          → 默认密钥 16 字节(128 位);getAlgorithm = ARCFOUR;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        ChaCha20         → 默认密钥 32 字节(256 位);getAlgorithm = ChaCha20;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        HmacMD5          → 默认密钥 64 字节(512 位);getAlgorithm = HmacMD5;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        HmacSHA1         → 默认密钥 64 字节(512 位);getAlgorithm = HmacSHA1;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        HmacSHA224       → 默认密钥 28 字节(224 位);getAlgorithm = HmacSHA224;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        HmacSHA256       → 默认密钥 32 字节(256 位);getAlgorithm = HmacSHA256;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        HmacSHA384       → 默认密钥 48 字节(384 位);getAlgorithm = HmacSHA384;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        HmacSHA512       → 默认密钥 64 字节(512 位);getAlgorithm = HmacSHA512;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        HmacSHA3-256     → 默认密钥 32 字节(256 位);getAlgorithm = HmacSHA3-256;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        HmacSHA512/256   → 默认密钥 32 字节(256 位);getAlgorithm = HmacSHA512/256;getFormat = RAW;provider = SunJCE;类 SecretKeySpec", "        SunTls12Prf      → IllegalStateException: TlsPrfGenerator must be initialized"], "cur": [], "mark": [], "done": []}, "done": [1, 2, 11, 19, 28, 35, 36, 45], "mark": [9, 16, 17, 18, 26, 33, 34, 43, 50], "b": {"items": [["AES 默认:JDK 17", 128, "128 位"], ["AES 默认:JDK 21", 256, "256 位"], ["AES 默认:JDK 27", 256, "256 位"]], "max": 256, "cur": [], "mark": [], "done": [0, 1, 2]}, "kv": {"items": [["AES 默认长度", "JDK 17 = 128 位;JDK 21 / 27 = 256 位"], ["HmacSHA1 / HmacMD5 默认", "64 字节(512 位)"], ["HmacSHA256 默认", "32 字节"]], "hl": ["AES 默认长度"]}}}, {"note": "init(int) 接受的长度:AES 只有 128 / 192 / 256(其它如 0 → InvalidParameterException: Wrong keysize: must be equal to 128, 192 or 256);DES 只接受 56(init(64) 被拒绝:“must be equal to 56”),生成的密钥却是 8 字节;DESede 接受 112 与 168,两者都生成 24 字节;Blowfish 32–448 且为 8 的倍数(“Keysize must be multiple of 8, and can only range from 32 to 448”);RC2 / ARCFOUR 40–1024;ChaCha20 只有 256;HmacSHA256 至少 40 位(“Key length must be at least 40 bits”),2048 位也接受(256 字节)。init(AlgorithmParameterSpec) 对 AES 与 HmacSHA256 都抛 InvalidAlgorithmParameterException: … key generation does not take any parameters。init 调两次,后一次生效(128 后 256 → 256 位)。getInstance:不存在的算法 → NoSuchAlgorithmException,算法名不区分大小写(“aes” 可用),不存在的提供者 → NoSuchProviderException。", "s": {"t": {"lines": ["  [sizes]", "        AES        接受:[128→16B, 192→24B, 256→32B]", "                   第一个被拒绝的:0: InvalidParameterException: Wrong keysize: must be equal to 128, 192 or 256", "        DES        接受:[56→8B]", "                   第一个被拒绝的:0: InvalidParameterException: Wrong keysize: must be equal to 56", "        DESede     接受:[112→24B, 168→24B]", "                   第一个被拒绝的:0: InvalidParameterException: Wrong keysize: must be equal to 112 or 168", "        Blowfish   接受:[40→5B, 56→7B, 64→8B, 112→14B, 128→16B, 168→21B, 192→24B, 200→25B, 256→32B, 384→48B, 448→56B]", "                   第一个被拒绝的:0: InvalidParameterException: Keysize must be multiple of 8, and can only range from 32 to 448 (inclusive)", "        RC2        接受:[40→5B, 56→7B, 64→8B, 100→13B, 112→14B, 128→16B, 168→21B, 192→24B, 200→25B, 256→32B, 384→48B, 448→56B, 512→64B, 1024→128B]", "                   第一个被拒绝的:0: InvalidParameterException: Key length for RC2 must be between 40 and 1024 bits", "        ARCFOUR    接受:[40→5B, 56→7B, 64→8B, 100→13B, 112→14B, 128→16B, 168→21B, 192→24B, 200→25B, 256→32B, 384→48B, 448→56B, 512→64B, 1024→128B]", "                   第一个被拒绝的:0: InvalidParameterException: Key length for ARCFOUR must be between 40 and 1024 bits", "        ChaCha20   接受:[256→32B]", "                   第一个被拒绝的:0: InvalidParameterException: Key length for ChaCha20 must be 256 bits", "        HmacSHA256 接受:[40→5B, 56→7B, 64→8B, 100→13B, 112→14B, 128→16B, 168→21B, 192→24B, 200→25B, 256→32B, 384→48B, 448→56B, 512→64B, 1024→128B, 2048→256B]", "                   第一个被拒绝的:0: InvalidParameterException: Key length must be at least 40 bits", "    DES init(56) 与 init(64) 生成的密钥长度:InvalidParameterException: Wrong keysize: must be equal to 56", "    DESede init(112) 与 init(168) 的密钥长度:24 / 24", "    init(AlgorithmParameterSpec):AES → InvalidAlgorithmParameterException: AES key generation does not take any parameters;HmacSHA256 → InvalidAlgorithmParameterException: HmacSHA256 key generation does not take any parameters", "    没有调用 init 就 generateKey 的密钥长度见上一节(使用默认长度);init 两次,后一次生效:256 位", "    不存在的算法:NoSuchAlgorithmException: AES256 KeyGenerator not available;名字大小写:aes;指定不存在的提供者:NoSuchProviderException: no such provider: Nope"], "cur": [], "mark": [], "done": []}, "done": [1, 3, 5, 7, 13, 15], "mark": [4, 8, 16, 17, 19, 21], "kv": {"items": [["AES", "只有 128 / 192 / 256"], ["DES init(64)", "被拒绝(只接受 56),密钥仍是 8 字节"], ["HmacSHA256", "≥ 40 位,2048 位也行"]], "hl": ["DES init(64)"]}}}, {"note": "随机性:同一个 KeyGenerator 连续生成 100000 个 AES-256 密钥,重复 0 个;20000 个密钥共 5120000 位,1 的比例 0.5002。但随机源由调用者决定:用种子 42 的 SHA1PRNG 作为 SecureRandom,两个全新的生成器得到的密钥完全相同(d50ac288b90ede2e311b02376bca7c70);new SecureRandom(种子字节)(默认 NativePRNG)生成的两个密钥不同(种子只是补充);自定义 SecureRandom 总是填 0x07 时,AES 密钥就是 07070707…(16 字节),DES 是 0707070707070707——KeyGenerator 直接使用调用者给的随机源,不做任何检查。", "s": {"t": {"lines": ["  [random]", "    同一个 KeyGenerator 连续生成 100000 个 AES-256 密钥:重复 0 个", "    20000 个密钥共 5120000 位,其中 1 的比例 0.4998(期望 0.5)", "    用 SHA1PRNG(种子 42)作为 SecureRandom 生成的密钥(第 1 个新生成器):d50ac288b90ede2e311b02376bca7c70", "    用 SHA1PRNG(种子 42)作为 SecureRandom 生成的密钥(第 2 个新生成器):d50ac288b90ede2e311b02376bca7c70", "    new SecureRandom(种子 1 字节) 默认实现(NativePRNG)生成的两个密钥是否相同:false", "    默认 SecureRandom 的算法:NativePRNG;KeyGenerator 默认使用它的提供者:SunJCE", "    自定义 SecureRandom 总是填 0x07:生成的密钥 = 07070707070707070707070707070707(KeyGenerator 直接使用调用者给的随机源,不做检查)", "    DES 在随机源给 0x07 时的密钥字节:0707070707070707;是否是弱密钥由 provider 处理?(这里看到的就是返回值)"], "cur": [], "mark": [], "done": []}, "done": [1, 2], "mark": [3, 4, 7, 8], "kv": {"items": [["默认 SecureRandom", "10 万个密钥无重复,位比例 0.5002"], ["SHA1PRNG(种子 42)", "两个新生成器得到同一个密钥"], ["自定义随机源", "直接使用,不检查(0x07 填充)"]], "hl": ["SHA1PRNG(种子 42)"]}}}, {"note": "DES 的奇偶校验位:10000 个生成的密钥里没有任何一个含偶数个 1 的字节(生成的密钥每个字节都满足奇校验);DESKeySpec.isWeak(01 01 01 01 01 01 01 01) = true,20000 个随机密钥里弱密钥 0 个。SecretKeySpec(01 02 03 04 05 06 07 08) 经 SecretKeyFactory(DES) 转成 DESKey 后字节变成 01 02 02 04 04 07 07 08(调整了奇偶校验位),isParityAdjusted 从 false 变 true;用两个密钥加密同一段明文,密文相同(DES 忽略校验位)。", "s": {"t": {"lines": ["  [des]", "    DES 密钥每个字节的奇校验位:10000 个密钥里有 0 个含偶数个 1 的字节", "    DESKeySpec.isWeak(01 01 01 01 01 01 01 01) = true;随机生成的密钥是弱密钥的有 0 / 20000", "    SecretKeySpec(01 02 … 08)的类 SecretKeySpec;经 SecretKeyFactory(DES) 转出的 DESKey;原始字节 0102030405060708;转出后字节 0102020404070708;相同? false", "    DESKeySpec.isParityAdjusted(原始字节) = false;isParityAdjusted(转出后字节) = true", "    用两个密钥加密同一段明文,密文是否相同(DES 忽略校验位):true"], "cur": [], "mark": [], "done": []}, "done": [1, 2], "mark": [3, 4, 5], "kv": {"items": [["生成的 DES 密钥", "每个字节都是奇校验"], ["SecretKeyFactory 转出", "字节被调整为奇校验:0102020404070708"], ["密文", "与未调整的密钥相同"]], "hl": ["SecretKeyFactory 转出"]}}}, {"note": "并发与耗时:8 个线程共用同一个 KeyGenerator 各生成 25000 个 AES-128 密钥,重复 0 个、异常 0 个,200000 个全部不同。每次 generateKey 约 AES 263 ns、HmacSHA256 276 ns、ChaCha20 262 ns、DESede 518 ns(自写计时,不是 JMH);KeyGenerator.getInstance(\"AES\") 约 325 ns。生成密钥本身很便宜,不值得缓存。", "s": {"t": {"lines": ["  [thread]", "    8 个线程共用同一个 KeyGenerator 各生成 25000 个 AES-128 密钥:重复 0 个,异常 0 个,不同密钥数 200000", "        AES        generateKey 约 263 ns / 次", "        HmacSHA256 generateKey 约 276 ns / 次", "        DESede     generateKey 约 518 ns / 次", "        ChaCha20   generateKey 约 262 ns / 次", "        KeyGenerator.getInstance(\"AES\") 约 325 ns / 次(自写计时,不是 JMH;sink=true)"], "cur": [], "mark": [], "done": []}, "done": [1], "mark": [2, 4, 6], "b": {"items": [["AES generateKey", 263, "263 ns"], ["HmacSHA256", 276, "276 ns"], ["ChaCha20", 262, "262 ns"], ["DESede", 518, "518 ns"], ["getInstance(\"AES\")", 325, "325 ns"]], "max": 520, "cur": [], "mark": [], "done": [0, 1, 2, 3, 4]}, "kv": {"items": [["并发共用", "20 万个密钥无重复、无异常"], ["generateKey", "约 260–520 ns"]], "hl": ["并发共用"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / OpenJDK(Temurin 17.0.20、Homebrew 21.0.12 与 27,每篇注明实际用的版本);用 javac 编译、java 直接运行,需要第三方库时用 Maven 解析依赖;计时用 System.nanoTime,数字每次运行会有小幅抖动。JDK 17.0.20.1 / 21.0.12.1 / 27,SunJCE 提供者;耗时为自写计时循环,不是 JMH</li><li>没有验证:PKCS#11 / FIPS 等其它提供者的 KeyGenerator、HKDF 与 KDF API(JDK 24+)、KeyGenerator 与 SecureRandom 在容器启动初期的熵与阻塞行为、Windows / Linux 上 NativePRNG 之外的默认 SecureRandom、RC2 / ARCFOUR 的实际安全性、密钥材料在内存中的清理(SecretKey.destroy)</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="java-algorithm-parameters.html">
+    <div>
+      <div class="t1">下一篇 · JAVA 361</div>
+      <div class="t2">AlgorithmParameters:保存算法参数而非密钥</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Java · KeyGenerator:生成对称密钥的参数边界 · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

@@ -1,0 +1,37 @@
+import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from ll import *
+tee('l3')
+sub = lab('l3sub'); ci(sub, '子仓库第一次', {'lib.txt': 'lib\n'}, t=0)
+d = lab('l3')
+W(d, {'plain.txt': 'plain\n', 'run.sh': '#!/bin/sh\necho hi\n'}, mode=0o644)
+(d / 'run.sh').chmod(0o755)
+os.symlink('plain.txt', d / 'link')
+rc, o = run(d, f'git -c protocol.file.allow=always submodule add -q {sub} vendor/lib 2>&1; git add -A; git commit -q -m 四种条目')
+print('== 一:一个提交里放进四种条目:普通文件、可执行文件、符号链接、子模块')
+sh(d, "stat -f '%Sp %N' plain.txt run.sh link; readlink link", n=10)
+sh(d, 'git ls-tree HEAD')
+sh(d, 'git ls-tree -r HEAD')
+print('== 二:tree 对象里的模式就是 ASCII 数字,四种就是全部合法值')
+tsha = out1(d, 'git rev-parse HEAD^{tree}')
+raw = loose(d, tsha); body = raw.split(b'\0', 1)[1]
+i = 0
+while i < len(body):
+    j = body.index(b' ', i); k = body.index(b'\0', j); print(f'  原始字节里的模式: {body[i:j].decode()!r:10} 名字 {body[j + 1:k].decode()}'); i = k + 21
+vtree = out1(d, 'git ls-tree HEAD vendor | cut -d" " -f3 | cut -f1')
+print('  vendor/ 这个子 tree:'); sh(d, f'git ls-tree {vtree}')
+print('== 三:120000 符号链接:blob 的内容就是链接目标的路径字符串')
+lsha = out1(d, 'git rev-parse HEAD:link')
+sh(d, f'git cat-file -s {lsha}; git cat-file -p {lsha}; echo; printf plain.txt | wc -c')
+print('  原始字节:', repr(loose(d, lsha)))
+print('== 四:160000 子模块(gitlink):tree 里记录的是子仓库的 commit hash,这个对象不在本仓库里')
+g = out1(d, 'git rev-parse HEAD:vendor/lib')
+print(f'  vendor/lib 条目的 hash = {g}')
+sh(d, f'git cat-file -t {g}')
+sh(d, f'git --git-dir={sub}/.git cat-file -t {g}')
+print('  .gitmodules 的内容和 git 本地对象里是否有 vendor/lib/lib.txt:')
+sh(d, 'cat .gitmodules; git ls-tree -r HEAD | grep -c lib.txt || true')
+print('== 五:想写别的模式会怎样:git 会把它规整成四种之一(100644、100755、120000、160000 加目录的 40000)')
+bl = out1(d, 'git rev-parse HEAD:plain.txt')
+for m in ['100664', '100600', '100777', '120755']:
+    o = out1(d, f'git update-index --add --cacheinfo {m},{bl},m_{m} 2>&1; git ls-files -s m_{m} 2>&1; git update-index --force-remove m_{m} 2>&1')
+    print(f'  --cacheinfo {m} → 实际写入的模式: {o.split()[0]}')

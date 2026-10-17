@@ -1,0 +1,24 @@
+from lib import *
+S = SS('m72')
+steps = [
+    step("3 节点副本集,c_w 预先有 15 万个 1 KB 的文档,a_counter.n 起始 150,000;后台事务循环每次往 c_w 插一个文档、a_counter.n 加 1,任何时刻 n == c_w 文档数。写入进行中做普通 mongodump(不带 --oplog):a_counter(1 个文档)几乎立刻导完,c_w 导出 150,824 个文档;恢复后 a_counter.n = 150,201、c_w = 150,824,n − w = −623——两个集合不在同一个时间点上。", t=tl(S(1)), mark=lidx(S(1), 'done dumping `test.a_counter`', 'done dumping `test.c_w`'), done=lidx(S(1), '普通 dump 恢复后'), b=bars([['a_counter.n', 150201, '150,201'], ['c_w 文档数', 150824, '150,824']], 150824, mark=[1], done=[0]), kv=KV([['a_counter.n', '150,201'], ['c_w 文档数', '150,824'], ['n − w', '−623(不一致)']], ['n − w'])),
+    step("带 --oplog 的 mongodump 必须是整库 dump(admin 也在里面):目录里多了 oplog.bson,mongodump 报 dumped 627 oplog entries。oplog.bson 里 627 条记录全是 applyOps(事务提交),展开后有 627 个对 test.c_w 的 insert 和 627 个对 test.a_counter 的 update;第一条里的 update 是 {\"$v\": 2, \"diff\": {\"u\": {\"n\": 151036}}}——记的是 n 的新值,不是 +1。", t=tl(S(2)), mark=lidx(S(2), 'dumped 627 oplog entries', 'oplog.bson 里有 627', '第一条记录里的操作'), done=lidx(S(2), 'mongodump --uri'), kv=KV([['oplog.bson', '627 条 applyOps'], ['展开后', '627 个 insert + 627 个 update'], ['update 的内容', '记新值(n: 151036),不是 $inc']], ['update 的内容'])),
+    step("带 --oplogReplay 恢复:mongorestore 先导入集合,再输出 replaying oplog,applied 1254 oplog entries(627 个事务 × 每个 2 个操作);结果 a_counter.n = 151,662、c_w = 151,662,n == w,两个集合被拉到同一个时间点。", t=tl(S(3)), mark=lidx(S(3), 'replaying oplog', 'applied 1254'), done=lidx(S(3), '--oplogReplay 恢复后'), b=bars([['a_counter.n', 151662, '151,662'], ['c_w 文档数', 151662, '151,662']], 151662, mark=[0, 1], done=[]), kv=KV([['应用的 oplog 条目', '1,254'], ['n', '151,662'], ['c_w', '151,662(一致)']], ['c_w'])),
+    step("同一份带 oplog.bson 的 dump,恢复时不带 --oplogReplay:oplog.bson 被直接忽略,命令输出里没有提到它;a_counter.n = 151,037、c_w = 151,656,n − w = −619——带了 --oplog dump 却没带 --oplogReplay 恢复,和普通 dump 一样不一致。", t=tl(S(4)), mark=lidx(S(4), 'finished restoring `test.c_w`'), done=lidx(S(4), '不带 --oplogReplay 恢复后'), kv=KV([['oplog.bson', '被忽略,无提示'], ['n − w', '−619(不一致)']], ['n − w'])),
+    step("--oplogLimit 只重放到指定时间戳。取 oplog.bson 中间那条(第 314/627 条)的时间戳 1791782835:78:applied 626 条,结果 n = 151,348、c_w = 151,656,n − w = −308,不一致——update 记的是新值,重放到中间点只把 n 倒回到当时的值,而 c_w 已经含有 dump 结束时的全部文档。把 limit 设成最后一条的时间戳 1791782837:77:applied 1252 条(少一个事务,limit 不含该时间戳本身),n == w == 151,661;设成 1791782837:78:applied 1254 条,和完整重放一样。", t=tl(S(5)), mark=lidx(S(5), '--oplogLimit 恢复后', '最后一条记录的时间戳:', '最后一条记录的时间戳 + 1'), done=lidx(S(5), '对比完整重放'), kv=KV([['limit = 中间点', 'n − w = −308,不一致'], ['limit = 最后一条', 'applied 1,252,一致(少 1 个事务)'], ['limit = 最后一条 + 1', 'applied 1,254,与完整重放相同']], ['limit = 中间点'])),
+    step("限制:--oplog 和 --db 一起用 → Failed: bad option: --oplog mode only supported on full dumps;对没有 oplog 的单机 mongod 用 --oplog → Failed: error getting oplog start: error getting recent oplog entry: mongo: no documents in result;mongorestore 的 --oplogReplay 和 --db(转成 includes)一起用 → Failed: cannot use --oplogReplay with includes specified。", t=tl(S(6)), mark=lidx(S(6), 'Failed: bad option', 'Failed: error getting oplog start', 'Failed: cannot use'), done=lidx(S(6), 'mongodump --uri'), kv=KV([['--oplog + --db', '拒绝:只支持整库'], ['--oplog 对单机', '拒绝:没有 oplog'], ['--oplogReplay + --db', '拒绝']], ['--oplog + --db'])),
+]
+A = mkartm('m72', 72, 'MongoDB,mongodump,mongorestore,oplog,一致性,真实验证,动画演示',
+    '实测写入进行中的 mongodump:不带 --oplog 恢复后两个集合不在同一时间点(n − w = −623);--oplog 生成 oplog.bson(627 条 applyOps),--oplogReplay 重放 1254 个操作后 n == w;不带 --oplogReplay 恢复则 oplog.bson 被无提示忽略;--oplogLimit 取中间点会不一致;--oplog 只支持整库。',
+    '在线备份时数据还在写,mongodump 出来的东西能恢复成一个一致的状态吗?--oplog 和 --oplogReplay 到底做了什么?这篇用一个 n == 文档数的不变式逐个验证。',
+    [('−623', '普通 dump 恢复后 a_counter.n 与 c_w 文档数之差'), ('1,254', '--oplogReplay 重放的操作数,恢复后 n == w'), ('−619', '带 oplog dump 但不带 --oplogReplay 恢复的差值')],
+    [('普通 dump 不一致', '<p>写入进行中做普通 <code>mongodump</code>,各集合在不同时间被读取,恢复后 <code>a_counter.n</code> 与 <code>c_w</code> 的文档数差了 623。</p>'),
+     ('oplog.bson', '<p><code>--oplog</code> 让 mongodump 在结束时把 dump 期间的 oplog 写进 <code>oplog.bson</code>;事务提交在里面是 <code>applyOps</code>,update 记的是新值。</p>'),
+     ('--oplogReplay', '<p>恢复时带 <code>--oplogReplay</code>,mongorestore 导完集合后重放 oplog,1254 个操作后两个集合一致。</p>'),
+     ('忘了 --oplogReplay', '<p>不带 <code>--oplogReplay</code> 恢复,oplog.bson 被忽略且没有任何提示,结果和普通 dump 一样不一致。</p>'),
+     ('--oplogLimit', '<p><code>--oplogLimit</code> 取 dump 窗口中间的时间戳会得到不一致的状态(n − w = −308);取窗口末尾才一致,limit 不含时间戳本身。</p>'),
+     ('使用限制', '<p><code>--oplog</code> 只支持整库 dump、需要有 oplog 的副本集;<code>--oplogReplay</code> 不能和 <code>--db</code>/includes 一起用。</p>')],
+    steps,
+    [ENV_M + '(mongodump/mongorestore 100.16.1)。3 节点副本集做源,单机 mongod 做恢复目标;一个事务循环在 dump 期间持续写入',
+     '没有验证:分片集群的备份(mongodump 对 mongos 的 --oplog 行为);dump 窗口里发生 DDL(建索引、drop)时的重放;大事务被拆成多条 applyOps 时的重放;oplog 窗口被覆盖时 mongodump 的报错;--oplogLimit 在连续 oplog 备份上做时间点恢复的完整流程;不同 mongodump 版本的差异;--numParallelCollections 的影响'],
+    'mongodump --oplog 与恢复')

@@ -1,0 +1,600 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>LRU Cache:哈希表 + 双向链表怎么配合</title>
+<meta name="description" content="容量 3 的 LRU 缓存跑 10 次 get/put,手写双向链表演示命中、未命中、淘汰时哈希表与链表如何同步更新。">
+<link rel="canonical" href="https://bigywater.tech/lru.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="LRU Cache:哈希表 + 双向链表怎么配合">
+<meta property="og:description" content="容量 3 的 LRU 缓存跑 10 次 get/put,手写双向链表演示命中、未命中、淘汰时哈希表与链表如何同步更新。">
+<meta property="og:url" content="https://bigywater.tech/lru.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="LRU Cache:哈希表 + 双向链表怎么配合">
+<meta name="twitter:description" content="容量 3 的 LRU 缓存跑 10 次 get/put,手写双向链表演示命中、未命中、淘汰时哈希表与链表如何同步更新。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F7F6FA; --surface:#FFFFFF; --surface-2:#EFEDF5;
+  --ink:#221F2E; --ink-soft:#565269; --ink-faint:#918CA3;
+  --line:#E3E0EC; --line-soft:#EEECF4;
+  --accent-hit:#2C7A5C; --accent-hit-soft:#DCF0E6;
+  --accent-miss:#B0453A; --accent-miss-soft:#F6DEDA;
+  --accent-active:#5B4FC4; --accent-active-soft:#E7E4F8;
+  --accent-evict:#B8681E; --accent-evict-soft:#F7E7D3;
+  --shadow:0 1px 2px rgba(20,15,35,.06),0 8px 24px -12px rgba(20,15,35,.14);
+  --radius:10px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#15131C; --surface:#1C1A25; --surface-2:#242130;
+    --ink:#EDEBF5; --ink-soft:#AFA9C4; --ink-faint:#6F6A85;
+    --line:#312D42; --line-soft:#282534;
+    --accent-hit:#5FCB9E; --accent-hit-soft:#163328;
+    --accent-miss:#E08272; --accent-miss-soft:#3B211D;
+    --accent-active:#9C90EE; --accent-active-soft:#2B2650;
+    --accent-evict:#E3A15C; --accent-evict-soft:#3A2A14;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 28px -14px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#15131C; --surface:#1C1A25; --surface-2:#242130;
+  --ink:#EDEBF5; --ink-soft:#AFA9C4; --ink-faint:#6F6A85;
+  --line:#312D42; --line-soft:#282534;
+  --accent-hit:#5FCB9E; --accent-hit-soft:#163328;
+  --accent-miss:#E08272; --accent-miss-soft:#3B211D;
+  --accent-active:#9C90EE; --accent-active-soft:#2B2650;
+  --accent-evict:#E3A15C; --accent-evict-soft:#3A2A14;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 28px -14px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.5;}
+.mono{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;font-variant-numeric:tabular-nums;}
+.wrap{max-width:1080px;margin:0 auto;padding:28px 20px 56px;}
+header{margin-bottom:18px;}
+h1{font-size:22px;margin:0 0 6px;letter-spacing:-.01em;}
+.sub{color:var(--ink-soft);font-size:14px;margin:0;}
+
+.controls{display:flex;align-items:center;gap:8px;margin:14px 0;flex-wrap:wrap;}
+button.ctrl{appearance:none;border:1px solid var(--line);background:var(--surface);color:var(--ink);padding:8px 14px;border-radius:8px;font-size:14px;cursor:pointer;font-weight:600;transition:background .15s,border-color .15s;}
+button.ctrl:hover:not(:disabled){background:var(--surface-2);}
+button.ctrl:disabled{opacity:.4;cursor:not-allowed;}
+button.ctrl.primary{background:var(--ink);color:var(--bg);border-color:var(--ink);}
+button.ctrl:focus-visible{outline:2px solid var(--accent-active);outline-offset:2px;}
+.progress{font-size:13px;color:var(--ink-faint);margin-left:4px;}
+.spacer{flex:1;}
+select.ctrl{padding:6px 10px;}
+
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);}
+.grid{display:grid;grid-template-columns:1.35fr 1fr;gap:16px;align-items:start;margin-top:14px;}
+@media (max-width:820px){.grid{grid-template-columns:1fr;}}
+.panel-title{font-size:13px;margin:0 0 12px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.06em;font-weight:700;display:flex;justify-content:space-between;}
+
+.ops-panel{padding:14px 16px;}
+.ops-row{display:flex;gap:6px;flex-wrap:wrap;}
+.op-chip{border:1.5px solid var(--line);border-radius:8px;padding:5px 10px;font-size:12.5px;font-weight:700;background:var(--surface-2);color:var(--ink-faint);font-family:ui-monospace,monospace;transition:background .2s,border-color .2s,color .2s;}
+.op-chip[data-state="current"]{border-color:var(--accent-active);background:var(--accent-active-soft);color:var(--ink);}
+.op-chip[data-state="hit"]{border-color:var(--accent-hit);background:var(--accent-hit-soft);color:var(--ink);}
+.op-chip[data-state="miss"]{border-color:var(--accent-miss);background:var(--accent-miss-soft);color:var(--ink);}
+.op-chip[data-state="write"]{border-color:var(--accent-evict);background:var(--accent-evict-soft);color:var(--ink);}
+
+.list-panel{padding:18px 16px;}
+.list-scroll{overflow-x:auto;}
+.list-row{display:flex;align-items:center;gap:6px;min-width:560px;padding:8px 4px;}
+.end-label{font-size:11px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.05em;font-weight:700;white-space:nowrap;padding:0 4px;}
+.node-chip{border:2px solid var(--line);border-radius:10px;padding:8px 14px;background:var(--surface-2);min-width:64px;text-align:center;transition:background .2s,border-color .2s,opacity .2s;}
+.node-chip[data-state="active"]{border-color:var(--accent-active);background:var(--accent-active-soft);}
+.node-chip[data-state="hit"]{border-color:var(--accent-hit);background:var(--accent-hit-soft);}
+.node-chip[data-state="evicting"]{border-color:var(--accent-evict);background:var(--accent-evict-soft);opacity:.6;text-decoration:line-through;border-style:dashed;}
+.node-key{font-size:11px;color:var(--ink-faint);font-family:ui-monospace,monospace;}
+.node-val{font-size:16px;font-weight:700;font-family:ui-monospace,monospace;}
+.arrow-sep{color:var(--ink-faint);font-size:14px;}
+.empty-note{color:var(--ink-faint);font-size:13px;font-style:italic;padding:8px 4px;}
+
+.side-panel{display:flex;flex-direction:column;gap:14px;}
+.map-panel{padding:14px 16px;}
+.map-row{display:flex;gap:6px;flex-wrap:wrap;min-height:30px;}
+.map-chip{border:1.5px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12.5px;font-family:ui-monospace,monospace;background:var(--surface-2);color:var(--ink-soft);}
+.map-chip[data-state="active"]{border-color:var(--accent-active);background:var(--accent-active-soft);color:var(--ink);}
+
+.desc-panel{padding:14px 16px;}
+.desc-panel h2{font-size:13px;margin:0 0 8px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.06em;font-weight:700;}
+.formula{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;font-size:14px;background:var(--surface-2);border-radius:8px;padding:10px 12px;margin-bottom:10px;border:1px solid var(--line-soft);}
+.formula .h{color:var(--accent-hit);font-weight:700;}
+.formula .m{color:var(--accent-miss);font-weight:700;}
+.formula .a{color:var(--accent-active);font-weight:700;}
+.formula .e{color:var(--accent-evict);font-weight:700;}
+#descText{font-size:14px;color:var(--ink-soft);margin:0;min-height:60px;}
+
+.log-panel{padding:10px;max-height:220px;overflow-y:auto;margin-top:14px;}
+.log-item{padding:7px 10px;border-radius:6px;font-size:13px;color:var(--ink-faint);cursor:pointer;display:flex;gap:8px;}
+.log-item:hover{background:var(--surface-2);}
+.log-item[data-active="true"]{background:var(--accent-active-soft);color:var(--ink);font-weight:600;}
+.log-idx{color:var(--ink-faint);min-width:26px;font-family:ui-monospace,monospace;}
+
+.legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:14px;font-size:12.5px;color:var(--ink-faint);}
+.legend span{display:inline-flex;align-items:center;gap:6px;}
+.dot{width:11px;height:11px;border-radius:4px;display:inline-block;border:2px solid var(--line);}
+.dot.active{background:var(--accent-active-soft);border-color:var(--accent-active);}
+.dot.hit{background:var(--accent-hit-soft);border-color:var(--accent-hit);}
+.dot.evict{background:var(--accent-evict-soft);border-color:var(--accent-evict);}
+
+@media (prefers-reduced-motion:reduce){*{transition:none !important;}}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>LRU Cache:哈希表 + 双向链表怎么配合</h1>
+    <p class="sub">容量 3 的 LRU 缓存,依次执行 10 次 get/put。哈希表负责 O(1) 定位节点,双向链表负责维护"最近使用顺序"——两者必须时刻保持一致,这正是手写 LRU 最容易出 bug 的地方。</p>
+  </header>
+
+  <div class="controls">
+    <button class="ctrl" id="btnReset">重置</button>
+    <button class="ctrl" id="btnPrev">上一步</button>
+    <button class="ctrl primary" id="btnPlay">播放</button>
+    <button class="ctrl" id="btnNext">下一步</button>
+    <span class="progress mono" id="progress">0 / 0</span>
+    <div class="spacer"></div>
+  </div>
+
+  <div class="ops-panel panel">
+    <div class="panel-title"><span>操作序列</span><span id="phaseBadge" class="mono">未开始</span></div>
+    <div class="ops-row" id="opsRow"></div>
+  </div>
+
+  <div class="grid">
+    <div class="list-panel panel">
+      <div class="panel-title"><span>双向链表(从左到右:最近使用 → 最久未使用)</span><span id="sizeBadge" class="mono">size 0/3</span></div>
+      <div class="list-scroll">
+        <div class="list-row" id="listRow"></div>
+      </div>
+    </div>
+
+    <div class="side-panel">
+      <div class="map-panel panel">
+        <h2 style="font-size:13px;margin:0 0 8px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.06em;font-weight:700;">哈希表(key → 节点)</h2>
+        <div class="map-row" id="mapRow"><span class="empty-note">空</span></div>
+      </div>
+      <div class="desc-panel panel">
+        <h2>当前步骤</h2>
+        <div class="formula" id="formulaBox">&mdash;</div>
+        <p id="descText">点击"下一步"或"播放"开始。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel log-panel" id="logPanel"></div>
+
+  <div class="legend">
+    <span><span class="dot active"></span>当前操作的节点</span>
+    <span><span class="dot hit"></span>命中,即将移到最前面</span>
+    <span><span class="dot evict"></span>容量已满,被淘汰</span>
+  </div>
+</div>
+
+<script>
+var DATA = {"capacity": 3, "ops": [["put", 1, "A"], ["put", 2, "B"], ["put", 3, "C"], ["get", 1, null], ["put", 4, "D"], ["get", 2, null], ["get", 3, null], ["put", 5, "E"], ["get", 4, null], ["get", 1, null]], "events": [{"type": "op-start", "op": "put", "key": 1, "value": "A"}, {"type": "insert", "key": 1, "value": "A"}, {"type": "op-done", "op": "put", "key": 1, "result": null, "order": [1], "size": 1}, {"type": "op-start", "op": "put", "key": 2, "value": "B"}, {"type": "insert", "key": 2, "value": "B"}, {"type": "op-done", "op": "put", "key": 2, "result": null, "order": [2, 1], "size": 2}, {"type": "op-start", "op": "put", "key": 3, "value": "C"}, {"type": "insert", "key": 3, "value": "C"}, {"type": "op-done", "op": "put", "key": 3, "result": null, "order": [3, 2, 1], "size": 3}, {"type": "op-start", "op": "get", "key": 1}, {"type": "hit", "key": 1, "value": "A"}, {"type": "unlink", "key": 1}, {"type": "add-front", "key": 1, "value": "A"}, {"type": "op-done", "op": "get", "key": 1, "result": "A", "order": [1, 3, 2], "size": 3}, {"type": "op-start", "op": "put", "key": 4, "value": "D"}, {"type": "evict", "key": 2, "value": "B"}, {"type": "insert", "key": 4, "value": "D"}, {"type": "op-done", "op": "put", "key": 4, "result": null, "order": [4, 1, 3], "size": 3}, {"type": "op-start", "op": "get", "key": 2}, {"type": "miss", "key": 2}, {"type": "op-done", "op": "get", "key": 2, "result": null, "order": [4, 1, 3], "size": 3}, {"type": "op-start", "op": "get", "key": 3}, {"type": "hit", "key": 3, "value": "C"}, {"type": "unlink", "key": 3}, {"type": "add-front", "key": 3, "value": "C"}, {"type": "op-done", "op": "get", "key": 3, "result": "C", "order": [3, 4, 1], "size": 3}, {"type": "op-start", "op": "put", "key": 5, "value": "E"}, {"type": "evict", "key": 1, "value": "A"}, {"type": "insert", "key": 5, "value": "E"}, {"type": "op-done", "op": "put", "key": 5, "result": null, "order": [5, 3, 4], "size": 3}, {"type": "op-start", "op": "get", "key": 4}, {"type": "hit", "key": 4, "value": "D"}, {"type": "unlink", "key": 4}, {"type": "add-front", "key": 4, "value": "D"}, {"type": "op-done", "op": "get", "key": 4, "result": "D", "order": [4, 5, 3], "size": 3}, {"type": "op-start", "op": "get", "key": 1}, {"type": "miss", "key": 1}, {"type": "op-done", "op": "get", "key": 1, "result": null, "order": [4, 5, 3], "size": 3}, {"type": "done", "final_order": [4, 5, 3]}], "get_results": ["A", null, "C", "D", null], "final_order": [4, 5, 3]};
+var CAPACITY = DATA.capacity;
+var OPS = DATA.ops;
+var EVENTS = DATA.events;
+
+var idx = -1;
+var playTimer = null;
+
+function opLabel(op){
+  return op[0] === 'get' ? ('get(' + op[1] + ')') : ('put(' + op[1] + ',' + op[2] + ')');
+}
+
+// precompute, for each op index, which event indices belong to it, and its outcome
+var opRanges = [];
+(function(){
+  var curStart = null, curOpIdx = -1;
+  for(var k=0;k<EVENTS.length;k++){
+    if(EVENTS[k].type === 'op-start'){
+      if(curStart !== null) opRanges.push({start:curStart, end:k-1, opIdx:curOpIdx});
+      curStart = k;
+      curOpIdx++;
+    }
+  }
+  if(curStart !== null) opRanges.push({start:curStart, end:EVENTS.length-1, opIdx:curOpIdx});
+})();
+
+function opIndexForEvent(k){
+  for(var i=0;i<opRanges.length;i++){
+    if(k >= opRanges[i].start && k <= opRanges[i].end) return opRanges[i].opIdx;
+  }
+  return -1;
+}
+
+var opsRow = document.getElementById('opsRow');
+function buildOpsRow(){
+  opsRow.innerHTML = '';
+  OPS.forEach(function(op, i){
+    var chip = document.createElement('span');
+    chip.className = 'op-chip';
+    chip.id = 'opchip-'+i;
+    chip.dataset.state = 'idle';
+    chip.textContent = opLabel(op);
+    opsRow.appendChild(chip);
+  });
+}
+
+function computeState(upto){
+  var order = [];
+  var values = {};
+  for(var k=0;k<=upto && k<EVENTS.length;k++){
+    var e = EVENTS[k];
+    if(e.type === 'insert'){
+      order.unshift(e.key); values[e.key] = e.value;
+    } else if(e.type === 'evict'){
+      order = order.filter(function(x){ return x !== e.key; });
+      delete values[e.key];
+    } else if(e.type === 'unlink'){
+      order = order.filter(function(x){ return x !== e.key; });
+    } else if(e.type === 'add-front'){
+      order.unshift(e.key); values[e.key] = e.value;
+    } else if(e.type === 'update-value'){
+      values[e.key] = e.new_value;
+    }
+  }
+  return { order: order, values: values };
+}
+
+function render(){
+  var s = computeState(idx);
+  var e = (idx >= 0 && idx < EVENTS.length) ? EVENTS[idx] : null;
+
+  var activeKey = null, evictInfo = null;
+  if(e){
+    if(e.type === 'op-start' || e.type === 'unlink' || e.type === 'add-front' ||
+       e.type === 'insert' || e.type === 'update-value' || e.type === 'hit'){
+      activeKey = e.key;
+    }
+    if(e.type === 'evict'){ evictInfo = { key: e.key, value: e.value }; }
+  }
+  var hitKey = (e && e.type === 'hit') ? e.key : null;
+
+  // list row
+  var listRow = document.getElementById('listRow');
+  listRow.innerHTML = '';
+  if(s.order.length === 0 && !evictInfo){
+    var empty = document.createElement('span');
+    empty.className = 'empty-note';
+    empty.textContent = '空';
+    listRow.appendChild(empty);
+  } else {
+    var mruLabel = document.createElement('span');
+    mruLabel.className = 'end-label';
+    mruLabel.textContent = 'MRU';
+    listRow.appendChild(mruLabel);
+    s.order.forEach(function(key, i){
+      if(i > 0){
+        var sep = document.createElement('span');
+        sep.className = 'arrow-sep';
+        sep.textContent = '↔';
+        listRow.appendChild(sep);
+      }
+      var chip = document.createElement('div');
+      chip.className = 'node-chip';
+      var state = 'idle';
+      if(hitKey === key) state = 'hit';
+      else if(activeKey === key) state = 'active';
+      chip.dataset.state = state;
+      var k = document.createElement('div');
+      k.className = 'node-key mono';
+      k.textContent = 'key=' + key;
+      var v = document.createElement('div');
+      v.className = 'node-val';
+      v.textContent = s.values[key];
+      chip.appendChild(k); chip.appendChild(v);
+      listRow.appendChild(chip);
+    });
+    if(evictInfo){
+      var sep2 = document.createElement('span');
+      sep2.className = 'arrow-sep';
+      sep2.textContent = '↔';
+      listRow.appendChild(sep2);
+      var gchip = document.createElement('div');
+      gchip.className = 'node-chip';
+      gchip.dataset.state = 'evicting';
+      var gk = document.createElement('div');
+      gk.className = 'node-key mono';
+      gk.textContent = 'key=' + evictInfo.key;
+      var gv = document.createElement('div');
+      gv.className = 'node-val';
+      gv.textContent = evictInfo.value;
+      gchip.appendChild(gk); gchip.appendChild(gv);
+      listRow.appendChild(gchip);
+    }
+    var lruLabel = document.createElement('span');
+    lruLabel.className = 'end-label';
+    lruLabel.textContent = 'LRU';
+    listRow.appendChild(lruLabel);
+  }
+  document.getElementById('sizeBadge').textContent = 'size ' + s.order.length + '/' + CAPACITY;
+
+  // hashmap row
+  var mapRow = document.getElementById('mapRow');
+  var keys = Object.keys(s.values);
+  if(keys.length === 0){
+    mapRow.innerHTML = '<span class="empty-note">空</span>';
+  } else {
+    mapRow.innerHTML = '';
+    keys.sort(function(a,b){ return Number(a)-Number(b); }).forEach(function(key){
+      var chip = document.createElement('span');
+      chip.className = 'map-chip';
+      chip.dataset.state = (activeKey == key) ? 'active' : 'idle';
+      chip.textContent = key + ' → ' + s.values[key];
+      mapRow.appendChild(chip);
+    });
+  }
+
+  // op queue highlighting: idle by default, 'current' while inside an unfinished op,
+  // outcome color (hit/miss/write) once that op's op-done event has been reached
+  OPS.forEach(function(op, i){
+    document.getElementById('opchip-'+i).dataset.state = 'idle';
+  });
+  for(var oi=0; oi<opRanges.length; oi++){
+    var range = opRanges[oi];
+    var chip2 = document.getElementById('opchip-'+oi);
+    if(idx >= range.end){
+      var doneEvent = EVENTS[range.end];
+      if(doneEvent.type === 'op-done'){
+        if(doneEvent.op === 'get'){
+          chip2.dataset.state = (doneEvent.result !== null) ? 'hit' : 'miss';
+        } else {
+          var hadEvict = false;
+          for(var kk=range.start; kk<=range.end; kk++){
+            if(EVENTS[kk].type === 'evict') hadEvict = true;
+          }
+          chip2.dataset.state = hadEvict ? 'write' : 'idle';
+        }
+      }
+    } else if(idx >= range.start && idx < range.end){
+      chip2.dataset.state = 'current';
+    }
+  }
+
+  var formulaBox = document.getElementById('formulaBox');
+  var descText = document.getElementById('descText');
+  var phaseBadge = document.getElementById('phaseBadge');
+
+  if(idx < 0){
+    formulaBox.innerHTML = '&mdash;';
+    descText.textContent = '容量为 ' + CAPACITY + ' 的 LRU 缓存,初始为空。点击"下一步"或"播放"开始执行操作序列。';
+    phaseBadge.textContent = '未开始';
+  } else {
+    phaseBadge.textContent = '第 ' + (idx+1) + ' / ' + EVENTS.length + ' 步';
+    if(e.type === 'op-start'){
+      if(e.op === 'get'){
+        formulaBox.innerHTML = '<span class="mono">get(' + e.key + ')</span>';
+        descText.textContent = '执行 get(' + e.key + '):先去哈希表里查这个 key 在不在。';
+      } else {
+        formulaBox.innerHTML = '<span class="mono">put(' + e.key + ', ' + e.value + ')</span>';
+        descText.textContent = '执行 put(' + e.key + ', ' + e.value + '):先看这个 key 是不是已经存在。';
+      }
+    } else if(e.type === 'hit'){
+      formulaBox.innerHTML = '<span class="h">命中</span> <span class="mono">key=' + e.key + ' → ' + e.value + '</span>';
+      descText.textContent = '哈希表里找到了 key=' + e.key + ',直接拿到对应节点,O(1)。接下来要把它挪到链表最前面(标记为"最近使用")。';
+    } else if(e.type === 'miss'){
+      formulaBox.innerHTML = '<span class="m">未命中</span>';
+      descText.textContent = '哈希表里没有 key=' + e.key + ',说明它从来没存过,或者已经被淘汰了。返回空,不做任何链表操作。';
+    } else if(e.type === 'unlink'){
+      formulaBox.innerHTML = '<span class="a">unlink(key=' + e.key + ')</span>';
+      descText.textContent = '把 key=' + e.key + ' 对应的节点从链表当前位置摘下来(修改它前后邻居的指针),这一步节点暂时"悬空"。';
+    } else if(e.type === 'add-front'){
+      formulaBox.innerHTML = '<span class="a">add_front(key=' + e.key + ')</span>';
+      descText.textContent = '把节点重新接到链表最前面(紧跟头部哨兵之后),现在它是"最近使用"的那个。';
+    } else if(e.type === 'evict'){
+      formulaBox.innerHTML = '<span class="e">evict(key=' + e.key + ')</span>  <span class="mono">// 容量已满</span>';
+      descText.textContent = '缓存已经满了(size == ' + CAPACITY + '),要先腾地方:把链表最后面(最久未使用)的节点摘掉,同时从哈希表里删掉这个 key,两边必须同步删除。';
+    } else if(e.type === 'insert'){
+      formulaBox.innerHTML = '<span class="h">insert(key=' + e.key + ', ' + e.value + ')</span>';
+      descText.textContent = '创建新节点,同时写入哈希表(方便下次 O(1) 查找)和链表最前面(标记为最近使用)——两个数据结构必须同时更新,这正是 LRU 实现的核心配合点。';
+    } else if(e.type === 'update-value'){
+      formulaBox.innerHTML = '<span class="mono">key=' + e.key + ' 的值 ' + e.old_value + ' → ' + e.new_value + '</span>';
+      descText.textContent = 'key=' + e.key + ' 已经存在,put 在这里的语义是更新值,不是插入新节点。';
+    } else if(e.type === 'op-done'){
+      if(e.op === 'get'){
+        formulaBox.innerHTML = '<span class="mono">get(' + e.key + ') = ' + (e.result === null ? 'null' : e.result) + '</span>';
+      } else {
+        formulaBox.innerHTML = '<span class="mono">// put 完成,当前顺序(MRU→LRU): [' + e.order.join(', ') + ']</span>';
+      }
+      descText.textContent = '这次操作完成。当前缓存里(从最近使用到最久未使用):[' + e.order.join(', ') + '],size = ' + e.size + '。';
+    } else if(e.type === 'done'){
+      formulaBox.innerHTML = '<span class="mono">全部完成</span>';
+      descText.textContent = '10 次操作全部执行完毕,最终顺序(MRU→LRU):[' + e.final_order.join(', ') + ']。';
+      phaseBadge.textContent = '完成';
+    }
+  }
+
+  document.getElementById('progress').textContent = (idx+1) + ' / ' + EVENTS.length;
+  document.getElementById('btnPrev').disabled = idx < 0;
+  document.getElementById('btnNext').disabled = idx >= EVENTS.length - 1;
+
+  var items = logPanel.children;
+  for(var i2=0;i2<items.length;i2++){
+    items[i2].setAttribute('data-active', i2 === idx ? 'true' : 'false');
+  }
+  if(idx >= 0 && items[idx]) items[idx].scrollIntoView({block:'nearest'});
+}
+
+function labelForEvent(e){
+  if(e.type === 'op-start') return (e.op === 'get' ? ('get(' + e.key + ') 开始') : ('put(' + e.key + ',' + e.value + ') 开始'));
+  if(e.type === 'hit') return '命中 key=' + e.key;
+  if(e.type === 'miss') return '未命中 key=' + e.key;
+  if(e.type === 'unlink') return 'unlink key=' + e.key;
+  if(e.type === 'add-front') return 'add_front key=' + e.key;
+  if(e.type === 'evict') return '淘汰 key=' + e.key;
+  if(e.type === 'insert') return '插入 key=' + e.key;
+  if(e.type === 'update-value') return '更新 key=' + e.key + ' 的值';
+  if(e.type === 'op-done') return (e.op === 'get' ? ('结果 = ' + (e.result===null?'null':e.result)) : ('完成,顺序=[' + e.order.join(',') + ']'));
+  if(e.type === 'done') return '全部完成';
+  return '';
+}
+
+var logPanel = document.getElementById('logPanel');
+function buildLog(){
+  logPanel.innerHTML = '';
+  EVENTS.forEach(function(e,i){
+    var item = document.createElement('div');
+    item.className = 'log-item';
+    item.setAttribute('data-active','false');
+    var idxSpan = document.createElement('span');
+    idxSpan.className = 'log-idx';
+    idxSpan.textContent = i+1;
+    var txt = document.createElement('span');
+    txt.textContent = labelForEvent(e);
+    item.appendChild(idxSpan); item.appendChild(txt);
+    item.addEventListener('click', function(ii){ return function(){ stopPlay(); idx = ii; render(); }; }(i));
+    logPanel.appendChild(item);
+  });
+}
+
+function goTo(i){
+  idx = Math.max(-1, Math.min(EVENTS.length-1, i));
+  render();
+}
+function stopPlay(){
+  if(playTimer){ clearInterval(playTimer); playTimer = null; }
+  document.getElementById('btnPlay').textContent = '播放';
+}
+document.getElementById('btnNext').addEventListener('click', function(){ stopPlay(); goTo(idx+1); });
+document.getElementById('btnPrev').addEventListener('click', function(){ stopPlay(); goTo(idx-1); });
+document.getElementById('btnReset').addEventListener('click', function(){ stopPlay(); goTo(-1); });
+document.getElementById('btnPlay').addEventListener('click', function(){
+  if(playTimer){ stopPlay(); return; }
+  if(idx >= EVENTS.length - 1) goTo(-1);
+  document.getElementById('btnPlay').textContent = '暂停';
+  var speed = 1000; // 固定慢速播放,不提供选项(教学演示,不追求速度)
+  playTimer = setInterval(function(){
+    if(idx >= EVENTS.length - 1){ stopPlay(); return; }
+    goTo(idx+1);
+  }, speed);
+});buildOpsRow();
+buildLog();
+goTo(-1);
+</script>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+</body>
+</html>

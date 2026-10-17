@@ -1,0 +1,764 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>GMP 调度器现场</title>
+<meta name="description" content="G/M/P 三者如何协作调度 goroutine,真实 trace 复现调度现场。">
+<link rel="canonical" href="https://bigywater.tech/gmp.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="GMP 调度器现场">
+<meta property="og:description" content="G/M/P 三者如何协作调度 goroutine,真实 trace 复现调度现场。">
+<meta property="og:url" content="https://bigywater.tech/gmp.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="GMP 调度器现场">
+<meta name="twitter:description" content="G/M/P 三者如何协作调度 goroutine,真实 trace 复现调度现场。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#FAF8F5; --surface:#FFFFFF; --surface-2:#F1EEE8; --surface-3:#E9E4D8;
+  --ink:#201C2B; --ink-soft:#55506A; --ink-faint:#8B85A0;
+  --line:#E4DFD5; --line-soft:#EDE9DF;
+  --g-c:#7C5CBF; --g-soft:#EDE7FB;
+  --m-c:#C85A46; --m-soft:#FBE6E1;
+  --p-c:#167D8C; --p-soft:#DCF1F0;
+  --warn:#B8791A; --warn-soft:#FBEBD3;
+  --code-bg:#211D30; --code-ink:#E7E2F5; --code-comment:#8D84AE; --code-kw:#7FD4C7; --code-str:#E3B368;
+  --shadow:0 1px 2px rgba(32,28,43,.06),0 10px 28px -14px rgba(32,28,43,.16);
+  --radius:12px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#15121F; --surface:#1D1930; --surface-2:#241F3B; --surface-3:#2C2647;
+    --ink:#EDE9F7; --ink-soft:#B5AECB; --ink-faint:#756D91;
+    --line:#332C4D; --line-soft:#2A2440;
+    --g-c:#B79CEE; --g-soft:#2C2547;
+    --m-c:#E08370; --m-soft:#3A241F;
+    --p-c:#4FC3D2; --p-soft:#17313A;
+    --warn:#E3A94C; --warn-soft:#3A2A16;
+    --code-bg:#0F0D1A; --code-ink:#E7E2F5; --code-comment:#786F9C; --code-kw:#7FD4C7; --code-str:#E3B368;
+    --shadow:0 1px 2px rgba(0,0,0,.35),0 14px 32px -16px rgba(0,0,0,.55);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#15121F; --surface:#1D1930; --surface-2:#241F3B; --surface-3:#2C2647;
+  --ink:#EDE9F7; --ink-soft:#B5AECB; --ink-faint:#756D91;
+  --line:#332C4D; --line-soft:#2A2440;
+  --g-c:#B79CEE; --g-soft:#2C2547;
+  --m-c:#E08370; --m-soft:#3A241F;
+  --p-c:#4FC3D2; --p-soft:#17313A;
+  --warn:#E3A94C; --warn-soft:#3A2A16;
+  --code-bg:#0F0D1A; --code-ink:#E7E2F5; --code-comment:#786F9C; --code-kw:#7FD4C7; --code-str:#E3B368;
+  --shadow:0 1px 2px rgba(0,0,0,.35),0 14px 32px -16px rgba(0,0,0,.55);
+}
+*{box-sizing:border-box;}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;}
+.wide{max-width:1080px;margin:0 auto;padding:0 22px;}
+.prose{max-width:1080px;margin:0 auto;padding:0 22px;}
+h1,h2,h3{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;letter-spacing:-.01em;text-wrap:balance;}
+
+header.hero{padding:64px 0 30px;}
+.eyebrow{font-size:12.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-faint);margin:0 0 14px;}
+h1{font-size:clamp(30px,5vw,44px);margin:0 0 16px;line-height:1.12;}
+.hero-sub{font-size:17px;color:var(--ink-soft);margin:0 0 22px;}
+.meta-row{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--ink-faint);}
+.meta-row span{display:inline-flex;align-items:center;gap:6px;}
+
+.legend-row{display:flex;gap:10px;flex-wrap:wrap;margin:28px 0 4px;}
+.legend-chip{display:inline-flex;align-items:center;gap:8px;padding:7px 13px;border-radius:999px;border:1px solid var(--line);background:var(--surface);font-size:13px;font-weight:600;}
+.legend-dot{width:11px;height:11px;border-radius:50%;flex:none;}
+.legend-chip .g-dot{background:var(--g-c);} .legend-chip .m-dot{background:var(--m-c);} .legend-chip .p-dot{background:var(--p-c);}
+
+section{padding:40px 0;}
+section.divider-top{border-top:1px solid var(--line);}
+h2{font-size:22px;margin:0 0 4px;}
+h2 .num{color:var(--ink-faint);font-weight:400;margin-right:8px;}
+.section-kicker{font-size:12.5px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.08em;font-weight:700;margin:0 0 8px;}
+p{font-size:15.5px;color:var(--ink-soft);margin:0 0 16px;}
+.prose p b, .prose li b{color:var(--ink);font-weight:700;}
+.prose ul{padding-left:22px;font-size:15.5px;color:var(--ink-soft);}
+.prose li{margin-bottom:8px;}
+.g-tag{color:var(--g-c);font-weight:700;}
+.m-tag{color:var(--m-c);font-weight:700;}
+.p-tag{color:var(--p-c);font-weight:700;}
+
+.entity-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:22px 0;}
+@media (max-width:760px){.entity-cards{grid-template-columns:1fr;}}
+.ecard{border:1px solid var(--line);border-radius:var(--radius);padding:18px;background:var(--surface);box-shadow:var(--shadow);}
+.ecard .etitle{font-family:ui-monospace,monospace;font-size:18px;font-weight:700;display:flex;align-items:center;gap:9px;margin-bottom:8px;}
+.ecard.g .etitle{color:var(--g-c);} .ecard.m .etitle{color:var(--m-c);} .ecard.p .etitle{color:var(--p-c);}
+.ecard p{font-size:14px;margin:0;}
+.edot{width:13px;height:13px;border-radius:50%;flex:none;}
+.ecard.g .edot{background:var(--g-c);} .ecard.m .edot{background:var(--m-c);} .ecard.p .edot{background:var(--p-c);}
+
+.code-quote{background:var(--code-bg);border-radius:var(--radius);overflow:hidden;margin:20px 0;box-shadow:var(--shadow);}
+.code-head{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;background:rgba(255,255,255,.04);border-bottom:1px solid rgba(255,255,255,.08);}
+.code-path{font-family:ui-monospace,monospace;font-size:12.5px;color:var(--code-comment);}
+.code-link{font-family:ui-monospace,monospace;font-size:12px;color:var(--code-kw);text-decoration:none;white-space:nowrap;}
+.code-link:hover{text-decoration:underline;}
+.code-quote pre{margin:0;padding:16px;overflow-x:auto;}
+.code-quote code{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;font-size:12.8px;line-height:1.6;color:var(--code-ink);white-space:pre;}
+.code-quote .cm{color:var(--code-comment);}
+
+.callout{border-left:3px solid var(--warn);background:var(--warn-soft);border-radius:0 8px 8px 0;padding:12px 16px;font-size:14px;color:var(--ink);margin:18px 0;}
+.callout b{color:var(--warn);}
+
+/* ---- simulator ---- */
+.sim-panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px;margin:22px 0;}
+.sim-controls{display:flex;align-items:center;gap:8px;margin-bottom:18px;flex-wrap:wrap;}
+button.ctrl{appearance:none;border:1px solid var(--line);background:var(--surface-2);color:var(--ink);padding:8px 14px;border-radius:8px;font-size:14px;cursor:pointer;font-weight:600;transition:background .15s,border-color .15s;font-family:ui-monospace,monospace;}
+button.ctrl:hover:not(:disabled){background:var(--surface-3);}
+button.ctrl:disabled{opacity:.4;cursor:not-allowed;}
+button.ctrl.primary{background:var(--ink);color:var(--bg);border-color:var(--ink);}
+button.ctrl:focus-visible{outline:2px solid var(--p-c);outline-offset:2px;}
+.sim-progress{font-size:12.5px;color:var(--ink-faint);margin-left:2px;font-family:ui-monospace,monospace;}
+.spacer{flex:1;}
+select.ctrl{padding:6px 10px;font-family:ui-monospace,monospace;}
+
+.global-tray{border:1.5px dashed var(--line);border-radius:10px;padding:10px 14px;margin-bottom:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-height:44px;}
+.global-tray .tray-label{font-size:11.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-faint);font-weight:700;margin-right:4px;}
+
+.p-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px;}
+@media (max-width:760px){.p-grid{grid-template-columns:1fr;}}
+.p-card{border:2px solid var(--line);border-radius:10px;padding:12px;background:var(--surface-2);transition:border-color .25s,background .25s;}
+.p-card[data-status="running"]{border-color:var(--p-c);}
+.p-card[data-status="syscall"]{border-color:var(--m-c);background:var(--m-soft);}
+.p-card-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}
+.p-name{font-family:ui-monospace,monospace;font-weight:700;color:var(--p-c);font-size:14px;}
+.p-status{font-size:11px;font-family:ui-monospace,monospace;color:var(--ink-faint);text-transform:uppercase;}
+.m-slot{display:flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:7px 9px;margin-bottom:8px;font-family:ui-monospace,monospace;font-size:12.5px;}
+.m-chip{width:22px;height:22px;border-radius:50%;background:var(--m-soft);color:var(--m-c);border:2px solid var(--m-c);display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:800;flex:none;}
+.g-chip{width:24px;height:24px;border-radius:6px;background:var(--g-soft);color:var(--g-c);border:2px solid var(--g-c);display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:800;flex:none;}
+.g-chip.tiny{width:20px;height:20px;font-size:9.5px;}
+.g-chip.ghost{opacity:.35;border-style:dashed;}
+.running-slot{min-height:30px;display:flex;align-items:center;gap:6px;font-family:ui-monospace,monospace;font-size:12px;color:var(--ink-faint);margin-bottom:8px;}
+.queue-label{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-faint);margin-bottom:5px;font-weight:700;}
+.queue-row{display:flex;gap:5px;flex-wrap:wrap;min-height:24px;}
+
+.sysmon-strip{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:8px;padding:8px 12px;margin-bottom:16px;font-family:ui-monospace,monospace;font-size:12.5px;color:var(--ink-faint);}
+.sysmon-strip .sm-dot{width:9px;height:9px;border-radius:50%;background:var(--line);flex:none;transition:background .2s,box-shadow .2s;}
+.sysmon-strip[data-active="true"] .sm-dot{background:var(--warn);box-shadow:0 0 0 4px var(--warn-soft);}
+
+.sim-desc{background:var(--surface-2);border-radius:8px;padding:12px 14px;font-size:13.5px;color:var(--ink-soft);margin-bottom:14px;min-height:44px;border:1px solid var(--line-soft);}
+.sim-desc b{color:var(--ink);}
+.sim-formula{font-family:ui-monospace,monospace;font-size:13px;color:var(--ink-faint);margin-bottom:8px;}
+
+.sim-log{max-height:190px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:8px;}
+.log-item{padding:6px 9px;border-radius:6px;font-size:12.5px;color:var(--ink-faint);cursor:pointer;font-family:ui-monospace,monospace;display:flex;gap:8px;}
+.log-item:hover{background:var(--surface-2);}
+.log-item[data-active="true"]{background:var(--p-soft);color:var(--ink);font-weight:600;}
+.log-idx{min-width:22px;color:var(--ink-faint);}
+
+.done-strip{display:flex;gap:5px;flex-wrap:wrap;align-items:center;margin-top:2px;}
+.done-strip .glabel{font-size:11px;color:var(--ink-faint);margin-right:4px;font-family:ui-monospace,monospace;text-transform:uppercase;letter-spacing:.06em;}
+
+.refs{font-size:14px;color:var(--ink-soft);}
+.refs li{margin-bottom:10px;}
+.refs a{color:var(--p-c);}
+footer.endnote{border-top:1px solid var(--line);padding:26px 0 60px;font-size:13px;color:var(--ink-faint);}
+
+@media (prefers-reduced-motion:reduce){*{transition:none !important;}}
+</style>
+
+<article>
+<header class="hero prose">
+  <p class="eyebrow">GO 运行时内部原理</p>
+  <h1>GMP 调度器现场</h1>
+  <p class="hero-sub">Goroutine 很便宜,操作系统线程很贵。Go 用 <span class="g-tag">G</span>(goroutine)、<span class="m-tag">M</span>(OS 线程)、<span class="p-tag">P</span>(调度上下文)三种角色,把"海量的轻量任务"和"有限的重量级线程"之间的调度问题,拆成了一套可以本地无锁运行、还能互相"偷"活干的系统。这篇文章配了一个可以逐步播放的调度器模拟器,以及若干条直接引用自 Go 运行时源码的片段。</p>
+  <div class="meta-row">
+    <span>· 引用 Go 源码 commit <code class="mono">72aa6db7</code></span>
+    <span>· 源码遵循 BSD-3-Clause 协议,版权归 The Go Authors 所有,下文均为简短引用并附原文链接</span>
+  </div>
+  <div class="legend-row">
+    <span class="legend-chip"><span class="legend-dot g-dot"></span>G · goroutine,你写的每一个 go func()</span>
+    <span class="legend-chip"><span class="legend-dot m-dot"></span>M · OS 线程,真正被内核调度、能执行代码的东西</span>
+    <span class="legend-chip"><span class="legend-dot p-dot"></span>P · 调度上下文,数量等于 GOMAXPROCS,是"允许并行执行 Go 代码的许可证"</span>
+  </div>
+</header>
+
+<section class="prose">
+  <p class="section-kicker">01 · 为什么不直接让线程调度 goroutine</p>
+  <h2>从 G-M 模型到 G-M-P 模型</h2>
+  <p>最早期的 Go 调度器只有 <span class="g-tag">G</span> 和 <span class="m-tag">M</span> 两种角色:所有可运行的 goroutine 挤在<b>一个全局队列</b>里,每个线程要拿任务就必须去抢这个队列的锁。goroutine 数量一多,线程之间抢锁抢得比干活还凶,这是 2012 年前后 Go 调度器被公认的老大难问题。</p>
+  <p>另一个更麻烦的问题是:goroutine 用的堆、缓存这些资源,是挂在线程上的。一个 goroutine 一旦阻塞在系统调用里,线程就跟着被内核挂起,它手里缓存的内存分配状态、待运行的其它 goroutine 队列,全都一起被冻结,没法转交给别的线程继续用。</p>
+  <p>Dmitry Vyukov 在 2012 年提出的方案,就是现在的 <b>G-M-P 模型</b>:凭空插入第三个角色 <span class="p-tag">P</span>,把"可以并行跑 Go 代码的名额"和"操作系统线程"解耦。每个 P 拥有自己的本地可运行队列、内存分配缓存;M 想执行 Go 代码,必须先持有一个 P。这样一来:</p>
+  <ul>
+    <li>本地队列大多数时候<b>不用加锁</b>,只有队列空了才需要去全局队列或者别的 P 那里找活干;</li>
+    <li>P 的数量恒定(默认等于 CPU 核数,由 <code class="mono">GOMAXPROCS</code> 控制),天然限制了同时并行执行 Go 代码的线程数;</li>
+    <li>goroutine 阻塞在系统调用时,P 可以和执行系统调用的 M <b>分离</b>,转手交给别的 M 继续跑其它 goroutine——线程可以随便阻塞,P 手里的活不会被一起冻住。</li>
+  </ul>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">02 · 三种角色分别是什么</p>
+  <h2>G / M / P 的真实定义</h2>
+  <p>这三个都是 Go 运行时里真实存在的 struct,定义在 <code class="mono">src/runtime/runtime2.go</code>。字段很多(g 有 90+ 个),下面只挑和调度直接相关的部分。</p>
+  <div class="entity-cards">
+    <div class="ecard g"><div class="etitle"><span class="edot"></span>struct g</div><p>一个 goroutine 的全部状态:栈边界、当前状态机(runnable/running/syscall/…)、指向正在使用它的 m。<b>极轻量</b>——初始栈只有 2KB,可以创建几十万个。</p></div>
+    <div class="ecard m"><div class="etitle"><span class="edot"></span>struct m</div><p>对应一个真实的 OS 线程。持有 g0(调度专用栈)、curg(当前在执行的 goroutine)、以及一个 p 指针——只有拿到 P,M 才能执行用户 Go 代码。</p></div>
+    <div class="ecard p"><div class="etitle"><span class="edot"></span>struct p</div><p>调度上下文,数量固定为 GOMAXPROCS。核心资产是本地可运行队列 runq,以及内存分配缓存 mcache——这两样东西不用锁就能被拥有它的 M 访问。</p></div>
+  </div>
+
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">runtime2.go · L471-L490</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/runtime/runtime2.go#L471-L490" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>type g struct {
+	// Stack parameters.
+	// stack describes the actual stack memory: [stack.lo, stack.hi).
+	// stackguard0 is the stack pointer compared in the Go stack growth prologue.
+	// It is stack.lo+StackGuard normally, but can be StackPreempt to trigger a preemption.
+	// stackguard1 is the stack pointer compared in the //go:systemstack stack growth prologue.
+	// It is stack.lo+StackGuard on g0 and gsignal stacks.
+	// It is ~0 on other goroutine stacks, to trigger a call to morestackc (and crash).
+	stack       stack   // offset known to runtime/cgo
+	stackguard0 uintptr // offset known to cmd/internal/obj/*
+	stackguard1 uintptr // offset known to cmd/internal/obj/*
+
+	_panic    *_panic // innermost panic
+	_defer    *_defer // innermost defer
+	m         *m      // current m
+	sched     gobuf
+	syscallsp uintptr // if status==Gsyscall, syscallsp = sched.sp to use during gc
+	syscallpc uintptr // if status==Gsyscall, syscallpc = sched.pc to use during gc
+	syscallbp uintptr // if status==Gsyscall, syscallbp = sched.bp to use in fpTraceback
+	stktopsp  uintptr // expected sp at top of stack, to check in traceback</code></pre>
+  </div>
+  <p>注意 <code class="mono">syscallsp</code> / <code class="mono">syscallpc</code> 这几个字段:goroutine 陷入系统调用时,运行时要把它当时的栈指针、程序计数器先记下来,GC 扫描栈的时候要用。这就是为什么"阻塞在系统调用"对 goroutine 本身来说,是一个需要被精确记录的正式状态,而不是线程层面看不见的黑盒。</p>
+
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">runtime2.go · L616-L646</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/runtime/runtime2.go#L616-L646" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>type m struct {
+	g0      *g     // goroutine with scheduling stack
+	morebuf gobuf  // gobuf arg to morestack
+	divmod  uint32 // div/mod denominator for arm - known to liblink (cmd/internal/obj/arm/obj5.go)
+
+	// Fields whose offsets are not known to debuggers.
+
+	procid     uint64            // for debuggers, but offset not hard-coded
+	gsignal    *g                // signal-handling g
+	goSigStack gsignalStack      // Go-allocated signal handling stack
+	sigmask    sigset            // storage for saved signal mask
+	tls        [tlsSlots]uintptr // thread-local storage (for x86 extern register)
+	mstartfn   func()
+	curg       *g       // current running goroutine
+	caughtsig  guintptr // goroutine running during fatal signal
+
+	// Indicates whether we've received a signal while
+	// running in secret mode.
+	signalSecret bool
+
+	// p is the currently attached P for executing Go code, nil if not executing user Go code.
+	//
+	// A non-nil p implies exclusive ownership of the P, unless curg is in _Gsyscall.
+	// In _Gsyscall the scheduler may mutate this instead. The point of synchronization
+	// is the _Gscan bit on curg's status. The scheduler must arrange to prevent curg
+	// from transitioning out of _Gsyscall if it intends to mutate p.
+	p puintptr
+
+	nextp           puintptr // The next P to install before executing. Implies exclusive ownership of this P.
+	oldp            puintptr // The P that was attached before executing a syscall.
+	id              int64</code></pre>
+  </div>
+  <p>关键是这句注释:<b>"A non-nil p implies exclusive ownership of the P"</b>——一个 M 只要 <code class="mono">p</code> 字段非空,就独占这个 P,不需要加锁去访问它的本地队列。这正是 GMP 模型无锁快路径的根基。</p>
+
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">runtime2.go · L774-L820(节选)</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/runtime/runtime2.go#L774-L820" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>type p struct {
+	id          int32
+	status      uint32 // one of pidle/prunning/...
+	link        puintptr
+	schedtick   uint32     // incremented on every scheduler call
+	syscalltick uint32     // incremented on every system call
+	sysmontick  sysmontick // last tick observed by sysmon
+	m           muintptr   // back-link to associated m (nil if idle)
+	...
+
+	// Queue of runnable goroutines. Accessed without lock.
+	runqhead uint32
+	runqtail uint32
+	runq     [256]guintptr
+	// runnext, if non-nil, is a runnable G that was ready'd by
+	// the current G and should be run next instead of what's in
+	// runq if there's time remaining in the running G's time
+	// slice. It will inherit the time left in the current time
+	// slice. If a set of goroutines is locked in a
+	// communicate-and-wait pattern, this schedules that set as a
+	// unit and eliminates the (potentially large) scheduling
+	// latency that otherwise arises from adding the ready'd
+	// goroutines to the end of the run queue.
+	//
+	// Note that while other P's may atomically CAS this to zero,
+	// only the owner P can CAS it to a valid G.
+	runnext guintptr</code></pre>
+  </div>
+  <p><code class="mono">runq [256]guintptr</code> 就是本地队列本体——一个定长的环形缓冲区,<code class="mono">runqhead</code>/<code class="mono">runqtail</code> 两个下标圈出当前有效区间。<code class="mono">runnext</code> 更有意思:它是一个"插队"槽位,专门放"当前 goroutine 刚刚通过 channel/锁唤醒的另一个 goroutine",让生产者-消费者这种紧密协作的 goroutine 对能立刻排到下一个执行,而不是排到本地队列尾部等轮询——这也是 Go 调度器对"局部性"的一处专门优化。</p>
+</section>
+
+<section class="prose divider-top" id="sim-section">
+  <p class="section-kicker">03 · 现场直播</p>
+  <h2>一次真实的调度过程</h2>
+  <p>下面不是动画特效,是一段<b>真实模拟出来并逐条校验过</b>的调度轨迹:3 个 P、初始 3 个 M、8 个 goroutine。规则严格来自上面的源码和后面会引用的 <code class="mono">stealWork</code> / <code class="mono">retake</code>:本地队列优先、空了找全局队列、再空了去偷别的 P 一半的队列、系统调用不会立刻交出 P、sysmon 发现 P 卡住太久才会强制收回。全部 8 个 goroutine 跑完之后,我用一个独立脚本校验了每一步快照的一致性(没有 goroutine 同时挂在两个地方、没有队列指向不存在的 G),细节见文末"这个模拟器做了哪些简化"。</p>
+</section>
+
+<section class="wide">
+  <div class="sim-panel">
+    <div class="sysmon-strip" id="sysmonStrip"><span class="sm-dot"></span><span id="sysmonText">sysmon:后台线程,周期性检查有没有 P 卡在系统调用里太久</span></div>
+
+    <div class="global-tray" id="globalTray"><span class="tray-label">全局队列 Global Run Queue</span></div>
+
+    <div class="p-grid" id="pGrid"></div>
+
+    <div class="sim-desc">
+      <div class="sim-formula" id="simFormula">&mdash;</div>
+      <div id="simDesc">点击"下一步"或"播放",从头看这 8 个 goroutine 怎么被调度完的。</div>
+    </div>
+
+    <div class="sim-controls">
+      <button class="ctrl" id="btnReset">重置</button>
+      <button class="ctrl" id="btnPrev">上一步</button>
+      <button class="ctrl primary" id="btnPlay">播放</button>
+      <button class="ctrl" id="btnNext">下一步</button>
+      <span class="sim-progress" id="simProgress">0 / 0</span>
+      <div class="spacer"></div>
+      <label class="sim-progress" for="simSpeed">速度</label>
+      <select class="ctrl" id="simSpeed">
+        <option value="2000">慢</option>
+        <option value="1200" selected>中</option>
+        <option value="550">快</option>
+      </select>
+    </div>
+
+    <div class="sim-log" id="simLog"></div>
+  </div>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">04 · 本地队列空了怎么办</p>
+  <h2>工作窃取(work stealing)</h2>
+  <p>模拟器里第 4 步、第 8 步、第 11 步、第 15 步都发生了"偷"——这不是我瞎编的行为,<code class="mono">findRunnable</code> 在本地队列和全局队列都找不到活干时,会调用 <code class="mono">stealWork</code>,按<b>随机顺序</b>依次尝试从别的 P 那里偷走<b>一半</b>的本地队列:</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">proc.go · L3844-L3905(节选)</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/runtime/proc.go#L3844-L3905" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>func stealWork(now int64) (gp *g, inheritTime bool, rnow, pollUntil int64, newWork bool) {
+	pp := getg().m.p.ptr()
+
+	ranTimer := false
+
+	const stealTries = 4
+	for i := 0; i &lt; stealTries; i++ {
+		stealTimersOrRunNextG := i == stealTries-1
+
+		for enum := stealOrder.start(cheaprand()); !enum.done(); enum.next() {
+			...
+
+			// Don't bother to attempt to steal if p2 is idle.
+			if !idlepMask.read(enum.position()) {
+				if gp := runqsteal(pp, p2, stealTimersOrRunNextG); gp != nil {
+					return gp, false, now, pollUntil, ranTimer
+				}
+			}
+		}
+	}</code></pre>
+  </div>
+  <p><code class="mono">stealTries = 4</code>:最多完整地把所有其它 P 轮询 4 遍才放弃。<code class="mono">stealOrder.start(cheaprand())</code> 保证每个 P 每轮尝试偷的顺序是打乱的,避免所有空闲 P 总是先去挤兑同一个受害者。只有在最后一遍(<code class="mono">stealTimersOrRunNextG</code>)才会连 <code class="mono">runnext</code> 这个"插队槽"也偷走——前面说过 runnext 是留给紧密协作的 goroutine 对的,能不动它就不动它。</p>
+  <p class="callout"><b>模拟器简化:</b>真实的 <code class="mono">runqsteal</code> 偷取数量算法比"取一半"更精细(要重新计算队首队尾、处理并发 CAS 失败重试),这里为了可读性简化成了"向下取整的一半,至少偷 1 个"。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">05 · goroutine 卡在系统调用里怎么办</p>
+  <h2>系统调用与 P 的转移</h2>
+  <p>模拟器第 15-23 步是全篇最关键的一段:G7 进入系统调用(<code class="mono">entersyscall</code>)。这里有个反直觉的地方——<b>P 不会立刻被交出去</b>。Go 赌的是大多数系统调用很快就返回,如果每次系统调用都要交接 P、可能还要唤醒或创建新线程,开销反而更大。所以 P 会先乐观地保持挂在原来的 M 上,只是标记成 <code class="mono">_Psyscall</code> 状态。</p>
+  <p>真正负责收拾"赌输了"情况的,是一个独立于所有 P 之外、专门跑在自己线程上的后台角色:<b>sysmon</b>。它不需要 P 就能运行,每隔至少 20 微秒醒来一次,巡查所有 P;发现一个 P 连续两次巡查都还在 <code class="mono">_Psyscall</code> 状态(也就是说这个系统调用已经跨过了至少一个 sysmon 周期,不像是"马上就回来"的那种),就强制把 P 收回来,交给另一个线程:</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">proc.go · L6737-L6767(retake 节选)</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/runtime/proc.go#L6737-L6767" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>		// Try to prevent the P from continuing in the syscall, if it's in one at all.
+		thread, ok := setBlockOnExitSyscall(pp)
+		if !ok {
+			// Not in a syscall, or something changed out from under us.
+			goto done
+		}
+
+		// Retake the P if it's there for more than 1 sysmon tick (at least 20us).
+		if syst := int64(pp.syscalltick); !sysretake &amp;&amp; int64(pd.syscalltick) != syst {
+			pd.syscalltick = uint32(syst)
+			pd.syscallwhen = now
+			thread.resume()
+			goto done
+		}
+
+		// On the one hand we don't want to retake Ps if there is no other work to do,
+		// but on the other hand we want to retake them eventually
+		// because they can prevent the sysmon thread from deep sleep.
+		if runqempty(pp) &amp;&amp; sched.nmspinning.Load()+sched.npidle.Load() &gt; 0 &amp;&amp; pd.syscallwhen+10*1000*1000 &gt; now {
+			thread.resume()
+			goto done
+		}
+
+		// Take the P. Note: because we have the scan bit, the goroutine
+		// is at worst stuck spinning in exitsyscall.
+		thread.takeP()
+		thread.resume()
+		n++
+
+		// Handoff the P for some other thread to run it.
+		handoffp(pp)</code></pre>
+  </div>
+  <p>对应模拟器里:第 18 步 sysmon 第一次巡查,发现 P1 在系统调用里,但这是第一次看到,先记一笔就放过;第 21 步第二次巡查,P1 还没回来——<b>retake</b>,把 P1 转交给新线程 M3。原来的 M1 完全不知情,继续在内核里等它的系统调用返回。等系统调用真的结束(第 22 步 <code class="mono">syscall-exit</code>),M1 想拿回原来的 P1,发现它已经易主了,只能把 G7 重新扔回全局队列(第 23 步),自己转入 parked 状态等待下次被复用。G7 最终在第 24-25 步被 P0 从全局队列里捡起来正常跑完。</p>
+  <p>这一套机制解释了一个常被问到的问题:<b>为什么一个 goroutine 阻塞在系统调用(比如同步文件 IO)不会拖垮整个 Go 程序的并行度</b>——最坏情况下也只是耽误一个 sysmon 周期,P 就会被收回去继续干别的活,而不是被这个卡住的线程永远攥在手里。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">06 · 实践</p>
+  <h2>GOMAXPROCS 意味着什么</h2>
+  <p><code class="mono">GOMAXPROCS</code> 设置的是 P 的数量,也就是<b>同一时刻最多有多少个 M 能并行执行 Go 代码</b>(不是能创建多少个 goroutine,也不是能创建多少个线程——阻塞在系统调用的 M 不占用这个名额)。默认等于 <code class="mono">runtime.NumCPU()</code>。</p>
+  <ul>
+    <li>P 太少:CPU 核心闲置,并行度上不去,即便 goroutine 数量再多也排不上队;</li>
+    <li>P 太多(超过实际核数):M 之间抢 CPU 时间片,上下文切换开销增加,通常没有收益;</li>
+    <li>在容器里跑 Go 程序时,<code class="mono">GOMAXPROCS</code> 默认读的是宿主机核数而不是 cgroup 限额,是一个真实存在过的生产事故来源(Uber 那篇 automaxprocs 的博客就是讲这个)——这也是为什么很多线上服务会显式引入 <code class="mono">uber-go/automaxprocs</code> 之类的库,在启动时按 cgroup 配额重新设置它。</li>
+  </ul>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">07 · 参考与说明</p>
+  <h2>引用与这个模拟器做了哪些简化</h2>
+  <ul class="refs">
+    <li>本文所有源码引用均来自 <a href="https://github.com/golang/go" target="_blank" rel="noopener">golang/go</a>,commit <code class="mono">72aa6db7943024b48c4d41c1fbc32b57b9fa036e</code>,遵循 Go 项目的 BSD-3-Clause 协议(© The Go Authors)。每一段引用都标了具体文件、行号,并附了指向该 commit 的永久链接,可以自行核对。</li>
+    <li>Dmitry Vyukov,<a href="https://docs.google.com/document/d/1TTj4T2JO42uD5ID9e89oa0sLKhJYD0Y_kqxDv3I3XMw" target="_blank" rel="noopener">Scalable Go Scheduler Design Doc</a>(2012)——G-M-P 模型最初的设计文档。</li>
+    <li>模拟器把"运行一个 goroutine"简化成了一个不可分割的整体动作,没有建模真实调度器里"运行满 10ms 时间片会被抢占"这件事——抢占式调度本身就足够写一整篇文章,这里先按下不表。</li>
+    <li>全局队列在真实调度器里不是"本地队列一空就去查",而是<b>每处理 61 次本地调度才查一次</b>(避免全局队列的锁成为新的瓶颈)。模拟器为了让"全局队列"这个概念在几步之内就能被看到,简化成了"本地队列一空就查"。</li>
+    <li>sysmon 的判定条件在真实源码里还包含"本地队列非空时优先克制、避免抢占"等更多分支,模拟器只保留了"连续两次巡查都在系统调用里"这一条最核心的规则。</li>
+  </ul>
+</section>
+
+<footer class="endnote prose">
+  GMP 系列 · 如果这篇文章里的模拟规则和你读到的某个 Go 版本的实际行为有出入,大概率是运行时又演进了——调度器几乎每个大版本都在被继续打磨。
+</footer>
+</article>
+
+<script>
+var EVENTS = [{"source": "local", "m": 0, "p": 0, "g": 1, "type": "run-start", "snapshot": {"ps": [{"id": 0, "status": "running", "m": 0, "queue": [2, 3, 4, 5, 7]}, {"id": 1, "status": "idle", "m": 1, "queue": []}, {"id": 2, "status": "idle", "m": 2, "queue": []}], "ms": [{"id": 0, "status": "running", "p": 0, "curg": 1}, {"id": 1, "status": "idle", "p": 1, "curg": null}, {"id": 2, "status": "idle", "p": 2, "curg": null}], "global": [6], "gs": [{"id": 1, "status": "running"}, {"id": 2, "status": "runnable"}, {"id": 3, "status": "runnable"}, {"id": 4, "status": "runnable"}, {"id": 5, "status": "runnable"}, {"id": 6, "status": "runnable"}, {"id": 7, "status": "runnable"}]}}, {"m": 0, "p": 0, "g": 1, "type": "run-done", "snapshot": {"ps": [{"id": 0, "status": "idle", "m": 0, "queue": [2, 3, 4, 5, 7]}, {"id": 1, "status": "idle", "m": 1, "queue": []}, {"id": 2, "status": "idle", "m": 2, "queue": []}], "ms": [{"id": 0, "status": "idle", "p": 0, "curg": null}, {"id": 1, "status": "idle", "p": 1, "curg": null}, {"id": 2, "status": "idle", "p": 2, "curg": null}], "global": [6], "gs": [{"id": 1, "status": "done"}, {"id": 2, "status": "runnable"}, {"id": 3, "status": "runnable"}, {"id": 4, "status": "runnable"}, {"id": 5, "status": "runnable"}, {"id": 6, "status": "runnable"}, {"id": 7, "status": "runnable"}]}}, {"m": 1, "p": 1, "g": 6, "type": "global-get", "snapshot": {"ps": [{"id": 0, "status": "idle", "m": 0, "queue": [2, 3, 4, 5, 7]}, {"id": 1, "status": "running", "m": 1, "queue": []}, {"id": 2, "status": "idle", "m": 2, "queue": []}], "ms": [{"id": 0, "status": "idle", "p": 0, "curg": null}, {"id": 1, "status": "running", "p": 1, "curg": 6}, {"id": 2, "status": "idle", "p": 2, "curg": null}], "global": [], "gs": [{"id": 1, "status": "done"}, {"id": 2, "status": "runnable"}, {"id": 3, "status": "runnable"}, {"id": 4, "status": "runnable"}, {"id": 5, "status": "runnable"}, {"id": 6, "status": "running"}, {"id": 7, "status": "runnable"}]}}, {"m": 1, "p": 1, "g": 6, "type": "run-done", "snapshot": {"ps": [{"id": 0, "status": "idle", "m": 0, "queue": [2, 3, 4, 5, 7]}, {"id": 1, "status": "idle", "m": 1, "queue": []}, {"id": 2, "status": "idle", "m": 2, "queue": []}], "ms": [{"id": 0, "status": "idle", "p": 0, "curg": null}, {"id": 1, "status": "idle", "p": 1, "curg": null}, {"id": 2, "status": "idle", "p": 2, "curg": null}], "global": [], "gs": [{"id": 1, "status": "done"}, {"id": 2, "status": "runnable"}, {"id": 3, "status": "runnable"}, {"id": 4, "status": "runnable"}, {"id": 5, "status": "runnable"}, {"id": 6, "status": "done"}, {"id": 7, "status": "runnable"}]}}, {"fromP": 0, "taken": [2, 3], "m": 2, "p": 2, "g": 2, "type": "steal", "snapshot": {"ps": [{"id": 0, "status": "idle", "m": 0, "queue": [4, 5, 7]}, {"id": 1, "status": "idle", "m": 1, "queue": []}, {"id": 2, "status": "running", "m": 2, "queue": [3]}], "ms": [{"id": 0, "status": "idle", "p": 0, "curg": null}, {"id": 1, "status": "idle", "p": 1, "curg": null}, {"id": 2, "status": "running", "p": 2, "curg": 2}], "global": [], "gs": [{"id": 1, "status": "done"}, {"id": 2, "status": "running"}, {"id": 3, "status": "runnable"}, {"id": 4, "status": "runnable"}, {"id": 5, "status": "runnable"}, {"id": 6, "status": "done"}, {"id": 7, "status": "runnable"}]}}, {"m": 2, "p": 2, "g": 2, "type": "run-done", "snapshot": {"ps": [{"id": 0, "status": "idle", "m": 0, "queue": [4, 5, 7]}, {"id": 1, "status": "idle", "m": 1, "queue": []}, {"id": 2, "status": "idle", "m": 2, "queue": [3]}], "ms": [{"id": 0, "status": "idle", "p": 0, "curg": null}, {"id": 1, "status": "idle", "p": 1, "curg": null}, {"id": 2, "status": "idle", "p": 2, "curg": null}], "global": [], "gs": [{"id": 1, "status": "done"}, {"id": 2, "status": "done"}, {"id": 3, "status": "runnable"}, {"id": 4, "status": "runnable"}, {"id": 5, "status": "runnable"}, {"id": 6, "status": "done"}, {"id": 7, "status": "runnable"}]}}, {"source": "local", "m": 0, "p": 0, "g": 4, "type": "run-start", "snapshot": {"ps": [{"id": 0, "status": "running", "m": 0, "queue": [5, 7]}, {"id": 1, "status": "idle", "m": 1, "queue": []}, {"id": 2, "status": "idle", "m": 2, "queue": [3]}], "ms": [{"id": 0, "status": "running", "p": 0, "curg": 4}, {"id": 1, "status": "idle", "p": 1, "curg": null}, {"id": 2, "status": "idle", "p": 2, "curg": null}], "global": [], "gs": [{"id": 1, "status": "done"}, {"id": 2, "status": "done"}, {"id": 3, "status": "runnable"}, {"id": 4, "status": "running"}, {"id": 5, "status": "runnable"}, {"id": 6, "status": "done"}, {"id": 7, "status": "runnable"}]}}, {"m": 0, "p": 0, "g": 4, "type": "run-done", "snapshot": {"ps": [{"id": 0, "status": "idle", "m": 0, "queue": [5, 7]}, {"id": 1, "status": "idle", "m": 1, "queue": []}, {"id": 2, "status": "idle", "m": 2, "queue": [3]}], "ms": [{"id": 0, "status": "idle", "p": 0, "curg": null}, {"id": 1, "status": "idle", "p": 1, "curg": null}, {"id": 2, "status": "idle", "p": 2, "curg": null}], "global": [], "gs": [{"id": 1, "status": "done"}, {"id": 2, "status": "done"}, {"id": 3, "status": "runnable"}, {"id": 4, "status": "done"}, {"id": 5, "status": "runnable"}, {"id": 6, "status": "done"}, {"id": 7, "status": "runnable"}]}}, {"fromP": 2, "taken": [3], "m": 1, "p": 1, "g": 3, "type": "steal", "snapshot": {"ps": [{"id": 0, "status": "idle", "m": 0, "queue": [5, 7]}, {"id": 1, "status": "running", "m": 1, "queue": []}, {"id": 2, "status": "idle", "m": 2, "queue": []}], "ms": [{"id": 0, "status": "idle", "p": 0, "curg": null}, {"id": 1, "status": "running", "p": 1, "curg": 3}, {"id": 2, "status": "idle", "p": 2, "curg": null}], "global": [], "gs": [{"id": 1, "status": "done"}, {"id": 2, "status": "done"}, {"id": 3, "status": "running"}, {"id": 4, "status": "done"}, {"id": 5, "status": "runnable"}, {"id": 6, "status": "done"}, {"id": 7, "status": "runnable"}]}}, {"m": 1, "p": 1, "g": 3, "type": "run-done", "snapshot": {"ps": [{"id": 0, "status": "idle", "m": 0, "queue": [5, 7]}, {"id": 1, "status": "idle", "m": 1, "queue": []}, {"id": 2, "status": "idle", "m": 2, "queue": []}], "ms": [{"id": 0, "status": "idle", "p": 0, "curg": null}, {"id": 1, "status": "idle", "p": 1, "curg": null}, {"id": 2, "status": "idle", "p": 2, "curg": null}], "global": [], "gs": [{"id": 1, "status": "done"}, {"id": 2, "status": "done"}, {"id": 3, "status": "done"}, {"id": 4, "status": "done"}, {"id": 5, "status": "runnable"}, {"id": 6, "status": "done"}, {"id": 7, "status": "runnable"}]}}, {"p": 1, "parent": 3, "g": 8, "type": "spawn", "snapshot": {"ps": [{"id": 0, "status": "idle", "m": 0, "queue": [5, 7]}, {"id": 1, "status": "idle", "m": 1, "queue": [8]}, {"id": 2, "status": "idle", "m": 2, "queue": []}], "ms": [{"id": 0, "status": "idle", "p": 0, "curg": null}, {"id": 1, "status": "idle", "p": 1, "curg": null}, {"id": 2, "status": "idle", "p": 2, "curg": null}], "global": [], "gs": [{"id": 1, "status": "done"}, {"id": 2, "status": "done"}, {"id": 3, "status": "done"}, {"id": 4, "status": "done"}, {"id": 5, "status": "runnable"}, {"id": 6, "status": "done"}, {"id": 7, "status": "runnable"}, {"id": 8, "status": "runnable"}]}}, {"fromP": 1, "taken": [8], "m": 2, "p": 2, "g": 8, "type": "steal", "snapshot": {"ps": [{"id": 0, "status": "idle", "m": 0, "queue": [5, 7]}, {"id": 1, "status": "idle", "m": 1, "queue": []}, {"id": 2, "status": "running", "m": 2, "queue": []}], "ms": [{"id": 0, "status": "idle", "p": 0, "curg": null}, {"id": 1, "status": "idle", "p": 1, "curg": null}, {"id": 2, "status": "running", "p": 2, "curg": 8}], "global": [], "gs": [{"id": 1, "status": "done"}, {"id": 2, "status": "done"}, {"id": 3, "status": "done"}, {"id": 4, "status": "done"}, {"id": 5, "status": "runnable"}, {"id": 6, "status": "done"}, {"id": 7, "status": "runnable"}, {"id": 8, "status": "running"}]}}, {"m": 2, "p": 2, "g": 8, "type": "run-done", "snapshot": {"ps": [{"id": 0, "status": "idle", "m": 0, "queue": [5, 7]}, {"id": 1, "status": "idle", "m": 1, "queue": []}, {"id": 2, "status": "idle", "m": 2, "queue": []}], "ms": [{"id": 0, "status": "idle", "p": 0, "curg": null}, {"id": 1, "status": "idle", "p": 1, "curg": null}, {"id": 2, "status": "idle", "p": 2, "curg": null}], "global": [], "gs": [{"id": 1, "status": "done"}, {"id": 2, "status": "done"}, {"id": 3, "status": "done"}, {"id": 4, "status": "done"}, {"id": 5, "status": "runnable"}, {"id": 6, "status": "done"}, {"id": 7, "status": "runnable"}, {"id": 8, "status": "done"}]}}, {"source": "local", "m": 0, "p": 0, "g": 5, "type": "run-start", "snapshot": {"ps": [{"id": 0, "status": "running", "m": 0, "queue": [7]}, {"id": 1, "status": "idle", "m": 1, "queue": []}, {"id": 2, "status": "idle", "m": 2, "queue": []}], "ms": [{"id": 0, "status": "running", "p": 0, "curg": 5}, {"id": 1, "status": "idle", "p": 1, "curg": null}, {"id": 2, "status": "idle", "p": 2, "curg": null}], "global": [], "gs": [{"id": 1, "status": "done"}, {"id": 2, "status": "done"}, {"id": 3, "status": "done"}, {"id": 4, "status": "done"}, {"id": 5, "status": "running"}, {"id": 6, "status": "done"}, {"id": 7, "status": "runnable"}, {"id": 8, "status": "done"}]}}, {"m": 0, "p": 0, "g": 5, "type": "run-done", "snapshot": {"ps": [{"id": 0, "status": "idle", "m": 0, "queue": [7]}, {"id": 1, "status": "idle", "m": 1, "queue": []}, {"id": 2, "status": "idle", "m": 2, "queue": []}], "ms": [{"id": 0, "status": "idle", "p": 0, "curg": null}, {"id": 1, "status": "idle", "p": 1, "curg": null}, {"id": 2, "status": "idle", "p": 2, "curg": null}], "global": [], "gs": [{"id": 1, "status": "done"}, {"id": 2, "status": "done"}, {"id": 3, "status": "done"}, {"id": 4, "status": "done"}, {"id": 5, "status": "done"}, {"id": 6, "status": "done"}, {"id": 7, "status": "runnable"}, {"id": 8, "status": "done"}]}}, {"fromP": 0, "taken": [7], "m": 1, "p": 1, "g": 7, "type": "steal", "snapshot": {"ps": [{"id": 0, "status": "idle", "m": 0, "queue": []}, {"id": 1, "status": "running", "m": 1, "queue": []}, {"id": 2, "status": "idle", "m": 2, "queue": []}], "ms": [{"id": 0, "status": "idle", "p": 0, "curg": null}, {"id": 1, "status": "running", "p": 1, "curg": 7}, {"id": 2, "status": "idle", "p": 2, "curg": null}], "global": [], "gs": [{"id": 1, "status": "done"}, {"id": 2, "status": "done"}, {"id": 3, "status": "done"}, {"id": 4, "status": "done"}, {"id": 5, "status": "done"}, {"id": 6, "status": "done"}, {"id": 7, "status": "running"}, {"id": 8, "status": "done"}]}}, {"m": 1, "p": 1, "g": 7, "type": "syscall-enter", "snapshot": {"ps": [{"id": 0, "status": "idle", "m": 0, "queue": []}, {"id": 1, "status": "running", "m": 1, "queue": []}, {"id": 2, "status": "idle", "m": 2, "queue": []}], "ms": [{"id": 0, "status": "idle", "p": 0, "curg": null}, {"id": 1, "status": "running", "p": 1, "curg": 7}, {"id": 2, "status": "idle", "p": 2, "curg": null}], "global": [], "gs": [{"id": 1, "status": "done"}, {"id": 2, "status": "done"}, {"id": 3, "status": "done"}, {"id": 4, "status": "done"}, {"id": 5, "status": "done"}, {"id": 6, "status": "done"}, {"id": 7, "status": "running"}, {"id": 8, "status": "done"}]}}, {"m": 2, "p": 2, "type": "p-idle", "snapshot": {"ps": [{"id": 0, "status": "idle", "m": 0, "queue": []}, {"id": 1, "status": "syscall", "m": 1, "queue": []}, {"id": 2, "status": "idle", "m": 2, "queue": []}], "ms": [{"id": 0, "status": "idle", "p": 0, "curg": null}, {"id": 1, "status": "syscall", "p": 1, "curg": 7}, {"id": 2, "status": "idle", "p": 2, "curg": null}], "global": [], "gs": [{"id": 1, "status": "done"}, {"id": 2, "status": "done"}, {"id": 3, "status": "done"}, {"id": 4, "status": "done"}, {"id": 5, "status": "done"}, {"id": 6, "status": "done"}, {"id": 7, "status": "syscall"}, {"id": 8, "status": "done"}]}}, {"checked": [1], "retaken": [], "type": "sysmon-tick", "snapshot": {"ps": [{"id": 0, "status": "idle", "m": 0, "queue": []}, {"id": 1, "status": "syscall", "m": 1, "queue": []}, {"id": 2, "status": "idle", "m": 2, "queue": []}], "ms": [{"id": 0, "status": "idle", "p": 0, "curg": null}, {"id": 1, "status": "syscall", "p": 1, "curg": 7}, {"id": 2, "status": "idle", "p": 2, "curg": null}], "global": [], "gs": [{"id": 1, "status": "done"}, {"id": 2, "status": "done"}, {"id": 3, "status": "done"}, {"id": 4, "status": "done"}, {"id": 5, "status": "done"}, {"id": 6, "status": "done"}, {"id": 7, "status": "syscall"}, {"id": 8, "status": "done"}]}}, {"m": 0, "p": 0, "type": "p-idle", "snapshot": {"ps": [{"id": 0, "status": "idle", "m": 0, "queue": []}, {"id": 1, "status": "syscall", "m": 1, "queue": []}, {"id": 2, "status": "idle", "m": 2, "queue": []}], "ms": [{"id": 0, "status": "idle", "p": 0, "curg": null}, {"id": 1, "status": "syscall", "p": 1, "curg": 7}, {"id": 2, "status": "idle", "p": 2, "curg": null}], "global": [], "gs": [{"id": 1, "status": "done"}, {"id": 2, "status": "done"}, {"id": 3, "status": "done"}, {"id": 4, "status": "done"}, {"id": 5, "status": "done"}, {"id": 6, "status": "done"}, {"id": 7, "status": "syscall"}, {"id": 8, "status": "done"}]}}, {"m": 2, "p": 2, "type": "p-idle", "snapshot": {"ps": [{"id": 0, "status": "idle", "m": 0, "queue": []}, {"id": 1, "status": "syscall", "m": 1, "queue": []}, {"id": 2, "status": "idle", "m": 2, "queue": []}], "ms": [{"id": 0, "status": "idle", "p": 0, "curg": null}, {"id": 1, "status": "syscall", "p": 1, "curg": 7}, {"id": 2, "status": "idle", "p": 2, "curg": null}], "global": [], "gs": [{"id": 1, "status": "done"}, {"id": 2, "status": "done"}, {"id": 3, "status": "done"}, {"id": 4, "status": "done"}, {"id": 5, "status": "done"}, {"id": 6, "status": "done"}, {"id": 7, "status": "syscall"}, {"id": 8, "status": "done"}]}}, {"checked": [1], "retaken": [{"p": 1, "oldM": 1, "newM": 3}], "type": "sysmon-tick", "snapshot": {"ps": [{"id": 0, "status": "idle", "m": 0, "queue": []}, {"id": 1, "status": "idle", "m": 3, "queue": []}, {"id": 2, "status": "idle", "m": 2, "queue": []}], "ms": [{"id": 0, "status": "idle", "p": 0, "curg": null}, {"id": 1, "status": "syscall", "p": null, "curg": 7}, {"id": 2, "status": "idle", "p": 2, "curg": null}, {"id": 3, "status": "idle", "p": 1, "curg": null}], "global": [], "gs": [{"id": 1, "status": "done"}, {"id": 2, "status": "done"}, {"id": 3, "status": "done"}, {"id": 4, "status": "done"}, {"id": 5, "status": "done"}, {"id": 6, "status": "done"}, {"id": 7, "status": "syscall"}, {"id": 8, "status": "done"}]}}, {"m": 1, "g": 7, "reacquiredP": null, "type": "syscall-exit", "snapshot": {"ps": [{"id": 0, "status": "idle", "m": 0, "queue": []}, {"id": 1, "status": "idle", "m": 3, "queue": []}, {"id": 2, "status": "idle", "m": 2, "queue": []}], "ms": [{"id": 0, "status": "idle", "p": 0, "curg": null}, {"id": 1, "status": "parked", "p": null, "curg": null}, {"id": 2, "status": "idle", "p": 2, "curg": null}, {"id": 3, "status": "idle", "p": 1, "curg": null}], "global": [7], "gs": [{"id": 1, "status": "done"}, {"id": 2, "status": "done"}, {"id": 3, "status": "done"}, {"id": 4, "status": "done"}, {"id": 5, "status": "done"}, {"id": 6, "status": "done"}, {"id": 7, "status": "runnable"}, {"id": 8, "status": "done"}]}}, {"g": 7, "dest": "global", "type": "requeue-after-syscall", "snapshot": {"ps": [{"id": 0, "status": "idle", "m": 0, "queue": []}, {"id": 1, "status": "idle", "m": 3, "queue": []}, {"id": 2, "status": "idle", "m": 2, "queue": []}], "ms": [{"id": 0, "status": "idle", "p": 0, "curg": null}, {"id": 1, "status": "parked", "p": null, "curg": null}, {"id": 2, "status": "idle", "p": 2, "curg": null}, {"id": 3, "status": "idle", "p": 1, "curg": null}], "global": [7], "gs": [{"id": 1, "status": "done"}, {"id": 2, "status": "done"}, {"id": 3, "status": "done"}, {"id": 4, "status": "done"}, {"id": 5, "status": "done"}, {"id": 6, "status": "done"}, {"id": 7, "status": "runnable"}, {"id": 8, "status": "done"}]}}, {"m": 0, "p": 0, "g": 7, "type": "global-get", "snapshot": {"ps": [{"id": 0, "status": "running", "m": 0, "queue": []}, {"id": 1, "status": "idle", "m": 3, "queue": []}, {"id": 2, "status": "idle", "m": 2, "queue": []}], "ms": [{"id": 0, "status": "running", "p": 0, "curg": 7}, {"id": 1, "status": "parked", "p": null, "curg": null}, {"id": 2, "status": "idle", "p": 2, "curg": null}, {"id": 3, "status": "idle", "p": 1, "curg": null}], "global": [], "gs": [{"id": 1, "status": "done"}, {"id": 2, "status": "done"}, {"id": 3, "status": "done"}, {"id": 4, "status": "done"}, {"id": 5, "status": "done"}, {"id": 6, "status": "done"}, {"id": 7, "status": "running"}, {"id": 8, "status": "done"}]}}, {"m": 0, "p": 0, "g": 7, "type": "run-done", "snapshot": {"ps": [{"id": 0, "status": "idle", "m": 0, "queue": []}, {"id": 1, "status": "idle", "m": 3, "queue": []}, {"id": 2, "status": "idle", "m": 2, "queue": []}], "ms": [{"id": 0, "status": "idle", "p": 0, "curg": null}, {"id": 1, "status": "parked", "p": null, "curg": null}, {"id": 2, "status": "idle", "p": 2, "curg": null}, {"id": 3, "status": "idle", "p": 1, "curg": null}], "global": [], "gs": [{"id": 1, "status": "done"}, {"id": 2, "status": "done"}, {"id": 3, "status": "done"}, {"id": 4, "status": "done"}, {"id": 5, "status": "done"}, {"id": 6, "status": "done"}, {"id": 7, "status": "done"}, {"id": 8, "status": "done"}]}}, {"m": 2, "p": 2, "type": "p-idle", "snapshot": {"ps": [{"id": 0, "status": "idle", "m": 0, "queue": []}, {"id": 1, "status": "idle", "m": 3, "queue": []}, {"id": 2, "status": "idle", "m": 2, "queue": []}], "ms": [{"id": 0, "status": "idle", "p": 0, "curg": null}, {"id": 1, "status": "parked", "p": null, "curg": null}, {"id": 2, "status": "idle", "p": 2, "curg": null}, {"id": 3, "status": "idle", "p": 1, "curg": null}], "global": [], "gs": [{"id": 1, "status": "done"}, {"id": 2, "status": "done"}, {"id": 3, "status": "done"}, {"id": 4, "status": "done"}, {"id": 5, "status": "done"}, {"id": 6, "status": "done"}, {"id": 7, "status": "done"}, {"id": 8, "status": "done"}]}}, {"m": 3, "p": 1, "type": "p-idle", "snapshot": {"ps": [{"id": 0, "status": "idle", "m": 0, "queue": []}, {"id": 1, "status": "idle", "m": 3, "queue": []}, {"id": 2, "status": "idle", "m": 2, "queue": []}], "ms": [{"id": 0, "status": "idle", "p": 0, "curg": null}, {"id": 1, "status": "parked", "p": null, "curg": null}, {"id": 2, "status": "idle", "p": 2, "curg": null}, {"id": 3, "status": "idle", "p": 1, "curg": null}], "global": [], "gs": [{"id": 1, "status": "done"}, {"id": 2, "status": "done"}, {"id": 3, "status": "done"}, {"id": 4, "status": "done"}, {"id": 5, "status": "done"}, {"id": 6, "status": "done"}, {"id": 7, "status": "done"}, {"id": 8, "status": "done"}]}}, {"type": "all-done", "snapshot": {"ps": [{"id": 0, "status": "idle", "m": 0, "queue": []}, {"id": 1, "status": "idle", "m": 3, "queue": []}, {"id": 2, "status": "idle", "m": 2, "queue": []}], "ms": [{"id": 0, "status": "idle", "p": 0, "curg": null}, {"id": 1, "status": "parked", "p": null, "curg": null}, {"id": 2, "status": "idle", "p": 2, "curg": null}, {"id": 3, "status": "idle", "p": 1, "curg": null}], "global": [], "gs": [{"id": 1, "status": "done"}, {"id": 2, "status": "done"}, {"id": 3, "status": "done"}, {"id": 4, "status": "done"}, {"id": 5, "status": "done"}, {"id": 6, "status": "done"}, {"id": 7, "status": "done"}, {"id": 8, "status": "done"}]}}];
+var idx = -1;
+var playTimer = null;
+
+var pGrid = document.getElementById('pGrid');
+var globalTray = document.getElementById('globalTray');
+var simLog = document.getElementById('simLog');
+
+function buildPGrid(numP){
+  for(var i=0;i<numP;i++){
+    var card = document.createElement('div');
+    card.className = 'p-card';
+    card.id = 'pcard-'+i;
+    card.innerHTML =
+      '<div class="p-card-head"><span class="p-name">P' + i + '</span><span class="p-status" id="pstatus-'+i+'">idle</span></div>' +
+      '<div class="m-slot" id="mslot-'+i+'"><span class="m-chip" id="mchip-'+i+'">M?</span><span id="mlabel-'+i+'">未绑定</span></div>' +
+      '<div class="running-slot" id="running-'+i+'">空闲</div>' +
+      '<div class="queue-label">本地队列</div>' +
+      '<div class="queue-row" id="queue-'+i+'"></div>';
+    pGrid.appendChild(card);
+  }
+}
+
+function gChip(gid, tiny){
+  var d = document.createElement('div');
+  d.className = 'g-chip' + (tiny ? ' tiny' : '');
+  d.textContent = 'G' + gid;
+  return d;
+}
+
+function render(){
+  var snap = idx >= 0 ? EVENTS[idx].snapshot : EVENTS[0] ? initialSnapshot() : null;
+  if(!snap) return;
+
+  snap.ps.forEach(function(p){
+    var card = document.getElementById('pcard-'+p.id);
+    card.dataset.status = p.status;
+    document.getElementById('pstatus-'+p.id).textContent = p.status;
+    var m = snap.ms.find(function(mm){ return mm.id === p.m; });
+    document.getElementById('mchip-'+p.id).textContent = 'M'+p.m;
+    document.getElementById('mlabel-'+p.id).textContent = m ? ('M' + m.id + ' · ' + m.status) : '未绑定';
+    var runningEl = document.getElementById('running-'+p.id);
+    runningEl.innerHTML = '';
+    if(m && m.curg !== null && m.curg !== undefined){
+      var chip = gChip(m.curg, true);
+      runningEl.appendChild(chip);
+      var txt = document.createElement('span');
+      txt.textContent = m.status === 'syscall' ? '陷入系统调用中' : '正在运行';
+      runningEl.appendChild(txt);
+    } else {
+      runningEl.textContent = '空闲';
+    }
+    var qrow = document.getElementById('queue-'+p.id);
+    qrow.innerHTML = '';
+    p.queue.forEach(function(gid){ qrow.appendChild(gChip(gid, false)); });
+    if(p.queue.length === 0){
+      var empty = document.createElement('span');
+      empty.style.cssText = 'font-size:12px;color:var(--ink-faint);font-family:ui-monospace,monospace;';
+      empty.textContent = '(空)';
+      qrow.appendChild(empty);
+    }
+  });
+
+  globalTray.querySelectorAll('.g-chip').forEach(function(el){ el.remove(); });
+  snap.global.forEach(function(gid){ globalTray.appendChild(gChip(gid, false)); });
+
+  var sysmonActive = idx >= 0 && (EVENTS[idx].type === 'sysmon-tick');
+  document.getElementById('sysmonStrip').dataset.active = sysmonActive ? 'true' : 'false';
+
+  var doneList = snap.gs.filter(function(g){ return g.status === 'done'; }).map(function(g){ return g.id; });
+  document.getElementById('sysmonText').textContent = sysmonActive
+    ? 'sysmon:正在巡查……'
+    : ('已完成 ' + doneList.length + ' / ' + snap.gs.length + ' 个 goroutine');
+
+  var formulaEl = document.getElementById('simFormula');
+  var descEl = document.getElementById('simDesc');
+  if(idx < 0){
+    formulaEl.textContent = '—';
+    descEl.innerHTML = '点击"下一步"或"播放",从头看这 8 个 goroutine 怎么被调度完的。';
+  } else {
+    var e = EVENTS[idx];
+    formulaEl.textContent = formulaFor(e);
+    descEl.innerHTML = descFor(e);
+  }
+
+  document.getElementById('simProgress').textContent = (idx+1) + ' / ' + EVENTS.length;
+  document.getElementById('btnPrev').disabled = idx < 0;
+  document.getElementById('btnNext').disabled = idx >= EVENTS.length - 1;
+
+  var items = simLog.children;
+  for(var i=0;i<items.length;i++){
+    items[i].setAttribute('data-active', i === idx ? 'true' : 'false');
+  }
+  if(idx >= 0 && items[idx]) items[idx].scrollIntoView({block:'nearest'});
+}
+
+function initialSnapshot(){
+  return EVENTS.length ? clonePreState(EVENTS[0].snapshot) : null;
+}
+function clonePreState(s){
+  return {
+    ps: s.ps.map(function(p){ return {id:p.id, status:'idle', m:p.m, queue: p.id===0 ? [1,2,3,4,5,7] : []}; }),
+    ms: s.ms.map(function(m){ return {id:m.id, status:'idle', p:m.p, curg:null}; }),
+    global: [6],
+    gs: [1,2,3,4,5,6,7].map(function(id){ return {id:id, status:'runnable'}; }),
+  };
+}
+
+function formulaFor(e){
+  if(e.type === 'run-start') return (e.source==='local' ? 'runqget(P'+e.p+')' : e.source) + ' → M' + e.m + ' 执行 G' + e.g;
+  if(e.type === 'global-get') return 'globrunqget() → M' + e.m + '(P' + e.p + ')执行 G' + e.g;
+  if(e.type === 'steal') return 'runqsteal(P' + e.p + ', P' + e.fromP + ') → 偷到 [' + e.taken.map(function(g){return 'G'+g;}).join(', ') + ']';
+  if(e.type === 'run-done') return 'G' + e.g + ' 执行完毕,返回 findRunnable() 循环';
+  if(e.type === 'spawn') return 'go func() → 新建 G' + e.g + ',挂到 P' + e.p + ' 本地队列';
+  if(e.type === 'syscall-enter') return 'entersyscall():G' + e.g + ' 阻塞,P' + e.p + ' 暂时不释放';
+  if(e.type === 'sysmon-tick') return 'sysmon 巡查:P' + e.checked.join(',P') + ' 处于 _Psyscall';
+  if(e.type === 'syscall-exit') return 'exitsyscall():M' + e.m + ' 尝试拿回原来的 P';
+  if(e.type === 'requeue-after-syscall') return 'globrunqput(G' + e.g + ')';
+  if(e.type === 'p-idle') return 'P' + e.p + ' 本地队列、全局队列、可偷的 P 都为空';
+  if(e.type === 'all-done') return '8 个 goroutine 全部完成';
+  return '—';
+}
+
+function descFor(e){
+  if(e.type === 'run-start') return 'M<b>'+e.m+'</b> 从自己 P<b>'+e.p+'</b> 的本地队列头部取出 <b>G'+e.g+'</b> 直接执行,全程不需要加锁。';
+  if(e.type === 'global-get') return 'P<b>'+e.p+'</b> 本地队列空了,去全局队列(需要加锁)捞了一个 <b>G'+e.g+'</b> 回来执行。';
+  if(e.type === 'steal') return 'P<b>'+e.p+'</b> 自己没活干,也没全局队列,于是找 P<b>'+e.fromP+'</b> 打劫,一次性偷走它一半的本地队列(<b>'+e.taken.map(function(g){return 'G'+g;}).join(', ')+'</b>),从中取第一个 <b>G'+e.g+'</b> 开始执行,剩下的留在自己本地队列。';
+  if(e.type === 'run-done') return 'G<b>'+e.g+'</b> 正常运行结束,M<b>'+e.m+'</b> 回到 schedule() 循环,继续找下一个可运行的 goroutine。';
+  if(e.type === 'spawn') return 'G'+e.parent+' 在执行过程中调用了 <b>go func()</b>,新创建的 G<b>'+e.g+'</b> 被放进了创建者当前所在 P<b>'+e.p+'</b> 的本地队列——新 goroutine 默认优先在"父级"所在的 P 上排队,这样局部性更好。';
+  if(e.type === 'syscall-enter') return 'G<b>'+e.g+'</b> 发起了一次阻塞系统调用。注意:P<b>'+e.p+'</b> <b>没有</b>立刻被释放——运行时乐观地假设这次系统调用很快会返回,继续把 P 挂在这个 M 上,只是把 P 的状态标记为 <b>_Psyscall</b>。';
+  if(e.type === 'sysmon-tick'){
+    if(e.retaken.length){
+      var r = e.retaken[0];
+      return 'sysmon 再次巡查,发现 P<b>'+r.p+'</b> <b>连续第二次</b>还停在 _Psyscall——判定这次系统调用"赌输了",强制把 P<b>'+r.p+'</b> 从 M<b>'+r.oldM+'</b> 手里收回,转交给 M<b>'+r.newM+'</b>(闲置线程或新建线程)继续工作。原来的 M<b>'+r.oldM+'</b> 对此一无所知,仍在内核里等待系统调用返回。';
+    }
+    return 'sysmon(独立于任何 P、专门跑在自己线程上的后台监控)醒来做周期性巡查,发现 P<b>'+e.checked.join(',P')+'</b> 处于系统调用状态——这是第一次看到,还不能判断是"快返回"还是"卡住了",先记录一个时间戳,再等下一轮巡查确认。';
+  }
+  if(e.type === 'syscall-exit') return '阻塞的系统调用终于返回,M<b>'+e.m+'</b> 尝试用 <b>exitsyscall()</b> 拿回它原来的 P。' + (e.reacquiredP !== null && e.reacquiredP !== undefined ? '这次 P 还没被别人抢走,顺利拿回,G'+e.g+' 就地继续跑完。' : '但 P 已经在上一步被 sysmon 转交给了别的 M——<b>拿不回来了</b>。');
+  if(e.type === 'requeue-after-syscall') return '既然拿不回原来的 P,运行时只能把刚从系统调用里回来的 G<b>'+e.g+'</b> 当作一个全新的可运行 goroutine,扔进<b>全局队列</b>,等任意一个 P 有空来捞走它;这个 M 自己则转入 parked 状态,等待被复用。';
+  if(e.type === 'p-idle') return 'P<b>'+e.p+'</b> 本地队列空、全局队列空、能偷的 P 也没有可偷的了,这一轮 M<b>'+e.m+'</b> 找不到活干(真实调度器这里会让 M 自旋一小段时间,再考虑真正休眠)。';
+  if(e.type === 'all-done') return '全部 8 个 goroutine 执行完毕,所有本地队列和全局队列都清空了。';
+  return '';
+}
+
+function labelForEvent(e){
+  if(e.type === 'run-start') return (e.source==='local'?'本地取任务':'') + ' M'+e.m+' 运行 G'+e.g;
+  if(e.type === 'global-get') return '从全局队列取 G'+e.g+' → M'+e.m;
+  if(e.type === 'steal') return 'P'+e.p+' 偷 P'+e.fromP+' 的队列';
+  if(e.type === 'run-done') return 'G'+e.g+' 完成';
+  if(e.type === 'spawn') return '新建 G'+e.g;
+  if(e.type === 'syscall-enter') return 'G'+e.g+' 进入系统调用';
+  if(e.type === 'sysmon-tick') return e.retaken.length ? 'sysmon 强制收回 P' : 'sysmon 巡查';
+  if(e.type === 'syscall-exit') return 'M'+e.m+' 尝试拿回 P';
+  if(e.type === 'requeue-after-syscall') return 'G'+e.g+' 回到全局队列';
+  if(e.type === 'p-idle') return 'P'+e.p+' 空闲';
+  if(e.type === 'all-done') return '全部完成';
+  return '';
+}
+
+function buildLog(){
+  simLog.innerHTML = '';
+  EVENTS.forEach(function(e,i){
+    var item = document.createElement('div');
+    item.className = 'log-item';
+    item.setAttribute('data-active','false');
+    var idxSpan = document.createElement('span');
+    idxSpan.className = 'log-idx';
+    idxSpan.textContent = i+1;
+    var txt = document.createElement('span');
+    txt.textContent = labelForEvent(e);
+    item.appendChild(idxSpan); item.appendChild(txt);
+    item.addEventListener('click', function(ii){ return function(){ stopPlay(); idx = ii; render(); }; }(i));
+    simLog.appendChild(item);
+  });
+}
+
+function goTo(i){
+  idx = Math.max(-1, Math.min(EVENTS.length-1, i));
+  render();
+}
+function stopPlay(){
+  if(playTimer){ clearInterval(playTimer); playTimer = null; }
+  document.getElementById('btnPlay').textContent = '播放';
+}
+document.getElementById('btnNext').addEventListener('click', function(){ stopPlay(); goTo(idx+1); });
+document.getElementById('btnPrev').addEventListener('click', function(){ stopPlay(); goTo(idx-1); });
+document.getElementById('btnReset').addEventListener('click', function(){ stopPlay(); goTo(-1); });
+document.getElementById('btnPlay').addEventListener('click', function(){
+  if(playTimer){ stopPlay(); return; }
+  if(idx >= EVENTS.length - 1) goTo(-1);
+  document.getElementById('btnPlay').textContent = '暂停';
+  var speed = parseInt(document.getElementById('simSpeed').value, 10);
+  playTimer = setInterval(function(){
+    if(idx >= EVENTS.length - 1){ stopPlay(); return; }
+    goTo(idx+1);
+  }, speed);
+});
+document.getElementById('simSpeed').addEventListener('change', function(){
+  if(playTimer){ stopPlay(); document.getElementById('btnPlay').click(); }
+});
+
+buildPGrid(3);
+buildLog();
+goTo(-1);
+</script>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+</body>
+</html>

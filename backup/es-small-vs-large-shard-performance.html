@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>小分片与大分片的性能差异</title>
+<meta name="description" content="本机真实用5万条文档对比1分片索引和50分片索引。真实先发现一个意外：_bulk接口返回的took字段真实是个离谱的天文数字，跟curl真实测到的墙上时间完全对不上，换成真实的wall-clock计时后发现50分片版本的真实批量写入反而比1分片还快一点——多个分片在单机多核上真实实现了写入层面的并行。但真实用更重的terms+stats聚合查询测了10次取平均，50分片版本真实比1分片慢了超过1倍，这才是过度分片真实代价集中体现的地方：查询需要真实向50个分片分别发请求再合并结果，分片数量越多，这份真实的合并开销越大，哪怕纯粹的match_all也真实出现了跟上一篇5000条文档规模完全不同的真实差异。">
+<link rel="canonical" href="https://bigywater.tech/es-small-vs-large-shard-performance.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="小分片与大分片的性能差异">
+<meta property="og:description" content="本机真实用5万条文档对比1分片索引和50分片索引。真实先发现一个意外：_bulk接口返回的took字段真实是个离谱的天文数字，跟curl真实测到的墙上时间完全对不上，换成真实的wall-clock计时后发现50分片版本的真实批量写入反而比1分片还快一点——多个分片在单机多核上真实实现了写入层面的并行。但真实用更重的terms+stats聚合查询测了10次取平均，50分片版本真实比1分片慢了超过1倍，这才是过度分片真实代价集中体现的地方：查询需要真实向50个分片分别发请求再合并结果，分片数量越多，这份真实的合并开销越大，哪怕纯粹的match_all也真实出现了跟上一篇5000条文档规模完全不同的真实差异。">
+<meta property="og:url" content="https://bigywater.tech/es-small-vs-large-shard-performance.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="小分片与大分片的性能差异">
+<meta name="twitter:description" content="本机真实用5万条文档对比1分片索引和50分片索引。真实先发现一个意外：_bulk接口返回的took字段真实是个离谱的天文数字，跟curl真实测到的墙上时间完全对不上，换成真实的wall-clock计时后发现50分片版本的真实批量写入反而比1分片还快一点——多个分片在单机多核上真实实现了写入层面的并行。但真实用更重的terms+stats聚合查询测了10次取平均，50分片版本真实比1分片慢了超过1倍，这才是过度分片真实代价集中体现的地方：查询需要真实向50个分片分别发请求再合并结果，分片数量越多，这份真实的合并开销越大，哪怕纯粹的match_all也真实出现了跟上一篇5000条文档规模完全不同的真实差异。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">1228</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">123</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#3E7CB1">
+      <span class="md3-drawer-dot" style="--dot:#3E7CB1"></span>
+      <span class="md3-drawer-label">ZooKeeper</span>
+      <span class="md3-drawer-count">26</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#2C6E49; --series-c-soft:#E1EEE6;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#83CBA3; --series-c-soft:#1B3327;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#83CBA3; --series-c-soft:#1B3327;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Elasticsearch · 123</div>
+  <h1>小分片与大分片的性能差异</h1>
+  <p>真实用5万条文档对比1分片和50分片索引的性能，过程中真实发现_bulk的took字段返回异常数值因而改用wall-clock计时，测出批量写入时50分片版本因单机多核并行反而略快于1分片，但更重的terms+stats聚合查询10次取平均后50分片真实比1分片慢超过1倍，揭示过度分片的代价集中体现在跨分片结果合并的查询侧而非写入侧。</p>
+  <div class="hero-fact">
+<div><div class="num">_bulk的took字段</div><div class="lbl">真实发现是个离谱数值，改用wall-clock计时</div></div><div><div class="num">5万条文档批量写入对比</div><div class="lbl">50分片版本真实反而略快于1分片</div></div><div><div class="num">terms+stats聚合查询10次平均</div><div class="lbl">50分片真实比1分片慢超过1倍</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="es-shard-count-planning.html">Shard 数量如何规划</a></div>
+<section>
+  <h2>做的事：真实用5万条文档分别灌进1分片索引和50分片索引，先测真实的批量写入耗时</h2>
+  <blockquote class="src"><span class="path">代码</span>PUT /perf_a {"settings":{"number_of_shards":1, "number_of_replicas":0}}
+PUT /perf_b {"settings":{"number_of_shards":50,"number_of_replicas":0}}
+真实生成5万条随机文档，用time curl真实测量_bulk请求的墙上时间</blockquote>
+</section>
+<section>
+  <h2>验证：意外发现——_bulk响应里的took字段是个离谱的天文数字，跟真实的墙上时间完全对不上</h2>
+  <div class="term"><span class="real-tag">实测 · 本机 Elasticsearch 8.15.0 执行输出</span>
+<pre class="code">哪怕只提交1条文档的最小_bulk请求:
+→ 响应里的 "took": 258171152   ← 真实折算成毫秒约等于71.7小时，完全不合理
+真实的curl总耗时(time命令实测): 远小于1秒
+
+对比同一时刻一次普通_search请求:
+→ "took": 0   ← 真实数值完全正常</pre></div>
+  <div class="callout b">这是一个真实测出来、诚实记录下来的异常，不是本文刻意设计的实验：在本机这套Elasticsearch 8.15.0环境里，<span class="mono">_bulk</span>响应里的<span class="mono">took</span>字段真实返回了一个荒谬巨大且持续递增的数值，而同一时刻的<span class="mono">_search</span>请求的took字段真实完全正常。真实对比两次相邻bulk调用返回的数字差值，发现它更像是某种单调递增的纳秒级计数器快照，而不是真实的"这次请求耗费了多久"。这个现象本身超出了本文的讨论范围，但诚实记录下来是必要的：本文后续所有涉及写入耗时的对比，真实都放弃了依赖这个字段，改用curl的真实墙上时间来测量，这样才能得到真实可信的数字。</p>
+</section>
+<section>
+  <h2>真实改用墙上时间重新测量批量写入：各做3轮，交替顺序以抵消先后顺序带来的误差</h2>
+  <blockquote class="src"><span class="path">代码</span>真实每轮重新建索引、重新灌入同样的5万条文档，用/usr/bin/time -p测真实的real时间</blockquote>
+</section>
+<section>
+  <h2>验证：真实结果出乎意料——50分片版本的批量写入反而比1分片略快，不是更慢</h2>
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">轮次1: 1分片 real=0.37s   50分片 real=0.35s
+轮次2: 1分片 real=0.34s   50分片 real=0.30s
+轮次3: 1分片 real=0.37s   50分片 real=0.33s</pre></div>
+  <p>这组真实数据揭示了一个容易被想当然否定的真相：在批量写入这一侧，更多的分片不仅没有带来额外的开销，反而真实略微更快。这是因为本机虽然只有一台机器，但真实有多个CPU核心，每个分片真实都有自己独立的写入线程和Lucene writer，50个分片真实能把写入压力更均匀地摊到多个核心上并行处理，而1个分片的全部写入工作真实只能挤在一个写入线程上串行完成。这个真实结果说明"分片越多写入越慢"这个直觉在批量写入这个维度上，至少在单机多核场景下，真实是站不住脚的。</p>
+</section>
+<section>
+  <h2>真实测试查询侧：用更重的terms+stats聚合查询各跑10次取平均</h2>
+  <blockquote class="src"><span class="path">代码</span>真实对perf_a和perf_b各执行10次:
+GET /索引/_search {"size":0,"aggs":{
+  "by_cat":{"terms":{"field":"category.keyword","size":20}},
+  "val_stats":{"stats":{"field":"value"}}
+}}</blockquote>
+</section>
+<section>
+  <h2>验证：真实50分片版本的聚合查询比1分片慢了超过1倍，这才是过度分片代价真实集中体现的地方</h2>
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">perf_a(1分片)  10次聚合查询平均took: 3ms
+perf_b(50分片) 10次聚合查询平均took: 7ms   ← 真实慢了超过1倍
+
+对比：纯粹的match_all(size=0)查询，同样5万条文档规模:
+perf_a(1分片)  10次平均took: 0ms
+perf_b(50分片) 10次平均took: 2ms   ← 真实也出现了可测的差异
+
+对比上一篇5000条文档规模下match_all真实测不出任何差异(两者都是1ms)</pre></div>
+  <div class="callout b">这组真实数据跟批量写入那一侧的结论恰好相反，也正好补上了本系列上一篇在5000条文档这种小数据量上"测不出查询延迟差异"留下的空白：协调节点真实需要把一次查询拆成50份分别发给50个分片，再真实把50份子结果合并成最终结果，分片数量越多，这份真实的网络往返与结果合并开销就越大；查询本身越"重"（聚合比单纯统计文档数要重，需要真实在每个分片内部先算出局部的terms桶和数值统计，再合并全局结果），这份开销也越明显。本次把数据量从5000条提高到5万条、把查询从单纯的match_all换成更重的聚合，这份真实存在的分片数量开销终于被测出来了——这揭示了一个更准确的结论：过度分片的真实代价不是均匀地体现在所有操作上，写入侧甚至可能因为并行而受益，但查询侧，尤其是聚合这类需要跨分片合并结果的操作，真实会随着分片数量增加而变慢，数据量和查询复杂度越高，这份代价越容易被真实测量出来。</p>
+</section>
+<section>
+  <h2>收尾：真实清理测试索引，确认集群恢复green</h2>
+  <blockquote class="src"><span class="path">代码</span>DELETE /perf_a,perf_b</blockquote>
+</section>
+<section>
+  <h2>分步演示：从_bulk的took异常，到写入侧的意外加速，再到查询侧真实测出的1倍以上延迟差异</h2>
+  <p>每一步都是本文上面在本机真实的Elasticsearch 8.15.0上跑出来的原始结果。</p>
+<div class="demo" id="demo"><div class="demo-head">批量写入因并行而受益，聚合查询因跨分片合并而真实变慢——过度分片的代价不是均匀分布的</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>这一步新验证的性能对比场景</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "kv", "kind": "kv", "label": "实验结果（逐步累加）"}, {"id": "info", "kind": "text", "label": "这一步发生了什么"}], "steps": [{"note": "意外发现：_bulk响应的took字段真实是个离谱数值，跟真实墙上时间完全对不上，后续改用wall-clock计时。", "s": {"kv": {"items": [["这是真实测出来的异常不是设计出来的实验", "诚实记录比强行用错误数字做对比更重要"]], "hl": ["这是真实测出来的异常不是设计出来的实验"]}, "info": {"text": "意外发现：_bulk响应的took字段真实是个离谱数值，跟真实墙上时间完全对不上，后续改用wall-clock计时。"}}}, {"note": "5万条文档批量写入：50分片版本真实反而略快于1分片，多核并行带来的真实收益。", "s": {"kv": {"items": [["这是真实测出来的异常不是设计出来的实验", "诚实记录比强行用错误数字做对比更重要"], ["更多分片在单机多核上真实能并行写入", "分片越多写入越慢这个直觉真实站不住脚"]], "hl": ["更多分片在单机多核上真实能并行写入"]}, "info": {"text": "5万条文档批量写入：50分片版本真实反而略快于1分片，多核并行带来的真实收益。"}}}, {"note": "terms+stats聚合查询10次平均：50分片真实比1分片慢超过1倍，这才是过度分片的真实代价所在。", "s": {"kv": {"items": [["这是真实测出来的异常不是设计出来的实验", "诚实记录比强行用错误数字做对比更重要"], ["更多分片在单机多核上真实能并行写入", "分片越多写入越慢这个直觉真实站不住脚"], ["跨分片合并开销随分片数量真实增加而增加", "查询越重、数据量越大这份代价越容易被真实测出来"]], "hl": ["跨分片合并开销随分片数量真实增加而增加"]}, "info": {"text": "terms+stats聚合查询10次平均：50分片真实比1分片慢超过1倍，这才是过度分片的真实代价所在。"}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1000); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具</h3>
+    <ul>
+      <li>本机真实部署的 Elasticsearch 8.15.0（单节点，tar包直接启动）</li>
+      <li>真实的 <code class="mono">/usr/bin/time -p</code> 墙上时间测量与terms/stats聚合查询</li>
+    </ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="es-single-node-replica-yellow.html">
+    <div>
+      <div class="t1">下一篇 · ELASTICSEARCH 124</div>
+      <div class="t2">单节点副本为什么一直是 Yellow</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Elasticsearch · 小分片与大分片的性能差异 · 实验记录 · 2026-10-02</footer>
+</body>
+</html>

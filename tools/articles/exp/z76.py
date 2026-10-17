@@ -1,0 +1,30 @@
+import sys, os, time, json, re, subprocess; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from zkl import *
+tee('z76'); R = {}
+d = pki()
+subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'rogue.key', '-out', 'rogue.crt', '-days', '30', '-subj', '/CN=client1'], cwd=d, capture_output=True)
+subprocess.run(['openssl', 'pkcs12', '-export', '-in', 'rogue.crt', '-inkey', 'rogue.key', '-out', 'rogue.p12', '-name', 'rogue', '-passout', 'pass:changeit'], cwd=d, capture_output=True)
+def one(o, n=2): return ' | '.join(l.strip() for l in (o or '(无输出)').splitlines()[:n])[:170]
+c = lambda port, *cmds, **k: [one(x) for x in cli(port, *cmds, **k)]
+print('== 一:ssl.clientAuth=need(双向 TLS):没有客户端证书的连接')
+n = Node('z76', 7300, conf=tls_conf(d, 7301, client_auth='need', plain=False)); n.prepare(); n.start(wipe=False, wait=False); time.sleep(5)
+R['nocert'] = c(7301, 'ls /', jvm=tls_cli_jvm(d), timeout=30)[0]; print('  TLS 客户端不带证书 →', R['nocert'])
+R['cert_ok'] = c(7301, 'ls /', jvm=tls_cli_jvm(d, client='client1'), timeout=30)[0]; print('  带 client1 证书(CA 签发)→', R['cert_ok'])
+R['rogue'] = c(7301, 'ls /', jvm=tls_cli_jvm(d, client='rogue'), timeout=30)[0]; print('  带一张自签名、同样叫 CN=client1 的证书(不是我的 CA 签发)→', R['rogue'])
+print()
+print('== 二:证书的主题(DN)成为 ZooKeeper 里的身份(x509 认证):whoami')
+R['whoami1'] = c(7301, 'whoami', jvm=tls_cli_jvm(d, client='client1'), timeout=30, )[0] if False else cli(7301, 'whoami', jvm=tls_cli_jvm(d, client='client1'), timeout=30)[0].replace('\n', ' | ')[:150]; print('  client1 的 whoami →', R['whoami1'])
+R['whoami2'] = cli(7301, 'whoami', jvm=tls_cli_jvm(d, client='client2'), timeout=30)[0].replace('\n', ' | ')[:150]; print('  client2 的 whoami →', R['whoami2'])
+print()
+print('== 三:用 x509 ACL 按证书授权:client1 创建只允许 CN=client1 访问的节点')
+o = cli(7301, 'create /only-client1 secret x509:CN=client1:cdrwa', jvm=tls_cli_jvm(d, client='client1'), timeout=30)[0]; print('  client1 创建 /only-client1(ACL = x509:CN=client1:cdrwa)→', one(o)); R['create'] = one(o)
+R['get1'] = c(7301, 'get /only-client1', jvm=tls_cli_jvm(d, client='client1'), timeout=30)[0]; R['get2'] = c(7301, 'get /only-client1', jvm=tls_cli_jvm(d, client='client2'), timeout=30)[0]
+print('  client1 读 →', R['get1']); print('  client2 读 →', R['get2'])
+o = cli(7301, 'getAcl /only-client1', jvm=tls_cli_jvm(d, client='client1'), timeout=30)[0]; print('  getAcl →', one(o, 3)); R['acl'] = one(o, 3)
+n.stop()
+print()
+print('== 四:ssl.clientAuth=want:证书可有可无——带证书的被识别身份,不带的以匿名身份继续')
+m = Node('z76b', 7302, conf=tls_conf(d, 7303, client_auth='want', plain=False)); m.prepare(); m.start(wipe=False, wait=False); time.sleep(5)
+R['want_nocert'] = c(7303, 'ls /', jvm=tls_cli_jvm(d), timeout=30)[0]; print('  不带证书 →', R['want_nocert'])
+R['want_cert'] = cli(7303, 'whoami', jvm=tls_cli_jvm(d, client='client1'), timeout=30)[0].replace('\n', ' | ')[:150]; print('  带 client1 证书 whoami →', R['want_cert'])
+m.stop(); save('z76', R)

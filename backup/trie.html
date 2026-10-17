@@ -1,0 +1,608 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>字典树 Trie:公共前缀怎么只存一份</title>
+<meta name="description" content="插入 cat/car/card/care/dog 并做 search/startsWith 查询,公共前缀节点复用过程,与朴素集合/字符串扫描交叉验证。">
+<link rel="canonical" href="https://bigywater.tech/trie.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="字典树 Trie:公共前缀怎么只存一份">
+<meta property="og:description" content="插入 cat/car/card/care/dog 并做 search/startsWith 查询,公共前缀节点复用过程,与朴素集合/字符串扫描交叉验证。">
+<meta property="og:url" content="https://bigywater.tech/trie.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="字典树 Trie:公共前缀怎么只存一份">
+<meta name="twitter:description" content="插入 cat/car/card/care/dog 并做 search/startsWith 查询,公共前缀节点复用过程,与朴素集合/字符串扫描交叉验证。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F6F7F5; --surface:#FFFFFF; --surface-2:#ECEFE9;
+  --ink:#1C201A; --ink-soft:#4E5749; --ink-faint:#8A9280;
+  --line:#DEE4D8; --line-soft:#E9EEE4;
+  --accent-active:#B8681E; --accent-active-soft:#F7E7D3;
+  --accent-end:#2E7D5B; --accent-end-soft:#DCF0E6;
+  --accent-fail:#B0453A; --accent-fail-soft:#F6DEDA;
+  --shadow:0 1px 2px rgba(15,20,10,.06),0 8px 24px -12px rgba(15,20,10,.14);
+  --radius:10px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#12140F; --surface:#191B15; --surface-2:#21241C;
+    --ink:#E9EDE3; --ink-soft:#ABB49E; --ink-faint:#6A7261;
+    --line:#2C3325; --line-soft:#242A1E;
+    --accent-active:#E3A15C; --accent-active-soft:#3A2A14;
+    --accent-end:#5FCB9A; --accent-end-soft:#153325;
+    --accent-fail:#E08272; --accent-fail-soft:#3B211D;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 28px -14px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#12140F; --surface:#191B15; --surface-2:#21241C;
+  --ink:#E9EDE3; --ink-soft:#ABB49E; --ink-faint:#6A7261;
+  --line:#2C3325; --line-soft:#242A1E;
+  --accent-active:#E3A15C; --accent-active-soft:#3A2A14;
+  --accent-end:#5FCB9A; --accent-end-soft:#153325;
+  --accent-fail:#E08272; --accent-fail-soft:#3B211D;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 28px -14px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.5;}
+.mono{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;font-variant-numeric:tabular-nums;}
+.wrap{max-width:1080px;margin:0 auto;padding:28px 20px 56px;}
+header{margin-bottom:18px;}
+h1{font-size:22px;margin:0 0 6px;letter-spacing:-.01em;}
+.sub{color:var(--ink-soft);font-size:14px;margin:0;}
+
+.controls{display:flex;align-items:center;gap:8px;margin:14px 0;flex-wrap:wrap;}
+button.ctrl{appearance:none;border:1px solid var(--line);background:var(--surface);color:var(--ink);padding:8px 14px;border-radius:8px;font-size:14px;cursor:pointer;font-weight:600;transition:background .15s,border-color .15s;}
+button.ctrl:hover:not(:disabled){background:var(--surface-2);}
+button.ctrl:disabled{opacity:.4;cursor:not-allowed;}
+button.ctrl.primary{background:var(--ink);color:var(--bg);border-color:var(--ink);}
+button.ctrl:focus-visible{outline:2px solid var(--accent-active);outline-offset:2px;}
+.progress{font-size:13px;color:var(--ink-faint);margin-left:4px;}
+.spacer{flex:1;}
+select.ctrl{padding:6px 10px;}
+
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);}
+.grid{display:grid;grid-template-columns:1.35fr 1fr;gap:16px;align-items:start;}
+@media (max-width:820px){.grid{grid-template-columns:1fr;}}
+
+.tree-panel{padding:16px;}
+.tree-title-row{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;}
+.tree-title-row h2{font-size:13px;margin:0;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.06em;font-weight:700;}
+.step-badge{font-size:12px;color:var(--ink-faint);}
+.canvas-scroll{overflow-x:auto;}
+svg{display:block;width:100%;height:auto;min-width:560px;}
+.node-circle{fill:var(--surface-2);stroke:var(--line);stroke-width:2;transition:fill .2s,stroke .2s,stroke-width .2s;}
+.node-label{fill:var(--ink);font-size:14px;font-weight:700;text-anchor:middle;dominant-baseline:central;font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;pointer-events:none;}
+.node[data-end="true"] .node-circle{fill:var(--accent-end-soft);stroke:var(--accent-end);}
+.node[data-active="true"] .node-circle{stroke:var(--accent-active);stroke-width:3.5;}
+.node[data-fail="true"] .node-circle{stroke:var(--accent-fail);stroke-width:3.5;}
+.end-dot{fill:var(--accent-end);}
+.edge-line{stroke:var(--line);stroke-width:2;transition:stroke .2s,stroke-width .2s;}
+.edge-line[data-state="active"]{stroke:var(--accent-active);stroke-width:3;}
+.root-label{fill:var(--ink-faint);font-size:11px;text-anchor:middle;font-family:ui-monospace,monospace;}
+
+.side-panel{display:flex;flex-direction:column;gap:14px;}
+.words-panel{padding:14px 16px;}
+.words-panel h2{font-size:13px;margin:0 0 10px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.06em;font-weight:700;}
+.chip-row{display:flex;gap:8px;flex-wrap:wrap;}
+.w-chip{border:1.5px solid var(--line);border-radius:8px;padding:5px 11px;font-size:13px;font-weight:700;background:var(--surface-2);color:var(--ink-faint);font-family:ui-monospace,monospace;transition:background .2s,border-color .2s,color .2s;}
+.w-chip[data-state="active"]{border-color:var(--accent-active);background:var(--accent-active-soft);color:var(--ink);}
+.w-chip[data-state="done"]{border-color:var(--accent-end);background:var(--accent-end-soft);color:var(--ink);}
+
+.q-chip{border:1.5px solid var(--line);border-radius:8px;padding:5px 11px;font-size:12.5px;font-weight:700;background:var(--surface-2);color:var(--ink-faint);font-family:ui-monospace,monospace;transition:background .2s,border-color .2s,color .2s;}
+.q-chip[data-state="active"]{border-color:var(--accent-active);background:var(--accent-active-soft);color:var(--ink);}
+.q-chip[data-state="true"]{border-color:var(--accent-end);background:var(--accent-end-soft);color:var(--ink);}
+.q-chip[data-state="false"]{border-color:var(--accent-fail);background:var(--accent-fail-soft);color:var(--ink);}
+
+.desc-panel{padding:14px 16px;}
+.desc-panel h2{font-size:13px;margin:0 0 8px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.06em;font-weight:700;}
+.formula{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;font-size:14px;background:var(--surface-2);border-radius:8px;padding:10px 12px;margin-bottom:10px;border:1px solid var(--line-soft);}
+.formula .a{color:var(--accent-active);font-weight:700;}
+.formula .e{color:var(--accent-end);font-weight:700;}
+.formula .f{color:var(--accent-fail);font-weight:700;}
+#descText{font-size:14px;color:var(--ink-soft);margin:0;min-height:60px;}
+
+.log-panel{padding:10px;max-height:220px;overflow-y:auto;margin-top:14px;}
+.log-item{padding:7px 10px;border-radius:6px;font-size:13px;color:var(--ink-faint);cursor:pointer;display:flex;gap:8px;}
+.log-item:hover{background:var(--surface-2);}
+.log-item[data-active="true"]{background:var(--accent-active-soft);color:var(--ink);font-weight:600;}
+.log-idx{color:var(--ink-faint);min-width:26px;font-family:ui-monospace,monospace;}
+
+.legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:14px;font-size:12.5px;color:var(--ink-faint);}
+.legend span{display:inline-flex;align-items:center;gap:6px;}
+.dot{width:11px;height:11px;border-radius:50%;display:inline-block;border:2px solid var(--line);}
+.dot.active{background:var(--accent-active-soft);border-color:var(--accent-active);}
+.dot.end{background:var(--accent-end-soft);border-color:var(--accent-end);}
+.dot.fail{background:var(--accent-fail-soft);border-color:var(--accent-fail);}
+
+@media (prefers-reduced-motion:reduce){*{transition:none !important;}}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>字典树 Trie:公共前缀怎么只存一份</h1>
+    <p class="sub">依次插入 cat / car / card / care / dog,再做几次 search 和 startsWith 查询。共享前缀(比如 "ca")在树里只会被创建一次——第二次插入 car 时,c 和 ca 这两个节点是复用的,不会重复创建。</p>
+  </header>
+
+  <div class="controls">
+    <button class="ctrl" id="btnReset">重置</button>
+    <button class="ctrl" id="btnPrev">上一步</button>
+    <button class="ctrl primary" id="btnPlay">播放</button>
+    <button class="ctrl" id="btnNext">下一步</button>
+    <span class="progress mono" id="progress">0 / 0</span>
+    <div class="spacer"></div>
+  </div>
+
+  <div class="grid">
+    <div class="tree-panel panel">
+      <div class="tree-title-row">
+        <h2>Trie 树(带绿点的节点是某个单词的结尾)</h2>
+        <span class="step-badge mono" id="stepBadge">未开始</span>
+      </div>
+      <div class="canvas-scroll">
+        <svg viewBox="0 0 640 400" id="svgGraph">
+          <g id="edgesGroup"></g>
+          <g id="nodesGroup"></g>
+        </svg>
+      </div>
+    </div>
+
+    <div class="side-panel">
+      <div class="words-panel panel">
+        <h2>插入的单词</h2>
+        <div class="chip-row" id="wordsRow"></div>
+      </div>
+      <div class="words-panel panel">
+        <h2>查询序列</h2>
+        <div class="chip-row" id="queriesRow"></div>
+      </div>
+      <div class="desc-panel panel">
+        <h2>当前步骤</h2>
+        <div class="formula" id="formulaBox">&mdash;</div>
+        <p id="descText">点击"下一步"或"播放"开始。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel log-panel" id="logPanel"></div>
+
+  <div class="legend">
+    <span><span class="dot active"></span>正在访问/创建的节点</span>
+    <span><span class="dot end"></span>某个单词的结尾</span>
+    <span><span class="dot fail"></span>查询在此失败(路径不存在)</span>
+  </div>
+</div>
+
+<script>
+var DATA = {"words": ["cat", "car", "card", "care", "dog"], "queries": [["search", "car"], ["search", "ca"], ["startsWith", "ca"], ["search", "cards"], ["startsWith", "do"], ["search", "dog"]], "events": [{"type": "insert-start", "word": "cat"}, {"type": "visit-or-create", "char": "c", "node_path": "c", "created": true, "word": "cat"}, {"type": "visit-or-create", "char": "a", "node_path": "ca", "created": true, "word": "cat"}, {"type": "visit-or-create", "char": "t", "node_path": "cat", "created": true, "word": "cat"}, {"type": "mark-end", "node_path": "cat", "word": "cat", "already_was_end": false}, {"type": "insert-done", "word": "cat"}, {"type": "insert-start", "word": "car"}, {"type": "visit-or-create", "char": "c", "node_path": "c", "created": false, "word": "car"}, {"type": "visit-or-create", "char": "a", "node_path": "ca", "created": false, "word": "car"}, {"type": "visit-or-create", "char": "r", "node_path": "car", "created": true, "word": "car"}, {"type": "mark-end", "node_path": "car", "word": "car", "already_was_end": false}, {"type": "insert-done", "word": "car"}, {"type": "insert-start", "word": "card"}, {"type": "visit-or-create", "char": "c", "node_path": "c", "created": false, "word": "card"}, {"type": "visit-or-create", "char": "a", "node_path": "ca", "created": false, "word": "card"}, {"type": "visit-or-create", "char": "r", "node_path": "car", "created": false, "word": "card"}, {"type": "visit-or-create", "char": "d", "node_path": "card", "created": true, "word": "card"}, {"type": "mark-end", "node_path": "card", "word": "card", "already_was_end": false}, {"type": "insert-done", "word": "card"}, {"type": "insert-start", "word": "care"}, {"type": "visit-or-create", "char": "c", "node_path": "c", "created": false, "word": "care"}, {"type": "visit-or-create", "char": "a", "node_path": "ca", "created": false, "word": "care"}, {"type": "visit-or-create", "char": "r", "node_path": "car", "created": false, "word": "care"}, {"type": "visit-or-create", "char": "e", "node_path": "care", "created": true, "word": "care"}, {"type": "mark-end", "node_path": "care", "word": "care", "already_was_end": false}, {"type": "insert-done", "word": "care"}, {"type": "insert-start", "word": "dog"}, {"type": "visit-or-create", "char": "d", "node_path": "d", "created": true, "word": "dog"}, {"type": "visit-or-create", "char": "o", "node_path": "do", "created": true, "word": "dog"}, {"type": "visit-or-create", "char": "g", "node_path": "dog", "created": true, "word": "dog"}, {"type": "mark-end", "node_path": "dog", "word": "dog", "already_was_end": false}, {"type": "insert-done", "word": "dog"}, {"type": "query-start", "kind": "search", "target": "car"}, {"type": "walk-step", "char": "c", "node_path": "c", "found": true}, {"type": "walk-step", "char": "a", "node_path": "ca", "found": true}, {"type": "walk-step", "char": "r", "node_path": "car", "found": true}, {"type": "check-end", "node_path": "car", "is_end": true}, {"type": "query-done", "kind": "search", "target": "car", "result": true}, {"type": "query-start", "kind": "search", "target": "ca"}, {"type": "walk-step", "char": "c", "node_path": "c", "found": true}, {"type": "walk-step", "char": "a", "node_path": "ca", "found": true}, {"type": "check-end", "node_path": "ca", "is_end": false}, {"type": "query-done", "kind": "search", "target": "ca", "result": false}, {"type": "query-start", "kind": "startsWith", "target": "ca"}, {"type": "walk-step", "char": "c", "node_path": "c", "found": true}, {"type": "walk-step", "char": "a", "node_path": "ca", "found": true}, {"type": "query-done", "kind": "startsWith", "target": "ca", "result": true}, {"type": "query-start", "kind": "search", "target": "cards"}, {"type": "walk-step", "char": "c", "node_path": "c", "found": true}, {"type": "walk-step", "char": "a", "node_path": "ca", "found": true}, {"type": "walk-step", "char": "r", "node_path": "car", "found": true}, {"type": "walk-step", "char": "d", "node_path": "card", "found": true}, {"type": "walk-step", "char": "s", "node_path": "cards", "found": false}, {"type": "query-done", "kind": "search", "target": "cards", "result": false}, {"type": "query-start", "kind": "startsWith", "target": "do"}, {"type": "walk-step", "char": "d", "node_path": "d", "found": true}, {"type": "walk-step", "char": "o", "node_path": "do", "found": true}, {"type": "query-done", "kind": "startsWith", "target": "do", "result": true}, {"type": "query-start", "kind": "search", "target": "dog"}, {"type": "walk-step", "char": "d", "node_path": "d", "found": true}, {"type": "walk-step", "char": "o", "node_path": "do", "found": true}, {"type": "walk-step", "char": "g", "node_path": "dog", "found": true}, {"type": "check-end", "node_path": "dog", "is_end": true}, {"type": "query-done", "kind": "search", "target": "dog", "result": true}, {"type": "done", "query_results": [true, false, true, false, true, true]}], "query_results": [true, false, true, false, true, true]};
+var WORDS = DATA.words;
+var QUERIES = DATA.queries;
+var EVENTS = DATA.events;
+
+// tree shape is fully known in advance from WORDS: cat/car/card/care/dog
+var TREE_NODES = [
+  {path:'',     char:'•',  x:320, y:30},
+  {path:'c',    char:'c',  x:190, y:100},
+  {path:'d',    char:'d',  x:480, y:100},
+  {path:'ca',   char:'a',  x:190, y:170},
+  {path:'do',   char:'o',  x:480, y:170},
+  {path:'cat',  char:'t',  x:100, y:240},
+  {path:'car',  char:'r',  x:260, y:240},
+  {path:'dog',  char:'g',  x:480, y:240},
+  {path:'card', char:'d',  x:190, y:310},
+  {path:'care', char:'e',  x:320, y:310}
+];
+var TREE_EDGES = [
+  ['', 'c'], ['', 'd'],
+  ['c', 'ca'], ['d', 'do'],
+  ['ca', 'cat'], ['ca', 'car'],
+  ['do', 'dog'],
+  ['car', 'card'], ['car', 'care']
+];
+
+var idx = -1;
+var playTimer = null;
+
+var svgNS = 'http://www.w3.org/2000/svg';
+var edgesGroup = document.getElementById('edgesGroup');
+var nodesGroup = document.getElementById('nodesGroup');
+var byPath = {};
+TREE_NODES.forEach(function(n){ byPath[n.path] = n; });
+
+function edgeId(a,b){ return (a===''?'root':a) + '__' + b; }
+
+function buildTree(){
+  edgesGroup.innerHTML = '';
+  nodesGroup.innerHTML = '';
+  TREE_EDGES.forEach(function(pair){
+    var a = byPath[pair[0]], b = byPath[pair[1]];
+    var line = document.createElementNS(svgNS,'line');
+    line.setAttribute('x1',a.x); line.setAttribute('y1',a.y+20);
+    line.setAttribute('x2',b.x); line.setAttribute('y2',b.y-20);
+    line.setAttribute('class','edge-line');
+    line.setAttribute('id','edge-'+edgeId(pair[0],pair[1]));
+    line.setAttribute('data-state','idle');
+    edgesGroup.appendChild(line);
+  });
+  TREE_NODES.forEach(function(n){
+    var g = document.createElementNS(svgNS,'g');
+    g.setAttribute('class','node');
+    g.setAttribute('data-active','false');
+    g.setAttribute('data-end','false');
+    g.setAttribute('data-fail','false');
+    g.setAttribute('id','node-'+(n.path===''?'root':n.path));
+    var circle = document.createElementNS(svgNS,'circle');
+    circle.setAttribute('cx',n.x); circle.setAttribute('cy',n.y); circle.setAttribute('r',20);
+    circle.setAttribute('class','node-circle');
+    var text = document.createElementNS(svgNS,'text');
+    text.setAttribute('x',n.x); text.setAttribute('y',n.y);
+    text.setAttribute('class','node-label');
+    text.textContent = n.char;
+    g.appendChild(circle); g.appendChild(text);
+    nodesGroup.appendChild(g);
+    if(n.path === ''){
+      var lbl = document.createElementNS(svgNS,'text');
+      lbl.setAttribute('x',n.x); lbl.setAttribute('y',n.y-30);
+      lbl.setAttribute('class','root-label');
+      lbl.textContent = 'root';
+      nodesGroup.appendChild(lbl);
+    }
+  });
+}
+
+function computeState(upto){
+  var createdPaths = {};
+  var endPaths = {};
+  var activePath = null;
+  var activeEdge = null;
+  var failPath = null;
+  for(var k=0;k<=upto && k<EVENTS.length;k++){
+    var e = EVENTS[k];
+    if(e.type === 'visit-or-create'){
+      createdPaths[e.node_path] = true;
+    } else if(e.type === 'mark-end'){
+      endPaths[e.node_path] = true;
+    }
+  }
+  if(upto >= 0 && upto < EVENTS.length){
+    var ce = EVENTS[upto];
+    if(ce.type === 'visit-or-create'){
+      activePath = ce.node_path;
+      activeEdge = [ce.node_path.slice(0,-1), ce.node_path];
+    } else if(ce.type === 'mark-end'){
+      activePath = ce.node_path;
+    } else if(ce.type === 'walk-step'){
+      if(ce.found){
+        activePath = ce.node_path;
+        activeEdge = [ce.node_path.slice(0,-1), ce.node_path];
+      } else {
+        failPath = ce.node_path.slice(0,-1); // last real node before the missing char
+      }
+    } else if(ce.type === 'check-end'){
+      activePath = ce.node_path;
+    }
+  }
+  return { createdPaths: createdPaths, endPaths: endPaths, activePath: activePath, activeEdge: activeEdge, failPath: failPath };
+}
+
+function render(){
+  var s = computeState(idx);
+
+  TREE_NODES.forEach(function(n){
+    var el = document.getElementById('node-'+(n.path===''?'root':n.path));
+    var exists = n.path === '' || s.createdPaths[n.path];
+    el.setAttribute('data-active', (exists && s.activePath === n.path) ? 'true' : 'false');
+    el.setAttribute('data-end', (exists && s.endPaths[n.path]) ? 'true' : 'false');
+    el.setAttribute('data-fail', (exists && s.failPath === n.path) ? 'true' : 'false');
+    el.style.opacity = exists ? '1' : '0.18';
+    el.style.strokeDasharray = '';
+  });
+
+  TREE_EDGES.forEach(function(pair){
+    var el = document.getElementById('edge-'+edgeId(pair[0],pair[1]));
+    var exists = s.createdPaths[pair[1]];
+    el.style.opacity = exists ? '1' : '0.15';
+    var isActive = s.activeEdge && s.activeEdge[0] === pair[0] && s.activeEdge[1] === pair[1];
+    el.setAttribute('data-state', isActive ? 'active' : 'idle');
+  });
+
+  // word chips
+  var currentWord = null, currentQueryIdx = null;
+  if(idx >= 0 && idx < EVENTS.length){
+    var e = EVENTS[idx];
+    if(e.word) currentWord = e.word;
+  }
+  var insertedWords = {};
+  for(var k2=0;k2<=idx && k2<EVENTS.length;k2++){
+    if(EVENTS[k2].type === 'insert-done') insertedWords[EVENTS[k2].word] = true;
+  }
+  WORDS.forEach(function(w, i){
+    var chip = document.getElementById('wchip-'+i);
+    if(insertedWords[w]) chip.dataset.state = 'done';
+    else if(currentWord === w) chip.dataset.state = 'active';
+    else chip.dataset.state = 'idle';
+  });
+
+  QUERIES.forEach(function(q, i){
+    document.getElementById('qchip-'+i).dataset.state = 'idle';
+  });
+  var qi = -1;
+  for(var k3=0;k3<=idx && k3<EVENTS.length;k3++){
+    var ev3 = EVENTS[k3];
+    if(ev3.type === 'query-start') qi++;
+    if(ev3.type === 'query-done' && qi >= 0){
+      document.getElementById('qchip-'+qi).dataset.state = String(ev3.result);
+    }
+  }
+  if(qi >= 0 && qi < QUERIES.length){
+    var curChip = document.getElementById('qchip-'+qi);
+    if(curChip.dataset.state === 'idle') curChip.dataset.state = 'active';
+  }
+
+  var formulaBox = document.getElementById('formulaBox');
+  var descText = document.getElementById('descText');
+  var stepBadge = document.getElementById('stepBadge');
+
+  if(idx < 0){
+    formulaBox.innerHTML = '&mdash;';
+    descText.textContent = '空树,只有一个根节点(不代表任何字符)。点击"下一步"或"播放"开始插入单词。';
+    stepBadge.textContent = '未开始';
+  } else {
+    var e = EVENTS[idx];
+    stepBadge.textContent = '第 ' + (idx+1) + ' / ' + EVENTS.length + ' 步';
+    if(e.type === 'insert-start'){
+      formulaBox.innerHTML = '<span class="mono">insert("' + e.word + '")</span>';
+      descText.textContent = '开始插入 "' + e.word + '",从根节点出发,逐个字符往下走。';
+    } else if(e.type === 'visit-or-create'){
+      formulaBox.innerHTML = e.created
+        ? ('<span class="a">创建节点 \'' + e.char + '\'</span>  <span class="mono">path="' + e.node_path + '"</span>')
+        : ('<span class="mono">复用已有节点 \'' + e.char + '\'  path="' + e.node_path + '"</span>');
+      descText.textContent = e.created
+        ? ('当前节点没有字符 \'' + e.char + '\' 对应的孩子,新建一个。')
+        : ('当前节点已经有字符 \'' + e.char + '\' 对应的孩子了(之前插入别的单词时创建的),直接复用,不用新建。');
+    } else if(e.type === 'mark-end'){
+      formulaBox.innerHTML = '<span class="e">标记单词结尾</span>  <span class="mono">path="' + e.node_path + '"</span>';
+      descText.textContent = '"' + e.word + '" 的最后一个字符插入完成,把这个节点标记为"单词结尾"(is_end = true)。';
+    } else if(e.type === 'insert-done'){
+      formulaBox.innerHTML = '<span class="mono">// insert("' + e.word + '") 完成</span>';
+      descText.textContent = '"' + e.word + '" 插入完成。';
+    } else if(e.type === 'query-start'){
+      formulaBox.innerHTML = '<span class="mono">' + e.kind + '("' + e.target + '")</span>';
+      descText.textContent = '开始查询:' + (e.kind === 'search' ? ('"' + e.target + '" 是否是一个完整插入过的单词。') : ('是否存在以 "' + e.target + '" 开头的单词。'));
+    } else if(e.type === 'walk-step'){
+      if(e.found){
+        formulaBox.innerHTML = '<span class="a">走到 \'' + e.char + '\'</span>  <span class="mono">path="' + e.node_path + '"</span>';
+        descText.textContent = '沿着字符 \'' + e.char + '\' 往下走,节点存在,继续。';
+      } else {
+        formulaBox.innerHTML = '<span class="f">字符 \'' + e.char + '\' 不存在</span>';
+        descText.textContent = '当前节点没有字符 \'' + e.char + '\' 对应的孩子——路径在这里断了,查询直接失败,不用往下走了。';
+      }
+    } else if(e.type === 'check-end'){
+      formulaBox.innerHTML = '<span class="mono">is_end = ' + e.is_end + '</span>';
+      descText.textContent = e.is_end
+        ? '路径存在,并且这个节点正好是某个单词的结尾——search 返回 true。'
+        : '路径存在,但这个节点不是任何单词的结尾(只是别的单词的前缀)——search 仍然返回 false。';
+    } else if(e.type === 'query-done'){
+      formulaBox.innerHTML = '<span class="mono">' + e.kind + '("' + e.target + '") = ' + e.result + '</span>';
+      descText.textContent = '查询结果:' + e.result + '。';
+    } else if(e.type === 'done'){
+      formulaBox.innerHTML = '<span class="mono">全部完成</span>';
+      descText.textContent = '全部插入和查询完成。所有 search/startsWith 的结果都和"直接在单词列表里查找/用 str.startswith 扫描"这种最朴素的方法交叉验证过,完全一致。';
+      stepBadge.textContent = '完成';
+    }
+  }
+
+  document.getElementById('progress').textContent = (idx+1) + ' / ' + EVENTS.length;
+  document.getElementById('btnPrev').disabled = idx < 0;
+  document.getElementById('btnNext').disabled = idx >= EVENTS.length - 1;
+
+  var items = logPanel.children;
+  for(var i2=0;i2<items.length;i2++){
+    items[i2].setAttribute('data-active', i2 === idx ? 'true' : 'false');
+  }
+  if(idx >= 0 && items[idx]) items[idx].scrollIntoView({block:'nearest'});
+}
+
+function labelForEvent(e){
+  if(e.type === 'insert-start') return 'insert("' + e.word + '")';
+  if(e.type === 'visit-or-create') return (e.created ? '创建 ' : '复用 ') + '\'' + e.char + '\' (' + e.node_path + ')';
+  if(e.type === 'mark-end') return '标记结尾 ' + e.node_path;
+  if(e.type === 'insert-done') return 'insert("' + e.word + '") 完成';
+  if(e.type === 'query-start') return e.kind + '("' + e.target + '")';
+  if(e.type === 'walk-step') return (e.found ? '→ ' : '✗ ') + e.char + ' (' + e.node_path + ')';
+  if(e.type === 'check-end') return 'is_end=' + e.is_end;
+  if(e.type === 'query-done') return '= ' + e.result;
+  if(e.type === 'done') return '全部完成';
+  return '';
+}
+
+var logPanel = document.getElementById('logPanel');
+function buildLog(){
+  logPanel.innerHTML = '';
+  EVENTS.forEach(function(e,i){
+    var item = document.createElement('div');
+    item.className = 'log-item';
+    item.setAttribute('data-active','false');
+    var idxSpan = document.createElement('span');
+    idxSpan.className = 'log-idx';
+    idxSpan.textContent = i+1;
+    var txt = document.createElement('span');
+    txt.textContent = labelForEvent(e);
+    item.appendChild(idxSpan); item.appendChild(txt);
+    item.addEventListener('click', function(ii){ return function(){ stopPlay(); idx = ii; render(); }; }(i));
+    logPanel.appendChild(item);
+  });
+}
+
+function buildWordsAndQueries(){
+  var wordsRow = document.getElementById('wordsRow');
+  wordsRow.innerHTML = '';
+  WORDS.forEach(function(w, i){
+    var chip = document.createElement('span');
+    chip.className = 'w-chip';
+    chip.id = 'wchip-'+i;
+    chip.dataset.state = 'idle';
+    chip.textContent = w;
+    wordsRow.appendChild(chip);
+  });
+  var queriesRow = document.getElementById('queriesRow');
+  queriesRow.innerHTML = '';
+  QUERIES.forEach(function(q, i){
+    var chip = document.createElement('span');
+    chip.className = 'q-chip';
+    chip.id = 'qchip-'+i;
+    chip.dataset.state = 'idle';
+    chip.textContent = q[0] + '("' + q[1] + '")';
+    queriesRow.appendChild(chip);
+  });
+}
+
+function goTo(i){
+  idx = Math.max(-1, Math.min(EVENTS.length-1, i));
+  render();
+}
+function stopPlay(){
+  if(playTimer){ clearInterval(playTimer); playTimer = null; }
+  document.getElementById('btnPlay').textContent = '播放';
+}
+document.getElementById('btnNext').addEventListener('click', function(){ stopPlay(); goTo(idx+1); });
+document.getElementById('btnPrev').addEventListener('click', function(){ stopPlay(); goTo(idx-1); });
+document.getElementById('btnReset').addEventListener('click', function(){ stopPlay(); goTo(-1); });
+document.getElementById('btnPlay').addEventListener('click', function(){
+  if(playTimer){ stopPlay(); return; }
+  if(idx >= EVENTS.length - 1) goTo(-1);
+  document.getElementById('btnPlay').textContent = '暂停';
+  var speed = 900; // 固定慢速播放,不提供选项(教学演示,不追求速度)
+  playTimer = setInterval(function(){
+    if(idx >= EVENTS.length - 1){ stopPlay(); return; }
+    goTo(idx+1);
+  }, speed);
+});buildTree();
+buildWordsAndQueries();
+buildLog();
+goTo(-1);
+</script>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+</body>
+</html>

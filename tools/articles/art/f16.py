@@ -1,0 +1,17 @@
+from lib import *
+S = SS('f16')
+R = J('f16')
+steps = [
+    step("@app.route('/hello', methods=['GET']) 之后:url_map 的规则数从 1 变成 2(原来的 1 条是 /static 规则),view_functions 也从 1 个变成 2 个。装饰器返回的仍然是原函数 hello(类型 function,可以直接调用)。新增的 Rule:rule = /hello、endpoint = hello、methods = GET、HEAD、OPTIONS(HEAD 与 OPTIONS 是自动加的)、strict_slashes = True,view_functions['hello'] 就是这个函数。", t=tl(S(1)), done=lidx(S(1), '注册前 → 后', '装饰器返回的是原函数'), mark=lidx(S(1), 'Rule 对象'), kv=KV([['规则数', '1 → 2(含 /static)'], ['返回值', '原函数 hello'], ['methods', 'GET、HEAD、OPTIONS']], ['返回值'])),
+    step("route 只是 add_url_rule 的语法糖:@a1.route('/x', methods=['POST']) 与 a2.add_url_rule('/x', endpoint='f', view_func=f2, methods=['POST']) 得到完全相同的规则 [('/x', 'f', ['OPTIONS', 'POST'])]。Scaffold.route 里的 decorator 只有三行:取出 endpoint、调用 self.add_url_rule(rule, endpoint, f, **options)、return f。", t=tl(S(2)), done=lidx(S(2), '@route 的规则', 'add_url_rule :', '相同: True'), mark=lidx(S(2), 'def decorator', 'self.add_url_rule', 'return f'), kv=KV([['@route', "[('/x', 'f', ['OPTIONS', 'POST'])]"], ['add_url_rule', '同上'], ['相同', 'True']], ['相同'])),
+    step("endpoint 默认取函数名:两个同名函数 view 会抛 AssertionError「View function mapping is overwriting an existing endpoint function: view」。可以用 endpoint='c_custom' 自己指定;此时 view_functions 的键是 ['c_custom', 'static', 'view']。", t=tl(S(3)), mark=lidx(S(3), 'AssertionError'), done=lidx(S(3), '自定义 endpoint'), kv=KV([['同名函数', 'AssertionError: overwriting an existing endpoint'], ['自定义', "endpoint='c_custom'"]], ['同名函数'])),
+    step("同一个函数可以挂多个路径:/one 与 /two 的方法是 GET、HEAD、OPTIONS,/three 声明 methods=['POST'] 所以是 OPTIONS、POST。请求结果:GET /one 200、GET /two 200、GET /three 405(只允许 POST),POST /three 200。", t=tl(S(4)), done=lidx(S(4), '/one ', '/two ', '/three '), mark=lidx(S(4), '请求:'), kv=KV([['/one /two', 'GET、HEAD、OPTIONS'], ['/three', 'OPTIONS、POST'], ['GET /three', '405']], ['GET /three'])),
+    step("路由要在应用处理第一个请求之前注册:处理过 GET /ok 之后再 a.get('/late') 抛 AssertionError「The setup method 'get' can no longer be called on the application. It has already handled its first request, any changes will not be applied consistently.」。注册发生在装饰器执行(通常是导入模块)的时刻。", t=tl(S(5)), mark=lidx(S(5), 'AssertionError'), kv=KV([['第一个请求之后注册', 'AssertionError: setup method can no longer be called']], ['第一个请求之后注册'])),
+    step("flask --app ra routes 列出注册的路由:items(GET、POST,/items)、static(GET,/static/<path:filename>)、user(GET,/users/<int:uid>)。这张表的方法列不显示自动加的 HEAD 与 OPTIONS。", t=tl(S(6)), done=lidx(S(6), 'items', 'static', 'user'), kv=KV([['items', 'GET, POST /items'], ['static', 'GET /static/<path:filename>'], ['user', 'GET /users/<int:uid>']], ['items'])),
+]
+A = mkartf('f16', 16, 'Flask,路由,route,add_url_rule,真实验证,动画演示',
+    '验证 @app.route():它返回原函数,往 url_map 与 view_functions 各写一项;和 add_url_rule 得到相同的规则;endpoint 默认是函数名,同名会 AssertionError;一个函数可挂多个路径;第一个请求之后不能再注册;flask routes 命令。',
+    '一行 @app.route(...) 之后,Flask 内部多了什么?它和 add_url_rule 是什么关系?endpoint 是怎么来的?这篇把这些一一打印出来。',
+    [('3 行', 'Scaffold.route 里 decorator 的代码行数(取 endpoint、add_url_rule、return f)'), ('GET、HEAD、OPTIONS', 'methods 默认值对应的实际方法集合'), ('AssertionError', '第一个请求之后再注册路由时的报错类型')],
+    [('route 注册了什么', '<p>下一篇:<a href="flask-url-rule-matching-order.html">URL Rule 与路由匹配顺序</a>。</p>'), ('route 与 add_url_rule', None), ('endpoint', None), ('多路径与多方法', None), ('注册时机', None), ('flask routes', None)],
+    steps, [ENV_F, '没有验证:endpoint 名在蓝图里的前缀规则(见第 26 篇)、defaults 与 redirect_to 参数、subdomain 与 host_matching 参数、class-based view(MethodView)注册路由的差别、add_url_rule 的 provide_automatic_options 参数'], '@route')

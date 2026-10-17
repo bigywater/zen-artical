@@ -1,0 +1,14 @@
+from lib import *
+S = SS('u117')
+steps = [
+    step("None 的真实位模式:Option<&u32>、Option<&mut u32>、Option<Box<u32>>、Option<NonNull<u32>>、Option<fn()>、Option<extern \"C\" fn()> 的 None 经 transmute 读出都是 0x0,大小都是 8 字节(一个指针)。对照:裸指针 *const u32 本身可以是空,没有 niche,Option<*const u32> 要 16 字节。", t=tl(S(1)), done=lidx(S(1), 'None 的位模式', '大小'), mark=lidx(S(1), '对照'), kv=KV([['引用 / Box / NonNull / fn', 'None = 0x0,8 字节'], ['*const T', 'Option 要 16 字节']], ['*const T'])),
+    step("FFI 里的可空指针:声明 extern \"C\" { fn getenv(name: *const c_char) -> Option<&'static c_char>; fn strchr(…) -> Option<&'static c_char>; },直接调用真实的 libc。getenv(\"HOME\") 得 Some(C 返回了非空指针);getenv(\"U117_NOT_SET\") 得 None(C 返回了 NULL);strchr(\"hello world\", 'w') 得 Some(\"world\"),找不到 'z' 得 None。不需要手写判空转换。", t=tl(S(2)), done=lidx(S(2), 'getenv("HOME")', 'strchr'), mark=lidx(S(2), 'U117_NOT_SET'), kv=KV([['C 返回 NULL', 'Rust 收到 None'], ['C 返回指针', 'Rust 收到 Some(&T)']], ['C 返回 NULL'])),
+    step("反方向:把 Option<Box<c_void>> 传给 libc 的 free,None 变成 NULL,free(NULL) 是合法的空操作,程序没有崩溃;malloc(16) 返回的非空指针被 Rust 收成 Some。", t=tl(S(3)), done=lidx(S(3), 'free(None)', 'malloc(16)'), kv=KV([['free(None)', '传给 C 的是 NULL'], ['malloc(16)', 'Some(非空指针)']], ['free(None)'])),
+    step("没有 niche 的「可空」要多付空间:链表节点 {val: u64, next} 里 Option<Box<Node>> 是 16 字节、Option<NonNull<Node>> 是 16 字节;自己用「裸指针 + bool 标志」表示就是 24 字节。可选索引字段用 Option<u64> 是 24 字节,换成 Option<NonZeroU64> 是 16 字节。", t=tl(S(4)), done=lidx(S(4), 'Option<Box<Node>>', 'Option<u64>'), b=bars([['Option<Box> 节点', 16, '16 B'], ['裸指针 + bool 节点', 24, '24 B'], ['Option<u64> 索引节点', 24, '24 B'], ['Option<NonZeroU64> 索引节点', 16, '16 B']], 24, done=[0, 3], cur=[1, 2]), kv=KV([['Option<Box> / Option<NonNull>', '16 字节'], ['裸指针 + bool', '24 字节'], ['Option<NonZeroU64>', '16 字节(Option<u64> 是 24)']], ['裸指针 + bool'])),
+]
+A = mkart('u117', 117, 'Rust,Option,空指针优化,FFI,真实验证,动画演示',
+    '用 transmute 与真实 libc 调用验证 Option<&T> 的空指针优化:Option<&T> / <&mut T> / <Box<T>> / <NonNull<T>> / <fn()> 的 None 都是 0x0、8 字节(裸指针的 Option 要 16 字节);getenv / strchr 返回 NULL 直接收成 None;Option<Box> 传给 free;自己手写「裸指针 + bool」的节点 24 字节而 Option<Box> 节点 16 字节。',
+    'Option<&T> 为什么没有额外开销?在 FFI 里它又怎么变成 C 的可空指针?这篇不靠文档,而是直接读 None 的位模式,并真的调用 libc 的 getenv、strchr、free 来验证。',
+    [('0x0', 'Option<&T> 等 None 的位模式'), ('2 个 libc 函数', '用 Option<&T> 作返回值直接接收 NULL 的 getenv 与 strchr'), ('16 对 24 字节', 'Option<Box> 链表节点与「裸指针 + bool」节点的大小')],
+    [('None 就是空指针', '<p>通用的 niche 规则见<a href="rust-enum-layout.html">Enum 的内存布局</a>。</p>'), ('接收 C 的可空指针', '<p>FFI 调用的基础见<a href="rust-ffi-call-c.html">FFI 调用 C 函数</a>。</p>'), ('把 Option 传给 C', None), ('没有 niche 的代价', None)],
+    steps, [ENV_U + '。FFI 直接链接系统 libc,没有使用 bindgen', '没有验证:Option<&T> 与 C 的 const T* 在 ABI 层面是否在所有平台等价(只在本机 aarch64 验证)、返回非空但悬空指针时的后果、Option<extern fn> 作为回调参数的实际调用、其它 niche 类型(如 Option<NonZeroU8>)在 FFI 上的可用性'], 'Option<&T> 的空指针优化')

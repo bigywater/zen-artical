@@ -1,0 +1,22 @@
+from lib import *
+S = SS('l14')
+steps = [
+    step("一个文件改了 40 个版本(每次改 3 行、追加 1 行),最新版 22,779 字节,40 个版本原始字节合计 869,708。完全不做 delta(window=0 depth=0)的 pack 是 560,627 字节:只靠 zlib 把每个版本单独压缩,约是原始合计的 64%。", t=tl(S(1)), mark=lidx(S(1), 'window=0 depth=0'), done=lidx(S(1), '40 个版本的原始字节合计'), kv=KV([['版本数', '40,每个约 22 KB'], ['原始合计', '869,708 字节'], ['不做 delta', 'pack 560,627 字节']], ['不做 delta'])),
+    step("window(为每个对象同时考虑多少个候选基础,按大小排序邻近的对象)的影响,depth 固定 50,单线程:window=1 时 102,498 字节、最长链 1;window=2 就降到 28,623 字节、最长链 39,之后到 5、10、50 都不再变。因为这是一个文件的 40 个版本,每个版本的最佳基础就是相邻的版本,窗口 2 已经足够;窗口大小的价值在于有很多互相不相关的对象时。", t=tl(S(2)), mark=lidx(S(2), 'window=1 ', 'window=2 '), done=lidx(S(2), 'window=5', 'window=10', 'window=50'), b=bars([['window=1', 102498, '102,498'], ['window=2', 28623, '28,623'], ['window=5', 28623, '28,623'], ['window=50', 28623, '28,623']], 102498, mark=[0], done=[1, 2, 3]), kv=KV([['window=1', '只看前 1 个对象,最长链 1'], ['window ≥ 2', '本例已达最小:28,623 字节'], ['适用', '大窗口对无序的大量对象才有收益']], ['window ≥ 2'])),
+    step("depth(delta 链最长允许多深)的影响,window 固定 50:depth=0 即不做 delta,560,627 字节;depth=1 是 102,498;depth=2 是 49,400;depth=5 是 35,328;depth=10 是 32,357;depth=50 是 28,623,最长链 39(40 个版本只有 39 次可以接在前面)。越深越小,但收益递减:从 0 到 1 缩小 82%,从 10 到 50 只再省 12%。完整存放的对象数从 120(全部)降到 81。", t=tl(S(3)), mark=lidx(S(3), 'depth=0 ', 'depth=50 '), done=lidx(S(3), 'depth=1 ', 'depth=2 ', 'depth=5 ', 'depth=10 '), b=bars([['depth=0', 560627, '560,627'], ['depth=1', 102498, '102,498'], ['depth=2', 49400, '49,400'], ['depth=5', 35328, '35,328'], ['depth=10', 32357, '32,357'], ['depth=50', 28623, '28,623']], 560627, mark=[5], done=[0, 1, 2, 3, 4]), kv=KV([['depth=0 → 1', '560 KB → 102 KB'], ['depth=10 → 50', '32 KB → 28 KB'], ['完整存放', '120 个 → 81 个']], ['depth=0 → 1'])),
+    step("链越深,读取时要沿链一路还原,理论上更慢。实测一个进程里用 git cat-file --batch 读完 40 个版本,9 次中位数:depth=0 是 11.8 ms,depth=1 是 10.3,depth=5 是 10.2,depth=50 是 11.2——耗时没有随深度增长,在这个规模(每个版本 22 KB)下差别在进程启动与噪声之内。", t=tl(S(4)), mark=lidx(S(4), 'depth=50 '), done=lidx(S(4), 'depth=0 ', 'depth=1 ', 'depth=5 '), b=bars([['depth=0', 11.8, '11.8 ms'], ['depth=1', 10.3, '10.3 ms'], ['depth=5', 10.2, '10.2 ms'], ['depth=50', 11.2, '11.2 ms']], 11.8, mark=[3], done=[0, 1, 2]), kv=KV([['理论', '链越深,还原越慢'], ['这里的实测', '40 个 22 KB 的版本里看不出差别'], ['限制', '没有测大文件、更长的链']], ['这里的实测'])),
+    step("git gc 普通执行的 repack 命令行是 git repack -d -l -q --cruft --cruft-expiration=2.weeks.ago,没有 -f,没有 --window 和 --depth;加了 --aggressive 之后变成 git repack -d -l -f --depth=50 --window=250 ……:-f 丢弃已有的 delta 重新计算,window 开到 250。", t=tl(S(5)), mark=lidx(S(5), '--depth=50 --window=250'), done=lidx(S(5), 'git repack -d -l -q --cruft', 'git gc --aggressive'), kv=KV([['普通 gc', '复用已有 delta,不加 -f'], ['--aggressive', '-f --depth=50 --window=250'], ['代价', '重新计算所有 delta,慢']], ['--aggressive'])),
+]
+A = mkarti('l14', 14, 'Git,delta,window,depth,repack,gc,真实验证,动画演示',
+    '在一个文件的 40 个版本上用 git repack 调 window 与 depth:不做 delta 的 pack 是 560,627 字节;window=1 是 102,498,window≥2 就降到 28,623(单线程);depth=1 是 102,498,depth=50 是 28,623、最长链 39;读 40 个版本的耗时在 10~12 ms 之间看不出差别;gc --aggressive 的实际命令行是 -f --depth=50 --window=250。',
+    'git 的 delta 链是怎么形成的?window 和 depth 各自控制什么?这篇用同一个文件的 40 个版本,一次一个参数地重打包,看 pack 大小、最长链和读取耗时,最后看 gc --aggressive 到底传了什么参数。',
+    [('560,627 → 28,623', '40 个版本的 pack 大小:不做 delta 与 depth=50、window≥2 的对比(字节)'), ('window=2', '一个文件的线性历史里,窗口 2 就已达到本例的最小值'), ('-f --depth=50 --window=250', 'git gc --aggressive 传给 repack 的参数')],
+    [('window 与 depth', '<p><code>--window</code> 控制为每个对象同时考虑多少个候选基础(对象按类型、文件名、大小排序,相近的挨在一起);<code>--depth</code> 限制 delta 链的最大长度。窗口大找到更好基础的机会多,深度大可以把链接得更长。</p>'),
+     ('这组数据的 window', '<p>40 个版本是同一个文件的线性历史,每个版本的最佳基础就是相邻的版本,所以窗口 2 就已经把大小压到最小。窗口大小真正起作用的是大量互相有些相似的对象的场合。</p>'),
+     ('depth 的收益递减', '<p>depth 从 0 到 1 就缩小了 82%,从 10 到 50 只再省 12%。越深越小,但边际收益快速下降。链太深会让读取要沿链多次还原,所以 git 默认的最大深度是 50。</p>'),
+     ('读取代价', '<p>理论上链越深读越慢,这里 40 个 22 KB 的版本在一个进程里读完,depth=0 到 depth=50 的耗时都在 10~12 ms 之间,看不出区别;大文件和更长的链没有测。</p>'),
+     ('gc 与 aggressive', '<p>普通 <code>git gc</code> 的 repack 不加 <code>-f</code>,会复用已有的 delta;<code>--aggressive</code> 加 <code>-f --depth=50 --window=250</code>,把所有 delta 重新计算,更小也更慢。</p>')],
+    steps,
+    [ENV_I_GIT + '。repack 实验固定 pack.threads=1(不固定时,git 会把对象分给多个线程各自搜索 delta,结果因线程切分而不同——我在没固定线程数时观察到 window=2 的 pack 在两次运行中分别是 83,277 和 96,588 字节);数据是固定随机种子生成的文本,每次改 3 行加 1 行;耗时每档 9 次取中位数',
+     '没有验证:多线程下的 pack 大小分布(只观察到不固定线程数时结果不稳定);真实代码仓库(这里是随机单词);大于 22 KB 的文件、几百个相似但不相邻的对象下的 window 影响;pack.windowMemory、pack.deltaCacheSize 对结果的影响;depth 大于 50 的收益'],
+    'window 与 depth')

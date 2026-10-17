@@ -1,0 +1,485 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>Go 二进制为什么这么大:符号表、反射元数据与 -ldflags -s -w</title>
+<meta name="description" content="在 Go 1.27.1 里实测二进制体积:hello world 1.75–2.32 MiB,加 encoding/json 3.59 MiB,加 net/http 约 7.9 MiB;-ldflags=&quot;-s -w&quot; 统一小 33%–35%;pclntab 与代码一样大;panic 的栈回溯靠 pclntab,所以剥离符号表后仍有函数名;按包统计 runtime 占 42%;通过 reflect.Value.MethodByName 调用方法会一次多约 0.9 MiB 并保留所有导出方法(每个约 470 字节);各平台 hello world 的大小。">
+<link rel="canonical" href="https://bigywater.tech/go-binary-size.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Go 二进制为什么这么大:符号表、反射元数据与 -ldflags -s -w">
+<meta property="og:description" content="在 Go 1.27.1 里实测二进制体积:hello world 1.75–2.32 MiB,加 encoding/json 3.59 MiB,加 net/http 约 7.9 MiB;-ldflags=&quot;-s -w&quot; 统一小 33%–35%;pclntab 与代码一样大;panic 的栈回溯靠 pclntab,所以剥离符号表后仍有函数名;按包统计 runtime 占 42%;通过 reflect.Value.MethodByName 调用方法会一次多约 0.9 MiB 并保留所有导出方法(每个约 470 字节);各平台 hello world 的大小。">
+<meta property="og:url" content="https://bigywater.tech/go-binary-size.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Go 二进制为什么这么大:符号表、反射元数据与 -ldflags -s -w">
+<meta name="twitter:description" content="在 Go 1.27.1 里实测二进制体积:hello world 1.75–2.32 MiB,加 encoding/json 3.59 MiB,加 net/http 约 7.9 MiB;-ldflags=&quot;-s -w&quot; 统一小 33%–35%;pclntab 与代码一样大;panic 的栈回溯靠 pclntab,所以剥离符号表后仍有函数名;按包统计 runtime 占 42%;通过 reflect.Value.MethodByName 调用方法会一次多约 0.9 MiB 并保留所有导出方法(每个约 470 字节);各平台 hello world 的大小。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">1970</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">44</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#00799A; --series-c-soft:#D9F1F8;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#4FC3E8; --series-c-soft:#0B2A33;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#4FC3E8; --series-c-soft:#0B2A33;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Go · 45</div>
+  <h1>Go 二进制为什么这么大:符号表、反射元数据与 -ldflags -s -w</h1>
+  <p>Go 的二进制大,主要因为它自带运行时、垃圾回收、类型信息与完整的函数表。这篇用真实构建量出:不同依赖带来多少、-s -w 去掉了什么、pclntab 是什么、体积都花在哪些包上,以及反射用法怎样让链接器没法丢掉不用的方法。</p>
+  <div class="hero-fact">
+<div><div class="num">~0.9 MiB</div><div class="lbl">只要用了 reflect.Value.MethodByName,二进制就多这么多(再加每个方法约 470 字节)</div></div><div><div class="num">33%–35%</div><div class="lbl">-ldflags="-s -w" 对各种程序的体积缩减</div></div><div><div class="num">pclntab</div><div class="lbl">与 __text 一样大(650154 与 632260 字节);panic 回溯靠它,剥离符号后函数名仍在</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="go-go-work.html">go.work 工作区:多模块开发时 replace 的替代方案</a></div>
+<section>
+  <h2>依赖决定体积</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  println 版(不导入 fmt):默认 1831778 字节(1.75 MiB);-ldflags="-s -w" 1195250 字节(1.14 MiB),小 35%
+  fmt.Println 版:默认 2429714 字节(2.32 MiB);-ldflags="-s -w" 1587714 字节(1.51 MiB),小 35%
+  加 encoding/json:默认 3766466 字节(3.59 MiB);-ldflags="-s -w" 2477826 字节(2.36 MiB),小 34%
+  加 net/http 客户端:默认 8316338 字节(7.93 MiB);-ldflags="-s -w" 5612050 字节(5.35 MiB),小 33%
+  加 net/http 服务端:默认 8217154 字节(7.84 MiB);-ldflags="-s -w" 5544514 字节(5.29 MiB),小 33%</pre></div>
+  <p>最小的 hello world 约 1.75 MiB(只用内建 <code>println</code>,不导入 <code>fmt</code>),<code>fmt</code> 带来 0.57 MiB,<code>encoding/json</code> 再加 1.27 MiB,<code>net/http</code> 把它推到 7.8–7.9 MiB——因为它拖进 TLS、x509、HTTP/2、net 等一大串包。体积主要是“导入了什么”,而不是你自己写了多少代码。</p>
+</section>
+<section>
+  <h2>-s 与 -w</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  默认:2429714 字节(2.32 MiB)
+  -ldflags=-s(去掉符号表):1587714 字节(1.51 MiB)
+  -ldflags=-w(去掉 DWARF 调试信息):1686674 字节(1.61 MiB)
+  -ldflags="-s -w":1587714 字节(1.51 MiB)
+  -trimpath:2396642 字节(2.29 MiB)
+  -trimpath 加 -s -w:1571202 字节(1.50 MiB)
+  size -m(默认构建)里的段:
+    Segment __PAGEZERO: 4294967296 (zero fill)
+    Segment __TEXT: 1343488
+    Section __text: 632260
+    Section __symbol_stub1: 696
+    Section __rodata: 40578
+    Section __gopclntab: 650154
+    Segment __DATA_CONST: 144880
+    Section __rodata: 7296
+    Section __go_type: 136160
+    Section __go_func: 960
+    Section __got: 464
+    Segment __DATA: 213424
+    Section __go_buildinfo: 224
+    Section __go_fipsinfo: 120
+    Section __go_module: 568
+    Section __noptrdata: 19266</pre></div>
+  <p><code>-s</code> 去掉符号表,<code>-w</code> 去掉 DWARF 调试信息;实测只写 <code>-s</code> 就和 <code>-s -w</code> 一样大(DWARF 随符号表一起没了),只写 <code>-w</code> 单独能省约 0.71 MiB(2429714 → 1686674 字节)。<code>-trimpath</code> 只是把路径换成相对形式,体积只小一点(省约 33 KB)。代价是 <code>go tool nm</code> 与调试器能看到的东西变少,<b>不影响运行,也不影响 panic 的栈回溯</b>。</p>
+</section>
+<section>
+  <h2>体积用在哪</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  nm 里占文件空间的符号(类型 T/R/D 等,不含 BSS)合计 5483407 字节(文件 8217154 字节);BSS 符号合计 33779728 字节,最大的是 crypto/internal/fips140/drbg.memory(33554432 字节)——BSS 不占文件空间,但运行时要映射内存
+    runtime                            2319311 字节  42.3%
+    _type:*                             535536 字节   9.8%
+    go:*(编译器生成的数据)                      483400 字节   8.8%
+    vendor/golang                       224122 字节   4.1%
+    crypto/tls                          222035 字节   4.0%
+    crypto/internal/fips140/nistec      137648 字节   2.5%
+    net                                 136336 字节   2.5%
+    net/http/internal/http2             123867 字节   2.3%
+    net/http                            107073 字节   2.0%
+    crypto/x509                          92394 字节   1.7%
+  最大的 5 个符号:
+     1681680  runtime.pclntab
+      535536  _type:*
+      365592  go:func.*
+      116128  runtime.rodata
+      116128  go:string.*</pre></div>
+  <p>按符号统计,运行时(含它的类型与函数表)占了 4 成以上,最大的单个符号是 <code>runtime.pclntab</code>(程序计数器到函数、文件、行号的映射表,栈回溯、垃圾回收的栈扫描都要用它);<code>_type:*</code> 是类型描述符(反射与接口用)。BSS 里有一个 32 MiB 的 <code>crypto/internal/fips140/drbg.memory</code>:不占文件空间,但会占运行时的内存映射(我没有量它的实际驻留内存)。</p>
+</section>
+<section>
+  <h2>剥离后还有函数名</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  默认:1831906 字节;go tool nm 可用,符号 1826 个;panic 回溯里的函数:main.boom(...) main.main()
+  -ldflags="-s -w":1195362 字节;go tool nm 可用,符号 42 个;panic 回溯里的函数:main.boom(...) main.main()</pre></div>
+  <p>剥离符号表后 <code>go tool nm</code> 从 1826 个符号变成 42 个,但 panic 的回溯照样显示 <code>main.boom</code>,因为回溯读的是 pclntab。所以生产构建加 <code>-s -w</code> 通常是安全的;想保留符号以便事后分析就别加。</p>
+</section>
+<section>
+  <h2>反射与死代码消除</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  不用反射,只直接调 M1:默认 2429698 字节、-s -w 1587714 字节;符号表里 main.T.M&lt;数字&gt; 的函数有 0 个
+  reflect.TypeOf(...).Name()(用了反射但不调方法):默认 2446258 字节、-s -w 1604258 字节;符号表里 main.T.M&lt;数字&gt; 的函数有 0 个
+  reflect.Value.MethodByName(动态名字):默认 3444562 字节、-s -w 2276322 字节;符号表里 main.T.M&lt;数字&gt; 的函数有 200 个
+  同一个类型的方法数 N 变化时(都用 MethodByName,默认构建):
+    N =   0:3349922 字节,比 N = 0 多 0 字节
+    N =  20:3367602 字节,比 N = 0 多 17680 字节(每个方法约 884 字节)
+    N = 100:3405378 字节,比 N = 0 多 55456 字节(每个方法约 555 字节)
+    N = 200:3444562 字节,比 N = 0 多 94640 字节(每个方法约 473 字节)</pre></div>
+  <p>链接器会丢掉没被引用的函数,但如果程序里出现 <code>MethodByName</code> 这样“按名字找方法”的反射调用,编译器无法知道会调哪个,所以把能被反射到的导出方法全部保留(实验里 200 个方法全留着,符号表里 200 个)。仅仅用 <code>reflect.TypeOf</code> 不会触发。这一点只看到现象,我没有读链接器里决定保留的那段代码。</p>
+</section>
+<section>
+  <h2>不同平台</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  darwin/arm64:默认 2429714 字节(2.32 MiB);-s -w 1587714 字节(1.51 MiB)
+  linux/amd64:默认 2346705 字节(2.24 MiB);-s -w 1515680 字节(1.45 MiB)
+  linux/arm64:默认 2342341 字节(2.23 MiB);-s -w 1573024 字节(1.50 MiB)
+  windows/amd64:默认 2496512 字节(2.38 MiB);-s -w 1660416 字节(1.58 MiB)</pre></div>
+  <p>交叉编译出的 hello world 大小相近,windows 稍大。数字都是 <code>CGO_ENABLED=0</code>、<code>go build</code> 默认选项的结果,没有试 <code>-gcflags</code>、UPX 等其它减小体积的手段。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">二进制体积</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "b", "kind": "bars", "label": "数字对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "不同程序的二进制大小(darwin/arm64,CGO_ENABLED=0):println 版 1831778 字节(1.75 MiB),fmt.Println 版 2429714 字节(2.32 MiB),加 encoding/json 3766466 字节(3.59 MiB),加 net/http 客户端 8316338 字节(7.93 MiB),加 net/http 服务端 8217154 字节(7.84 MiB)。每个程序用 -ldflags=\"-s -w\" 之后都小 33%–35%:1.14、1.51、2.36、5.35、5.29 MiB。", "s": {"t": {"lines": ["  println 版(不导入 fmt):默认 1831778 字节(1.75 MiB);-ldflags=\"-s -w\" 1195250 字节(1.14 MiB),小 35%", "  fmt.Println 版:默认 2429714 字节(2.32 MiB);-ldflags=\"-s -w\" 1587714 字节(1.51 MiB),小 35%", "  加 encoding/json:默认 3766466 字节(3.59 MiB);-ldflags=\"-s -w\" 2477826 字节(2.36 MiB),小 34%", "  加 net/http 客户端:默认 8316338 字节(7.93 MiB);-ldflags=\"-s -w\" 5612050 字节(5.35 MiB),小 33%", "  加 net/http 服务端:默认 8217154 字节(7.84 MiB);-ldflags=\"-s -w\" 5544514 字节(5.29 MiB),小 33%"], "cur": [], "mark": [], "done": []}, "done": [0, 1], "mark": [2, 3, 4], "b": {"items": [["println 版(MiB)", 1.75, "1.75"], ["fmt.Println 版", 2.32, "2.32"], ["+ encoding/json", 3.59, "3.59"], ["+ net/http 客户端", 7.93, "7.93"], ["net/http 版 -s -w", 5.35, "5.35"]], "max": 7.93, "cur": [], "mark": [2, 3, 4], "done": [0, 1]}, "kv": {"items": [["不导入 fmt 的 hello", "1.75 MiB"], ["fmt.Println", "2.32 MiB(+0.57)"], ["+ encoding/json", "3.59 MiB"], ["+ net/http", "7.8–7.9 MiB"], ["-s -w 的效果", "统一小 33%–35%"]], "hl": ["+ net/http"]}}}, {"note": "-s 与 -w 各去掉了什么(fmt.Println 版):默认 2429714 字节;-ldflags=-s 1587714 字节(与 -s -w 相同:去掉符号表时 DWARF 也一起没了);-ldflags=-w 1686674 字节(只去 DWARF);-trimpath 2396642 字节,-trimpath 加 -s -w 1571202 字节。size -m 看默认构建的段:__TEXT 1343488 字节(__text 632260、__gopclntab 650154、__rodata 40578),__DATA_CONST 144880(__go_type 136160),__DATA 213424。pclntab 与代码一样大。", "s": {"t": {"lines": ["  默认:2429714 字节(2.32 MiB)", "  -ldflags=-s(去掉符号表):1587714 字节(1.51 MiB)", "  -ldflags=-w(去掉 DWARF 调试信息):1686674 字节(1.61 MiB)", "  -ldflags=\"-s -w\":1587714 字节(1.51 MiB)", "  -trimpath:2396642 字节(2.29 MiB)", "  -trimpath 加 -s -w:1571202 字节(1.50 MiB)", "  size -m(默认构建)里的段:", "    Segment __PAGEZERO: 4294967296 (zero fill)", "    Segment __TEXT: 1343488", "    Section __text: 632260", "    Section __symbol_stub1: 696", "    Section __rodata: 40578", "    Section __gopclntab: 650154", "    Segment __DATA_CONST: 144880", "    Section __rodata: 7296", "    Section __go_type: 136160", "    Section __go_func: 960", "    Section __got: 464", "    Segment __DATA: 213424", "    Section __go_buildinfo: 224", "    Section __go_fipsinfo: 120", "    Section __go_module: 568", "    Section __noptrdata: 19266"], "cur": [], "mark": [], "done": []}, "done": [0, 1, 2], "mark": [4, 5, 9, 12], "b": {"items": [["默认(KiB)", 2373, "2373"], ["-s(KiB)", 1550, "1550"], ["-w(KiB)", 1647, "1647"], ["__text(KiB)", 617, "617"], ["__gopclntab(KiB)", 635, "635"]], "max": 2373, "cur": [], "mark": [3, 4], "done": [1, 2]}, "kv": {"items": [["默认", "2429714 字节"], ["-s", "1587714 字节(与 -s -w 相同)"], ["-w", "1686674 字节"], ["__text / __gopclntab", "632260 / 650154 字节——一样大"]], "hl": ["__text / __gopclntab"]}}}, {"note": "体积用在哪(net/http 服务端版,默认构建):nm 里占文件空间的符号合计 5483407 字节(文件 8217154 字节)。按包:runtime 2319311 字节(42.3%)、_type:*(类型描述符)535536(9.8%)、go:*(编译器生成的数据)483400(8.8%)、vendor/golang 224122、crypto/tls 222035、crypto/internal/fips140/nistec 137648、net 136336、net/http/internal/http2 123867、net/http 107073。最大的符号是 runtime.pclntab 1681680 字节。另外 BSS 里有 crypto/internal/fips140/drbg.memory 33554432 字节(32 MiB)——不占文件空间,但运行时要映射内存。", "s": {"t": {"lines": ["  nm 里占文件空间的符号(类型 T/R/D 等,不含 BSS)合计 5483407 字节(文件 8217154 字节);BSS 符号合计 33779728 字节,最大的是 crypto/internal/fips140/drbg.memory(33554432 字节)——BSS 不占文件空间,但运行时要映射内存", "    runtime                            2319311 字节  42.3%", "    _type:*                             535536 字节   9.8%", "    go:*(编译器生成的数据)                      483400 字节   8.8%", "    vendor/golang                       224122 字节   4.1%", "    crypto/tls                          222035 字节   4.0%", "    crypto/internal/fips140/nistec      137648 字节   2.5%", "    net                                 136336 字节   2.5%", "    net/http/internal/http2             123867 字节   2.3%", "    net/http                            107073 字节   2.0%", "    crypto/x509                          92394 字节   1.7%", "  最大的 5 个符号:", "     1681680  runtime.pclntab", "      535536  _type:*", "      365592  go:func.*", "      116128  runtime.rodata", "      116128  go:string.*"], "cur": [], "mark": [], "done": []}, "done": [0, 1], "mark": [0, 2, 12, 13], "b": {"items": [["runtime(KiB)", 2265, "2265"], ["_type:*", 523, "523"], ["go:* 生成数据", 472, "472"], ["crypto/tls", 217, "217"], ["net/http", 105, "105"]], "max": 2265, "cur": [], "mark": [1, 2, 3, 4], "done": [0]}, "kv": {"items": [["runtime", "2319311 字节,占 42.3%"], ["最大的符号", "runtime.pclntab 1681680 字节"], ["BSS", "fips140/drbg.memory 32 MiB:不占文件,占内存映射"], ["net/http 自己", "107073 字节(依赖的 crypto、net 等更大)"]], "hl": ["BSS"]}}}, {"note": "-s -w 之后还能看到函数名吗:默认构建 1831906 字节,go tool nm 有 1826 个符号;-ldflags=\"-s -w\" 构建 1195362 字节,go tool nm 只剩 42 个符号;两种构建下 panic 的栈回溯里都有 main.boom(...) 与 main.main()——回溯靠的是 pclntab,不靠符号表。", "s": {"t": {"lines": ["  默认:1831906 字节;go tool nm 可用,符号 1826 个;panic 回溯里的函数:main.boom(...) main.main()", "  -ldflags=\"-s -w\":1195362 字节;go tool nm 可用,符号 42 个;panic 回溯里的函数:main.boom(...) main.main()"], "cur": [], "mark": [], "done": []}, "mark": [0, 1], "b": {"items": [["默认的符号数", 1826, "1826"], ["-s -w 的符号数", 42, "42"]], "max": 1826, "cur": [], "mark": [0], "done": [1]}, "kv": {"items": [["符号表", "1826 → 42 个符号"], ["panic 栈回溯", "函数名仍在(pclntab)"], ["含义", "剥离不影响运行与诊断,影响 nm 与调试器"]], "hl": ["panic 栈回溯"]}}}, {"note": "反射会让链接器保留更多方法:同一个类型有 200 个导出方法。不用反射、只直接调 M1:2429698 字节,符号表里没有 M<数字>;用 reflect.TypeOf(…).Name()(用了反射但不调方法):2446258 字节,仍是 0 个;用 reflect.Value.MethodByName(动态名字):3444562 字节,200 个方法全部保留。方法数 N 变化:N = 0 是 3349922 字节(用 MethodByName 本身就比 hello 多约 0.9 MiB),N = 20 多 17680 字节、N = 100 多 55456 字节、N = 200 多 94640 字节(每个方法约 470 字节)。", "s": {"t": {"lines": ["  不用反射,只直接调 M1:默认 2429698 字节、-s -w 1587714 字节;符号表里 main.T.M<数字> 的函数有 0 个", "  reflect.TypeOf(...).Name()(用了反射但不调方法):默认 2446258 字节、-s -w 1604258 字节;符号表里 main.T.M<数字> 的函数有 0 个", "  reflect.Value.MethodByName(动态名字):默认 3444562 字节、-s -w 2276322 字节;符号表里 main.T.M<数字> 的函数有 200 个", "  同一个类型的方法数 N 变化时(都用 MethodByName,默认构建):", "    N =   0:3349922 字节,比 N = 0 多 0 字节", "    N =  20:3367602 字节,比 N = 0 多 17680 字节(每个方法约 884 字节)", "    N = 100:3405378 字节,比 N = 0 多 55456 字节(每个方法约 555 字节)", "    N = 200:3444562 字节,比 N = 0 多 94640 字节(每个方法约 473 字节)"], "cur": [], "mark": [], "done": []}, "done": [0, 1], "mark": [2, 3, 7], "b": {"items": [["直接调用(KiB)", 2373, "2373"], ["TypeOf.Name", 2389, "2389"], ["MethodByName N=0", 3272, "3272"], ["MethodByName N=200", 3364, "3364"]], "max": 3364, "cur": [], "mark": [2, 3], "done": [0, 1]}, "kv": {"items": [["不用反射", "2429698 字节;200 个方法都被丢弃"], ["reflect.TypeOf(...).Name()", "+16 KB;方法仍被丢弃"], ["MethodByName", "+约 0.9 MiB 固定成本,方法全部保留"], ["每个方法", "约 470 字节"]], "hl": ["MethodByName"]}}}, {"note": "不同平台的 hello world(fmt.Println 版,交叉编译):darwin/arm64 2429714 字节(2.32 MiB),-s -w 1587714;linux/amd64 2346705(2.24 MiB),-s -w 1515680;linux/arm64 2342341(2.23 MiB),-s -w 1573024;windows/amd64 2496512(2.38 MiB),-s -w 1660416(1.58 MiB)。", "s": {"t": {"lines": ["  darwin/arm64:默认 2429714 字节(2.32 MiB);-s -w 1587714 字节(1.51 MiB)", "  linux/amd64:默认 2346705 字节(2.24 MiB);-s -w 1515680 字节(1.45 MiB)", "  linux/arm64:默认 2342341 字节(2.23 MiB);-s -w 1573024 字节(1.50 MiB)", "  windows/amd64:默认 2496512 字节(2.38 MiB);-s -w 1660416 字节(1.58 MiB)"], "cur": [], "mark": [], "done": []}, "done": [0, 1, 2], "mark": [3], "kv": {"items": [["darwin/arm64", "2.32 MiB → 1.51 MiB"], ["linux/amd64", "2.24 MiB → 1.45 MiB"], ["linux/arm64", "2.23 MiB → 1.50 MiB"], ["windows/amd64", "2.38 MiB → 1.58 MiB"]], "hl": ["windows/amd64"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / Go 1.27.1(brew);用 go run / go build / go test 直接编译运行,需要第三方库时经代理从 proxy.golang.org 下载;计时用 time.Now / testing.B,数字每次运行会有小幅抖动。所有大小来自真实构建(go build 默认选项,CGO_ENABLED=0);段大小用 macOS 的 size -m;符号大小用 go tool nm -size(BSS 符号单独统计);panic 回溯来自真实运行</li><li>没有验证:UPX 压缩、-gcflags 与 -ldflags 的其它体积选项、链接器死代码消除的具体算法、BSS 的 32 MiB 在运行时的实际驻留内存、Linux 上 ELF 各段的占用(只在 macOS 上看了段)、go build -buildmode=pie 等其它构建模式</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="go-inlining.html">
+    <div>
+      <div class="t1">下一篇 · GO 46</div>
+      <div class="t2">内联:什么函数会被内联,-gcflags=-m 怎么读</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Go · Go 二进制为什么这么大:符号表、反射元数据与 -ldflags -s -w · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

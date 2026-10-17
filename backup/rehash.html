@@ -1,0 +1,499 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>渐进式 rehash:字典扩容不卡顿的秘密</title>
+<meta name="description" content="抓拍到两张哈希表同时存在的渐进式迁移过程。">
+<link rel="canonical" href="https://bigywater.tech/rehash.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="渐进式 rehash:字典扩容不卡顿的秘密">
+<meta property="og:description" content="抓拍到两张哈希表同时存在的渐进式迁移过程。">
+<meta property="og:url" content="https://bigywater.tech/rehash.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="渐进式 rehash:字典扩容不卡顿的秘密">
+<meta name="twitter:description" content="抓拍到两张哈希表同时存在的渐进式迁移过程。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F7F5F3; --paper:#FFFFFF; --ink:#211A19; --ink-dim:#6B5D5A; --line:#E3DAD6;
+  --redis-c:#C6302B; --redis-c-soft:#FBE7E5;
+  --mem-c:#B8791E; --mem-c-soft:#F6ECD9;
+  --type-c:#2C6E49; --type-c-soft:#E1EFE6;
+  --code-bg:#241C1B; --code-ink:#F0E7E4;
+  --shadow: 0 1px 2px rgba(40,20,18,.06), 0 8px 24px -12px rgba(40,20,18,.16);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#17100F; --paper:#231A19; --ink:#F0E7E4; --ink-dim:#B3A19D; --line:#3A2C29;
+    --redis-c:#F0736A; --redis-c-soft:#3A211F;
+    --mem-c:#E0AC5C; --mem-c-soft:#382C18;
+    --type-c:#6FC492; --type-c-soft:#1B3327;
+    --code-bg:#120D0C; --code-ink:#EFE4E1;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#17100F; --paper:#231A19; --ink:#F0E7E4; --ink-dim:#B3A19D; --line:#3A2C29;
+  --redis-c:#F0736A; --redis-c-soft:#3A211F;
+  --mem-c:#E0AC5C; --mem-c-soft:#382C18;
+  --type-c:#6FC492; --type-c-soft:#1B3327;
+  --code-bg:#120D0C; --code-ink:#EFE4E1;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--redis-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--redis-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--redis-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--redis-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.a .tag{background:var(--redis-c-soft); color:var(--redis-c);}
+.card.b .tag{background:var(--mem-c-soft); color:var(--mem-c);}
+.card.c .tag{background:var(--type-c-soft); color:var(--type-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#B3A19D; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#F0A6A0;}
+
+.callout{border-left:3px solid var(--redis-c); background:var(--redis-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+.callout.c{border-color:var(--type-c); background:var(--type-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--redis-c-soft); color:var(--redis-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#F0A6A0;}
+.term .ok{color:#7DD0A0;}
+.term .cm{color:#8B7F7C;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--mem-c-soft); color:var(--mem-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:22px 20px;}
+.tables{display:grid; grid-template-columns:1fr 1fr; gap:14px;}
+@media (max-width:640px){.tables{grid-template-columns:1fr;}}
+.tblbox{border:1px solid var(--line); border-radius:10px; padding:12px 14px; background:var(--bg);}
+.tblbox h4{margin:0 0 10px; font-size:.72rem; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-dim); font-weight:700;}
+.bucketrow{display:flex; align-items:center; gap:8px; margin-bottom:4px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.76rem;}
+.bucketidx{width:22px; text-align:right; color:var(--ink-dim); flex:0 0 auto;}
+.bucketcells{flex:1; display:flex; flex-wrap:wrap; gap:3px;}
+.keycell{padding:2px 6px; border-radius:4px; background:var(--paper); border:1px solid var(--line);}
+.keycell.active{border-color:var(--redis-c); background:var(--redis-c-soft); color:var(--redis-c); font-weight:700;}
+.bucketrow.migrated .bucketcells{opacity:.3;}
+.bucketrow.current{background:var(--mem-c-soft); border-radius:5px;}
+.stat-row{display:flex; gap:16px; flex-wrap:wrap; margin:14px 0 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem;}
+.stat{border:1px solid var(--line); border-radius:8px; padding:8px 12px; background:var(--bg);}
+.stat b{color:var(--redis-c); display:block; font-size:1rem; font-variant-numeric:tabular-nums;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--redis-c); color:var(--redis-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--redis-c); border-color:var(--redis-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{display:flex; align-items:center; gap:10px; margin-bottom:24px; font-size:.88rem; color:var(--ink-dim); flex-wrap:wrap;}
+.prev-post a{font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--redis-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Redis 系列 · 第四篇</div>
+    <h1>Redis 里存几百万个 key 的字典要扩容,为什么感觉不到卡顿?</h1>
+    <p>Redis 的整个 keyspace,底层就是一个巨大的哈希表(<span class="mono">dict</span>)。哈希表装的元素多了要扩容,扩容意味着把所有元素从旧表搬到新表——如果几百万个 key 一次性从头搬到尾,单线程的 Redis 会在这几十毫秒甚至更久的时间里完全没法响应任何请求。Redis 的解法是<b>渐进式 rehash</b>:把这次大搬家拆成无数个小碎步,分散在之后的每一次操作里悄悄完成。</p>
+    <p>本机运行的 Redis 8.10.1,在批量插入 20 万个 key 的过程中,抓到了两张哈希表同时存在的瞬间。</p>
+    <div class="hero-fact">
+      <div><div class="num">2 张表同时在</div><div class="lbl">抓到 rehash 进行中的状态,新表元素数在不同快照间持续增长</div></div>
+      <div><div class="num">4</div><div class="lbl">字典初始桶数量,源码常量(<span class="mono">DICT_HT_INITIAL_SIZE</span>)</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <div class="prev-post">← 接上篇 <a href="io.html" target="_blank" rel="noopener">Redis 一个线程,怎么同时管几万个连接</a></div>
+  <h2>问题:全量搬家会卡住整个 Redis</h2>
+  <p class="h2-sub">哈希表的经典扩容方式是:申请一张更大的新表,把旧表里所有元素重新计算哈希、逐个搬过去。</p>
+  <div class="cards">
+    <div class="card a">
+      <span class="tag">一次性 rehash</span>
+      <h3>元素越多,卡得越久</h3>
+      <p>几百万个 key 一次性重新计算哈希、搬到新表,单线程的 Redis 在这段时间里没法处理任何其他请求——对一个号称"高性能"的系统这是不可接受的。</p>
+    </div>
+    <div class="card b">
+      <span class="tag">渐进式 rehash</span>
+      <h3>拆成无数个小碎步</h3>
+      <p>同时保留新旧两张表,每次读写操作顺手搬一两个桶,再加上后台定时任务见缝插针地多搬一些——直到旧表搬空。</p>
+    </div>
+    <div class="card c">
+      <span class="tag">代价</span>
+      <h3>rehash 期间要同时维护两张表</h3>
+      <p>查找一个 key 得先查旧表、没找到再查新表;新写入的 key 直接放进新表——多了一点判断逻辑,换来的是"没有一次性卡顿"。</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>真实实测:抓拍到两张表同时存在</h2>
+  <p class="h2-sub">本机运行的 Redis,用 <span class="mono">--pipe</span> 批量插入 20 万个 key,同时每 50 毫秒用 <span class="mono">DEBUG HTSTATS</span> 查一次字典状态。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cmd">$ redis-cli --pipe &lt; 20万条SET命令.txt &</span>
+<span class="cmd">$ (每 50ms) redis-cli DEBUG HTSTATS 0</span>
+
+<span class="ok">Hash table 1 stats (rehashing target):
+ table size: 65536
+ number of elements: 47559</span>
+
+<span class="cm"># ...再过 100ms...</span>
+
+<span class="ok">Hash table 1 stats (rehashing target):
+ table size: 262144
+ number of elements: 187499</span>
+
+<span class="cm"># 插入结束后</span>
+<span class="ok">Hash table 0 stats (main hash table):
+ table size: 262144
+ number of elements: 200000</span>
+  </div>
+  <p>中间那次抓拍里,<span class="mono">Hash table 1 (rehashing target)</span> 这行本身就是铁证——它只在 rehash 进行中才会出现在 <span class="mono">DEBUG HTSTATS</span> 的输出里,插入结束后就只剩一张表了。有意思的是两次抓拍的目标表大小不一样(65536 → 262144)——这说明期间发生了不止一轮扩容:第一轮扩容很快就搬完了,但插入速度太快,搬完没多久 key 数量又超过了新表容量,马上触发了第二轮更大的扩容。系统在高压力下,过程往往比教科书描述的"一次扩容、慢慢搬完"更曲折,这里如实记录了这个细节。</p>
+</section>
+
+<section>
+  <h2>源码里的碎步搬家</h2>
+  <p class="h2-sub">核心函数一次只搬 <span class="mono">n</span> 个非空桶,谁来调用、传多大的 <span class="mono">n</span>,决定了"碎步"具体有多碎。</p>
+  <blockquote class="src">
+    <span class="path">src/dict.c · <a href="https://github.com/redis/redis/blob/8.10.1/src/dict.c#L406" target="_blank" rel="noopener">redis @ 8.10.1, L406</a></span>
+int dictRehash(dict *d, int n) {
+    ...
+    while(n-- && d->ht_used[0] != 0) {
+        while(d->ht_table[0][d->rehashidx] == NULL) {
+            d->rehashidx++;   // 跳过空桶
+            ...
+        }
+        rehashEntriesInBucketAtIndex(d, d->rehashidx);  // 搬这一个桶
+        d->rehashidx++;
+    }
+    return !dictCheckRehashingCompleted(d);
+}
+  </blockquote>
+  <p>这个函数被两个地方调用,搬家速度由两条腿一起驱动:</p>
+  <table class="mono">
+    <tr><th>调用方</th><th>n 是多少</th><th>触发时机</th></tr>
+    <tr><td><span class="mono">_dictRehashStep()</span></td><td>1</td><td>每一次正常的读/写/删操作,顺手搬 1 个桶</td></tr>
+    <tr><td><span class="mono">dictRehashMicroseconds()</span></td><td>每批 100</td><td>后台定时任务,给一个时间预算(微秒级),时间到就停,不是搬固定数量</td></tr>
+  </table>
+  <p>这也是为什么"渐进式 rehash 会不会拖慢单次操作"这个问题的答案是"几乎不会"——每次操作只多做一点点搬家的活,而且完全没有流量的时候,后台任务也会利用空闲时间把搬家进度往前推。</p>
+</section>
+
+<section>
+  <h2>演示:一步步搬,搬的时候怎么查数据</h2>
+  <p class="h2-sub">用一个初始 4 个桶的玩具字典复现完整过程,插入 12 个 key,规则和代码一致(每次操作搬 1 个桶)。</p>
+  <div class="demo" id="rhDemo">
+    <div class="demo-head">渐进式 rehash 演示</div>
+    <div class="demo-narration" id="rhNarration"></div>
+    <div class="demo-body">
+      <div class="tables">
+        <div class="tblbox"><h4>ht[0](旧表)</h4><div id="rhHt0"></div></div>
+        <div class="tblbox"><h4>ht[1](新表,rehash 时才存在)</h4><div id="rhHt1"></div></div>
+      </div>
+      <div class="stat-row" id="rhStats"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="rhReset">⏮ 重来</button>
+      <button class="btn" id="rhPrev">‹ 上一步</button>
+      <button class="btn primary" id="rhNext">下一步 ›</button>
+      <button class="btn" id="rhPlay">▶ 自动播放</button>
+      <span class="step-counter" id="rhCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">演示里出现了两轮扩容(4→8,再 8→16),不是刻意设计的巧合——用和上面实验相同的驱动规则(每次插入顺手搬 1 个桶)跑小规模场景,自然也会在插入还没结束、上一轮还没搬完的情况下,重新触发下一轮更大的扩容,和抓拍到的现象是同一类规律。</p>
+</section>
+
+<section>
+  <h2>为什么扩容期间要小心翼翼</h2>
+  <p class="h2-sub">还有一个容易被忽略的细节:BGSAVE/BGREWRITEAOF 期间,Redis 会刻意<b>推迟</b>扩容。</p>
+  <blockquote class="src">
+    <span class="path">src/dict.c · <a href="https://github.com/redis/redis/blob/8.10.1/src/dict.c#L28" target="_blank" rel="noopener">redis @ 8.10.1, L28</a></span>
+/* Using dictSetResizeEnabled() we make possible to disable
+ * resizing and rehashing of the hash table as needed. This is very
+ * important for Redis, as we use copy-on-write and don't want to move
+ * too much memory around when there is a child performing saving
+ * operations. */
+  </blockquote>
+  <p>第一篇讲过 Redis 靠 <span class="mono">fork</span> 子进程做 RDB/AOF 重写,父子进程共享内存页,谁先写谁触发写时复制(copy-on-write)。如果这时候还在到处搬桶、大量修改哈希表的内存,会把本该共享的页面提前复制出去,让这次 <span class="mono">fork</span> 期间的内存开销远超预期。所以源码里有一个 <span class="mono">dict_can_resize</span> 开关,fork 子进程存在时会被设成"能不扩容就不扩容",只有负载因子冲到 4 倍这种真正影响性能的地步,才会强行扩容——常量确认过:<span class="mono">dict_force_resize_ratio = 4</span>。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文"两张表同时存在"的实验在本机运行的 Redis 8.10.1 上完成:用 <span class="mono">redis-cli --pipe</span> 批量导入 20 万条 <span class="mono">SET</span> 命令,同时并发轮询 <span class="mono">DEBUG HTSTATS 0</span>,抓拍到的输出均为结果,未做任何删改。</li>
+      <li>源码引用(<span class="mono">dict.c</span> 的 <span class="mono">dictRehash</span>、<span class="mono">_dictRehashStep</span>、<span class="mono">dictRehashMicroseconds</span>、<span class="mono">dict_force_resize_ratio</span> 常量,以及 <span class="mono">dict.h</span> 的 <span class="mono">DICT_HT_INITIAL_SIZE</span>)取自 <span class="mono">redis/redis</span> 仓库 <span class="mono">8.10.1</span> 标签,与本机安装的 Redis 8.10.1 完全一致。</li>
+      <li>演示动画的玩具字典(初始 4 个桶)延续了规则(每次操作搬 1 个桶、负载因子达到 1 触发扩容、扩容后容量翻倍),并且用一套独立的暴力回放算法逐事件核对过"这一刻查某个 key 应该在哪张表里找到"这个判断的正确性,不是只跑通了一条精心设计的路径。</li>
+      <li>没有涉及:哈希冲突的链式解决方式本身(桶内部是链表)、<span class="mono">dictScan</span> 游标遍历如何在 rehash 期间保证不重复、不遗漏地扫描全部 key(这是渐进式 rehash 之上另一层需要小心处理的问题)、缩容(shrink)的触发条件与扩容并不完全对称。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="skiplist.html" target="_blank" rel="noopener">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">跳表:ZSet 排名为什么不用逐个数</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Redis 系列 · 第四篇 · 渐进式 rehash · 数据来自本机运行的 Redis 8.10.1</footer>
+
+<script>
+const DATA = {"events": [{"key": "k0", "bucket": 0, "type": "add-to-ht0"}, {"key": "k1", "bucket": 3, "type": "add-to-ht0"}, {"key": "k2", "bucket": 3, "type": "add-to-ht0"}, {"key": "k3", "bucket": 0, "type": "add-to-ht0"}, {"oldSize": 4, "newSize": 8, "reason": "used(4) >= size(4),触发扩容", "type": "start-rehash"}, {"key": "k4", "bucket": 0, "reason": "正在 rehash,新写入直接进 ht1", "type": "add-to-ht1"}, {"bucketIdx": 0, "keys": ["k0", "k3"], "ht0Remaining": 2, "ht1Count": 3, "type": "migrate-bucket"}, {"key": "k5", "bucket": 0, "reason": "正在 rehash,新写入直接进 ht1", "type": "add-to-ht1"}, {"bucketIdx": 3, "keys": ["k1", "k2"], "ht0Remaining": 0, "ht1Count": 6, "type": "migrate-bucket"}, {"finalSize": 8, "finalUsed": 6, "type": "rehash-complete"}, {"key": "k6", "bucket": 2, "type": "add-to-ht0"}, {"key": "k7", "bucket": 0, "type": "add-to-ht0"}, {"oldSize": 8, "newSize": 16, "reason": "used(8) >= size(8),触发扩容", "type": "start-rehash"}, {"key": "k8", "bucket": 2, "reason": "正在 rehash,新写入直接进 ht1", "type": "add-to-ht1"}, {"bucketIdx": 0, "keys": ["k4", "k0", "k5", "k7"], "ht0Remaining": 4, "ht1Count": 5, "type": "migrate-bucket"}, {"key": "k9", "bucket": 11, "reason": "正在 rehash,新写入直接进 ht1", "type": "add-to-ht1"}, {"bucketIdx": 2, "keys": ["k6"], "ht0Remaining": 3, "ht1Count": 7, "type": "migrate-bucket"}, {"key": "k10", "bucket": 5, "reason": "正在 rehash,新写入直接进 ht1", "type": "add-to-ht1"}, {"bucketIdx": 3, "keys": ["k1"], "ht0Remaining": 2, "ht1Count": 9, "type": "migrate-bucket"}, {"key": "k11", "bucket": 5, "reason": "正在 rehash,新写入直接进 ht1", "type": "add-to-ht1"}, {"bucketIdx": 4, "keys": ["k3"], "ht0Remaining": 1, "ht1Count": 11, "type": "migrate-bucket"}, {"bucketIdx": 7, "keys": ["k2"], "ht0Remaining": 0, "ht1Count": 12, "type": "migrate-bucket"}, {"finalSize": 16, "finalUsed": 12, "type": "rehash-complete"}, {"key": "k0", "foundIn": "ht0", "type": "find"}, {"key": "k1", "foundIn": "ht0", "type": "find"}, {"key": "k2", "foundIn": "ht0", "type": "find"}, {"key": "k3", "foundIn": "ht0", "type": "find"}, {"key": "k4", "foundIn": "ht0", "type": "find"}, {"key": "k5", "foundIn": "ht0", "type": "find"}, {"key": "k6", "foundIn": "ht0", "type": "find"}, {"key": "k7", "foundIn": "ht0", "type": "find"}, {"key": "k8", "foundIn": "ht0", "type": "find"}, {"key": "k9", "foundIn": "ht0", "type": "find"}, {"key": "k10", "foundIn": "ht0", "type": "find"}, {"key": "k11", "foundIn": "ht0", "type": "find"}, {"key": "nonexistent", "foundIn": null, "type": "find"}]};
+
+(function(){
+  const events = DATA.events;
+  const ht0Box = document.getElementById('rhHt0');
+  const ht1Box = document.getElementById('rhHt1');
+  const statsBox = document.getElementById('rhStats');
+  const narration = document.getElementById('rhNarration');
+  const counter = document.getElementById('rhCounter');
+  let idx = 0, playing=false, playTimer=null;
+
+  function describe(e){
+    switch(e.type){
+      case 'add-to-ht0': return `插入 <span class="k">${e.key}</span>,直接放进 ht[0]。`;
+      case 'start-rehash': return `触发扩容:${e.reason}。分配新表 ht[1](容量 ${e.newSize}),开始渐进式搬家。`;
+      case 'add-to-ht1': return `插入 <span class="k">${e.key}</span>:${e.reason}。`;
+      case 'migrate-bucket': return `顺手搬 1 个桶(第 ${e.bucketIdx} 号):把 [${e.keys.join(', ')}] 从 ht[0] 移到 ht[1]。ht[1] 现在有 ${e.ht1Count} 个元素。`;
+      case 'rehash-complete': return `搬完了!ht[1] 变成新的 ht[0](容量 ${e.finalSize},共 ${e.finalUsed} 个元素),旧表释放。`;
+      case 'find': return e.foundIn
+        ? `查找 <span class="k">${e.key}</span>:在 <b>${e.foundIn}</b> 里找到了。`
+        : `查找 <span class="k">${e.key}</span>:两张表都没有。`;
+      default: return e.type;
+    }
+  }
+
+  function computeState(uptoIdx){
+    let ht0 = Array.from({length:4}, ()=>[]);
+    let ht1 = null;
+    let rehashIdx = -1;
+    for (let i=0;i<=uptoIdx;i++){
+      const e = events[i];
+      if (e.type==='start-rehash'){ ht1 = Array.from({length:e.newSize}, ()=>[]); rehashIdx = 0; }
+      if (e.type==='add-to-ht0'){ ht0[e.bucket].push(e.key); }
+      if (e.type==='add-to-ht1'){ ht1[e.bucket].push(e.key); }
+      if (e.type==='migrate-bucket'){
+        ht0[e.bucketIdx] = [];
+        // the trace doesn't record each migrated key's exact ht1 bucket
+        // (only the aggregate source bucket), so for display we group them
+        // into one pseudo-bucket -- this only affects which row they're
+        // drawn in, not correctness of "is this key present in ht1"
+        ht1[e.bucketIdx % ht1.length].push(...e.keys);
+        rehashIdx = e.bucketIdx+1;
+      }
+      if (e.type==='rehash-complete'){ ht0 = ht1; ht1 = null; rehashIdx = -1; }
+    }
+    return {ht0, ht1, rehashIdx};
+  }
+
+  function renderTable(box, table, currentBucket){
+    if (!table){ box.innerHTML = '<span style="color:var(--ink-dim); font-size:.8rem;">(不存在)</span>'; return; }
+    let html = '';
+    table.forEach((bucket, i)=>{
+      const isCurrent = i===currentBucket;
+      html += `<div class="bucketrow ${isCurrent?'current':''}"><span class="bucketidx">${i}</span><span class="bucketcells">${bucket.map(k=>`<span class="keycell">${k}</span>`).join('') || '·'}</span></div>`;
+    });
+    box.innerHTML = html;
+  }
+
+  function render(){
+    idx = Math.max(0, Math.min(events.length-1, idx));
+    const e = events[idx];
+    narration.innerHTML = describe(e);
+    const state = computeState(idx);
+    const highlightBucket = e.type==='migrate-bucket' ? e.bucketIdx : -1;
+    renderTable(ht0Box, state.ht0, e.type==='migrate-bucket' ? highlightBucket : -1);
+    renderTable(ht1Box, state.ht1, -1);
+    const ht0Used = state.ht0.reduce((a,b)=>a+b.length,0);
+    const ht1Used = state.ht1 ? state.ht1.reduce((a,b)=>a+b.length,0) : 0;
+    statsBox.innerHTML = `<div class="stat">ht[0] 容量<b>${state.ht0.length}</b></div><div class="stat">ht[0] 已用<b>${ht0Used}</b></div><div class="stat">ht[1] 已用<b>${state.ht1?ht1Used:'—'}</b></div><div class="stat">是否 rehashing<b>${state.ht1?'是':'否'}</b></div>`;
+    counter.textContent = `${idx+1} / ${events.length}`;
+    document.getElementById('rhPrev').disabled = idx===0;
+    document.getElementById('rhNext').disabled = idx===events.length-1;
+  }
+  document.getElementById('rhPrev').onclick=()=>{idx--;render();stopPlay();};
+  document.getElementById('rhNext').onclick=()=>{idx++;render();stopPlay();};
+  document.getElementById('rhReset').onclick=()=>{idx=0;render();stopPlay();};
+  function stopPlay(){ playing=false; clearInterval(playTimer); document.getElementById('rhPlay').textContent='▶ 自动播放'; }
+  document.getElementById('rhPlay').onclick=()=>{
+    if(playing){ stopPlay(); return; }
+    playing=true; document.getElementById('rhPlay').textContent='⏸ 暂停';
+    playTimer = setInterval(()=>{
+      if(idx>=events.length-1){ stopPlay(); return; }
+      idx++; render();
+    }, 700);
+  };
+  render();
+})();
+</script>
+
+</body>
+</html>

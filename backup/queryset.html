@@ -1,0 +1,543 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>QuerySet:链式调用为什么不查库</title>
+<meta name="description" content="真实实测链式调用零查询、list() 触发单条合并 SQL、切片行为随求值状态变化。">
+<link rel="canonical" href="https://bigywater.tech/queryset.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="QuerySet:链式调用为什么不查库">
+<meta property="og:description" content="真实实测链式调用零查询、list() 触发单条合并 SQL、切片行为随求值状态变化。">
+<meta property="og:url" content="https://bigywater.tech/queryset.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="QuerySet:链式调用为什么不查库">
+<meta name="twitter:description" content="真实实测链式调用零查询、list() 触发单条合并 SQL、切片行为随求值状态变化。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F4F7F4; --paper:#FFFFFF; --ink:#132119; --ink-dim:#5C6B61; --line:#DCE6DE;
+  --dj-c:#0C4B33; --dj-c-soft:#E1EEE6;
+  --mem-c:#B8791E; --mem-c-soft:#F6ECD9;
+  --meta-c:#7B4FA8; --meta-c-soft:#EFE6F7;
+  --code-bg:#12211A; --code-ink:#E7F0EA;
+  --shadow: 0 1px 2px rgba(15,30,20,.06), 0 8px 24px -12px rgba(15,30,20,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0E1712; --paper:#18251E; --ink:#E7F0EA; --ink-dim:#9DB0A4; --line:#2C3B32;
+    --dj-c:#5FBF95; --dj-c-soft:#1B3327;
+    --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+    --meta-c:#B08AE0; --meta-c-soft:#332545;
+    --code-bg:#0B120D; --code-ink:#DCE9E0;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0E1712; --paper:#18251E; --ink:#E7F0EA; --ink-dim:#9DB0A4; --line:#2C3B32;
+  --dj-c:#5FBF95; --dj-c-soft:#1B3327;
+  --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+  --meta-c:#B08AE0; --meta-c-soft:#332545;
+  --code-bg:#0B120D; --code-ink:#DCE9E0;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--dj-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--dj-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--dj-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--dj-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.a .tag{background:var(--dj-c-soft); color:var(--dj-c);}
+.card.b .tag{background:var(--mem-c-soft); color:var(--mem-c);}
+.card.c .tag{background:var(--meta-c-soft); color:var(--meta-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#8FB0A0; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#9FE0C3;}
+
+.callout{border-left:3px solid var(--dj-c); background:var(--dj-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+.callout.c{border-color:var(--meta-c); background:var(--meta-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--dj-c-soft); color:var(--dj-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#9FE0C3;}
+.term pre.code{margin:0 0 10px; color:#9FE0C3; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+.term .ok{color:#7DD0A0;}
+.term .cm{color:#7C9C8C;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--mem-c-soft); color:var(--mem-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:22px 20px; overflow-x:auto;}
+.chain-row{display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:14px; min-width:560px;}
+.qs-node{padding:6px 12px; border-radius:8px; border:1px solid var(--line); background:var(--bg); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.76rem; text-align:center;}
+.qs-node.active{border-color:var(--dj-c); background:var(--dj-c-soft); color:var(--dj-c); font-weight:700;}
+.qs-node .label{font-weight:700;}
+.qs-node .cache{display:block; font-size:.65rem; color:var(--ink-dim); margin-top:2px;}
+.qs-node.cached .cache{color:var(--dj-c);}
+.qs-arrow{color:var(--ink-dim); font-size:.9rem;}
+.sql-box{border:1px solid var(--line); border-radius:10px; padding:12px 16px; background:var(--code-bg); color:var(--code-ink); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.78rem; min-height:24px;}
+.stat-row{display:flex; gap:16px; flex-wrap:wrap; margin:14px 0 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem;}
+.stat{border:1px solid var(--line); border-radius:8px; padding:8px 12px; background:var(--bg);}
+.stat b{color:var(--dj-c); display:block; font-size:1rem; font-variant-numeric:tabular-nums;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--dj-c); color:var(--dj-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--dj-c); border-color:var(--dj-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{display:flex; align-items:center; gap:10px; margin-bottom:24px; font-size:.88rem; color:var(--ink-dim); flex-wrap:wrap;}
+.prev-post a{font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--dj-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Django 系列 · 第二篇</div>
+    <h1><span class="mono">Article.objects.filter(...).exclude(...).order_by(...)</span> 这一整行,数据库到底什么时候被真正查了?</h1>
+    <p>上一篇看到访问一个被 <span class="mono">.only()</span> 排除的字段会偷偷多打一次查询——那是"惰性"在单个字段上的体现。这一篇把镜头拉远,看惰性求值在整个 <span class="mono">QuerySet</span> 级别怎么工作:链式调用几个过滤条件,到底是在干什么;真正触发查询的是哪一步;同一个查询结果又是怎么被缓存、不会重复查两次的。全部结论都用本机真实 SQL 日志核对过,不是看文档转述。</p>
+    <div class="hero-fact">
+      <div><div class="num">0 次查询</div><div class="lbl">本机真实实测:三次链式 filter/exclude/order_by,一次数据库都没碰</div></div>
+      <div><div class="num">1 次查询</div><div class="lbl">本机真实实测:<span class="mono">list(qs)</span> 触发的,合并了全部三个条件的单条 SQL</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <div class="prev-post">← 接上篇 <a href="modelbase.html" target="_blank" rel="noopener">ModelBase:类属性怎么变成数据库字段</a></div>
+  <h2>真实实测:链式调用不查库,list() 才查</h2>
+  <p class="h2-sub">本机真实建表插入 5 条数据,监控 <span class="mono">connection.queries</span> 的真实变化。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">qs = Article.objects.filter(views__gte=10)
+print('after .filter():   queries =', len(connection.queries))
+qs = qs.exclude(views__gte=40)
+print('after .exclude():  queries =', len(connection.queries))
+qs = qs.order_by('-views')
+print('after .order_by(): queries =', len(connection.queries))
+
+results = list(qs)
+print('after list(qs):    queries =', len(connection.queries))
+print(connection.queries[-1][\"sql\"])</pre>
+<span class="ok">after .filter():   queries = 0
+after .exclude():  queries = 0
+after .order_by(): queries = 0
+after list(qs):    queries = 1
+SELECT ... FROM article WHERE (views >= 10 AND NOT (views >= 40))
+  ORDER BY views DESC</span>
+  </div>
+  <p>三次链式调用,一次查询都没触发——它们做的事情是"往一个查询描述里追加条件",不是"执行查询"。真正的 SQL 直到 <span class="mono">list(qs)</span> 才拼出来,而且是<b>一次性</b>把三个条件合并成一条语句执行,不是查一次、过滤一次、排序一次这样分三步。</p>
+</section>
+
+<section>
+  <h2>真实源码:三个不同的入口,同一个检查点</h2>
+  <p class="h2-sub"><span class="mono">list()</span>、<span class="mono">for</span> 循环、<span class="mono">bool()</span>、<span class="mono">len()</span>——这些"看起来在用普通序列"的操作,背后全部走同一个函数。</p>
+  <blockquote class="src">
+    <span class="path">django/db/models/query.py · <a href="https://github.com/django/django/blob/6.0.7/django/db/models/query.py#L371" target="_blank" rel="noopener">django @ 6.0.7, L371</a></span>
+def __len__(self):
+    self._fetch_all()
+    return len(self._result_cache)
+
+def __iter__(self):
+    self._fetch_all()
+    return iter(self._result_cache)
+
+def __bool__(self):
+    self._fetch_all()
+    return bool(self._result_cache)
+  </blockquote>
+  <blockquote class="src">
+    <span class="path">django/db/models/query.py · <a href="https://github.com/django/django/blob/6.0.7/django/db/models/query.py#L1998" target="_blank" rel="noopener">django @ 6.0.7, L1998</a></span>
+def _fetch_all(self):
+    if self._result_cache is None:
+        self._result_cache = list(self._iterable_class(self))
+    ...
+  </blockquote>
+  <p>只有一个真正的检查点:<span class="mono">_result_cache</span> 是不是 <span class="mono">None</span>。第一次访问时是 <span class="mono">None</span>,于是真的执行查询、把结果存进去;<b>之后不管再访问多少次</b>,只要 <span class="mono">_result_cache</span> 还在,就直接用缓存,不会再碰数据库——这解释了为什么上面那次实验里,链式调用的三步全是"追加条件"("惰性"),而 <span class="mono">list()</span> 是"第一次有人真的要结果了"("求值")。</p>
+</section>
+
+<section>
+  <h2>真实实测:同一个 QuerySet 遍历两次,只查一次</h2>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">list(qs)   # 第一次求值
+for a in qs:   # 再遍历一次同一个对象
+    pass
+print('queries after second iteration:', len(connection.queries))</pre>
+<span class="ok">queries after second iteration: 1</span>
+  </div>
+  <p>还是 1 次——第二次遍历完全没有新查询,直接用的是 <span class="mono">_result_cache</span> 里已经存好的结果。<span class="mono">QuerySet</span> 表现得像一个"第一次用的时候才去算,算完就记住"的容器。</p>
+</section>
+
+<section>
+  <h2>真实实测 + 真实源码:链式调用不是原地修改</h2>
+  <p class="h2-sub">既然 <span class="mono">qs = qs.exclude(...)</span> 这种写法很像"原地修改",要确认一下:<span class="mono">.filter()</span> 到底是改了原对象,还是造了个新的?</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">base = Article.objects.all()
+filtered = base.filter(views__gte=20)
+print('base is filtered?', base is filtered)
+
+list(filtered)
+print('filtered._result_cache is populated:', filtered._result_cache is not None)
+print('base._result_cache is still:', base._result_cache)</pre>
+<span class="ok">base is filtered? False
+filtered._result_cache is populated: True
+base._result_cache is still: None</span>
+  </div>
+  <p><span class="mono">base</span> 和 <span class="mono">filtered</span> 是两个不同的对象,求值 <span class="mono">filtered</span> 完全不影响 <span class="mono">base</span> 的缓存状态——它俩各有各的 <span class="mono">_result_cache</span>。源码里 <span class="mono">.filter()</span> 的文档字符串写得很直接:</p>
+  <blockquote class="src">
+    <span class="path">django/db/models/query.py · <a href="https://github.com/django/django/blob/6.0.7/django/db/models/query.py#L1536" target="_blank" rel="noopener">django @ 6.0.7, L1536</a></span>
+def filter(self, *args, **kwargs):
+    """
+    Return a new QuerySet instance with the args ANDed to the existing set.
+    """
+    ...
+    return self._filter_or_exclude(False, args, kwargs)
+  </blockquote>
+  <blockquote class="src">
+    <span class="path">django/db/models/query.py · <a href="https://github.com/django/django/blob/6.0.7/django/db/models/query.py#L1979" target="_blank" rel="noopener">django @ 6.0.7, L1979</a></span>
+def _clone(self):
+    """Return a copy of the current QuerySet. A lightweight alternative
+    to deepcopy()."""
+    c = self.__class__(model=self.model, query=self.query.chain(), ...)
+    ...
+    return c
+  </blockquote>
+  <p><span class="mono">.filter()</span>/<span class="mono">.exclude()</span>/<span class="mono">.order_by()</span> 内部都会先 <span class="mono">_clone()</span> 出一个新对象(带着查询描述的一份拷贝),再修改这个新对象,原对象从头到尾没被碰过。这也是为什么"惰性"是安全的:可以放心地把同一个 <span class="mono">base</span> 拿去派生出好几个不同方向的查询,互相之间不会打架。</p>
+</section>
+
+<section>
+  <h2>真实实测:.exists()/.count() 走的是完全不同的 SQL</h2>
+  <p class="h2-sub">"求值"不是只有一种形态——有些操作压根不需要把整个结果集搬出来。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">print(Article.objects.filter(views__gte=20).exists())
+print(connection.queries[-1]['sql'])
+print()
+print(Article.objects.filter(views__gte=20).count())
+print(connection.queries[-1]['sql'])</pre>
+<span class="ok">True
+SELECT 1 AS "a" FROM article WHERE views >= 20 LIMIT 1
+
+3
+SELECT COUNT(*) AS "__count" FROM article WHERE views >= 20</span>
+  </div>
+  <p><span class="mono">.exists()</span> 是 <span class="mono">SELECT 1 ... LIMIT 1</span>,数据库找到第一条匹配就能停;<span class="mono">.count()</span> 是 <span class="mono">SELECT COUNT(*)</span>,交给数据库自己数,压根不会把行数据传回 Python 这边。两个都不会碰 <span class="mono">_result_cache</span>,也都不会把完整的模型对象实例化出来——这也是为什么"判断存在用 <span class="mono">.exists()</span>,别写 <span class="mono">if list(qs):</span>"是真实有性能依据的建议。</p>
+</section>
+
+<section>
+  <h2>真实实测:切片的行为,取决于求值没求值</h2>
+  <p class="h2-sub">最容易被忽略的一个细节:<span class="mono">qs[3:6]</span> 到底是不是查询数据库的 <span class="mono">LIMIT</span>/<span class="mono">OFFSET</span>,要看这个 <span class="mono">qs</span> 之前有没有被求值过。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">qs = Article.objects.all().order_by('id')[3:6]   # 还没求值就切片
+print(list(qs))
+print(connection.queries[-1]['sql'])</pre>
+<span class="ok">[...]
+SELECT ... FROM article ORDER BY id ASC LIMIT 3 OFFSET 3</span>
+
+<pre class="code">qs2 = Article.objects.all().order_by('id')
+list(qs2)   # 先强制求值,填满 _result_cache
+before = len(connection.queries)
+sliced = qs2[3:6]   # 再切片
+print('新增查询数:', len(connection.queries) - before)
+print(type(sliced))</pre>
+<span class="ok">新增查询数: 0
+&lt;class 'list'&gt;</span>
+  </div>
+  <p>在<b>还没求值</b>的 <span class="mono">QuerySet</span> 上切片,切片信息会被编译进真实 SQL 的 <span class="mono">LIMIT</span>/<span class="mono">OFFSET</span> 里,数据库只返回需要的那几行;在<b>已经求值过</b>(<span class="mono">_result_cache</span> 已经填满)的 <span class="mono">QuerySet</span> 上切片,直接是 Python 原生 list 在内存里切,一次新查询都不会有。同样是 <span class="mono">qs[3:6]</span> 这行代码,实际发生的事完全取决于它执行时 <span class="mono">_result_cache</span> 是不是 <span class="mono">None</span>。</p>
+</section>
+
+<section>
+  <h2>演示:三次链式调用 + 两次求值,完整走一遍</h2>
+  <p class="h2-sub">复现前面"filter → exclude → order_by → 求值 → 再求值 → 求值另一个中间对象"的完整场景。</p>
+  <div class="demo" id="qsDemo">
+    <div class="demo-head">QuerySet 惰性求值演示</div>
+    <div class="demo-narration" id="qsNarration"></div>
+    <div class="demo-body">
+      <div class="chain-row" id="qsChain"></div>
+      <div class="sql-box" id="qsSql">(还没有任何 SQL 执行)</div>
+      <div class="stat-row" id="qsStats"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="qsReset">⏮ 重来</button>
+      <button class="btn" id="qsPrev">‹ 上一步</button>
+      <button class="btn primary" id="qsNext">下一步 ›</button>
+      <button class="btn" id="qsPlay">▶ 自动播放</button>
+      <span class="step-counter" id="qsCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">数据来自独立验证过的 Python 模拟——每个链式调用产生的都是独立对象(用真实的 <span class="mono">_clone()</span> 思路复现),哪次求值是真查、哪次是命中缓存,用一套独立回放算法核对过。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文全部真实实验(链式调用零查询、<span class="mono">list()</span> 触发单条合并 SQL、二次遍历命中缓存、<span class="mono">.filter()</span> 返回新对象、<span class="mono">.exists()</span>/<span class="mono">.count()</span> 的专用 SQL、切片行为的求值状态依赖)均在本机真实运行的 Django 6.0.7(配合内存 SQLite 数据库,开启 <span class="mono">DEBUG=True</span> 记录真实查询日志)上完成,数据未做删改。</li>
+      <li>源码引用(<span class="mono">django/db/models/query.py</span> 的 <span class="mono">__len__</span>/<span class="mono">__iter__</span>/<span class="mono">__bool__</span>/<span class="mono">_fetch_all</span>/<span class="mono">filter</span>/<span class="mono">_clone</span>)取自本机通过 pip 安装的 Django 6.0.7 包本身,并逐字节比对确认与 <span class="mono">django/django</span> 仓库 <span class="mono">6.0.7</span> 标签完全一致。</li>
+      <li>演示动画的链式求值模型(每次链式调用产生独立对象、<span class="mono">_result_cache</span> 是否为空作为唯一判断依据)由 Python 独立实现并交叉验证过——用真实实测过的三步链式 + 三次求值场景做参数,哪次是真查询、哪次是缓存命中都用独立回放算法核对过。</li>
+      <li>没有涉及:<span class="mono">select_related</span>/<span class="mono">prefetch_related</span> 怎么把多次查询合并/预取(下一篇计划专门讲这个和经典的 N+1 问题)、<span class="mono">QuerySet</span> 的 <span class="mono">Q</span> 对象组合查询、聚合(<span class="mono">annotate</span>/<span class="mono">aggregate</span>)对求值时机的影响。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="middleware.html" target="_blank" rel="noopener">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">中间件:请求怎么被一层层包起来</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Django 系列 · 第二篇 · QuerySet 惰性求值 · 数据来自本机真实运行的 Django 6.0.7</footer>
+
+<script>
+const DATA = {"events": [{"fromLabel": "base", "toLabel": "qs2", "op": "filter(views>=10)", "filters": ["filter(views>=10)"], "order": null, "type": "chain"}, {"fromLabel": "qs2", "toLabel": "qs3", "op": "exclude(views>=40)", "filters": ["filter(views>=10)", "exclude(views>=40)"], "order": null, "type": "chain"}, {"fromLabel": "qs3", "toLabel": "qs4", "op": "order_by('-views')", "filters": ["filter(views>=10)", "exclude(views>=40)"], "order": "-views", "type": "chain"}, {"label": "qs4", "sql": "SELECT * WHERE [views>=10, views>=40] ORDER BY -views", "rowCount": 3, "cacheWasNone": true, "type": "evaluate"}, {"label": "qs4", "sql": null, "rowCount": 3, "cacheWasNone": false, "type": "evaluate"}, {"label": "qs2", "sql": "SELECT * WHERE [views>=10] ORDER BY None", "rowCount": 4, "cacheWasNone": true, "type": "evaluate"}], "step3Label": "qs4", "step1Label": "qs2"};
+
+(function(){
+  const events = DATA.events;
+  const chainEl = document.getElementById('qsChain');
+  const sqlEl = document.getElementById('qsSql');
+  const narration = document.getElementById('qsNarration');
+  const statsBox = document.getElementById('qsStats');
+  const counter = document.getElementById('qsCounter');
+  let idx = 0, playing=false, playTimer=null;
+
+  function describe(e){
+    if (e.type === 'chain') return `<span class="k">${e.fromLabel}</span>.${e.op} → 生成新对象 <span class="k">${e.toLabel}</span>(累积条件:[${e.filters.join(', ')}]${e.order ? ', order_by='+e.order : ''}),没有执行任何 SQL。`;
+    if (e.type === 'evaluate' && e.cacheWasNone) return `求值 <span class="k">${e.label}</span>:_result_cache 是 None,真的执行查询,拿到 ${e.rowCount} 行,存进缓存。`;
+    if (e.type === 'evaluate' && !e.cacheWasNone) return `求值 <span class="k">${e.label}</span>:_result_cache 已经有数据了,直接返回缓存,${e.rowCount} 行,不执行任何 SQL。`;
+    return e.type;
+  }
+
+  function replayUpTo(uptoIdx){
+    const nodes = {}; // label -> {filters, order, cached}
+    let order = [];
+    for (let i = 0; i <= uptoIdx; i++){
+      const e = events[i];
+      if (e.type === 'chain'){
+        if (!nodes[e.fromLabel]) { nodes[e.fromLabel] = {filters: [], order: null, cached: false}; order.push(e.fromLabel); }
+        nodes[e.toLabel] = {filters: e.filters, order: e.order, cached: false};
+        order.push(e.toLabel);
+      }
+      if (e.type === 'evaluate'){
+        if (nodes[e.label]) nodes[e.label].cached = true;
+      }
+    }
+    // dedupe order while preserving first-seen sequence
+    const seen = new Set();
+    const uniqueOrder = order.filter(l => (seen.has(l) ? false : (seen.add(l), true)));
+    return {nodes, order: uniqueOrder};
+  }
+
+  function render(){
+    idx = Math.max(0, Math.min(events.length-1, idx));
+    const e = events[idx];
+    narration.innerHTML = describe(e);
+    const state = replayUpTo(idx);
+
+    chainEl.innerHTML = state.order.map((label, i) => {
+      const n = state.nodes[label];
+      const isActive = (e.type === 'chain' && (e.fromLabel === label || e.toLabel === label)) ||
+                        (e.type === 'evaluate' && e.label === label);
+      const cls = 'qs-node' + (isActive ? ' active' : '') + (n.cached ? ' cached' : '');
+      const cacheLabel = n.cached ? '缓存已填充' : '未求值';
+      const arrow = i < state.order.length - 1 ? '<span class="qs-arrow">→</span>' : '';
+      return `<div class="${cls}"><span class="label">${label}</span><span class="cache">${cacheLabel}</span></div>${arrow}`;
+    }).join('');
+
+    if (e.type === 'evaluate' && e.sql){
+      sqlEl.textContent = e.sql;
+    } else if (e.type === 'evaluate') {
+      sqlEl.textContent = '(命中缓存,没有新 SQL)';
+    } else {
+      sqlEl.textContent = '(还没有任何 SQL 执行)';
+    }
+
+    const totalRealFetches = events.slice(0, idx+1).filter(ev => ev.type === 'evaluate' && ev.cacheWasNone).length;
+    const totalCacheHits = events.slice(0, idx+1).filter(ev => ev.type === 'evaluate' && !ev.cacheWasNone).length;
+    statsBox.innerHTML = `<div class="stat">真实执行的查询数<b>${totalRealFetches}</b></div><div class="stat">命中缓存次数<b>${totalCacheHits}</b></div>`;
+
+    counter.textContent = `${idx+1} / ${events.length}`;
+    document.getElementById('qsPrev').disabled = idx===0;
+    document.getElementById('qsNext').disabled = idx===events.length-1;
+  }
+  document.getElementById('qsPrev').onclick=()=>{idx--;render();stopPlay();};
+  document.getElementById('qsNext').onclick=()=>{idx++;render();stopPlay();};
+  document.getElementById('qsReset').onclick=()=>{idx=0;render();stopPlay();};
+  function stopPlay(){ playing=false; clearInterval(playTimer); document.getElementById('qsPlay').textContent='▶ 自动播放'; }
+  document.getElementById('qsPlay').onclick=()=>{
+    if(playing){ stopPlay(); return; }
+    playing=true; document.getElementById('qsPlay').textContent='⏸ 暂停';
+    playTimer = setInterval(()=>{
+      if(idx>=events.length-1){ stopPlay(); return; }
+      idx++; render();
+    }, 1100);
+  };
+  render();
+})();
+</script>
+
+</body>
+</html>

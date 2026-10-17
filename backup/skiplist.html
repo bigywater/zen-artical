@@ -1,0 +1,523 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>跳表:ZSet 排名为什么不用逐个数</title>
+<meta name="description" content="随机层数生成与 O(log N) 排名查询的源码与实测。">
+<link rel="canonical" href="https://bigywater.tech/skiplist.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="跳表:ZSet 排名为什么不用逐个数">
+<meta property="og:description" content="随机层数生成与 O(log N) 排名查询的源码与实测。">
+<meta property="og:url" content="https://bigywater.tech/skiplist.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="跳表:ZSet 排名为什么不用逐个数">
+<meta name="twitter:description" content="随机层数生成与 O(log N) 排名查询的源码与实测。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F7F5F3; --paper:#FFFFFF; --ink:#211A19; --ink-dim:#6B5D5A; --line:#E3DAD6;
+  --redis-c:#C6302B; --redis-c-soft:#FBE7E5;
+  --mem-c:#B8791E; --mem-c-soft:#F6ECD9;
+  --type-c:#2C6E49; --type-c-soft:#E1EFE6;
+  --code-bg:#241C1B; --code-ink:#F0E7E4;
+  --shadow: 0 1px 2px rgba(40,20,18,.06), 0 8px 24px -12px rgba(40,20,18,.16);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#17100F; --paper:#231A19; --ink:#F0E7E4; --ink-dim:#B3A19D; --line:#3A2C29;
+    --redis-c:#F0736A; --redis-c-soft:#3A211F;
+    --mem-c:#E0AC5C; --mem-c-soft:#382C18;
+    --type-c:#6FC492; --type-c-soft:#1B3327;
+    --code-bg:#120D0C; --code-ink:#EFE4E1;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#17100F; --paper:#231A19; --ink:#F0E7E4; --ink-dim:#B3A19D; --line:#3A2C29;
+  --redis-c:#F0736A; --redis-c-soft:#3A211F;
+  --mem-c:#E0AC5C; --mem-c-soft:#382C18;
+  --type-c:#6FC492; --type-c-soft:#1B3327;
+  --code-bg:#120D0C; --code-ink:#EFE4E1;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--redis-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--redis-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--redis-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--redis-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.a .tag{background:var(--redis-c-soft); color:var(--redis-c);}
+.card.b .tag{background:var(--mem-c-soft); color:var(--mem-c);}
+.card.c .tag{background:var(--type-c-soft); color:var(--type-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#B3A19D; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#F0A6A0;}
+
+.callout{border-left:3px solid var(--redis-c); background:var(--redis-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+.callout.c{border-color:var(--type-c); background:var(--type-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--redis-c-soft); color:var(--redis-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#F0A6A0;}
+.term .ok{color:#7DD0A0;}
+.term .cm{color:#8B7F7C;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--mem-c-soft); color:var(--mem-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:22px 20px; overflow-x:auto;}
+.skl{min-width:640px;}
+.sklrow{display:flex; align-items:center; gap:6px; margin-bottom:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.78rem;}
+.skllvl{width:52px; flex:0 0 auto; color:var(--ink-dim); text-align:right;}
+.skltrack{flex:1; display:flex; align-items:center; gap:0; min-height:30px; position:relative;}
+.sklnode{padding:3px 9px; border-radius:6px; background:var(--bg); border:1px solid var(--line); white-space:nowrap;}
+.sklnode.header{background:var(--code-bg); color:var(--code-ink); border-color:var(--code-bg);}
+.sklnode.active{border-color:var(--redis-c); background:var(--redis-c-soft); color:var(--redis-c); font-weight:700;}
+.sklnode.newitem{border-color:var(--type-c); background:var(--type-c-soft); color:var(--type-c); font-weight:700;}
+.sklarrow{width:26px; height:1px; background:var(--line); position:relative; flex:0 0 auto;}
+.sklarrow.hot{background:var(--redis-c); height:2px;}
+.stat-row{display:flex; gap:16px; flex-wrap:wrap; margin:14px 0 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem;}
+.stat{border:1px solid var(--line); border-radius:8px; padding:8px 12px; background:var(--bg);}
+.stat b{color:var(--redis-c); display:block; font-size:1rem; font-variant-numeric:tabular-nums;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--redis-c); color:var(--redis-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--redis-c); border-color:var(--redis-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{display:flex; align-items:center; gap:10px; margin-bottom:24px; font-size:.88rem; color:var(--ink-dim); flex-wrap:wrap;}
+.prev-post a{font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--redis-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Redis 系列 · 第五篇</div>
+    <h1>ZSet 查一个成员排第几名,为什么不用从头数?</h1>
+    <p>上一篇讲到 ZSet 的 <span class="mono">skiplist</span> 编码其实是 <span class="mono">dict + zskiplist</span> 两个结构一起工作:dict 负责"这个成员分数是多少"的 O(1) 查找,zskiplist 负责"按分数排序、按排名区间查询"。这一篇专门拆开 zskiplist 本身——它靠什么在不需要整体重排的情况下,把插入、删除、按名次查找都做到 O(log N)。</p>
+    <p>本机运行的 Redis 8.10.1 上建了一个 100 万成员的 ZSet,<span class="mono">ZRANK</span> 的服务端耗时在成员数从 1000 涨到 100 万的过程中几乎没有变化。</p>
+    <div class="hero-fact">
+      <div><div class="num">0.25</div><div class="lbl">每往上一层的概率,常量 <span class="mono">ZSKIPLIST_P</span></div></div>
+      <div><div class="num">~3.8us</div><div class="lbl">100万成员 ZSet 里 ZRANK 服务端耗时,和 1000 成员时几乎一样</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <div class="prev-post">← 接上篇 <a href="rehash.html" target="_blank" rel="noopener">Redis 渐进式 rehash</a></div>
+  <h2>问题:排好序之后,怎么快速定位</h2>
+  <p class="h2-sub">一个有序数据结构,插入、删除、按名次查找,理论上都能用平衡树做到 O(log N)。Redis 选了另一条路。</p>
+  <div class="cards">
+    <div class="card a">
+      <span class="tag">链表</span>
+      <h3>插入删除快,查找是 O(N)</h3>
+      <p>普通有序链表插入/删除只需改几个指针,但要找"第 500000 名是谁"或者"某个成员排第几",只能从头一个个数过去。</p>
+    </div>
+    <div class="card b">
+      <span class="tag">平衡树</span>
+      <h3>O(log N) 但要处理旋转</h3>
+      <p>红黑树、AVL 树能做到 O(log N),但插入删除后要维护平衡(旋转、变色),实现复杂,范围查询也不如链表结构直观。</p>
+    </div>
+    <div class="card c">
+      <span class="tag">跳表</span>
+      <h3>用随机层数换 O(log N)</h3>
+      <p>本质还是链表,但每个节点随机拥有额外的"高层快捷指针"。查找时先在高层大步跳,跳过头再逐层下沉,期望复杂度 O(log N),不需要任何旋转或再平衡。</p>
+    </div>
+  </div>
+  <p style="font-size:.88rem; color:var(--ink-dim);">跳表由 William Pugh 在论文《Skip Lists: A Probabilistic Alternative to Balanced Trees》中提出。Redis 用平衡树的替代方案换来的是实现简单(没有旋转、没有再平衡的边界情况)、范围查询友好(区间本身就是链表上的一段),用统计概率换掉了最坏情况的严格保证——这也是"probabilistic"这个词的含义:单次操作有极小概率退化,但期望情况稳定在 O(log N)。</p>
+</section>
+
+<section>
+  <h2>源码:一个节点其实是"一次性打包"出来的</h2>
+  <p class="h2-sub">课本里的跳表节点通常是"值 + 每层一个指针"这么简单。8.10.1 版本的实现做了一次内存布局优化,和大多数教程描述的经典版本不一样。</p>
+  <blockquote class="src">
+    <span class="path">src/server.h · <a href="https://github.com/redis/redis/blob/8.10.1/src/server.h#L1791" target="_blank" rel="noopener">redis @ 8.10.1, L1791</a></span>
+/* Node info placed in level[0].span since it's unused at level 0 */
+typedef struct zskiplistNodeInfo {
+    uint16_t sdsoffset;  /* 成员字符串相对节点起始地址的偏移 */
+    uint8_t levels;      /* 这个节点有几层(1-32) */
+    uint8_t reserved;
+} zskiplistNodeInfo;
+
+typedef struct zskiplistNode {
+    double score;
+    struct zskiplistNode *backward;
+    struct zskiplistLevel {
+        struct zskiplistNode *forward;
+        unsigned long span;   /* level 0 时被复用来存 zskiplistNodeInfo */
+    } level[];
+    /* sds 成员字符串直接紧跟在 level[] 数组后面,同一块内存里 */
+} zskiplistNode;
+  </blockquote>
+  <p>两个不那么"教科书"的细节:</p>
+  <div class="callout">
+    <b>成员字符串没有单独分配。</b> <span class="mono">zslCreateNode()</span> 一次性 <span class="mono">malloc</span> 出"节点头 + level 数组 + sds 成员字符串"整块内存,成员字符串直接摆在数组后面,靠一个偏移量 <span class="mono">sdsoffset</span> 定位——比"节点里存一个指向单独字符串对象的指针"少一次内存分配,也少一次指针跳转。
+  </div>
+  <div class="callout b">
+    <b>level[0] 的 span 字段被挪用了。</b> span 表示"这一层的前进指针跳过了几个元素",但 level 0 每个节点都挨着下一个,span 恒为 1,这个字段等于白放着。8.10.1 直接把它复用成 <span class="mono">zskiplistNodeInfo</span>(节点层数 + 成员偏移量),省下一个字段的内存,不用为每个节点额外分配元数据空间。
+  </div>
+  <blockquote class="src">
+    <span class="path">src/t_zset.c · <a href="https://github.com/redis/redis/blob/8.10.1/src/t_zset.c#L169" target="_blank" rel="noopener">redis @ 8.10.1, L169</a></span>
+static zskiplistNode *zslCreateNode(zskiplist *zsl, int level, double score, sds ele) {
+    size_t node_size = sizeof(zskiplistNode) + level * sizeof(struct zskiplistLevel);
+    size_t sds_buf_size = sds_hdr_len + ele_len + 1;
+    size_t total_size = node_size + sds_buf_size;
+
+    zskiplistNode *zn = zmalloc_usable(total_size, &usable);   // 一次分配搞定
+    ...
+    char *sds_buf = (char*)zn + node_size;
+    sds embedded_sds = sdsnewplacement(sds_buf, sds_buf_size, sds_type, ele, ele_len);
+    zslSetNodeInfo(zn, level, sds_offset);   // 层数、偏移量塞进 level[0].span
+    ...
+}
+  </blockquote>
+  <p>每个节点的层数(<span class="mono">level</span> 数组长度)在分配时就定死,是个变长数组(<span class="mono">struct zskiplistLevel level[]</span>)——节点越矮,分配的内存越小,这也是为什么"层数是随机的"这件事在内存层面完全体现在了每个节点的实际大小上。</p>
+</section>
+
+<section>
+  <h2>层数怎么随机出来的:抛硬币式增长</h2>
+  <p class="h2-sub">每个新节点的层数,靠一个"抛硬币"式的循环决定——不是预先算好,是一边抛一边往上加。</p>
+  <blockquote class="src">
+    <span class="path">src/t_zset.c · <a href="https://github.com/redis/redis/blob/8.10.1/src/t_zset.c#L254" target="_blank" rel="noopener">redis @ 8.10.1, L254</a></span>
+static int zslRandomLevel(void) {
+    static const int threshold = ZSKIPLIST_P*RAND_MAX;
+    int level = 1;
+    while (random() &lt; threshold)
+        level += 1;
+    return (level&lt;ZSKIPLIST_MAXLEVEL) ? level : ZSKIPLIST_MAXLEVEL;
+}
+  </blockquote>
+  <p>每个节点起步至少是 1 层。之后每多"抛"中一次(概率 <span class="mono">ZSKIPLIST_P = 0.25</span>),层数就 +1,直到抛不中为止,封顶 <span class="mono">ZSKIPLIST_MAXLEVEL = 32</span>。结果是层数越高,节点越少——这不是巧合,是几何分布的直接后果:第 k 层存在的概率是 <span class="mono">0.25^(k-1)</span>。</p>
+  <p>用同样规则(seed=123)独立跑了 20000 次抽样,和理论概率逐层核对:</p>
+  <table class="mono">
+    <tr><th>层数</th><th>实测占比</th><th>理论占比 (0.25^(k-1)×0.75)</th><th>样本数</th></tr>
+    <tr><td>1</td><td>0.7499</td><td>0.7500</td><td>14997</td></tr>
+    <tr><td>2</td><td>0.1855</td><td>0.1875</td><td>3711</td></tr>
+    <tr><td>3</td><td>0.0486</td><td>0.0469</td><td>972</td></tr>
+    <tr><td>4</td><td>0.0121</td><td>0.0117</td><td>242</td></tr>
+    <tr><td>5</td><td>0.0030</td><td>0.0029</td><td>60</td></tr>
+    <tr><td>6</td><td>0.0006</td><td>0.0007</td><td>13</td></tr>
+    <tr><td>7</td><td>0.0002</td><td>0.0002</td><td>4</td></tr>
+  </table>
+  <p style="font-size:.88rem; color:var(--ink-dim);">四分之三的节点只有 1 层(和普通链表节点没区别),能长到 5 层以上的节点,两万个里不到一百个。真正撑起"跳过大段元素"的,是这一小撮高层节点。</p>
+</section>
+
+<section>
+  <h2>真实实测:100 万成员的 ZSet,查排名几乎不受影响</h2>
+  <p class="h2-sub">本机运行的 Redis,<span class="mono">--pipe</span> 批量插入 100 万条随机分数的 <span class="mono">ZADD</span>,确认走的是 skiplist 编码。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cmd">$ redis-cli --pipe &lt; 100万条ZADD命令.txt</span>
+<span class="ok">All data transferred. Waiting for the last reply...
+errors: 0, replies: 1000000</span>
+
+<span class="cmd">$ redis-cli ZCARD bigzset</span>
+<span class="ok">(integer) 1000000</span>
+<span class="cmd">$ redis-cli OBJECT ENCODING bigzset</span>
+<span class="ok">"skiplist"</span>
+  </div>
+  <p>直接测 <span class="mono">ZRANK</span> 单次往返耗时,会被网络/协议开销(~95us)完全淹没,看不出结构本身的差异。用 pipeline 把 5000 次 <span class="mono">ZRANK</span> 打包发送、摊平网络开销,才能看到服务端的每次执行成本:</p>
+  <table class="mono">
+    <tr><th>ZSet 成员数 N</th><th>编码</th><th>ZRANK 服务端耗时(pipeline 摊平后)</th></tr>
+    <tr><td>1,000</td><td>skiplist</td><td>3.764 us/次</td></tr>
+    <tr><td>10,000</td><td>skiplist</td><td>3.798 us/次</td></tr>
+    <tr><td>100,000</td><td>skiplist</td><td>3.787 us/次</td></tr>
+    <tr><td>1,000,000</td><td>skiplist</td><td>3.856 us/次</td></tr>
+  </table>
+  <p>成员数涨了 1000 倍,耗时几乎没变。这不是"没测出差异"的失败实验——这恰恰是 O(log N) 该有的样子:<span class="mono">log2(1,000,000) ≈ 20</span>,<span class="mono">log2(1,000) ≈ 10</span>,跳表要多跳的层数只多了一倍,而每一跳本身是几十纳秒级别的指针操作,在微秒级的测量精度下根本看不出来。如果 ZRANK 真是从头数到尾的 O(N) 实现,1000 倍的成员数增长会直接体现成千倍的耗时增长——那种差异是不可能被淹没的。</p>
+</section>
+
+<section>
+  <h2>演示:插入时怎么找位置,怎么算排名</h2>
+  <p class="h2-sub">用 8 个 (分数, 成员) 复现一次完整的插入过程——从最高层开始网右走,走不动就下沉一层,一路记录"跳过了多少元素"。</p>
+  <div class="demo" id="sklDemo">
+    <div class="demo-head">跳表插入演示</div>
+    <div class="demo-narration" id="sklNarration"></div>
+    <div class="demo-body">
+      <div class="skl" id="sklTable"></div>
+      <div class="stat-row" id="sklStats"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="sklReset">⏮ 重来</button>
+      <button class="btn" id="sklPrev">‹ 上一步</button>
+      <button class="btn primary" id="sklNext">下一步 ›</button>
+      <button class="btn" id="sklPlay">▶ 自动播放</button>
+      <span class="step-counter" id="sklCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">每个节点的层数由和 <span class="mono">zslRandomLevel()</span> 完全一致的抛硬币算法生成(seed 固定以保证可复现),路径记录、最终排名均由独立的暴力排序交叉验证过,不是手摆的示意图。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>100 万成员 ZSet 的构建与编码确认(<span class="mono">OBJECT ENCODING</span> = skiplist)在本机运行的 Redis 8.10.1 上完成;<span class="mono">ZRANK</span> 耗时数据分两组测:一组是普通单次往返(被网络开销主导,仅用于说明为什么需要摊平测量),另一组用 <span class="mono">redis-py</span> pipeline 一次打包 5000 次调用、取多轮 median,尽量剥离网络往返开销、逼近服务端执行成本。</li>
+      <li>源码引用(<span class="mono">t_zset.c</span> 的 <span class="mono">zskiplistNode</span>/<span class="mono">zskiplistNodeInfo</span> 结构、<span class="mono">zslCreateNode</span>、<span class="mono">zslRandomLevel</span>、<span class="mono">zslInsertNode</span>,以及 <span class="mono">server.h</span> 的 <span class="mono">ZSKIPLIST_MAXLEVEL</span>/<span class="mono">ZSKIPLIST_P</span> 常量)取自 <span class="mono">redis/redis</span> 仓库 <span class="mono">8.10.1</span> 标签,与本机安装的 Redis 8.10.1 完全一致。这份"节点内嵌 sds、层数元信息复用 span 字段"的内存布局是较新版本的优化,和网上大多数教程描述的经典版本(节点持有独立的 <span class="mono">robj *obj</span> 指针)不完全一样——本文以本机安装的版本为准。</li>
+      <li>层数分布的统计核对(20000 次抽样 vs. 理论几何分布)、演示动画里的插入路径与最终排名,均由 Python 模拟生成并用独立的暴力排序算法交叉验证过,断言全部通过后才用于渲染演示数据。</li>
+      <li>"为什么选跳表而不是平衡树"这部分,后半段（简单实现、范围查询友好、用概率换最坏情况保证）是 Redis 项目公开报道过的设计取舍,转述自公开资料,不是这份 <span class="mono">t_zset.c</span> 文件当前版本注释里的原文——文件头部注释目前只明确引用了 William Pugh 的论文和三处相对原始算法的改动(允许重复分数、按 satellite data 比较、只在最底层维护双向指针),这部分是直接引用的。</li>
+      <li>没有涉及:跳表节点的删除/更新路径(<span class="mono">zslDelete</span>/<span class="mono">zslUpdateScore</span>)、按分数区间批量删除(<span class="mono">zslDeleteRangeByScore</span>)、以及 dict 和 zskiplist 两个结构在增删时如何保持严格同步这几处更细的实现细节。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="persist.html" target="_blank" rel="noopener">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">RDB 与 AOF:崩溃之后到底丢了多少</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Redis 系列 · 第五篇 · 跳表(skiplist) · 数据来自本机运行的 Redis 8.10.1</footer>
+
+<script>
+const DATA = {"flat_steps": [{"phase": "path", "ele": "diana", "score": 72, "insertLevel": 1, "pathLevel": 0, "action": "insert-here", "from": null, "to": null, "stopAt": "(header)", "items": []}, {"phase": "commit", "ele": "diana", "score": 72, "insertLevel": 1, "rank": 0, "totalAfter": 1, "items": [{"score": 72, "ele": "diana", "level": 1}]}, {"phase": "path", "ele": "alice", "score": 15, "insertLevel": 2, "pathLevel": 0, "action": "insert-here", "from": null, "to": null, "stopAt": "(header)", "items": [{"score": 72, "ele": "diana", "level": 1}]}, {"phase": "commit", "ele": "alice", "score": 15, "insertLevel": 2, "rank": 0, "totalAfter": 2, "items": [{"score": 15, "ele": "alice", "level": 2}, {"score": 72, "ele": "diana", "level": 1}]}, {"phase": "path", "ele": "frank", "score": 58, "insertLevel": 2, "pathLevel": 1, "action": "move-right", "from": "(header)", "to": "alice", "stopAt": null, "items": [{"score": 15, "ele": "alice", "level": 2}, {"score": 72, "ele": "diana", "level": 1}]}, {"phase": "path", "ele": "frank", "score": 58, "insertLevel": 2, "pathLevel": 1, "action": "drop-down", "from": null, "to": null, "stopAt": "alice", "items": [{"score": 15, "ele": "alice", "level": 2}, {"score": 72, "ele": "diana", "level": 1}]}, {"phase": "path", "ele": "frank", "score": 58, "insertLevel": 2, "pathLevel": 0, "action": "insert-here", "from": null, "to": null, "stopAt": "alice", "items": [{"score": 15, "ele": "alice", "level": 2}, {"score": 72, "ele": "diana", "level": 1}]}, {"phase": "commit", "ele": "frank", "score": 58, "insertLevel": 2, "rank": 1, "totalAfter": 3, "items": [{"score": 15, "ele": "alice", "level": 2}, {"score": 58, "ele": "frank", "level": 2}, {"score": 72, "ele": "diana", "level": 1}]}, {"phase": "path", "ele": "carol", "score": 33, "insertLevel": 1, "pathLevel": 1, "action": "move-right", "from": "(header)", "to": "alice", "stopAt": null, "items": [{"score": 15, "ele": "alice", "level": 2}, {"score": 58, "ele": "frank", "level": 2}, {"score": 72, "ele": "diana", "level": 1}]}, {"phase": "path", "ele": "carol", "score": 33, "insertLevel": 1, "pathLevel": 1, "action": "drop-down", "from": null, "to": null, "stopAt": "alice", "items": [{"score": 15, "ele": "alice", "level": 2}, {"score": 58, "ele": "frank", "level": 2}, {"score": 72, "ele": "diana", "level": 1}]}, {"phase": "path", "ele": "carol", "score": 33, "insertLevel": 1, "pathLevel": 0, "action": "insert-here", "from": null, "to": null, "stopAt": "alice", "items": [{"score": 15, "ele": "alice", "level": 2}, {"score": 58, "ele": "frank", "level": 2}, {"score": 72, "ele": "diana", "level": 1}]}, {"phase": "commit", "ele": "carol", "score": 33, "insertLevel": 1, "rank": 1, "totalAfter": 4, "items": [{"score": 15, "ele": "alice", "level": 2}, {"score": 33, "ele": "carol", "level": 1}, {"score": 58, "ele": "frank", "level": 2}, {"score": 72, "ele": "diana", "level": 1}]}, {"phase": "path", "ele": "gina", "score": 91, "insertLevel": 2, "pathLevel": 1, "action": "move-right", "from": "(header)", "to": "alice", "stopAt": null, "items": [{"score": 15, "ele": "alice", "level": 2}, {"score": 33, "ele": "carol", "level": 1}, {"score": 58, "ele": "frank", "level": 2}, {"score": 72, "ele": "diana", "level": 1}]}, {"phase": "path", "ele": "gina", "score": 91, "insertLevel": 2, "pathLevel": 1, "action": "move-right", "from": "alice", "to": "frank", "stopAt": null, "items": [{"score": 15, "ele": "alice", "level": 2}, {"score": 33, "ele": "carol", "level": 1}, {"score": 58, "ele": "frank", "level": 2}, {"score": 72, "ele": "diana", "level": 1}]}, {"phase": "path", "ele": "gina", "score": 91, "insertLevel": 2, "pathLevel": 1, "action": "drop-down", "from": null, "to": null, "stopAt": "frank", "items": [{"score": 15, "ele": "alice", "level": 2}, {"score": 33, "ele": "carol", "level": 1}, {"score": 58, "ele": "frank", "level": 2}, {"score": 72, "ele": "diana", "level": 1}]}, {"phase": "path", "ele": "gina", "score": 91, "insertLevel": 2, "pathLevel": 0, "action": "move-right", "from": "frank", "to": "diana", "stopAt": null, "items": [{"score": 15, "ele": "alice", "level": 2}, {"score": 33, "ele": "carol", "level": 1}, {"score": 58, "ele": "frank", "level": 2}, {"score": 72, "ele": "diana", "level": 1}]}, {"phase": "path", "ele": "gina", "score": 91, "insertLevel": 2, "pathLevel": 0, "action": "insert-here", "from": null, "to": null, "stopAt": "diana", "items": [{"score": 15, "ele": "alice", "level": 2}, {"score": 33, "ele": "carol", "level": 1}, {"score": 58, "ele": "frank", "level": 2}, {"score": 72, "ele": "diana", "level": 1}]}, {"phase": "commit", "ele": "gina", "score": 91, "insertLevel": 2, "rank": 4, "totalAfter": 5, "items": [{"score": 15, "ele": "alice", "level": 2}, {"score": 33, "ele": "carol", "level": 1}, {"score": 58, "ele": "frank", "level": 2}, {"score": 72, "ele": "diana", "level": 1}, {"score": 91, "ele": "gina", "level": 2}]}, {"phase": "path", "ele": "eve", "score": 4, "insertLevel": 2, "pathLevel": 1, "action": "drop-down", "from": null, "to": null, "stopAt": "(header)", "items": [{"score": 15, "ele": "alice", "level": 2}, {"score": 33, "ele": "carol", "level": 1}, {"score": 58, "ele": "frank", "level": 2}, {"score": 72, "ele": "diana", "level": 1}, {"score": 91, "ele": "gina", "level": 2}]}, {"phase": "path", "ele": "eve", "score": 4, "insertLevel": 2, "pathLevel": 0, "action": "insert-here", "from": null, "to": null, "stopAt": "(header)", "items": [{"score": 15, "ele": "alice", "level": 2}, {"score": 33, "ele": "carol", "level": 1}, {"score": 58, "ele": "frank", "level": 2}, {"score": 72, "ele": "diana", "level": 1}, {"score": 91, "ele": "gina", "level": 2}]}, {"phase": "commit", "ele": "eve", "score": 4, "insertLevel": 2, "rank": 0, "totalAfter": 6, "items": [{"score": 4, "ele": "eve", "level": 2}, {"score": 15, "ele": "alice", "level": 2}, {"score": 33, "ele": "carol", "level": 1}, {"score": 58, "ele": "frank", "level": 2}, {"score": 72, "ele": "diana", "level": 1}, {"score": 91, "ele": "gina", "level": 2}]}, {"phase": "path", "ele": "bob", "score": 47, "insertLevel": 3, "pathLevel": 1, "action": "move-right", "from": "(header)", "to": "eve", "stopAt": null, "items": [{"score": 4, "ele": "eve", "level": 2}, {"score": 15, "ele": "alice", "level": 2}, {"score": 33, "ele": "carol", "level": 1}, {"score": 58, "ele": "frank", "level": 2}, {"score": 72, "ele": "diana", "level": 1}, {"score": 91, "ele": "gina", "level": 2}]}, {"phase": "path", "ele": "bob", "score": 47, "insertLevel": 3, "pathLevel": 1, "action": "move-right", "from": "eve", "to": "alice", "stopAt": null, "items": [{"score": 4, "ele": "eve", "level": 2}, {"score": 15, "ele": "alice", "level": 2}, {"score": 33, "ele": "carol", "level": 1}, {"score": 58, "ele": "frank", "level": 2}, {"score": 72, "ele": "diana", "level": 1}, {"score": 91, "ele": "gina", "level": 2}]}, {"phase": "path", "ele": "bob", "score": 47, "insertLevel": 3, "pathLevel": 1, "action": "drop-down", "from": null, "to": null, "stopAt": "alice", "items": [{"score": 4, "ele": "eve", "level": 2}, {"score": 15, "ele": "alice", "level": 2}, {"score": 33, "ele": "carol", "level": 1}, {"score": 58, "ele": "frank", "level": 2}, {"score": 72, "ele": "diana", "level": 1}, {"score": 91, "ele": "gina", "level": 2}]}, {"phase": "path", "ele": "bob", "score": 47, "insertLevel": 3, "pathLevel": 0, "action": "move-right", "from": "alice", "to": "carol", "stopAt": null, "items": [{"score": 4, "ele": "eve", "level": 2}, {"score": 15, "ele": "alice", "level": 2}, {"score": 33, "ele": "carol", "level": 1}, {"score": 58, "ele": "frank", "level": 2}, {"score": 72, "ele": "diana", "level": 1}, {"score": 91, "ele": "gina", "level": 2}]}, {"phase": "path", "ele": "bob", "score": 47, "insertLevel": 3, "pathLevel": 0, "action": "insert-here", "from": null, "to": null, "stopAt": "carol", "items": [{"score": 4, "ele": "eve", "level": 2}, {"score": 15, "ele": "alice", "level": 2}, {"score": 33, "ele": "carol", "level": 1}, {"score": 58, "ele": "frank", "level": 2}, {"score": 72, "ele": "diana", "level": 1}, {"score": 91, "ele": "gina", "level": 2}]}, {"phase": "commit", "ele": "bob", "score": 47, "insertLevel": 3, "rank": 3, "totalAfter": 7, "items": [{"score": 4, "ele": "eve", "level": 2}, {"score": 15, "ele": "alice", "level": 2}, {"score": 33, "ele": "carol", "level": 1}, {"score": 47, "ele": "bob", "level": 3}, {"score": 58, "ele": "frank", "level": 2}, {"score": 72, "ele": "diana", "level": 1}, {"score": 91, "ele": "gina", "level": 2}]}, {"phase": "path", "ele": "heidi", "score": 66, "insertLevel": 1, "pathLevel": 2, "action": "move-right", "from": "(header)", "to": "bob", "stopAt": null, "items": [{"score": 4, "ele": "eve", "level": 2}, {"score": 15, "ele": "alice", "level": 2}, {"score": 33, "ele": "carol", "level": 1}, {"score": 47, "ele": "bob", "level": 3}, {"score": 58, "ele": "frank", "level": 2}, {"score": 72, "ele": "diana", "level": 1}, {"score": 91, "ele": "gina", "level": 2}]}, {"phase": "path", "ele": "heidi", "score": 66, "insertLevel": 1, "pathLevel": 2, "action": "drop-down", "from": null, "to": null, "stopAt": "bob", "items": [{"score": 4, "ele": "eve", "level": 2}, {"score": 15, "ele": "alice", "level": 2}, {"score": 33, "ele": "carol", "level": 1}, {"score": 47, "ele": "bob", "level": 3}, {"score": 58, "ele": "frank", "level": 2}, {"score": 72, "ele": "diana", "level": 1}, {"score": 91, "ele": "gina", "level": 2}]}, {"phase": "path", "ele": "heidi", "score": 66, "insertLevel": 1, "pathLevel": 1, "action": "move-right", "from": "bob", "to": "frank", "stopAt": null, "items": [{"score": 4, "ele": "eve", "level": 2}, {"score": 15, "ele": "alice", "level": 2}, {"score": 33, "ele": "carol", "level": 1}, {"score": 47, "ele": "bob", "level": 3}, {"score": 58, "ele": "frank", "level": 2}, {"score": 72, "ele": "diana", "level": 1}, {"score": 91, "ele": "gina", "level": 2}]}, {"phase": "path", "ele": "heidi", "score": 66, "insertLevel": 1, "pathLevel": 1, "action": "drop-down", "from": null, "to": null, "stopAt": "frank", "items": [{"score": 4, "ele": "eve", "level": 2}, {"score": 15, "ele": "alice", "level": 2}, {"score": 33, "ele": "carol", "level": 1}, {"score": 47, "ele": "bob", "level": 3}, {"score": 58, "ele": "frank", "level": 2}, {"score": 72, "ele": "diana", "level": 1}, {"score": 91, "ele": "gina", "level": 2}]}, {"phase": "path", "ele": "heidi", "score": 66, "insertLevel": 1, "pathLevel": 0, "action": "insert-here", "from": null, "to": null, "stopAt": "frank", "items": [{"score": 4, "ele": "eve", "level": 2}, {"score": 15, "ele": "alice", "level": 2}, {"score": 33, "ele": "carol", "level": 1}, {"score": 47, "ele": "bob", "level": 3}, {"score": 58, "ele": "frank", "level": 2}, {"score": 72, "ele": "diana", "level": 1}, {"score": 91, "ele": "gina", "level": 2}]}, {"phase": "commit", "ele": "heidi", "score": 66, "insertLevel": 1, "rank": 5, "totalAfter": 8, "items": [{"score": 4, "ele": "eve", "level": 2}, {"score": 15, "ele": "alice", "level": 2}, {"score": 33, "ele": "carol", "level": 1}, {"score": 47, "ele": "bob", "level": 3}, {"score": 58, "ele": "frank", "level": 2}, {"score": 66, "ele": "heidi", "level": 1}, {"score": 72, "ele": "diana", "level": 1}, {"score": 91, "ele": "gina", "level": 2}]}]};
+
+(function(){
+  const steps = DATA.flat_steps;
+  const box = document.getElementById('sklTable');
+  const statsBox = document.getElementById('sklStats');
+  const narration = document.getElementById('sklNarration');
+  const counter = document.getElementById('sklCounter');
+  let idx = 0, playing=false, playTimer=null;
+
+  function describeStep(s){
+    if (s.phase === 'path'){
+      if (s.action === 'move-right'){
+        return `插入 <span class="k">${s.ele}(分数 ${s.score})</span>:在第 ${s.pathLevel} 层,${s.from} 比它小,继续向右走到 <b>${s.to}</b>。`;
+      }
+      if (s.action === 'drop-down'){
+        return `插入 <span class="k">${s.ele}(分数 ${s.score})</span>:第 ${s.pathLevel} 层走不动了(停在 <b>${s.stopAt}</b>),下沉到第 ${s.pathLevel-1} 层继续找。`;
+      }
+      return `插入 <span class="k">${s.ele}(分数 ${s.score})</span>:到达第 0 层,停在 <b>${s.stopAt}</b>,这就是插入位置。`;
+    }
+    return `完成插入 <span class="k">${s.ele}</span>:随机层数 = ${s.insertLevel}(抛硬币结果),排名(rank)= ${s.rank}(0-based,即前面有 ${s.rank} 个元素)。`;
+  }
+
+  function render(){
+    idx = Math.max(0, Math.min(steps.length-1, idx));
+    const s = steps[idx];
+    narration.innerHTML = describeStep(s);
+
+    const items = s.items;
+    const maxLevel = Math.max(1, ...items.map(it=>it.level), (s.phase==='path' ? s.insertLevel : 0));
+    // header always spans all current max levels
+    let html = '';
+    for (let lvl = maxLevel - 1; lvl >= 0; lvl--){
+      html += `<div class="sklrow"><span class="skllvl">L${lvl}</span><div class="skltrack">`;
+      html += `<span class="sklnode header">header</span>`;
+      // nodes at this level, in sorted order (items already sorted by score,ele)
+      const onThisLevel = items.filter(it => it.level > lvl);
+      let prevWasHot = (s.phase==='path' && s.pathLevel===lvl && (s.from==='(header)'));
+      html += `<span class="sklarrow ${prevWasHot?'hot':''}"></span>`;
+      onThisLevel.forEach((it, i)=>{
+        const isFrom = s.phase==='path' && s.pathLevel===lvl && it.ele===s.from;
+        const isTo = s.phase==='path' && s.pathLevel===lvl && it.ele===s.to;
+        const isStop = s.phase==='path' && s.pathLevel===lvl && it.ele===s.stopAt;
+        const cls = (isFrom||isTo||isStop) ? 'active' : '';
+        html += `<span class="sklnode ${cls}">${it.ele}:${it.score}</span>`;
+        const nextHot = s.phase==='path' && s.pathLevel===lvl && it.ele===s.from;
+        html += `<span class="sklarrow ${nextHot?'hot':''}"></span>`;
+      });
+      // the item currently being inserted, if its random level reaches this row and we're past/at insert
+      if (s.phase === 'commit' && s.insertLevel > lvl){
+        // already merged into items via s.items (items includes it after commit) -- handled above via onThisLevel
+      }
+      if (s.phase === 'path' && s.action === 'insert-here' && s.pathLevel === lvl && s.insertLevel > lvl){
+        html += `<span class="sklnode newitem">${s.ele}:${s.score} (插入中)</span>`;
+      }
+      html += `</div></div>`;
+    }
+    box.innerHTML = html;
+
+    const insertedCount = s.phase === 'commit' ? s.items.length : s.items.length;
+    statsBox.innerHTML = `<div class="stat">当前元素数<b>${insertedCount}</b></div><div class="stat">跳表层数<b>${maxLevel}</b></div><div class="stat">阶段<b>${s.phase==='path'?'寻找位置':'完成插入'}</b></div>`;
+
+    counter.textContent = `${idx+1} / ${steps.length}`;
+    document.getElementById('sklPrev').disabled = idx===0;
+    document.getElementById('sklNext').disabled = idx===steps.length-1;
+  }
+  document.getElementById('sklPrev').onclick=()=>{idx--;render();stopPlay();};
+  document.getElementById('sklNext').onclick=()=>{idx++;render();stopPlay();};
+  document.getElementById('sklReset').onclick=()=>{idx=0;render();stopPlay();};
+  function stopPlay(){ playing=false; clearInterval(playTimer); document.getElementById('sklPlay').textContent='▶ 自动播放'; }
+  document.getElementById('sklPlay').onclick=()=>{
+    if(playing){ stopPlay(); return; }
+    playing=true; document.getElementById('sklPlay').textContent='⏸ 暂停';
+    playTimer = setInterval(()=>{
+      if(idx>=steps.length-1){ stopPlay(); return; }
+      idx++; render();
+    }, 900);
+  };
+  render();
+})();
+</script>
+
+</body>
+</html>

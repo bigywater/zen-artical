@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>JDBC Array 与 Struct:映射数据库复合类型</title>
+<meta name="description" content="在 PostgreSQL 16.15 与 MySQL 26.7.0 上实测 JDBC Array / Struct:PG 数组的元素类型与还原(NULL 元素、特殊字符、二维数组)、下标从 1 开始的越界错误;MySQL 不支持 Array / Struct,且 setObject(Integer[]) 会把数组序列化后发给服务器;= ANY(?) 对比 IN 列表(10000 个 id:4.40 对 10.17 ms);PG 复合类型只能通过 PGobject 访问。">
+<link rel="canonical" href="https://bigywater.tech/java-jdbc-array-struct.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="JDBC Array 与 Struct:映射数据库复合类型">
+<meta property="og:description" content="在 PostgreSQL 16.15 与 MySQL 26.7.0 上实测 JDBC Array / Struct:PG 数组的元素类型与还原(NULL 元素、特殊字符、二维数组)、下标从 1 开始的越界错误;MySQL 不支持 Array / Struct,且 setObject(Integer[]) 会把数组序列化后发给服务器;= ANY(?) 对比 IN 列表(10000 个 id:4.40 对 10.17 ms);PG 复合类型只能通过 PGobject 访问。">
+<meta property="og:url" content="https://bigywater.tech/java-jdbc-array-struct.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="JDBC Array 与 Struct:映射数据库复合类型">
+<meta name="twitter:description" content="在 PostgreSQL 16.15 与 MySQL 26.7.0 上实测 JDBC Array / Struct:PG 数组的元素类型与还原(NULL 元素、特殊字符、二维数组)、下标从 1 开始的越界错误;MySQL 不支持 Array / Struct,且 setObject(Integer[]) 会把数组序列化后发给服务器;= ANY(?) 对比 IN 列表(10000 个 id:4.40 对 10.17 ms);PG 复合类型只能通过 PGobject 访问。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">1871</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">368</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#B85C00; --series-c-soft:#FBE7D1;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#F29A4A; --series-c-soft:#3B2208;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#F29A4A; --series-c-soft:#3B2208;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Java · 369</div>
+  <h1>JDBC Array 与 Struct:映射数据库复合类型</h1>
+  <p>JDBC 的 Array 与 Struct 在不同数据库上的支持天差地别。这篇用 PostgreSQL 把数组用到极致,用 MySQL 看清「不支持」是什么样子,并检查复合类型能走到哪一步。</p>
+  <div class="hero-fact">
+<div><div class="num">4.40 vs 10.17 ms</div><div class="lbl">10000 个 id 的查询:= ANY(?) 数组参数与 IN (?,…) 占位符列表(PG)</div></div><div><div class="num">aced0005</div><div class="lbl">MySQL 上 setObject(Integer[]) 发给服务器的数据开头(Java 序列化魔数,不报错)</div></div><div><div class="num">PGobject</div><div class="lbl">PG 复合类型 getObject 的返回类型(不是 java.sql.Struct;createStruct 与 getObject(Struct.class) 都不支持)</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="java-sqlxml.html">SQLXML:在 JDBC 中处理 XML 数据</a></div>
+<section>
+  <h2>PG 数组的类型与还原</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  插入多种元素类型的数组:1 行
+      ints   列类型 _int4     /2003   getBaseTypeName=int4       getBaseType=4      getArray → Integer[4][1, 2, null, 4]
+      txt    列类型 _text     /2003   getBaseTypeName=text       getBaseType=12     getArray → String[8][a,b, quote"here, back\slash, {brace}, 中文, NULL, ,  space ]
+      nums   列类型 _numeric  /2003   getBaseTypeName=numeric    getBaseType=2      getArray → BigDecimal[2][1.50, -0.001]
+      ts     列类型 _timestamp/2003   getBaseTypeName=timestamp  getBaseType=93     getArray → Timestamp[2][2026-01-02 03:04:05.678, null]
+      ids    列类型 _uuid     /2003   getBaseTypeName=uuid       getBaseType=1111   getArray → UUID[1][123e4567-e89b-12d3-a456-426614174000]
+      bools  列类型 _bool     /2003   getBaseTypeName=bool       getBaseType=-7     getArray → Boolean[3][true, false, null]
+      bytes  列类型 _bytea    /2003   getBaseTypeName=bytea      getBaseType=-2     getArray → byte[][2][byte[3][1, 2, 3], byte[0][]]
+      grid   列类型 _int4     /2003   getBaseTypeName=int4       getBaseType=4      getArray → Integer[][3][Integer[2][1, 2], Integer[2][3, 4], Integer[2][5, 6]]
+  getString 看数组的文本形式:ints = “{1,2,NULL,4}”;txt = “{"a,b","quote\"here","back\\slash","{brace}",中文,"NULL",""," space "}”
+  getObject("ints") 的类型:org.postgresql.jdbc.PgArray
+  txt 数组里的各元素是否原样还原:true;“NULL” 字符串与 SQL NULL 的区别:ta[5] = NULL(String)
+  二维数组 getArray():Integer[][] Integer[][3][Integer[2][1, 2], Integer[2][3, 4], Integer[2][5, 6]];元素 [0] 的类型 Integer[]
+  getArray(2, 2)(从第 2 个元素起取 2 个,下标从 1 开始):Integer[2][2, null];getArray(1, 10) 超过长度:PSQLException(22000): The array index is out of range: 11, number of elements: 4.;getArray(0, 2):PSQLException(22000): The array index is out of range: 0;getArray(5, 1):PSQLException(22000): The array index is out of range: 6, number of elements: 4.
+  array.getResultSet()(第 1 列是下标,第 2 列是值):[1:1, 2:2, 3:null, 4:4];列数 2
+  free() 之后 getArray:null
+  空数组与 NULL 数组:空数组 getArray → Integer[0][];NULL 数组 getArray = null(wasNull true);getString 空数组 “{}”
+  元素类型与数组类型不匹配:PSQLException(22P02): ERROR: invalid input syntax for type integer: "x"
+  createArrayOf 的类型名写错("int" / "INTEGER" / "int4" / "_int4" / "nosuchtype"):[int=ok, INTEGER=ok, int4=ok, _int4=PSQLException(42602): Unable to find server array type for provided name _int4., integer[]=PSQLException(42602): Unable to find server array type for provided name integer[]., nosuchtype=PSQLException(42602): Unable to find server array type for provided name nosuchtype.]
+  createArrayOf("integer", Object[] 里混入 Long):成功 {"1","2"}
+  ps.setObject(i, Integer[]) 直接传 Java 数组:cardinality = 3
+  ps.setObject(i, int[])(基本类型):cardinality = 3</pre></div>
+</section>
+<section>
+  <h2>MySQL:没有 Array 与 Struct</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  createArrayOf:SQLFeatureNotSupportedException(null): null
+  createStruct:SQLFeatureNotSupportedException(null): null
+  DatabaseMetaData.supportsGetGeneratedKeys 等无关;JSON 数组列 getObject:String “[1, 2, 3]”;rs.getArray → SQLFeatureNotSupportedException(null): null
+  setArray 到 PreparedStatement:SQLFeatureNotSupportedException(null): null
+  setObject(1, new Integer[]{1,2}):查询返回 132 字节,开头 aced00057572(aced0005 是 Java 序列化流的魔数——数组被当作序列化对象传给了服务器)
+  IN 列表替代:500 个占位符的 IN → 500 行</pre></div>
+</section>
+<section>
+  <h2>用数组参数代替 IN 列表</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">         10 个 id:= ANY(?) 0.14 ms(10 行);IN (?,…) 0.15 ms(10 行)
+       1000 个 id:= ANY(?) 0.56 ms(1000 行);IN (?,…) 1.12 ms(1000 行)
+      10000 个 id:= ANY(?) 4.40 ms(10000 行);IN (?,…) 10.17 ms(10000 行)
+      30000 个 id:= ANY(?) 12.28 ms(30000 行);IN (?,…) 成功
+      40000 个 id:= ANY(?) 14.36 ms(33334 行);IN (?,…) 成功
+  没有元素时 = ANY(空数组):0 行;空 IN () 的 SQL:PSQLException(42601): ERROR: syntax error at or near ")"
+  ANY(?) 里含 NULL 元素:2 行;NOT IN 加 NULL 的陷阱 id &lt;&gt; all(含 NULL):0 行(预期 99998,NULL 使整个比较未知)</pre></div>
+</section>
+<section>
+  <h2>复合类型与 Struct</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  createStruct:SQLFeatureNotSupportedException(0A000): Method org.postgresql.jdbc.PgConnection.createStruct(String, Object[]) is not yet implemented.
+  用 PGobject(type=point3, value="(1,2,…)") 插入复合类型:1 行
+  getObject 复合类型:org.postgresql.util.PGobject;getType = point3;getValue = “(1,2,"he said ""hi""")”;getString = “(1,2,"he said ""hi""")”;metadata 类型 point3/2002
+  rs.getObject(1, java.sql.Struct.class) :PSQLException(22023): conversion to interface java.sql.Struct from point3 not supported
+  拆开成列:(p).x = 1;(p).label = “he said "hi"”(服务端展开比客户端解析文本更可靠)
+  PgStruct 类 / Struct 接口:org.postgresql.jdbc 里有没有 PgStruct —— ClassNotFoundException: org.postgresql.jdbc.PgStruct
+  复合类型数组 getArray:baseTypeName=point3;元素类型 PGobject;元素 [(1,2,a), (3,4,b)]
+  getObject(列, Map) 自定义类型映射:SQLFeatureNotSupportedException(0A000): Method org.postgresql.jdbc.PgResultSet.getObjectImpl(int,Map) is not yet implemented.
+  getTypeMap:{}</pre></div>
+</section>
+<section>
+  <h2>大数组</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">         1000 个元素:createArrayOf 3 ms;INSERT 2 ms;getArray → Integer[1000][0, 1, 2, 3, 7 ms
+       100000 个元素:createArrayOf 5 ms;INSERT 6 ms;getArray → Integer[100000][0, 1, 2,  33 ms
+      1000000 个元素:createArrayOf 6 ms;INSERT 49 ms;getArray → Integer[1000000][0, 1, 2, 158 ms
+  int[] 基本类型数组(getArray 返回的是装箱的 Integer[])的内存/用途:见上一项的 getArray 类型</pre></div>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">Array 与 Struct</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "PostgreSQL 的数组列(int[]、text[]、numeric[]、timestamp[]、uuid[]、boolean[]、bytea[]、二维 int[][])用 createArrayOf(类型名, Object[]) + setArray 写入。getArray() 还原成带类型的 Java 数组:Integer[4]{1, 2, null, 4}、String[8]、BigDecimal[2]{1.50, -0.001}、Timestamp[2]{2026-01-02 03:04:05.678, null}、UUID[1]、Boolean[3]{true, false, null}、byte[][2]、二维 Integer[][3]。列类型名是 _int4 / _text …(JDBC 类型 2003 = ARRAY),getBaseTypeName 是 int4 / text / numeric,getBaseType 分别是 4 / 12 / 2 / 93 / 1111(uuid)/ -7 / -2。getObject 的类型是 PgArray。", "s": {"t": {"lines": ["  插入多种元素类型的数组:1 行", "      ints   列类型 _int4     /2003   getBaseTypeName=int4       getBaseType=4      getArray → Integer[4][1, 2, null, 4]", "      txt    列类型 _text     /2003   getBaseTypeName=text       getBaseType=12     getArray → String[8][a,b, quote\"here, back\\slash, {brace}, 中文, NULL, ,  space ]", "      nums   列类型 _numeric  /2003   getBaseTypeName=numeric    getBaseType=2      getArray → BigDecimal[2][1.50, -0.001]", "      ts     列类型 _timestamp/2003   getBaseTypeName=timestamp  getBaseType=93     getArray → Timestamp[2][2026-01-02 03:04:05.678, null]", "      ids    列类型 _uuid     /2003   getBaseTypeName=uuid       getBaseType=1111   getArray → UUID[1][123e4567-e89b-12d3-a456-426614174000]", "      bools  列类型 _bool     /2003   getBaseTypeName=bool       getBaseType=-7     getArray → Boolean[3][true, false, null]", "      bytes  列类型 _bytea    /2003   getBaseTypeName=bytea      getBaseType=-2     getArray → byte[][2][byte[3][1, 2, 3], byte[0][]]", "      grid   列类型 _int4     /2003   getBaseTypeName=int4       getBaseType=4      getArray → Integer[][3][Integer[2][1, 2], Integer[2][3, 4], Integer[2][5, 6]]", "  getString 看数组的文本形式:ints = “{1,2,NULL,4}”;txt = “{\"a,b\",\"quote\\\"here\",\"back\\\\slash\",\"{brace}\",中文,\"NULL\",\"\",\" space \"}”", "  getObject(\"ints\") 的类型:org.postgresql.jdbc.PgArray", "  txt 数组里的各元素是否原样还原:true;“NULL” 字符串与 SQL NULL 的区别:ta[5] = NULL(String)", "  二维数组 getArray():Integer[][] Integer[][3][Integer[2][1, 2], Integer[2][3, 4], Integer[2][5, 6]];元素 [0] 的类型 Integer[]", "  getArray(2, 2)(从第 2 个元素起取 2 个,下标从 1 开始):Integer[2][2, null];getArray(1, 10) 超过长度:PSQLException(22000): The array index is out of range: 11, number of elements: 4.;getArray(0, 2):PSQLException(22000): The array index is out of range: 0;getArray(5, 1):PSQLException(22000): The array index is out of range: 6, number of elements: 4.", "  array.getResultSet()(第 1 列是下标,第 2 列是值):[1:1, 2:2, 3:null, 4:4];列数 2", "  free() 之后 getArray:null", "  空数组与 NULL 数组:空数组 getArray → Integer[0][];NULL 数组 getArray = null(wasNull true);getString 空数组 “{}”", "  元素类型与数组类型不匹配:PSQLException(22P02): ERROR: invalid input syntax for type integer: \"x\"", "  createArrayOf 的类型名写错(\"int\" / \"INTEGER\" / \"int4\" / \"_int4\" / \"nosuchtype\"):[int=ok, INTEGER=ok, int4=ok, _int4=PSQLException(42602): Unable to find server array type for provided name _int4., integer[]=PSQLException(42602): Unable to find server array type for provided name integer[]., nosuchtype=PSQLException(42602): Unable to find server array type for provided name nosuchtype.]", "  createArrayOf(\"integer\", Object[] 里混入 Long):成功 {\"1\",\"2\"}", "  ps.setObject(i, Integer[]) 直接传 Java 数组:cardinality = 3", "  ps.setObject(i, int[])(基本类型):cardinality = 3"], "cur": [], "mark": [], "done": []}, "done": [0, 1, 2, 8], "mark": [1, 8, 10], "kv": {"items": [["getArray 的 Java 类型", "Integer[] / String[] / BigDecimal[] / UUID[] / byte[][]"], ["getBaseTypeName", "int4 / text / numeric …"], ["二维数组", "Integer[][]"]], "hl": ["getArray 的 Java 类型"]}}}, {"note": "数组里的特殊字符与 NULL:text[] 里 “a,b”、带双引号、反斜杠、花括号、中文、字符串 “NULL”、空字符串、前后带空格的元素全部原样还原(Arrays.equals 为 true);getString 看到的文本形式是 {\"a,b\",\"quote\\\"here\",\"back\\\\slash\",\"{brace}\",中文,\"NULL\",\"\",\" space \"},其中字符串 “NULL” 被加引号以区别于 SQL NULL(getArray 里 ta[5] 是字符串 “NULL”,而 int 数组里的 NULL 元素是 null)。空数组 getArray 得到 Integer[0],getString 是 “{}”;SQL NULL 数组 getArray = null、wasNull = true。", "s": {"t": {"lines": ["  插入多种元素类型的数组:1 行", "      ints   列类型 _int4     /2003   getBaseTypeName=int4       getBaseType=4      getArray → Integer[4][1, 2, null, 4]", "      txt    列类型 _text     /2003   getBaseTypeName=text       getBaseType=12     getArray → String[8][a,b, quote\"here, back\\slash, {brace}, 中文, NULL, ,  space ]", "      nums   列类型 _numeric  /2003   getBaseTypeName=numeric    getBaseType=2      getArray → BigDecimal[2][1.50, -0.001]", "      ts     列类型 _timestamp/2003   getBaseTypeName=timestamp  getBaseType=93     getArray → Timestamp[2][2026-01-02 03:04:05.678, null]", "      ids    列类型 _uuid     /2003   getBaseTypeName=uuid       getBaseType=1111   getArray → UUID[1][123e4567-e89b-12d3-a456-426614174000]", "      bools  列类型 _bool     /2003   getBaseTypeName=bool       getBaseType=-7     getArray → Boolean[3][true, false, null]", "      bytes  列类型 _bytea    /2003   getBaseTypeName=bytea      getBaseType=-2     getArray → byte[][2][byte[3][1, 2, 3], byte[0][]]", "      grid   列类型 _int4     /2003   getBaseTypeName=int4       getBaseType=4      getArray → Integer[][3][Integer[2][1, 2], Integer[2][3, 4], Integer[2][5, 6]]", "  getString 看数组的文本形式:ints = “{1,2,NULL,4}”;txt = “{\"a,b\",\"quote\\\"here\",\"back\\\\slash\",\"{brace}\",中文,\"NULL\",\"\",\" space \"}”", "  getObject(\"ints\") 的类型:org.postgresql.jdbc.PgArray", "  txt 数组里的各元素是否原样还原:true;“NULL” 字符串与 SQL NULL 的区别:ta[5] = NULL(String)", "  二维数组 getArray():Integer[][] Integer[][3][Integer[2][1, 2], Integer[2][3, 4], Integer[2][5, 6]];元素 [0] 的类型 Integer[]", "  getArray(2, 2)(从第 2 个元素起取 2 个,下标从 1 开始):Integer[2][2, null];getArray(1, 10) 超过长度:PSQLException(22000): The array index is out of range: 11, number of elements: 4.;getArray(0, 2):PSQLException(22000): The array index is out of range: 0;getArray(5, 1):PSQLException(22000): The array index is out of range: 6, number of elements: 4.", "  array.getResultSet()(第 1 列是下标,第 2 列是值):[1:1, 2:2, 3:null, 4:4];列数 2", "  free() 之后 getArray:null", "  空数组与 NULL 数组:空数组 getArray → Integer[0][];NULL 数组 getArray = null(wasNull true);getString 空数组 “{}”", "  元素类型与数组类型不匹配:PSQLException(22P02): ERROR: invalid input syntax for type integer: \"x\"", "  createArrayOf 的类型名写错(\"int\" / \"INTEGER\" / \"int4\" / \"_int4\" / \"nosuchtype\"):[int=ok, INTEGER=ok, int4=ok, _int4=PSQLException(42602): Unable to find server array type for provided name _int4., integer[]=PSQLException(42602): Unable to find server array type for provided name integer[]., nosuchtype=PSQLException(42602): Unable to find server array type for provided name nosuchtype.]", "  createArrayOf(\"integer\", Object[] 里混入 Long):成功 {\"1\",\"2\"}", "  ps.setObject(i, Integer[]) 直接传 Java 数组:cardinality = 3", "  ps.setObject(i, int[])(基本类型):cardinality = 3"], "cur": [], "mark": [], "done": []}, "done": [9, 11], "mark": [11, 16], "kv": {"items": [["特殊字符", "原样还原(Arrays.equals = true)"], ["字符串 NULL vs SQL NULL", "getArray 里分别是 “NULL” 与 null"], ["空数组 / NULL 数组", "Integer[0] / null"]], "hl": ["字符串 NULL vs SQL NULL"]}}}, {"note": "下标与边界:Array.getArray(index, count) 的下标从 1 开始:getArray(2, 2) 得到 Integer[2]{2, null};getArray(1, 10) 超过长度 → PSQLException(22000): The array index is out of range: 11, number of elements: 4.;getArray(0, 2) → “The array index is out of range: 0”;getArray(5, 1) → “… out of range: 6, number of elements: 4.”。array.getResultSet() 有 2 列(第 1 列是下标,第 2 列是值):[1:1, 2:2, 3:null, 4:4]。free() 之后 getArray 返回 null(不抛异常)。元素类型不匹配:把 String[]{\"x\", \"y\"} 当 integer 数组插入 → 22P02 “invalid input syntax for type integer: \"x\"”。", "s": {"t": {"lines": ["  插入多种元素类型的数组:1 行", "      ints   列类型 _int4     /2003   getBaseTypeName=int4       getBaseType=4      getArray → Integer[4][1, 2, null, 4]", "      txt    列类型 _text     /2003   getBaseTypeName=text       getBaseType=12     getArray → String[8][a,b, quote\"here, back\\slash, {brace}, 中文, NULL, ,  space ]", "      nums   列类型 _numeric  /2003   getBaseTypeName=numeric    getBaseType=2      getArray → BigDecimal[2][1.50, -0.001]", "      ts     列类型 _timestamp/2003   getBaseTypeName=timestamp  getBaseType=93     getArray → Timestamp[2][2026-01-02 03:04:05.678, null]", "      ids    列类型 _uuid     /2003   getBaseTypeName=uuid       getBaseType=1111   getArray → UUID[1][123e4567-e89b-12d3-a456-426614174000]", "      bools  列类型 _bool     /2003   getBaseTypeName=bool       getBaseType=-7     getArray → Boolean[3][true, false, null]", "      bytes  列类型 _bytea    /2003   getBaseTypeName=bytea      getBaseType=-2     getArray → byte[][2][byte[3][1, 2, 3], byte[0][]]", "      grid   列类型 _int4     /2003   getBaseTypeName=int4       getBaseType=4      getArray → Integer[][3][Integer[2][1, 2], Integer[2][3, 4], Integer[2][5, 6]]", "  getString 看数组的文本形式:ints = “{1,2,NULL,4}”;txt = “{\"a,b\",\"quote\\\"here\",\"back\\\\slash\",\"{brace}\",中文,\"NULL\",\"\",\" space \"}”", "  getObject(\"ints\") 的类型:org.postgresql.jdbc.PgArray", "  txt 数组里的各元素是否原样还原:true;“NULL” 字符串与 SQL NULL 的区别:ta[5] = NULL(String)", "  二维数组 getArray():Integer[][] Integer[][3][Integer[2][1, 2], Integer[2][3, 4], Integer[2][5, 6]];元素 [0] 的类型 Integer[]", "  getArray(2, 2)(从第 2 个元素起取 2 个,下标从 1 开始):Integer[2][2, null];getArray(1, 10) 超过长度:PSQLException(22000): The array index is out of range: 11, number of elements: 4.;getArray(0, 2):PSQLException(22000): The array index is out of range: 0;getArray(5, 1):PSQLException(22000): The array index is out of range: 6, number of elements: 4.", "  array.getResultSet()(第 1 列是下标,第 2 列是值):[1:1, 2:2, 3:null, 4:4];列数 2", "  free() 之后 getArray:null", "  空数组与 NULL 数组:空数组 getArray → Integer[0][];NULL 数组 getArray = null(wasNull true);getString 空数组 “{}”", "  元素类型与数组类型不匹配:PSQLException(22P02): ERROR: invalid input syntax for type integer: \"x\"", "  createArrayOf 的类型名写错(\"int\" / \"INTEGER\" / \"int4\" / \"_int4\" / \"nosuchtype\"):[int=ok, INTEGER=ok, int4=ok, _int4=PSQLException(42602): Unable to find server array type for provided name _int4., integer[]=PSQLException(42602): Unable to find server array type for provided name integer[]., nosuchtype=PSQLException(42602): Unable to find server array type for provided name nosuchtype.]", "  createArrayOf(\"integer\", Object[] 里混入 Long):成功 {\"1\",\"2\"}", "  ps.setObject(i, Integer[]) 直接传 Java 数组:cardinality = 3", "  ps.setObject(i, int[])(基本类型):cardinality = 3"], "cur": [], "mark": [], "done": []}, "done": [13, 14], "mark": [13, 15, 17], "kv": {"items": [["getArray(index, count)", "下标从 1 开始,越界抛 22000"], ["free() 之后", "getArray 返回 null"], ["元素类型不匹配", "22P02"]], "hl": ["free() 之后"]}}}, {"note": "createArrayOf 的类型名:“int”、“INTEGER”、“int4” 可以,“_int4”、“integer[]”、“nosuchtype” → PSQLException(42602): Unable to find server array type for provided name …;Object[]{1, 2L} 混装 Integer 与 Long 可以(转成文本 {\"1\",\"2\"})。ps.setObject(i, Integer[]) 与 setObject(i, int[]) 直接传 Java 数组都能被 PG 驱动识别(cardinality = 3)。", "s": {"t": {"lines": ["  插入多种元素类型的数组:1 行", "      ints   列类型 _int4     /2003   getBaseTypeName=int4       getBaseType=4      getArray → Integer[4][1, 2, null, 4]", "      txt    列类型 _text     /2003   getBaseTypeName=text       getBaseType=12     getArray → String[8][a,b, quote\"here, back\\slash, {brace}, 中文, NULL, ,  space ]", "      nums   列类型 _numeric  /2003   getBaseTypeName=numeric    getBaseType=2      getArray → BigDecimal[2][1.50, -0.001]", "      ts     列类型 _timestamp/2003   getBaseTypeName=timestamp  getBaseType=93     getArray → Timestamp[2][2026-01-02 03:04:05.678, null]", "      ids    列类型 _uuid     /2003   getBaseTypeName=uuid       getBaseType=1111   getArray → UUID[1][123e4567-e89b-12d3-a456-426614174000]", "      bools  列类型 _bool     /2003   getBaseTypeName=bool       getBaseType=-7     getArray → Boolean[3][true, false, null]", "      bytes  列类型 _bytea    /2003   getBaseTypeName=bytea      getBaseType=-2     getArray → byte[][2][byte[3][1, 2, 3], byte[0][]]", "      grid   列类型 _int4     /2003   getBaseTypeName=int4       getBaseType=4      getArray → Integer[][3][Integer[2][1, 2], Integer[2][3, 4], Integer[2][5, 6]]", "  getString 看数组的文本形式:ints = “{1,2,NULL,4}”;txt = “{\"a,b\",\"quote\\\"here\",\"back\\\\slash\",\"{brace}\",中文,\"NULL\",\"\",\" space \"}”", "  getObject(\"ints\") 的类型:org.postgresql.jdbc.PgArray", "  txt 数组里的各元素是否原样还原:true;“NULL” 字符串与 SQL NULL 的区别:ta[5] = NULL(String)", "  二维数组 getArray():Integer[][] Integer[][3][Integer[2][1, 2], Integer[2][3, 4], Integer[2][5, 6]];元素 [0] 的类型 Integer[]", "  getArray(2, 2)(从第 2 个元素起取 2 个,下标从 1 开始):Integer[2][2, null];getArray(1, 10) 超过长度:PSQLException(22000): The array index is out of range: 11, number of elements: 4.;getArray(0, 2):PSQLException(22000): The array index is out of range: 0;getArray(5, 1):PSQLException(22000): The array index is out of range: 6, number of elements: 4.", "  array.getResultSet()(第 1 列是下标,第 2 列是值):[1:1, 2:2, 3:null, 4:4];列数 2", "  free() 之后 getArray:null", "  空数组与 NULL 数组:空数组 getArray → Integer[0][];NULL 数组 getArray = null(wasNull true);getString 空数组 “{}”", "  元素类型与数组类型不匹配:PSQLException(22P02): ERROR: invalid input syntax for type integer: \"x\"", "  createArrayOf 的类型名写错(\"int\" / \"INTEGER\" / \"int4\" / \"_int4\" / \"nosuchtype\"):[int=ok, INTEGER=ok, int4=ok, _int4=PSQLException(42602): Unable to find server array type for provided name _int4., integer[]=PSQLException(42602): Unable to find server array type for provided name integer[]., nosuchtype=PSQLException(42602): Unable to find server array type for provided name nosuchtype.]", "  createArrayOf(\"integer\", Object[] 里混入 Long):成功 {\"1\",\"2\"}", "  ps.setObject(i, Integer[]) 直接传 Java 数组:cardinality = 3", "  ps.setObject(i, int[])(基本类型):cardinality = 3"], "cur": [], "mark": [], "done": []}, "done": [18], "mark": [18, 19, 20, 21], "kv": {"items": [["类型名", "int / INTEGER / int4 可以;_int4 / integer[] 报 42602"], ["setObject(Java 数组)", "PG 驱动识别"]], "hl": ["类型名"]}}}, {"note": "MySQL(Connector/J 9.1.0)没有 Array / Struct:createArrayOf 与 createStruct 都抛 SQLFeatureNotSupportedException(消息为 null);setArray 同样不支持;JSON 列 [1,2,3] 用 getObject 读到的是 String “[1, 2, 3]”,rs.getArray 抛 SQLFeatureNotSupportedException。危险的是 ps.setObject(1, new Integer[]{1, 2}):不报错,数组被当作 Java 序列化对象发送,服务器收到的是 132 字节、以 aced0005 开头的二进制(Java 序列化流的魔数)。", "s": {"t": {"lines": ["  createArrayOf:SQLFeatureNotSupportedException(null): null", "  createStruct:SQLFeatureNotSupportedException(null): null", "  DatabaseMetaData.supportsGetGeneratedKeys 等无关;JSON 数组列 getObject:String “[1, 2, 3]”;rs.getArray → SQLFeatureNotSupportedException(null): null", "  setArray 到 PreparedStatement:SQLFeatureNotSupportedException(null): null", "  setObject(1, new Integer[]{1,2}):查询返回 132 字节,开头 aced00057572(aced0005 是 Java 序列化流的魔数——数组被当作序列化对象传给了服务器)", "  IN 列表替代:500 个占位符的 IN → 500 行"], "cur": [], "mark": [], "done": []}, "done": [0, 1, 2], "mark": [3, 4], "kv": {"items": [["createArrayOf / createStruct", "SQLFeatureNotSupportedException"], ["setObject(Integer[])", "不报错,被序列化成 132 字节二进制(aced0005…)"]], "hl": ["setObject(Integer[])"]}}}, {"note": "数组参数代替 IN 列表(PG,100000 行的表,取 5 次最小值):10 个 id:= ANY(?) 0.14 ms、IN (?,…) 0.15 ms;1000 个:0.56 ms 对 1.12 ms;10000 个:4.40 ms 对 10.17 ms;30000 个与 40000 个 id 用 IN (?,…) 也能成功(驱动没有因超过 32767 个参数而失败),= ANY(?) 分别是 12.28 ms 与 14.36 ms。空数组 = ANY(空) 得到 0 行,而空的 IN () 是语法错误(42601);ANY 里含 NULL 元素时只匹配非 NULL 的元素(2 行),但 id <> all(含 NULL 的数组) 得到 0 行(预期 99998 行,NULL 使整个比较的结果未知)。", "s": {"t": {"lines": ["         10 个 id:= ANY(?) 0.14 ms(10 行);IN (?,…) 0.15 ms(10 行)", "       1000 个 id:= ANY(?) 0.56 ms(1000 行);IN (?,…) 1.12 ms(1000 行)", "      10000 个 id:= ANY(?) 4.40 ms(10000 行);IN (?,…) 10.17 ms(10000 行)", "      30000 个 id:= ANY(?) 12.28 ms(30000 行);IN (?,…) 成功", "      40000 个 id:= ANY(?) 14.36 ms(33334 行);IN (?,…) 成功", "  没有元素时 = ANY(空数组):0 行;空 IN () 的 SQL:PSQLException(42601): ERROR: syntax error at or near \")\"", "  ANY(?) 里含 NULL 元素:2 行;NOT IN 加 NULL 的陷阱 id <> all(含 NULL):0 行(预期 99998,NULL 使整个比较未知)"], "cur": [], "mark": [], "done": []}, "done": [0, 1, 2], "mark": [3, 5, 6], "b": {"items": [["1000 个 id:= ANY(?)", 0.56, "0.56 ms"], ["1000 个 id:IN (?,…)", 1.12, "1.12 ms"], ["10000 个 id:= ANY(?)", 4.4, "4.40 ms"], ["10000 个 id:IN (?,…)", 10.17, "10.17 ms"]], "max": 10.2, "cur": [], "mark": [], "done": [0, 1, 2, 3]}, "kv": {"items": [["10000 个 id", "= ANY(?) 4.40 ms / IN 10.17 ms"], ["空数组", "= ANY 得 0 行;IN () 是语法错误"], ["<> all(含 NULL)", "0 行"]], "hl": ["<> all(含 NULL)"]}}}, {"note": "Struct 与复合类型:PG 驱动的 createStruct 抛 SQLFeatureNotSupportedException: Method org.postgresql.jdbc.PgConnection.createStruct(String, Object[]) is not yet implemented.;复合类型 point3(x int, y int, label text)的值用 PGobject(setType(\"point3\")、setValue(\"(1,2,…)\"))插入;getObject 返回 org.postgresql.util.PGobject(getType = point3,getValue 是文本 “(1,2,\"he said \"\"hi\"\"\")”,列的 JDBC 类型 2002 = STRUCT);rs.getObject(1, Struct.class) → “conversion to interface java.sql.Struct from point3 not supported”;getObject(列, Map) → not yet implemented;驱动里没有 PgStruct 类。复合类型数组的 getArray 得到 baseTypeName=point3 的 PGobject[]。服务端展开((p).x、(p).label)比客户端解析文本更可靠。", "s": {"t": {"lines": ["  createStruct:SQLFeatureNotSupportedException(0A000): Method org.postgresql.jdbc.PgConnection.createStruct(String, Object[]) is not yet implemented.", "  用 PGobject(type=point3, value=\"(1,2,…)\") 插入复合类型:1 行", "  getObject 复合类型:org.postgresql.util.PGobject;getType = point3;getValue = “(1,2,\"he said \"\"hi\"\"\")”;getString = “(1,2,\"he said \"\"hi\"\"\")”;metadata 类型 point3/2002", "  rs.getObject(1, java.sql.Struct.class) :PSQLException(22023): conversion to interface java.sql.Struct from point3 not supported", "  拆开成列:(p).x = 1;(p).label = “he said \"hi\"”(服务端展开比客户端解析文本更可靠)", "  PgStruct 类 / Struct 接口:org.postgresql.jdbc 里有没有 PgStruct —— ClassNotFoundException: org.postgresql.jdbc.PgStruct", "  复合类型数组 getArray:baseTypeName=point3;元素类型 PGobject;元素 [(1,2,a), (3,4,b)]", "  getObject(列, Map) 自定义类型映射:SQLFeatureNotSupportedException(0A000): Method org.postgresql.jdbc.PgResultSet.getObjectImpl(int,Map) is not yet implemented.", "  getTypeMap:{}"], "cur": [], "mark": [], "done": []}, "done": [0, 1, 2], "mark": [3, 5, 6, 7], "kv": {"items": [["createStruct", "PG 未实现"], ["复合类型值", "PGobject(类型名 + 文本值)"], ["getObject(…, Struct.class)", "不支持"]], "hl": ["复合类型值"]}}}, {"note": "大数组(PG,int[]):1000 个元素 createArrayOf 3 ms、INSERT 2 ms、getArray 7 ms;100000 个元素 5 ms、6 ms、33 ms;1000000 个元素 6 ms、49 ms、158 ms(getArray 返回装箱的 Integer[1000000])。读取比写入慢——要解析文本形式并装箱每个元素;只需要部分元素时用 getArray(index, count) 或在 SQL 里取切片。", "s": {"t": {"lines": ["         1000 个元素:createArrayOf 3 ms;INSERT 2 ms;getArray → Integer[1000][0, 1, 2, 3, 7 ms", "       100000 个元素:createArrayOf 5 ms;INSERT 6 ms;getArray → Integer[100000][0, 1, 2,  33 ms", "      1000000 个元素:createArrayOf 6 ms;INSERT 49 ms;getArray → Integer[1000000][0, 1, 2, 158 ms", "  int[] 基本类型数组(getArray 返回的是装箱的 Integer[])的内存/用途:见上一项的 getArray 类型"], "cur": [], "mark": [], "done": []}, "done": [0, 1], "mark": [2], "b": {"items": [["100 万元素 createArrayOf", 6, "6 ms"], ["100 万元素 INSERT", 49, "49 ms"], ["100 万元素 getArray", 158, "158 ms"]], "max": 160, "cur": [], "mark": [], "done": [0, 1, 2]}, "kv": {"items": [["100 万元素", "createArrayOf 6 ms / INSERT 49 ms / getArray 158 ms"]], "hl": ["100 万元素"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64,JDK 21.0.12;PostgreSQL 16.15 与 MySQL 26.7.0(自己初始化的隔离实例,端口 9501 / 9601);驱动 PostgreSQL JDBC 42.7.4、MySQL Connector/J 9.1.0</li><li>没有验证:Oracle 的 ARRAY / STRUCT(OracleDataFactory 与 SQLData 映射)、PostgreSQL 的 Struct 自定义类型映射(SQLData)、数组元素类型是 enum / range / 自定义复合类型时的细节、HikariCP 等连接池包装对 Array 的影响、JDBC 的 setObject(Array) 在预编译语句缓存(prepareThreshold)下的执行计划差异</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="java-connection-pool.html">
+    <div>
+      <div class="t1">下一篇 · JAVA 370</div>
+      <div class="t2">JDBC 连接池:复用连接也要重置状态</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Java · JDBC Array 与 Struct:映射数据库复合类型 · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

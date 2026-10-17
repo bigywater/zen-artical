@@ -1,0 +1,15 @@
+from lib import *
+S = SS('f149')
+R = J('f149'); nx = R['nginx']; k = list(nx); n1, n2 = nx[k[0]], nx[k[1]]; cap = R['cap']
+steps = [
+    step("SSE 的线上格式:响应是 200、Content-Type: text/event-stream; charset=utf-8、Cache-Control: no-cache、Transfer-Encoding: chunked。正文是一条条以空行结束的事件:id: 1、data: {\"n\": 1}、空行;可选的 event: 名字;以冒号开头的行是注释(这里的 : keep-alive comment,常用来保持连接不被代理判空闲)。Flask 里就是一个生成器加 stream_with_context,用 Response(mimetype='text/event-stream') 返回。", t=tl(S(1)), done=lidx(S(1), '状态', "'id: 1'", "'data: {\"n\": 1}'", 'keep-alive'), kv=KV([['Content-Type', 'text/event-stream'], ['事件', 'id / event / data + 空行结束'], ['注释行', '冒号开头,可做保活']], ['事件'])),
+    step("真实 Chrome 的 EventSource:服务端每发完 3 条就结束响应。页面依次收到 1、2、3,然后 onerror(readyState = 0,CONNECTING——连接断了,浏览器自动重连,而不是关闭),重连后收到 4、5、6;服务端日志里第一次连接 Last-Event-ID=None,第二次是 Last-Event-ID=3——浏览器自动把最后收到的事件 id 作为请求头带上,服务端据此从 4 继续。断线续传是 SSE 比手写长轮询省事的地方。", t=tl(S(2)), done=lidx(S(2), '页面收到', '服务端日志'), kv=KV([['断线', 'readyState=0,浏览器自动重连'], ['Last-Event-ID', '自动带上最后收到的 id,服务端从那里继续']], ['Last-Event-ID'])),
+    step(f"经过 nginx(proxy_buffering 默认开):响应头里没有 X-Accel-Buffering 时,3 条事件在约 {n1[0]} ms 一次性到达(被 nginx 缓冲到响应结束);服务端在响应头里加 X-Accel-Buffering: no 后,数据按 {n2} ms 逐条到达——nginx 对这个响应关闭缓冲,不需要改 nginx 配置。SSE 经过 nginx 必须处理缓冲(要么响应头,要么 proxy_buffering off)。", b=bars([['无 X-Accel-Buffering,首条', n1[0], f'{n1[0]} ms'], ['有 X-Accel-Buffering: no,首条', max(n2[0], 1), f'{n2[0]} ms']], n1[0], mark=[0], done=[1]), t=tl(S(3)), mark=lidx(S(3), '没有 X-Accel-Buffering'), done=lidx(S(3), '响应头 X-Accel-Buffering'), kv=KV([['不处理缓冲', f'{n1[0]} ms 才一次性到'], ['X-Accel-Buffering: no', f'首条 {n2[0]} ms,逐条到达']], ['X-Accel-Buffering: no'])),
+    step(f"每个 SSE 连接占一个线程:gunicorn gthread 8 线程,8 个 SSE 连接在进行(每个要 1 秒结束),这时一个普通的 /ping 用了 {cap:.0f} ms——要等某个连接结束释放线程。长时间挂着的 SSE 连接更多时,就会把 worker 的线程耗尽(与第 148 篇的长轮询同理),需要 gevent 或专门的推送服务。", t=tl(S(4)), mark=lidx(S(4), '8 个 SSE'), kv=KV([['每个 SSE 连接', '占住一个 worker 线程'], ['线程耗尽', '普通请求要排队']], ['每个 SSE 连接'])),
+]
+A = mkartf('f149', 149, 'Flask,SSE,EventSource,nginx,Last-Event-ID,真实验证,动画演示',
+    f'实测 Server-Sent Events:text/event-stream 的线上格式、真实 Chrome 的 EventSource 断线后自动重连并带 Last-Event-ID=3 从 4 继续、经过 nginx 时没有 X-Accel-Buffering 头则 {n1[0]} ms 才一次性到达而加了头逐条到达、每个连接占一个线程。',
+    'Flask 怎么实现 SSE?浏览器断线后会怎样?经过 nginx 要注意什么?这篇用真实的 gunicorn、nginx 与 Chrome 的 EventSource,把线上格式、断线续传与缓冲逐项验证。',
+    [('Last-Event-ID=3', '浏览器断线重连时自动带上的请求头,值是最后收到的事件 id'), (f'{n1[0]} → {n2[0]} ms', '经过 nginx 时第一条事件到达的时间:没有与有 X-Accel-Buffering: no'), ('readyState=0', '连接断开后 EventSource 的状态:自动重连,不是关闭')],
+    [('线上格式', '<p>上一篇:<a href="flask-long-polling.html">长轮询</a>;下一篇:<a href="flask-websocket-socketio.html">WebSocket 与 Flask-SocketIO</a>。</p>'), ('浏览器的自动重连', '<p>浏览器是本机的 Google Chrome 无头模式。</p>'), ('nginx 的缓冲', '<p>nginx 是自己起的实例(自签证书),与第 134 篇相同的配置。</p>'), ('占用线程', None)],
+    steps, [ENV_F + '。gunicorn gthread、nginx 1.31.6(自己的配置、非默认端口)、本机 Google Chrome(无头模式)', '没有验证:事件的 retry 字段、自定义 event 名在浏览器里的 addEventListener、多进程下事件的广播(需要 redis 发布订阅)、HTTP/2 下的连接数限制、认证(EventSource 不能自定义请求头)的处理'], 'Server-Sent Events')

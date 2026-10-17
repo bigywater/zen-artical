@@ -1,0 +1,26 @@
+from lib import *
+S = SS('s21')
+steps = [
+    step("HTTP 缓存默认关闭(HTTPCACHE_ENABLED = False)。打开后第一次运行 3 个请求全部 miss、firsthand、store(httpcache/miss = 3、firsthand = 3、store = 3),服务器收到 3 个请求;第二次运行同一个缓存目录,全部 hit(httpcache/hit = 3),服务器收到 0 个请求,响应的 flags 里多了 'cached'。默认策略 DummyPolicy:什么都缓存、永不过期。关掉缓存再跑同一个目录,请求照常去服务器。", t=tl(S(1)), mark=lidx(S(1), '第 2 次运行', 'HTTPCACHE_ENABLED=0'), done=lidx(S(1), '第 1 次运行'), b=bars([['第 1 次运行', 3, '服务器收到 3 个'], ['第 2 次运行', 0, '服务器收到 0 个']], 3, mark=[1], done=[0]), kv=KV([['第 1 次', 'miss 3 → store 3,服务器 3 个请求'], ['第 2 次', 'hit 3,服务器 0 个请求,flags=cached'], ['默认策略', 'DummyPolicy:全缓存、不过期']], ['第 2 次'])),
+    step("FilesystemCacheStorage 在 <目录>/<spider 名>/<指纹前 2 位>/<指纹>/ 下为每个请求存 7 个文件:meta(143 字节)、pickled_meta(113 字节,键有 method、response_url、status、timestamp、url)、request_headers、request_body(GET 为 0 字节)、response_headers(94 字节,第一行就是 Content-Length: 15)、response_body(15 字节 = <html>ok</html> 原样)、response_data(168 字节,pickle 的响应附加字段)。指纹就是去重用的那个 SHA1。", t=tl(S(2)), mark=lidx(S(2), 'response_body', 'pickled_meta'), done=lidx(S(2), '/meta', 'request_body', 'response_data'), kv=KV([['路径', '<目录>/<spider>/<指纹前 2 位>/<指纹>/'], ['文件', '7 个:meta、pickled_meta、request_*、response_*'], ['response_body', '15 字节,原样的正文'], ['指纹', '与去重相同的 SHA1']], ['路径'])),
+    step("默认 DummyPolicy 不看状态码:200、404、500、302、带 Cache-Control: no-store 的页面、带 max-age 的页面六个请求全部缓存,第二次运行服务器 0 个请求,httpcache/hit = 8(六个请求各 1 次,加上 500 被重试中间件又重试的 2 次,也命中缓存;302 的跳转目标 /ok 已经抓过,被去重丢弃);用 HTTPCACHE_IGNORE_HTTP_CODES = 404,500 排除后,第二次运行 404 和 500 仍要去服务器(500 还被重试了两次:/404、/500、/500、/500),stats 里 uncacheable = 4、hit = 4。", t=tl(S(3)), mark=lidx(S(3), 'IGNORE_HTTP_CODES'), done=lidx(S(3), '第二次运行服务器仍收到的路径'), kv=KV([['DummyPolicy', '6 个请求全部缓存(hit 8,含 500 的 2 次重试)'], ['IGNORE_HTTP_CODES = 404,500', '这两个每次都重新请求'], ['no-store', 'Dummy 策略下也被缓存']], ['DummyPolicy'])),
+    step("RFC2616Policy 尊重 Cache-Control 和验证器(第二次运行):/nostore(Cache-Control: no-store)不缓存,仍然请求;/maxage(max-age=3600)新鲜命中,服务器没收到;/etag(ETag 加 max-age=0)带上 If-None-Match: \"v1\" 重新验证,服务器回 304,回调拿到缓存正文且 flags=['cached'];/lm(Last-Modified)带 If-Modified-Since 验证,同样 304 命中;没有任何缓存头的 /ok 每次都重新请求。stats:hit 1、revalidate 2、uncacheable 2。", t=tl(S(4)), mark=lidx(S(4), '/etag', '/lm', '/nostore'), done=lidx(S(4), '/maxage', 'stats'), kv=KV([['no-store', '不缓存'], ['max-age 未过期', '直接命中'], ['ETag / Last-Modified', '条件请求,304 用缓存正文'], ['无任何缓存头', '每次都重新请求']], ['ETag / Last-Modified'])),
+    step("HTTPCACHE_EXPIRATION_SECS = 2(DummyPolicy):缓存之后立即再跑,服务器收到 0 个请求(hit 1);等 3 秒再跑,缓存已过期,服务器收到 1 个请求(miss 1、store 1,重新缓存)。0 表示永不过期(默认)。", t=tl(S(5)), mark=lidx(S(5), '3 秒后再跑'), done=lidx(S(5), '立即再跑'), kv=KV([['EXPIRATION_SECS = 2,立即再跑', 'hit,服务器 0 个'], ['过 3 秒再跑', 'miss → 重新请求并存储'], ['默认 0', '永不过期']], ['过 3 秒再跑'])),
+    step("meta dont_cache = True 的请求既不读也不写缓存(stats 里没有任何 httpcache/*,服务器收到 1 个);HTTPCACHE_IGNORE_MISSING = 1 只读缓存:已缓存的 /ok 命中(hit 1),缓存里没有的 /never-seen 抛 IgnoreRequest(ignore 1、miss 1),服务器 0 个请求。", t=tl(S(6)), mark=lidx(S(6), 'IGNORE_MISSING'), done=lidx(S(6), 'dont_cache'), kv=KV([['dont_cache = True', '不读不写缓存'], ['IGNORE_MISSING = 1', '缓存里没有的请求直接 IgnoreRequest'], ['用途', '离线复跑已抓过的站点']], ['IGNORE_MISSING = 1'])),
+    step("下载失败时用旧缓存兜底:RFC2616Policy 下 /etag 的缓存已需要重新验证,此时把服务器关掉(连接被拒)重跑:/etag 回调拿到缓存的 200(flags=['cached']),stats httpcache/errorrecovery = 1;没缓存过的 /ok 照常失败,errback 收到 DownloadConnectionRefusedError。", t=tl(S(7)), mark=lidx(S(7), 'errorrecovery'), kv=KV([['/etag(有旧缓存)', '用缓存兜底,errorrecovery = 1'], ['/ok(没缓存)', 'DownloadConnectionRefusedError'], ['条件', '下载异常 + 有可用的旧缓存']], ['/etag(有旧缓存)'])),
+]
+A = mkarts('s21', 21, 'Scrapy,HTTP缓存,HttpCacheMiddleware,RFC2616Policy,ETag,真实验证,动画演示',
+    '实测 Scrapy 2.19 的 HTTP 缓存:默认关闭,打开后第二次运行 3 个请求全部命中、服务器 0 个请求;每个请求在磁盘上 7 个文件;DummyPolicy 连 no-store 和 404/500 都缓存;RFC2616Policy 尊重 no-store、max-age、ETag/Last-Modified(304 用缓存正文);EXPIRATION_SECS 过期;服务器关闭时用旧缓存兜底。',
+    '开了 HTTPCACHE_ENABLED 之后,到底缓存了什么、什么时候失效、磁盘上长什么样?默认的 DummyPolicy 与 RFC2616Policy 差别在哪?这篇把两种策略对 no-store、max-age、ETag、404 等逐个实测,还看了缓存兜底下载失败。',
+    [('0 个', '开缓存后第二次运行,服务器收到的请求数(3 个全部命中)'), ('7 个', '每个缓存请求在磁盘上的文件数(FilesystemCacheStorage)'), ('304 → 命中', 'RFC2616Policy 下 ETag / Last-Modified 重新验证的结果:用缓存正文')],
+    [('缓存的开关与效果', '<p>开启后第一次是 miss,响应被存下;再次请求(同一个指纹)命中,不去服务器,响应的 <code>flags</code> 里有 <code>cached</code>。</p>'),
+     ('磁盘布局', '<p>每个请求一个目录,里面分别存请求头体、响应头体、元数据和 pickle 的附加字段;文件名按请求指纹组织。</p>'),
+     ('DummyPolicy', '<p>默认策略,不管状态码和 <code>Cache-Control</code>,全部缓存且永不过期,适合开发调试时反复回放。</p>'),
+     ('RFC2616Policy', '<p>按 HTTP 缓存规则:<code>no-store</code> 不缓存,<code>max-age</code> 内直接命中,过期后用 <code>ETag</code> / <code>Last-Modified</code> 做条件请求,304 则复用缓存正文。</p>'),
+     ('过期与排除', '<p><code>HTTPCACHE_EXPIRATION_SECS</code> 控制过期,<code>HTTPCACHE_IGNORE_HTTP_CODES</code> 排除某些状态码,meta <code>dont_cache</code> 跳过单个请求。</p>'),
+     ('只读缓存', '<p><code>HTTPCACHE_IGNORE_MISSING</code> 让缓存里没有的请求直接被忽略,可以用来离线重放。</p>'),
+     ('失败兜底', '<p>下载异常时如果有旧缓存,会返回旧缓存并计入 <code>httpcache/errorrecovery</code>。</p>')],
+    steps,
+    [ENV_Y + '。每个情形把同一个爬虫跑两次(同一个缓存目录)比较服务器收到的请求;RFC2616 的服务器按 ETag / If-None-Match 与 Last-Modified / If-Modified-Since 返回 304',
+     '没有验证:DbmCacheStorage(dbm 存储)和 HTTPCACHE_GZIP;HTTPCACHE_ALWAYS_STORE;HTTPCACHE_IGNORE_RESPONSE_CACHE_CONTROLS;缓存目录的并发读写;RFC2616Policy 对 Age、Expires、Vary 头的处理;缓存里重定向链的存储(只确认了 8 个命中包含 302 与它的目标);大量请求时目录数量(每个请求 7 个文件)对文件系统的压力'],
+    'HTTP 缓存')

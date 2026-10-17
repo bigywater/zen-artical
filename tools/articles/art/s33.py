@@ -1,0 +1,26 @@
+from lib import *
+S = SS('s33')
+steps = [
+    step("先说状态:FormRequest.from_response() 在 2.19 里已弃用,调用时抛 ScrapyDeprecationWarning “FormRequest.from_response() is deprecated. Use the form2request library instead.”;直接 FormRequest(url, formdata=…) 构造不受影响(警告数 0)。下面的行为照旧可用,只是官方推荐的方向变了。", t=tl(S(1)), mark=lidx(S(1), '警告'), kv=KV([['from_response()', '已弃用,推荐 form2request'], ['FormRequest(url, formdata=…)', '没有警告']], ['from_response()'])),
+    step("from_response 默认收集的字段(formid='login',再用 formdata 填 user=alice、pass=pw):隐藏字段 csrf=tok123;选中的 checkbox remember=yes(没选的 newsletter 不要);选中的 radio plan=pro;选中的 select lang=zh;多选 multi 的两个选中项 a 和 b 各一个同名参数;textarea bio 保留换行;**disabled 的 locked=x 也被带上了**(Scrapy 不跳过 disabled 字段);默认点第一个提交按钮 act=Login。方法 POST,地址 /do/login?next=1,Content-Type: application/x-www-form-urlencoded。", t=tl(S(2)), mark=lidx(S(2), 'body:'), done=lidx(S(2), 'POST http://site.test/do/login'), kv=KV([['带上', '隐藏字段、默认值、选中的 checkbox/radio/select、textarea'], ['不带', '没选中的 checkbox'], ['disabled 字段', '照样带上(locked=x)'], ['提交按钮', '默认第一个(act=Login)']], ['disabled 字段'])),
+    step("选哪个表单:不指定时取第一个(登录表单,POST);formnumber=1、formid='search'、formxpath、formcss='form#search' 都选到第二个表单(GET http://site.test/dir/search?q=python);formname='loginform' 选第一个。formnumber=5 抛 IndexError “Form number 5 not found”;页面里没有表单抛 ValueError “No <form> element found”。", t=tl(S(3)), mark=lidx(S(3), 'formnumber=5', '没有表单'), done=lidx(S(3), '默认第一个', 'formid="search"'), kv=KV([['默认', '第一个表单'], ['formid / formname / formnumber / formxpath / formcss', '都能选'], ['找不到', 'IndexError / ValueError']], ['默认'])),
+    step("提交按钮:默认点第一个(act=Login);clickdata={'value': 'Register'} 点第二个(act=Register);clickdata={'name': 'btn'} 点 <button>(btn=b1);clickdata={'nr': 12} 指的是 form.inputs 里第 13 个控件(Register),nr 0 是隐藏字段 csrf,不是按钮,所以没有按钮字段;没有匹配时抛 ValueError “No clickable element matching clickdata”;dont_click=True 不带任何按钮字段。", t=tl(S(4)), mark=lidx(S(4), 'nr": 0', 'Nope'), done=lidx(S(4), 'Register', 'btn', 'nr": 12', 'dont_click'), kv=KV([['默认', '第一个提交按钮'], ['clickdata value / name', '按属性匹配'], ['clickdata nr', 'form.inputs 里的第 n 个控件(不是第 n 个按钮)'], ['不匹配', 'ValueError']], ['clickdata nr'])),
+    step("formdata 覆盖或追加字段:{'remember': None, 'plan': 'enterprise', 'extra': ['x', 'y'], 'user': '中文'} → remember 被删掉(值为 None),plan 变成 enterprise,extra 列表产生两个同名参数 extra=x、extra=y,新字段 user 追加在后面(中文按页面编码 UTF-8 编码)。", t=tl(S(5)), mark=lidx(S(5), 'body:'), kv=KV([['值为 None', '删掉这个字段'], ['列表值', '多个同名参数'], ['已有字段', '被覆盖'], ['新字段', '追加']], ['值为 None'])),
+    step("action 与 method:POST 表单的 action=/do/login?next=1 按页面地址补成绝对 URL;GET 表单(action=search,相对路径)把字段放进查询串:http://site.test/dir/search?q=python,没有请求体也没有 Content-Type;参数 method='POST' 覆盖后变成 POST,字段进请求体;<base href> 下的相对 action 按 base 解析(http://other.test/base/x?a=1);没有 action 的表单提交到页面自己,GET 时旧的查询串被表单字段替换(…/here?a=1,没有 old=1);直接构造 FormRequest 时 formdata 的值必须是字符串(放整数抛 TypeError),列表值产生多个同名参数。", t=tl(S(6)), mark=lidx(S(6), '<base href>', '没有 action', '整数'), done=lidx(S(6), 'GET 表单 action=search', 'method="POST"'), kv=KV([['相对 action', '按页面 URL 或 <base> 补全'], ['GET 表单', '字段进查询串,无请求体'], ['没有 action', '提交给页面自己,旧查询串被替换'], ['formdata 值', '必须是字符串']], ['GET 表单'])),
+    step("不支持文件上传:enctype=\"multipart/form-data\" 的表单,from_response 仍然生成 application/x-www-form-urlencoded 的请求,<input type=file name=f> 变成空值的 f=,文件根本没有上传。需要上传文件得自己拼 multipart 请求体和 Content-Type。", t=tl(S(7)), mark=lidx(S(7), 'multipart', '是否出现'), kv=KV([['enctype', '被忽略'], ['type=file 字段', '变成空值参数 f='], ['文件上传', '要自己构造 multipart']], ['enctype'])),
+]
+A = mkarts('s33', 33, 'Scrapy,FormRequest,from_response,表单,clickdata,真实验证,动画演示',
+    '实测 FormRequest.from_response:2.19 里已弃用(推荐 form2request);默认收集隐藏字段、选中的 checkbox/radio/select、textarea,连 disabled 字段也会带上;clickdata 的 nr 是 form.inputs 里的序号;formdata 里 None 删字段、列表变多个同名参数;GET 表单字段进查询串;enctype multipart 被忽略。',
+    '登录、搜索这类表单怎么用 Scrapy 提交?from_response 会带哪些字段、点哪个按钮?disabled 字段呢?GET 和 POST 有什么不同?文件上传行不行?这篇在一个带各种控件的表单上逐项实测。',
+    [('disabled 也带', 'from_response 对 disabled 字段的处理(locked=x 出现在请求体里)'), ('nr = 12', 'clickdata 的 nr 指 form.inputs 里的序号,12 才是 Register 按钮'), ('0 个文件', 'enctype=multipart 的表单上传文件的数量(空值的 f= 而已)')],
+    [('状态', '<p>2.19 里 <code>FormRequest.from_response()</code> 被标记为弃用,建议用 form2request 库;<code>FormRequest(url, formdata=…)</code> 直接构造没有警告。</p>'),
+     ('收集规则', '<p>默认收集隐藏字段、文本框默认值、选中的 checkbox/radio/select、textarea,并点第一个提交按钮;没选中的 checkbox 不带,disabled 字段仍会带上。</p>'),
+     ('选表单', '<p>用 <code>formid</code> / <code>formname</code> / <code>formnumber</code> / <code>formxpath</code> / <code>formcss</code> 选表单,不指定取第一个。</p>'),
+     ('选按钮', '<p><code>clickdata</code> 选按钮(<code>nr</code> 按 <code>form.inputs</code> 序号,不是第几个按钮),<code>dont_click</code> 不点。</p>'),
+     ('formdata', '<p>覆盖、追加、用 <code>None</code> 删除字段;列表产生多个同名参数。</p>'),
+     ('action 与 method', '<p>相对 action 按页面 URL 或 <code>&lt;base&gt;</code> 补全;GET 表单把字段放进查询串;可用 <code>method</code> 参数覆盖。</p>'),
+     ('不支持 multipart', '<p>表单 enctype 被忽略,总是 urlencoded;文件字段只会变成空值参数。</p>')],
+    steps,
+    [ENV_Y + '。表单是手写的 HTML(登录表单含隐藏字段、各种控件、两个提交按钮和一个 button;另有一个 GET 搜索表单);直接用 HtmlResponse 和 FormRequest.from_response 构造请求,看生成的方法、URL、请求体',
+     '没有验证:form2request 库本身;非 UTF-8 页面的表单编码;JavaScript 动态生成的表单;<input type=image> 的坐标参数;formdata 同名字段的多个来源合并顺序;<select> 没有 selected 选项时取第一个 option 的细节(只测了有 selected 的)'],
+    '表单')

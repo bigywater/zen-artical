@@ -1,0 +1,515 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>CDI 依赖注入:作用域与代理对象</title>
+<meta name="description" content="在 Weld SE 5.1.3 上实测 CDI:@ApplicationScoped / @RequestScoped 注入的是延迟创建的代理(代理上的字段是 null),@Dependent 与 @Singleton 不是代理;final 类 / final 方法 / public 字段无法作普通作用域 bean(启动即报错);拦截器不拦截同类内部调用;@Dependent 循环依赖启动失败;歧义与缺失在启动时报 WELD-001409 / 001408;经代理调用约 77 ns。">
+<link rel="canonical" href="https://bigywater.tech/java-cdi-injection.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="CDI 依赖注入:作用域与代理对象">
+<meta property="og:description" content="在 Weld SE 5.1.3 上实测 CDI:@ApplicationScoped / @RequestScoped 注入的是延迟创建的代理(代理上的字段是 null),@Dependent 与 @Singleton 不是代理;final 类 / final 方法 / public 字段无法作普通作用域 bean(启动即报错);拦截器不拦截同类内部调用;@Dependent 循环依赖启动失败;歧义与缺失在启动时报 WELD-001409 / 001408;经代理调用约 77 ns。">
+<meta property="og:url" content="https://bigywater.tech/java-cdi-injection.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="CDI 依赖注入:作用域与代理对象">
+<meta name="twitter:description" content="在 Weld SE 5.1.3 上实测 CDI:@ApplicationScoped / @RequestScoped 注入的是延迟创建的代理(代理上的字段是 null),@Dependent 与 @Singleton 不是代理;final 类 / final 方法 / public 字段无法作普通作用域 bean(启动即报错);拦截器不拦截同类内部调用;@Dependent 循环依赖启动失败;歧义与缺失在启动时报 WELD-001409 / 001408;经代理调用约 77 ns。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">1876</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">373</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#B85C00; --series-c-soft:#FBE7D1;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#F29A4A; --series-c-soft:#3B2208;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#F29A4A; --series-c-soft:#3B2208;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Java · 374</div>
+  <h1>CDI 依赖注入:作用域与代理对象</h1>
+  <p>CDI 的 @ApplicationScoped 背后是一个代理对象。这篇用真实容器看代理什么时候创建、什么类型的类不能被代理、拦截器在哪些调用上起作用,以及歧义与循环依赖怎样在启动时暴露。</p>
+  <div class="hero-fact">
+<div><div class="num">null</div><div class="lbl">直接读 @ApplicationScoped bean 代理对象上的字段(注入发生在真实实例上,不在代理上)</div></div><div><div class="num">同类内部调用不拦截</div><div class="lbl">a() 内部调用同类的 @Logged 方法 b()、this.a()、包可见 pkg() 都没有触发拦截器</div></div><div><div class="num">77 ns</div><div class="lbl">经 @ApplicationScoped 代理调用一次 add 的耗时(直接调用约 0.31 ns)</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="java-bean-validation.html">Bean Validation:把约束声明在模型边界</a></div>
+<section>
+  <h2>作用域与代理</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [scope]
+  启动与取得 Client 之后(Client 本身是 @ApplicationScoped,拿到的是代理,还没构造真实实例):
+        容器已启动,尚未取得任何 bean
+        取得 Client(代理类 Main$Client$Proxy$_$$_WeldClientProxy)
+  直接读代理对象上的字段 cl.app / cl.dep:null / null(代理自己的字段没有被注入,是 null)
+  调用 cl.fields()(此时才创建真实的 Client 实例):app=true dep=true
+    构造日志:
+        new Client()
+        new Dep()#1
+        new Sing()#1
+        Client @PostConstruct(此时 app 类 = Main$App$Proxy$_$$_WeldClientProxy)
+  Client 里注入的各字段的运行时类:app = Main$App$Proxy$_$$_WeldClientProxy;dep = Dep;sing = Sing;req = Main$Req$Proxy$_$$_WeldClientProxy
+  是否是代理(类名含 Proxy):app true;dep false;sing false;req true
+  第 1 次 cl.app().who() = App@1500b2f3
+  第 2 次 cl.app().who() = App@1500b2f3
+    构造日志(ApplicationScoped 在第一次调用方法时才构造):
+        new App()#1
+  cl.dep().who() 两次:Dep@7eecb5b8 / Dep@7eecb5b8(@Dependent 随宿主创建,一个注入点一个实例)
+  cl.sing().who():Sing@126253fd;c.select(Sing.class).get().who():Sing@126253fd
+  两次 c.select(Client.class).get() 是同一个代理对象? true;两次 c.select(App.class).get().who() 相同(背后同一个实例)? true
+  两次 c.select(Dep.class).get() 是同一个对象? false(每次 get 新建一个 @Dependent)
+    构造日志:
+        new Dep()#2
+        new Dep()#3
+  Instance&lt;Dep&gt;.get() 三次的 who():Dep@7bbc8656 / Dep@6933b6c6 / Dep@7d3e8655
+    构造日志:
+        new Dep()#4
+        new Dep()#5
+        new Dep()#6
+  请求作用域(没有激活请求上下文)调用 cl.req().who():ContextNotActiveException: WELD-001303: No active contexts for scope type jakarta.enterprise.context.RequestScoped
+  激活请求上下文后 cl.req().who() 两次:Req@2f953efd / Req@2f953efd
+    日志(deactivate 时销毁 Req):
+        new Req()#1
+        Req @PreDestroy
+  再激活一次的 cl.req().who():Req@f68f0dc(新实例)
+  容器关闭之后:
+        Dep @PreDestroy Dep@3e0e1046
+        Dep @PreDestroy Dep@7dc19a70
+        Dep @PreDestroy Dep@7eecb5b8
+        Dep @PreDestroy Dep@7bbc8656
+        Dep @PreDestroy Dep@6933b6c6
+        Dep @PreDestroy Dep@7d3e8655</pre></div>
+</section>
+<section>
+  <h2>什么类不能被代理</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [proxy]
+      final 类的 @ApplicationScoped        → UnproxyableResolutionException: WELD-001437: Bean type class Main$FinalBean is not proxyable because it is final - &lt;unknownjakarta.enterprise.inject.spi.Bean instance&gt;.
+      带 public final 方法的 @ApplicationScoped → UnproxyableResolutionException: WELD-001480: Bean type class Main$FinalMethod is not proxyable because it contains a final method public final java.lang.String Main$FinalMethod.x() - &lt;unknownjakarta.enterprise.inject.spi.Bean instance&gt;.
+      没有无参构造器的 @ApplicationScoped        → UnsatisfiedResolutionException: WELD-001334: Unsatisfied dependencies for type NoDefaultCtor with qualifiers  
+      只有 private 无参构造器的 @ApplicationScoped → 启动成功;取得的类 Main$PrivateCtor$Proxy$_$$_WeldClientProxy(代理)
+      带 public 实例字段的 @ApplicationScoped  → DefinitionException: WELD-000075: Normal scoped managed bean implementation class has a public field:  [EnhancedAnnotatedFieldImpl] public Main$WithField.name
+      @Dependent 的类带 final 方法(注入点注入)     → 启动成功;取得的类 UseFinalDep
+  带包可见方法的 @ApplicationScoped:启动成功;b.y()(内部调用包可见的 x())= pkg</pre></div>
+</section>
+<section>
+  <h2>拦截器与自调用</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [intercept]
+  外部调用 b.a()(a 内部又调用 b()):a→b
+    拦截日志:
+          [拦截] a()
+  外部调用 b.plain()(无注解,内部 this.a()):plain→a→b
+    拦截日志:
+  外部调用 b.callPkg()(内部调用包可见方法 pkg(),pkg 带 @Logged):pkg
+    拦截日志:
+  b 的运行时类:Main$Biz$Proxy$_$$_WeldClientProxy</pre></div>
+</section>
+<section>
+  <h2>循环依赖</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [cycle]
+  @ApplicationScoped 的 CA ↔ CB 循环依赖:CA→Main$CB$Proxy$_$$_WeldClientProxy;CB→Main$CA$Proxy$_$$_WeldClientProxy
+  @Dependent 的 DA ↔ DB 循环依赖:DeploymentException: WELD-001443: Pseudo scoped bean has circular dependencies. Dependency path: 
+  @Dependent 的 DA ↔ DB,另有 DC 同时注入两者:DeploymentException: WELD-001443: Pseudo scoped bean has circular dependencies. Dependency path:</pre></div>
+</section>
+<section>
+  <h2>歧义、缺失与限定符</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [resolve]
+  两个实现、没有限定符(EnGreeter + ZhGreeter)注入 Greeter:DeploymentException: WELD-001409: Ambiguous dependencies for type Greeter with qualifiers @Default
+  没有任何实现注入 Runnable:DeploymentException: WELD-001408: Unsatisfied dependencies for type Runnable with qualifiers @Default
+  c.select(Greeter.class):isAmbiguous = true;isUnsatisfied = false;get() → AmbiguousResolutionException: WELD-001335: Ambiguous dependencies for type Greeter with qualifiers 
+  遍历 Instance:[hello, 你好]
+  select(@Lang("fr")):bonjour
+  select(@Lang("xx")) 不存在:UnsatisfiedResolutionException: WELD-001334: Unsatisfied dependencies for type Greeter with qualifiers @Lang WELD-001475: The following beans match by type, but none have matching qualifiers:
+  带限定符的实现还满足无限定符的注入点吗(@Default)? c.select(Greeter.class, Default.Literal.INSTANCE) 的实现数:2(只有 EnGreeter 与 ZhGreeter;@Lang 的实现没有 @Default)
+  @Alternative 的实现(没有启用)是否参与解析:启动成功;注入的是 hello
+  用 Weld.alternatives(AltGreeter) 启用后:注入的是 alt
+  @Inject @Lang("fr") Greeter:bonjour</pre></div>
+</section>
+<section>
+  <h2>生产者与销毁</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [producer]
+  c1 与 c2 是否同一个 Conn(@Dependent 生产者每个注入点一个):false;id 1 / 2
+  @ApplicationScoped 生产者生产的 Shared 注入后的类:Main$Shared$Proxy$_$$_WeldClientProxy;v() = shared
+  容器关闭时(@Disposes 的 Conn.close 是否执行):
+        open Conn#1
+        open Conn#2
+        取得 UseProd 之后
+        produce Shared
+        close Conn#1
+        close Conn#2
+  @ApplicationScoped 生产者生产 final 的 String 类型:DeploymentException: WELD-001410: The injection point has non-proxyable dependencies: [BackedAnnotatedField] @Inject @Named Main$UseFinalProd.s</pre></div>
+</section>
+<section>
+  <h2>代理的成本</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [cost]
+  2000 万次 add(a, b):经 @ApplicationScoped 代理 76.56 ns / 次;直接对象 0.31 ns / 次(sink=true)
+  c.select(Calc.class).get() 取一个 @Dependent bean 1.09 µs / 次
+  c.select(Calc.class).get() 取 @ApplicationScoped 代理 0.83 µs / 次
+  Weld SE 启动(6 个 bean 类,不扫描)20 ms</pre></div>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">CDI</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "Weld SE 5.1.3(CDI 4.0,不扫描、手工注册 bean 类)。@ApplicationScoped 的 Client 取到的是代理类 Main$Client$Proxy$_$$_WeldClientProxy,此时还没构造真实实例;直接读代理对象上的字段 cl.app / cl.dep 得到 null / null——代理自己的字段没有被注入。调用 cl.fields() 才创建真实的 Client:构造日志依次是 new Client()、new Dep()#1、new Sing()#1、Client @PostConstruct(此时注入的 App 是代理类)。", "s": {"t": {"lines": ["  [scope]", "  启动与取得 Client 之后(Client 本身是 @ApplicationScoped,拿到的是代理,还没构造真实实例):", "        容器已启动,尚未取得任何 bean", "        取得 Client(代理类 Main$Client$Proxy$_$$_WeldClientProxy)", "  直接读代理对象上的字段 cl.app / cl.dep:null / null(代理自己的字段没有被注入,是 null)", "  调用 cl.fields()(此时才创建真实的 Client 实例):app=true dep=true", "    构造日志:", "        new Client()", "        new Dep()#1", "        new Sing()#1", "        Client @PostConstruct(此时 app 类 = Main$App$Proxy$_$$_WeldClientProxy)", "  Client 里注入的各字段的运行时类:app = Main$App$Proxy$_$$_WeldClientProxy;dep = Dep;sing = Sing;req = Main$Req$Proxy$_$$_WeldClientProxy", "  是否是代理(类名含 Proxy):app true;dep false;sing false;req true", "  第 1 次 cl.app().who() = App@1500b2f3", "  第 2 次 cl.app().who() = App@1500b2f3", "    构造日志(ApplicationScoped 在第一次调用方法时才构造):", "        new App()#1", "  cl.dep().who() 两次:Dep@7eecb5b8 / Dep@7eecb5b8(@Dependent 随宿主创建,一个注入点一个实例)", "  cl.sing().who():Sing@126253fd;c.select(Sing.class).get().who():Sing@126253fd", "  两次 c.select(Client.class).get() 是同一个代理对象? true;两次 c.select(App.class).get().who() 相同(背后同一个实例)? true", "  两次 c.select(Dep.class).get() 是同一个对象? false(每次 get 新建一个 @Dependent)", "    构造日志:", "        new Dep()#2", "        new Dep()#3", "  Instance<Dep>.get() 三次的 who():Dep@7bbc8656 / Dep@6933b6c6 / Dep@7d3e8655", "    构造日志:", "        new Dep()#4", "        new Dep()#5", "        new Dep()#6", "  请求作用域(没有激活请求上下文)调用 cl.req().who():ContextNotActiveException: WELD-001303: No active contexts for scope type jakarta.enterprise.context.RequestScoped", "  激活请求上下文后 cl.req().who() 两次:Req@2f953efd / Req@2f953efd", "    日志(deactivate 时销毁 Req):", "        new Req()#1", "        Req @PreDestroy", "  再激活一次的 cl.req().who():Req@f68f0dc(新实例)", "  容器关闭之后:", "        Dep @PreDestroy Dep@3e0e1046", "        Dep @PreDestroy Dep@7dc19a70", "        Dep @PreDestroy Dep@7eecb5b8", "        Dep @PreDestroy Dep@7bbc8656", "        Dep @PreDestroy Dep@6933b6c6", "        Dep @PreDestroy Dep@7d3e8655"], "cur": [], "mark": [], "done": []}, "done": [1, 4, 5], "mark": [4, 7, 10], "kv": {"items": [["@ApplicationScoped 的注入结果", "客户端代理,真实实例延迟到第一次方法调用"], ["代理上的字段", "没有注入,是 null"]], "hl": ["代理上的字段"]}}}, {"note": "各作用域注入后的运行时类:@ApplicationScoped 的 App 与 @RequestScoped 的 Req 是 WeldClientProxy 代理;@Dependent 的 Dep 与 @Singleton 的 Sing(伪作用域)是真实类,没有代理。App 在第一次调用 who() 时才构造(new App()#1),之后每次 who() 返回同一个 App@1500b2f3;Dep 随宿主 Client 创建,一个注入点一个实例;Sing 注入的与 c.select(Sing.class).get() 是同一个对象。两次 c.select(Client.class).get() 是同一个代理;两次 c.select(Dep.class).get() 是不同对象(每次新建 @Dependent,#2、#3);Instance<Dep>.get() 三次得到三个不同的实例(#4 到 #6)。", "s": {"t": {"lines": ["  [scope]", "  启动与取得 Client 之后(Client 本身是 @ApplicationScoped,拿到的是代理,还没构造真实实例):", "        容器已启动,尚未取得任何 bean", "        取得 Client(代理类 Main$Client$Proxy$_$$_WeldClientProxy)", "  直接读代理对象上的字段 cl.app / cl.dep:null / null(代理自己的字段没有被注入,是 null)", "  调用 cl.fields()(此时才创建真实的 Client 实例):app=true dep=true", "    构造日志:", "        new Client()", "        new Dep()#1", "        new Sing()#1", "        Client @PostConstruct(此时 app 类 = Main$App$Proxy$_$$_WeldClientProxy)", "  Client 里注入的各字段的运行时类:app = Main$App$Proxy$_$$_WeldClientProxy;dep = Dep;sing = Sing;req = Main$Req$Proxy$_$$_WeldClientProxy", "  是否是代理(类名含 Proxy):app true;dep false;sing false;req true", "  第 1 次 cl.app().who() = App@1500b2f3", "  第 2 次 cl.app().who() = App@1500b2f3", "    构造日志(ApplicationScoped 在第一次调用方法时才构造):", "        new App()#1", "  cl.dep().who() 两次:Dep@7eecb5b8 / Dep@7eecb5b8(@Dependent 随宿主创建,一个注入点一个实例)", "  cl.sing().who():Sing@126253fd;c.select(Sing.class).get().who():Sing@126253fd", "  两次 c.select(Client.class).get() 是同一个代理对象? true;两次 c.select(App.class).get().who() 相同(背后同一个实例)? true", "  两次 c.select(Dep.class).get() 是同一个对象? false(每次 get 新建一个 @Dependent)", "    构造日志:", "        new Dep()#2", "        new Dep()#3", "  Instance<Dep>.get() 三次的 who():Dep@7bbc8656 / Dep@6933b6c6 / Dep@7d3e8655", "    构造日志:", "        new Dep()#4", "        new Dep()#5", "        new Dep()#6", "  请求作用域(没有激活请求上下文)调用 cl.req().who():ContextNotActiveException: WELD-001303: No active contexts for scope type jakarta.enterprise.context.RequestScoped", "  激活请求上下文后 cl.req().who() 两次:Req@2f953efd / Req@2f953efd", "    日志(deactivate 时销毁 Req):", "        new Req()#1", "        Req @PreDestroy", "  再激活一次的 cl.req().who():Req@f68f0dc(新实例)", "  容器关闭之后:", "        Dep @PreDestroy Dep@3e0e1046", "        Dep @PreDestroy Dep@7dc19a70", "        Dep @PreDestroy Dep@7eecb5b8", "        Dep @PreDestroy Dep@7bbc8656", "        Dep @PreDestroy Dep@6933b6c6", "        Dep @PreDestroy Dep@7d3e8655"], "cur": [], "mark": [], "done": []}, "done": [11, 12, 13], "mark": [16, 18, 20, 24], "kv": {"items": [["ApplicationScoped / RequestScoped", "代理,延迟创建"], ["Dependent / Singleton", "真实对象,无代理"], ["每次 get() 一个 @Dependent", "Dep#2、#3,Instance.get() 又三个"]], "hl": ["ApplicationScoped / RequestScoped"]}}}, {"note": "请求作用域:没有激活请求上下文时调用 cl.req().who() → ContextNotActiveException: WELD-001303: No active contexts for scope type jakarta.enterprise.context.RequestScoped。用 RequestContextController.activate() 激活后两次 who() 是同一个 Req@2f953efd,deactivate() 时调用 @PreDestroy(Req @PreDestroy);再激活得到新实例。@Dependent 的实例不会因为作用域结束而销毁:容器关闭时 6 个 Dep 实例才依次执行 @PreDestroy(包括每次 c.select(Dep.class).get() 与 Instance.get() 创建的),说明用 Instance 取的 @Dependent 要自己调用 destroy,否则只在容器关闭时才释放。", "s": {"t": {"lines": ["  [scope]", "  启动与取得 Client 之后(Client 本身是 @ApplicationScoped,拿到的是代理,还没构造真实实例):", "        容器已启动,尚未取得任何 bean", "        取得 Client(代理类 Main$Client$Proxy$_$$_WeldClientProxy)", "  直接读代理对象上的字段 cl.app / cl.dep:null / null(代理自己的字段没有被注入,是 null)", "  调用 cl.fields()(此时才创建真实的 Client 实例):app=true dep=true", "    构造日志:", "        new Client()", "        new Dep()#1", "        new Sing()#1", "        Client @PostConstruct(此时 app 类 = Main$App$Proxy$_$$_WeldClientProxy)", "  Client 里注入的各字段的运行时类:app = Main$App$Proxy$_$$_WeldClientProxy;dep = Dep;sing = Sing;req = Main$Req$Proxy$_$$_WeldClientProxy", "  是否是代理(类名含 Proxy):app true;dep false;sing false;req true", "  第 1 次 cl.app().who() = App@1500b2f3", "  第 2 次 cl.app().who() = App@1500b2f3", "    构造日志(ApplicationScoped 在第一次调用方法时才构造):", "        new App()#1", "  cl.dep().who() 两次:Dep@7eecb5b8 / Dep@7eecb5b8(@Dependent 随宿主创建,一个注入点一个实例)", "  cl.sing().who():Sing@126253fd;c.select(Sing.class).get().who():Sing@126253fd", "  两次 c.select(Client.class).get() 是同一个代理对象? true;两次 c.select(App.class).get().who() 相同(背后同一个实例)? true", "  两次 c.select(Dep.class).get() 是同一个对象? false(每次 get 新建一个 @Dependent)", "    构造日志:", "        new Dep()#2", "        new Dep()#3", "  Instance<Dep>.get() 三次的 who():Dep@7bbc8656 / Dep@6933b6c6 / Dep@7d3e8655", "    构造日志:", "        new Dep()#4", "        new Dep()#5", "        new Dep()#6", "  请求作用域(没有激活请求上下文)调用 cl.req().who():ContextNotActiveException: WELD-001303: No active contexts for scope type jakarta.enterprise.context.RequestScoped", "  激活请求上下文后 cl.req().who() 两次:Req@2f953efd / Req@2f953efd", "    日志(deactivate 时销毁 Req):", "        new Req()#1", "        Req @PreDestroy", "  再激活一次的 cl.req().who():Req@f68f0dc(新实例)", "  容器关闭之后:", "        Dep @PreDestroy Dep@3e0e1046", "        Dep @PreDestroy Dep@7dc19a70", "        Dep @PreDestroy Dep@7eecb5b8", "        Dep @PreDestroy Dep@7bbc8656", "        Dep @PreDestroy Dep@6933b6c6", "        Dep @PreDestroy Dep@7d3e8655"], "cur": [], "mark": [], "done": []}, "done": [29], "mark": [29, 33, 35, 36, 37, 38, 39, 40, 41], "kv": {"items": [["没有请求上下文", "ContextNotActiveException"], ["deactivate", "销毁 RequestScoped bean"], ["@Dependent(用 Instance 取)", "容器关闭时才 PreDestroy"]], "hl": ["@Dependent(用 Instance 取)"]}}}, {"note": "什么样的类不能被代理(@ApplicationScoped 等普通作用域需要代理):final 类 → UnproxyableResolutionException: WELD-001437 “not proxyable because it is final”;带 public final 方法 → WELD-001480 “contains a final method”;没有无参构造器 → 这个类根本不成为 bean(UnsatisfiedResolutionException: WELD-001334);带 public 实例字段 → DefinitionException WELD-000075 “Normal scoped managed bean implementation class has a public field”。只有 private 的无参构造器却能启动并生成代理(取得的类是 PrivateCtor$Proxy$_$$_WeldClientProxy);带包可见方法的 bean 正常工作(b.y() 内部调用 x() = pkg);@Dependent 的类带 final 方法不受影响。", "s": {"t": {"lines": ["  [proxy]", "      final 类的 @ApplicationScoped        → UnproxyableResolutionException: WELD-001437: Bean type class Main$FinalBean is not proxyable because it is final - <unknownjakarta.enterprise.inject.spi.Bean instance>.", "      带 public final 方法的 @ApplicationScoped → UnproxyableResolutionException: WELD-001480: Bean type class Main$FinalMethod is not proxyable because it contains a final method public final java.lang.String Main$FinalMethod.x() - <unknownjakarta.enterprise.inject.spi.Bean instance>.", "      没有无参构造器的 @ApplicationScoped        → UnsatisfiedResolutionException: WELD-001334: Unsatisfied dependencies for type NoDefaultCtor with qualifiers  ", "      只有 private 无参构造器的 @ApplicationScoped → 启动成功;取得的类 Main$PrivateCtor$Proxy$_$$_WeldClientProxy(代理)", "      带 public 实例字段的 @ApplicationScoped  → DefinitionException: WELD-000075: Normal scoped managed bean implementation class has a public field:  [EnhancedAnnotatedFieldImpl] public Main$WithField.name", "      @Dependent 的类带 final 方法(注入点注入)     → 启动成功;取得的类 UseFinalDep", "  带包可见方法的 @ApplicationScoped:启动成功;b.y()(内部调用包可见的 x())= pkg"], "cur": [], "mark": [], "done": []}, "done": [1, 2, 3], "mark": [1, 2, 4, 5, 7], "kv": {"items": [["final 类 / final 方法", "启动时报 WELD-001437 / WELD-001480"], ["public 实例字段", "WELD-000075"], ["private 无参构造器", "仍可代理"]], "hl": ["public 实例字段"]}}}, {"note": "拦截器与自调用(@Logged 绑定的 @Priority(100) 拦截器):外部调用 b.a() 触发拦截 “[拦截] a()”,但 a() 里面再调用同类的 b()(也带 @Logged)没有被拦截;外部调用没有注解的 plain(),里面 this.a() 也没有被拦截(拦截日志为空);callPkg() 内部调用带 @Logged 的包可见方法 pkg() 同样没有被拦截。拦截只发生在通过代理的外部调用上。", "s": {"t": {"lines": ["  [intercept]", "  外部调用 b.a()(a 内部又调用 b()):a→b", "    拦截日志:", "          [拦截] a()", "  外部调用 b.plain()(无注解,内部 this.a()):plain→a→b", "    拦截日志:", "  外部调用 b.callPkg()(内部调用包可见方法 pkg(),pkg 带 @Logged):pkg", "    拦截日志:", "  b 的运行时类:Main$Biz$Proxy$_$$_WeldClientProxy"], "cur": [], "mark": [], "done": []}, "done": [1, 4], "mark": [3, 6, 8], "kv": {"items": [["外部调用 b.a()", "被拦截"], ["同类内部调用 b() / this.a() / pkg()", "都没有被拦截"]], "hl": ["同类内部调用 b() / this.a() / pkg()"]}}}, {"note": "循环依赖:@ApplicationScoped 的 CA ↔ CB 能正常工作(各自注入对方的代理:CA→CB$Proxy…、CB→CA$Proxy…);@Dependent 的 DA ↔ DB 在启动时失败:DeploymentException WELD-001443: Pseudo scoped bean has circular dependencies,再加一个同时注入两者的 DC 也是同样的错误。", "s": {"t": {"lines": ["  [cycle]", "  @ApplicationScoped 的 CA ↔ CB 循环依赖:CA→Main$CB$Proxy$_$$_WeldClientProxy;CB→Main$CA$Proxy$_$$_WeldClientProxy", "  @Dependent 的 DA ↔ DB 循环依赖:DeploymentException: WELD-001443: Pseudo scoped bean has circular dependencies. Dependency path: ", "  @Dependent 的 DA ↔ DB,另有 DC 同时注入两者:DeploymentException: WELD-001443: Pseudo scoped bean has circular dependencies. Dependency path:"], "cur": [], "mark": [], "done": []}, "done": [1], "mark": [2, 3], "kv": {"items": [["普通作用域循环", "通过代理解决,正常运行"], ["@Dependent 循环", "启动失败 WELD-001443"]], "hl": ["@Dependent 循环"]}}}, {"note": "解析:两个无限定符的实现(EnGreeter、ZhGreeter)注入 Greeter → 启动失败 WELD-001409 Ambiguous dependencies;没有实现注入 Runnable → WELD-001408 Unsatisfied dependencies(都在启动时报错,不是运行时)。c.select(Greeter.class):isAmbiguous = true,get() 抛 AmbiguousResolutionException(WELD-001335),遍历 Instance 得到 [hello, 你好];select 带 @Lang(\"fr\") 得到 bonjour,不存在的限定符 → UnsatisfiedResolutionException(并提示 “beans match by type, but none have matching qualifiers”)。带 @Lang 的实现没有 @Default,所以 select(Greeter, Default) 只有 2 个。@Alternative 的实现默认不启用(注入的是 hello),用 selectAlternatives(AltGreeter.class) 启用后注入 alt。", "s": {"t": {"lines": ["  [resolve]", "  两个实现、没有限定符(EnGreeter + ZhGreeter)注入 Greeter:DeploymentException: WELD-001409: Ambiguous dependencies for type Greeter with qualifiers @Default", "  没有任何实现注入 Runnable:DeploymentException: WELD-001408: Unsatisfied dependencies for type Runnable with qualifiers @Default", "  c.select(Greeter.class):isAmbiguous = true;isUnsatisfied = false;get() → AmbiguousResolutionException: WELD-001335: Ambiguous dependencies for type Greeter with qualifiers ", "  遍历 Instance:[hello, 你好]", "  select(@Lang(\"fr\")):bonjour", "  select(@Lang(\"xx\")) 不存在:UnsatisfiedResolutionException: WELD-001334: Unsatisfied dependencies for type Greeter with qualifiers @Lang WELD-001475: The following beans match by type, but none have matching qualifiers:", "  带限定符的实现还满足无限定符的注入点吗(@Default)? c.select(Greeter.class, Default.Literal.INSTANCE) 的实现数:2(只有 EnGreeter 与 ZhGreeter;@Lang 的实现没有 @Default)", "  @Alternative 的实现(没有启用)是否参与解析:启动成功;注入的是 hello", "  用 Weld.alternatives(AltGreeter) 启用后:注入的是 alt", "  @Inject @Lang(\"fr\") Greeter:bonjour"], "cur": [], "mark": [], "done": []}, "done": [1, 2, 3], "mark": [1, 2, 5, 8, 9], "kv": {"items": [["歧义 / 缺失", "启动时失败(WELD-001409 / 001408)"], ["@Alternative", "默认不启用,需要显式选择"], ["带限定符的实现", "没有 @Default"]], "hl": ["歧义 / 缺失"]}}}, {"note": "生产者:@Dependent 的 @Produces Conn 每个注入点一个(c1 与 c2 不是同一个,id 1 / 2),取得 UseProd 时就创建(open Conn#1、#2);@ApplicationScoped 的生产者 Shared 注入的是代理(Shared$Proxy…),produce Shared 在第一次调用 v() 时才执行;容器关闭时 @Disposes 方法被调用(close Conn#1、close Conn#2)。@ApplicationScoped 生产者的类型是 final 的 String 时,注入点启动失败:WELD-001410 “The injection point has non-proxyable dependencies”。", "s": {"t": {"lines": ["  [producer]", "  c1 与 c2 是否同一个 Conn(@Dependent 生产者每个注入点一个):false;id 1 / 2", "  @ApplicationScoped 生产者生产的 Shared 注入后的类:Main$Shared$Proxy$_$$_WeldClientProxy;v() = shared", "  容器关闭时(@Disposes 的 Conn.close 是否执行):", "        open Conn#1", "        open Conn#2", "        取得 UseProd 之后", "        produce Shared", "        close Conn#1", "        close Conn#2", "  @ApplicationScoped 生产者生产 final 的 String 类型:DeploymentException: WELD-001410: The injection point has non-proxyable dependencies: [BackedAnnotatedField] @Inject @Named Main$UseFinalProd.s"], "cur": [], "mark": [], "done": []}, "done": [1, 2], "mark": [4, 8, 10], "kv": {"items": [["@Dependent 生产者", "每个注入点一个实例"], ["@Disposes", "容器关闭时调用"], ["final 类型的普通作用域生产者", "WELD-001410"]], "hl": ["@Disposes"]}}}, {"note": "代理的成本(Weld 5.1.3、JDK 21,自写计时,不是 JMH):2000 万次 add(a, b),经 @ApplicationScoped 代理约 76.56 ns / 次,直接对象约 0.31 ns / 次;c.select(Calc.class).get() 取 @Dependent bean 约 1.09 µs / 次,取 @ApplicationScoped 代理约 0.83 µs / 次;Weld SE 启动(6 个 bean 类,不扫描)约 20 ms。经过 CDI 代理的调用比直接调用慢两个数量级,但绝对值只有几十纳秒。", "s": {"t": {"lines": ["  [cost]", "  2000 万次 add(a, b):经 @ApplicationScoped 代理 76.56 ns / 次;直接对象 0.31 ns / 次(sink=true)", "  c.select(Calc.class).get() 取一个 @Dependent bean 1.09 µs / 次", "  c.select(Calc.class).get() 取 @ApplicationScoped 代理 0.83 µs / 次", "  Weld SE 启动(6 个 bean 类,不扫描)20 ms"], "cur": [], "mark": [], "done": []}, "done": [1], "mark": [2, 4], "b": {"items": [["经代理 add", 76.56, "76.56 ns"], ["直接 add", 0.31, "0.31 ns"]], "max": 77, "cur": [], "mark": [], "done": [0, 1]}, "kv": {"items": [["代理调用", "约 77 ns / 次(直接调用 0.31 ns)"], ["select().get()", "约 0.8–1.1 µs"], ["Weld SE 启动(6 个 bean)", "约 20 ms"]], "hl": ["代理调用"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64,JDK 21.0.12;Weld SE 5.1.3.Final(CDI 4.0),disableDiscovery + 手工注册 bean 类;javac 带 -parameters</li><li>没有验证:Quarkus ArC、OpenWebBeans 等其它实现的行为差异(自调用拦截、私有构造器代理)、@SessionScoped / @ConversationScoped、事件 @Observes 的顺序与异步、Instance 的 destroy() 对 @Dependent 的显式销毁、beans.xml 的 bean-discovery-mode 与注解扫描、CDI Lite(Quarkus 的构建时 bean 发现)</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="java-junit-lifecycle-isolation.html">
+    <div>
+      <div class="t1">下一篇 · JAVA 375</div>
+      <div class="t2">JUnit 生命周期隔离</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Java · CDI 依赖注入:作用域与代理对象 · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

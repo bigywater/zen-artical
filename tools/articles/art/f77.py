@@ -1,0 +1,18 @@
+from lib import *
+S = SS('f77')
+R = J('f77'); a = R['async']; cn = R['conn']
+steps = [
+    step("在本机起一个 aiosmtpd 的 SMTP 服务,mail.send 之后服务端收到的原始邮件:信封 MAIL FROM 是 MAIL_DEFAULT_SENDER(noreply@lab.test),RCPT TO 是 u@x.test;中文主题在原始头里被编码成 =?utf-8?b?...?=(RFC 2047);同时给了 body 和 html,MIME 结构是 multipart/mixed 里套 multipart/alternative,里面是 text/plain 与 text/html(都是 utf-8)。", t=tl(S(1)), done=lidx(S(1), '信封', 'Subject', 'MIME 结构'), kv=KV([['中文主题', '=?utf-8?b?...?='], ['body + html', 'multipart/alternative']], ['中文主题'])),
+    step("附件、多个收件人、抄送、密送:信封 RCPT TO 是 4 个地址(hidden、c、a、b——密送在信封里);邮件头里 To 是 a、b,Cc 是 c,没有 Bcc 头(密送不会写进头);Reply-To 是 support@lab.test;MIME 结构里有 text/csv 的 r.csv 附件。", t=tl(S(2)), done=lidx(S(2), '信封 RCPT TO', 'Bcc 头', 'MIME'), kv=KV([['Bcc', '只在信封里,不在头里'], ['附件', 'msg.attach(文件名, 类型, 字节)']], ['Bcc'])),
+    step("测试时不真发:TESTING=True 的应用里,suppress 在 init_app 时读取、默认等于 testing,于是 send 不连 SMTP(服务端新增 0 封),但 mail.record_messages() 的 outbox 里能拿到邮件(1 封,主题与收件人可断言);配置里并没有写进 MAIL_SUPPRESS_SEND 这个键。显式设 MAIL_SUPPRESS_SEND=False 则 TESTING 下也会真发(服务端新增 1 封)。", t=tl(S(3)), done=lidx(S(3), 'outbox', '显式'), mark=lidx(S(3), 'TESTING=True 发 1 封'), kv=KV([['TESTING=True', '默认不发,outbox 可断言'], ['MAIL_SUPPRESS_SEND', 'init_app 时读取']], ['TESTING=True'])),
+    step("头注入:主题里带 \\r\\n Bcc: ...、或收件人地址里带换行,Flask-Mail 在发送前直接抛 BadHeaderError(异常消息是空的),邮件没有发出。", t=tl(S(4)), mark=lidx(S(4), 'BadHeaderError'), kv=KV([['主题带换行', 'BadHeaderError'], ['收件人带换行', 'BadHeaderError']], ['主题带换行'])),
+    step(f"同步发送会卡住请求:SMTP 服务端 0.5 秒才响应,mail.send 就阻塞了 {a[0]:.0f} ms;放到线程里发,启动线程只花 {a[1]:.2f} ms 就返回,邮件在后台继续。线程里要自己开应用上下文,而且 Message 的构造也要在上下文里(没有显式 sender 时要读应用的默认发件人,上下文外构造抛 RuntimeError)。", b=bars([['同步 send', a[0], f'{a[0]:.0f} ms'], ['启动线程', a[1], f'{a[1]:.2f} ms']], a[0], mark=[0], done=[1]), t=tl(S(5)), done=lidx(S(5), '线程里 send'), mark=lidx(S(5), '上下文之外'), kv=KV([['同步 send', f'{a[0]:.0f} ms 阻塞请求'], ['线程', '要自己 app_context()']], ['同步 send'])),
+    step("SMTP 服务不可用(端口没人监听):mail.send 抛 ConnectionRefusedError: [Errno 61] Connection refused(这次 5 ms 就失败了);视图里不处理,HTTP 响应是 500。发邮件是外部依赖,视图里要决定失败时怎么办。", t=tl(S(6)), mark=lidx(S(6), 'ConnectionRefusedError', '500'), kv=KV([['SMTP 不可用', 'ConnectionRefusedError'], ['未处理', 'HTTP 500']], ['SMTP 不可用'])),
+    step(f"批量发送:10 封邮件,每封各调一次 mail.send 要 {cn[0]:.0f} ms,服务端看到 {cn[1]} 个 SMTP 会话;用一个 mail.connect() 发 10 封是 {cn[2]:.0f} ms,服务端只有 {cn[3]} 个会话。(本机回环 SMTP,远程服务器上建连接与 TLS 握手更贵,这里没有量。)", b=bars([['10 次 send', cn[0], f'{cn[0]:.0f} ms'], ['connect() 复用', cn[2], f'{cn[2]:.0f} ms']], cn[0], mark=[0], done=[1]), t=tl(S(7)), done=lidx(S(7), '会话'), kv=KV([['每封各建连接', f'{cn[1]} 个会话'], ['mail.connect()', f'{cn[3]} 个会话']], ['mail.connect()'])),
+]
+A = mkartf('f77', 77, 'Flask,Flask-Mail,SMTP,邮件,真实验证,动画演示',
+    f'用本机的 SMTP 服务实测 Flask-Mail:服务端收到的原始邮件(中文主题的编码、MIME 结构、信封与头里的收件人)、附件与密送、TESTING 下的 suppress 与 outbox、头注入检查、同步 send 阻塞 {a[0]:.0f} ms 与线程发送、SMTP 不可用时的异常、mail.connect() 复用连接。',
+    'Flask-Mail 发出去的邮件到底长什么样?密送在哪里?测试里怎么不真发?在请求里同步发会不会卡住?这篇自己起一个 SMTP 服务接收邮件,把这些逐个量出来。',
+    [(f'{a[0]:.0f} ms', 'SMTP 服务响应慢 0.5 秒时,同步 mail.send 阻塞请求的时间'), ('Bcc', '只出现在 SMTP 信封里,邮件头里没有'), (f'{cn[1]} → {cn[3]}', '10 封邮件的 SMTP 会话数:各自 send 与 mail.connect()')],
+    [('邮件的真实样子', '<p>上一篇:<a href="flask-flask-limiter.html">Flask-Limiter</a>;下一篇:<a href="flask-flask-socketio-connection.html">Flask-SocketIO 长连接</a>。</p>'), ('附件、抄送与密送', None), ('测试时不真发', None), ('头注入检查', None), ('同步发送与线程', '<p>生产里更常见的是任务队列(Celery 等),本篇没有验证。</p>'), ('SMTP 不可用', None), ('复用连接', None)],
+    steps, [ENV_F + '。Flask-Mail 0.10.0、aiosmtpd 1.4.6(本机 127.0.0.1 上的 SMTP 接收端)', '没有验证:TLS/SSL 与认证(MAIL_USE_TLS、MAIL_USERNAME)、真实邮件服务商的行为与退信、HTML 邮件在各邮件客户端的渲染、大附件、Celery 等异步方案、远程 SMTP 的连接耗时'], 'Flask-Mail', panels=[('t', 'term', '实验输出'), ('b', 'bars', '耗时'), ('kv', 'kv', '要点')])

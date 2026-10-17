@@ -1,0 +1,17 @@
+from lib import *
+S = SS('u157')
+R = J('u157'); P = R['par']; pt, st = P['默认并行'][1], P['--test-threads=1'][1]
+steps = [
+    step("cargo test 会运行三类测试,各自是独立的可执行文件:Running unittests src/lib.rs(单元测试,5 个:4 通过、1 个被 #[ignore] 忽略,显示 ignored, 很慢)、Running tests/api.rs 与 tests/second.rs(集成测试,每个文件一个独立的 crate,各自的汇总行)、Doc-tests calc(文档测试,这里 0 个)。单元测试里 #[should_panic(expected = …)] 的 div_by_zero 显示「- should panic ... ok」。", t=tl(S(1)), done=lidx(S(1), 'Running unittests', 'Running tests/api.rs', 'Running tests/second.rs', 'Doc-tests', 'should panic'), mark=lidx(S(1), 'ignored, 很慢'), kv=KV([['单元测试', 'src/lib.rs 里的 #[cfg(test)] mod'], ['集成测试', 'tests/*.rs,每个文件一个 crate'], ['文档测试', 'Doc-tests']], ['集成测试'])),
+    step("单元测试与集成测试的可见性不同:单元测试在同一个模块树里,can_test_private 能直接调用私有函数 secret(2) = 84;集成测试像外部使用者,试图 use calc::secret 报 error[E0603]: function `secret` is private。集成测试只验证公开 API。", t=tl(S(2)), mark=lidx(S(2), 'error[E0603]', 'private'), kv=KV([['单元测试', '能访问私有函数'], ['集成测试', '只能用公开 API:E0603']], ['集成测试'])),
+    step("过滤与忽略:--list 列出五个单元测试名;按名字过滤 add 只跑 1 个(4 filtered out);--ignored 只运行被忽略的 slow_test(用时 0.31 s,因为它 sleep 300 ms);默认运行时被忽略的显示 ignored 并带上原因。", t=tl(S(3)), done=lidx(S(3), '--list', '按名字过滤 add', '--ignored 只跑被忽略的', '默认(被忽略的显示'), kv=KV([['测试名过滤', 'cargo test add'], ['#[ignore]', '默认跳过,--ignored 才跑']], ['#[ignore]'])),
+    step("失败的测试:cargo test --test api 退出码 101;失败测试 failing_example 的输出里有断言信息(assertion `left == right` failed: 故意失败的断言,left: 2,right: 3)和 thread panicked 的位置 tests/api.rs:3:32;汇总行 1 passed; 1 failed,并提示「to rerun pass `--test api`」。", t=tl(S(4)), mark=lidx(S(4), 'FAILED', 'left: 2', 'right: 3'), done=lidx(S(4), 'cargo test --test api 退出码'), kv=KV([['退出码', '101'], ['断言失败', 'left / right + 自定义消息']], ['断言失败'])),
+    step("输出捕获:测试里 println! 的内容默认被捕获,通过的测试看不到(不加 --nocapture 时没有输出);加 --nocapture 才显示「这行 stdout 默认被捕获,只有失败或 --nocapture 才显示」。失败的测试则会把捕获的输出一起打印出来。", t=tl(S(4)), done=lidx(S(4), '--nocapture 时', '不加 --nocapture'), kv=KV([['通过的测试', 'println! 默认看不到'], ['--nocapture', '直接显示']], ['--nocapture'])),
+    step(f"测试默认并行:tests/par.rs 里 4 个 work()(各 sleep 100 ms)和一个 400 ms 的报告测试,默认并行时同时运行的 work() 最多 4 个,整个测试汇总 finished in {pt} s;--test-threads=1 时最多 1 个,finished in {st} s。共享了全局状态(如数据库、文件)的测试要么串行,要么互相隔离。", t=tl(S(5)), done=lidx(S(5), '默认并行', '--test-threads=1'), b=bars([['默认并行', pt, f'{pt} s'], ['--test-threads=1', st, f'{st} s']], st, cur=[1], done=[0]), kv=KV([['默认', f'最多 4 个同时,{pt} s'], ['--test-threads=1', f'1 个,{st} s']], ['--test-threads=1'])),
+]
+A = mkart('u157', 157, 'Rust,测试,单元测试,集成测试,cargo test,真实验证,动画演示',
+    f'用一个小库验证 cargo test:单元测试(同模块树,能测私有函数)、集成测试(tests/ 每文件一个 crate,只能用公开 API,私有函数 E0603)、文档测试;--list、过滤、#[ignore]/--ignored、should_panic;失败退出码 101 与输出;输出捕获与 --nocapture;测试默认并行(最多 4 个同时,{pt} s 对 --test-threads=1 的 {st} s)。',
+    'Rust 自带测试框架,但「单元测试放哪、集成测试能看到什么、输出什么时候显示、测试是不是并行」这些细节不看真实输出很容易记错。这篇搭一个小库,把 cargo test 的各类测试和开关一个个跑出来。',
+    [('3 类', 'cargo test 运行的测试种类:单元、集成、文档'), ('E0603', '集成测试访问私有函数的错误码'), (f'{pt} 对 {st} s', '测试并行与 --test-threads=1 的汇总耗时')],
+    [('三类测试', '<p>文档测试见<a href="rust-doc-test.html">Doc Test</a>;性能测试见<a href="rust-benchmark.html">Benchmark</a>。</p>'), ('可见性', None), ('过滤与忽略', None), ('失败与输出捕获', '<p>断言失败时的 panic 见<a href="rust-panic-unwrap-expect.html">panic!、unwrap 与 expect</a>。</p>'), ('并行', '<p>并行用的是线程,线程基础见<a href="rust-thread-spawn-join.html">线程创建与 Join</a>。</p>')],
+    steps, [ENV_U, '没有验证:--format json / JUnit 报告(需要 nightly)、测试里启动子进程或网络服务的隔离、#[test] 返回 Result 的行为、dev-dependencies 对测试的影响、cargo nextest 的差异、测试覆盖率工具'], '单元测试与集成测试')

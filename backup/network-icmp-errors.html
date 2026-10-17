@@ -1,0 +1,465 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>ICMP 差错报文:目的不可达、超时、需要分片</title>
+<meta name="description" content="抓包看 ICMP 差错报文:UDP 端口不可达(类型 3/3)引用 28 字节原包,connect 过的 UDP 才能收到错误;TCP 用 RST 拒绝、网关拒绝要 1005 ms(SYN 重发一次)、防火墙丢弃要等 3001 ms 超时;12 个目的地只有 4 个回差错;引用长度 28 与 40 字节两种;广播不回差错。">
+<link rel="canonical" href="https://bigywater.tech/network-icmp-errors.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="ICMP 差错报文:目的不可达、超时、需要分片">
+<meta property="og:description" content="抓包看 ICMP 差错报文:UDP 端口不可达(类型 3/3)引用 28 字节原包,connect 过的 UDP 才能收到错误;TCP 用 RST 拒绝、网关拒绝要 1005 ms(SYN 重发一次)、防火墙丢弃要等 3001 ms 超时;12 个目的地只有 4 个回差错;引用长度 28 与 40 字节两种;广播不回差错。">
+<meta property="og:url" content="https://bigywater.tech/network-icmp-errors.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="ICMP 差错报文:目的不可达、超时、需要分片">
+<meta name="twitter:description" content="抓包看 ICMP 差错报文:UDP 端口不可达(类型 3/3)引用 28 字节原包,connect 过的 UDP 才能收到错误;TCP 用 RST 拒绝、网关拒绝要 1005 ms(SYN 重发一次)、防火墙丢弃要等 3001 ms 超时;12 个目的地只有 4 个回差错;引用长度 28 与 40 字节两种;广播不回差错。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">2677</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">70</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">97</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">56</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">78</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">114</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">111</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">88</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#40678F; --series-c-soft:#DDE7F2;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#86B1DC; --series-c-soft:#16263A;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#86B1DC; --series-c-soft:#16263A;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>网络协议 · 15</div>
+  <h1>ICMP 差错报文:目的不可达、超时、需要分片</h1>
+  <p>路由器和主机怎么告诉你“送不到”?ICMP 差错报文里放了什么?为什么 UDP 套接字有时收不到错误,TCP 被拒绝和被丢弃的体验差别这么大?这篇向 12 个不同的目的地发探测,抓下回来的每一个 ICMP 差错报文,逐字节核对它们引用的原包。</p>
+  <div class="hero-fact">
+<div><div class="num">28 / 40 字节</div><div class="lbl">不同设备在 ICMP 差错里引用的原包长度:最少是 IP 头加 8 字节</div></div><div><div class="num">1005 ms 对 3001 ms</div><div class="lbl">connect 被网关 RST 拒绝与被防火墙丢弃(无任何回应)各用的时间</div></div><div><div class="num">4 / 12</div><div class="lbl">往 12 个目的地发 UDP 探测,实际收到 ICMP 差错报文的目的地个数</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="network-icmp-echo.html">ICMP echo:ping 的往返时间从哪里来</a></div>
+<section>
+  <h2>端口不可达</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  抓到 2 个 UDP 包和 2 个 ICMP 差错报文
+  ICMP 类型 3(目的不可达)代码 3(端口不可达),IP 总长 56 = 20 + 8 + 引用 28 字节;来自 127.0.0.1,引用的原包:目的 127.0.0.1 协议 17(17 = UDP)源端口 53211 目的端口 53932
+  ICMP 类型 3(目的不可达)代码 3(端口不可达),IP 总长 56 = 20 + 8 + 引用 28 字节;来自 127.0.0.1,引用的原包:目的 127.0.0.1 协议 17(17 = UDP)源端口 49222 目的端口 53932
+  引用的 28 字节(IP 头 20 字节 + UDP 头 8 字节)与发出的原包前 28 字节比较(原包共 45 字节,载荷 17 字节没有被引用):前 26 字节逐字节相同:True;最后 2 个字节是 UDP 校验和字段,原包里抓到 0xfe2c,引用里是 0x0000
+  应用这一侧:未 connect 的 UDP 套接字 sendto 之后 recvfrom → 没有任何错误(TimeoutError:超时);已 connect 的 UDP 套接字 send 之后 recv → ConnectionRefusedError: [Errno 61] Connection refused
+  所以 UDP 想知道对方端口是否关闭,必须 connect 后读错误;ICMP 差错里引用了原包头,内核靠引用的 四元组 找到是哪个套接字</pre></div>
+  <p>UDP 发到没人监听的端口,对方回 ICMP 类型 3 代码 3,里面引用原包的 IP 头和 UDP 头。只有 connect 过的 UDP 套接字能把它变成 ECONNREFUSED;没 connect 的套接字什么也不知道。</p>
+</section>
+<section>
+  <h2>拒绝与丢弃</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  lo0 上 connect 一个没人监听的 TCP 端口:ConnectionRefusedError: [Errno 61] Connection refused,用时 0.27 ms;抓到 2 个包:
+  +   0.000 ms  IP 127.0.0.1.C1 &gt; 127.0.0.1.C2: Flags [S], seq 2373677387, win 65535, options [mss 16344,nop,wscale 6,nop,nop,TS val
+  +   0.073 ms  IP 127.0.0.1.C2 &gt; 127.0.0.1.C1: Flags [R.], seq 0, ack 2373677388, win 0, length 0
+  其中 ICMP 包 0 个——TCP 的拒绝是 RST,不是 ICMP
+  默认网关 81 端口的 connect 在线上是这样的(en0,地址已遮盖):
+  +   0.000 ms  IP &lt;本机局域网IP&gt;.49279 &gt; &lt;本机局域网IP&gt;.81: Flags [SEW], seq 2125921335, win 65535, options [mss 1460,nop,wscale 6,nop,nop,TS val 661024073 ecr 0
+  +   3.023 ms  IP &lt;本机局域网IP&gt;.81 &gt; &lt;本机局域网IP&gt;.49279: Flags [R.], seq 0, ack 2125921336, win 0, length 0
+  +1001.255 ms  IP &lt;本机局域网IP&gt;.49279 &gt; &lt;本机局域网IP&gt;.81: Flags [S], seq 2125921335, win 65535, options [mss 1460,nop,wscale 6,nop,nop,TS val 661025074 ecr 0,s
+  +1003.819 ms  IP &lt;本机局域网IP&gt;.81 &gt; &lt;本机局域网IP&gt;.49279: Flags [R.], seq 0, ack 1, win 0, length 0
+  第一个 SYN 带 ECN 标志(SEW),网关用 RST 拒绝;1 秒后 macOS 又发一个 SYN,这次 ECN 标志去掉了(S),再被 RST 拒绝,connect 才报 Connection refused——所以被拒绝用了约 1 秒;重发是不是 ECN 协商失败后的回退,没有进一步验证
+  公网主机 81 端口:3 秒内共发出 3 个 SYN(+ / +1000.982 / +2002.020 ms),收到该主机的包 0 个——没有任何回应(被防火墙丢弃),connect 一直等到超时
+  默认网关的 81 端口:3 次 connect 结果「ConnectionRefusedError: [Errno 61] Connection refused」,用时 1005 / 1005 / 1005 ms
+  公网某主机的 81 端口:3 次 connect 结果「TimeoutError」,用时 3001 / 3001 / 3001 ms
+  公网某主机的 80 端口(对照:有服务):3 次 connect 结果「连上了」,用时 237 / 192 / 180 ms</pre></div>
+  <p>TCP 的拒绝是 RST,不用 ICMP。lo0 上 0.27 ms 就失败;网关的 RST 配合一次 SYN 重发共 1005 ms;防火墙丢弃则一直等到 3001 ms 超时,3 个 SYN 没有任何回应。</p>
+</section>
+<section>
+  <h2>谁会回</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  默认网关                    → 没有收到任何 ICMP 差错
+  远端私有地址 10.x             → 类型 3 代码 1(主机不可达),来自本机默认网关,IP 总长 68(引用 40 字节)
+  私有地址 172.31.x           → 没有收到任何 ICMP 差错
+  运营商级 NAT 地址段 100.64.x   → 没有收到任何 ICMP 差错
+  链路本地 169.254.x          → 没有收到任何 ICMP 差错
+  保留地址 240.0.0.1          → 没有收到任何 ICMP 差错
+  文档地址 198.51.100.7       → 没有收到任何 ICMP 差错
+  文档地址 203.0.113.9        → 没有收到任何 ICMP 差错
+  文档地址 192.0.2.1          → 没有收到任何 ICMP 差错
+  公网 DNS 服务器 A            → 类型 3 代码 3(端口不可达),来自目的地自己,IP 总长 56(引用 28 字节)
+  公网 DNS 服务器 B            → 类型 3 代码 3(端口不可达),来自目的地自己,IP 总长 68(引用 40 字节)
+  公网 Web 主机               → 类型 3 代码 3(端口不可达),来自目的地自己,IP 总长 68(引用 40 字节)
+  默认网关再单独试:间隔 1 s 连发 10 个到 33435 端口,收到 ICMP 差错 7 个(类型/代码:[(3, 3)])——网关不是每次都回
+  12 个目的地里 4 个收到了差错报文;出现过的 (类型, 代码):[(3, 1), (3, 3)]</pre></div>
+  <p>12 个目的地里只有 4 个回了差错:远端私有地址由网关回主机不可达,公网主机自己回端口不可达。其余的什么也没回,发送方无法区分原因;网关自己也只回了 10 个里的 7 个。</p>
+</section>
+<section>
+  <h2>引用多少</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  TTL=2  的探测:Time Exceeded 的 IP 总长 68,引用 40 字节;引用的 IP 头(版本/长度/标识/协议/源/目的)与原包相同:True;引用的 UDP 头(端口、长度)和载荷与原包相同:True
+  TTL=3  的探测:Time Exceeded 的 IP 总长 68,引用 40 字节;引用的 IP 头(版本/长度/标识/协议/源/目的)与原包相同:True;引用的 UDP 头(端口、长度)和载荷与原包相同:True
+  TTL=4  的探测:Time Exceeded 的 IP 总长 56,引用 28 字节;引用的 IP 头(版本/长度/标识/协议/源/目的)与原包相同:True;引用的 UDP 头(端口、长度)与原包相同:True
+  TTL=10 的探测:Time Exceeded 的 IP 总长 56,引用 28 字节;引用的 IP 头(版本/长度/标识/协议/源/目的)与原包相同:True;引用的 UDP 头(端口、长度)与原包相同:True
+  TTL=11 的探测:Time Exceeded 的 IP 总长 56,引用 28 字节;引用的 IP 头(版本/长度/标识/协议/源/目的)与原包相同:True;引用的 UDP 头(端口、长度)与原包相同:True
+  各种 (类型, 引用字节数) 出现次数:{(11, 40): 2, (11, 28): 3}
+  规范要求至少引用原包的 IP 头 + 8 字节(= 28 字节);更多的话接收方能拿到更多信息
+  对照第一节:本机内核回端口不可达引用了 28 字节;第三节里三台公网主机引用的分别是 [28, 40, 40] 字节</pre></div>
+  <p>规范只要求引用 IP 头加 8 字节。实测路由器有的引用 28 字节,有的引用整个 40 字节原包;引用里的端口让发送方(如 traceroute、内核)对应到具体探测或套接字。</p>
+</section>
+<section>
+  <h2>不对广播回</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  发 5 个到子网广播地址的 33435 端口:收到 ICMP 差错 0 个,来自 0 台设备
+  发 5 个到默认网关(单播)的 33435 端口:收到 ICMP 差错 3 个,来自 1 台设备
+  规范(RFC 1122 / 1812):不对发给广播 / 组播地址的数据报回 ICMP 差错,否则一个广播会引来整网的回复(广播风暴);也不对 ICMP 差错本身再回差错</pre></div>
+  <p>发往子网广播地址的包没有任何设备回差错,发往单个主机的则会回。这避免一个广播引来整网回复。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">ICMP 差错</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "b", "kind": "bars", "label": "数字对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "往 127.0.0.1 一个没人监听的 UDP 端口发数据报,本机内核回 ICMP 类型 3 代码 3(端口不可达)。抓到 2 个 UDP 包和 2 个差错报文(我发了两次),每个差错报文 IP 总长 56 = 20 字节 IP 头 + 8 字节 ICMP 头 + 引用 28 字节,来自 127.0.0.1。引用的 28 字节是原包的 IP 头加 UDP 头(原包共 45 字节,17 字节载荷没有被引用):前 26 字节与原包逐字节相同,最后 2 字节(UDP 校验和字段)原包里抓到 0xfe2c,引用里是 0x0000。应用这一侧:没有 connect 的 UDP 套接字 sendto 后 recvfrom 没有任何错误,只是超时;connect 过的套接字 send 后 recv 得到 ConnectionRefusedError [Errno 61]。ICMP 差错里引用了原包头,内核就是靠引用的地址和端口找到出错的套接字,而没有 connect 的套接字没有被通知。", "s": {"t": {"lines": ["  抓到 2 个 UDP 包和 2 个 ICMP 差错报文", "  ICMP 类型 3(目的不可达)代码 3(端口不可达),IP 总长 56 = 20 + 8 + 引用 28 字节;来自 127.0.0.1,引用的原包:目的 127.0.0.1 协议 17(17 = UDP)源端口 53211 目的端口 53932", "  ICMP 类型 3(目的不可达)代码 3(端口不可达),IP 总长 56 = 20 + 8 + 引用 28 字节;来自 127.0.0.1,引用的原包:目的 127.0.0.1 协议 17(17 = UDP)源端口 49222 目的端口 53932", "  引用的 28 字节(IP 头 20 字节 + UDP 头 8 字节)与发出的原包前 28 字节比较(原包共 45 字节,载荷 17 字节没有被引用):前 26 字节逐字节相同:True;最后 2 个字节是 UDP 校验和字段,原包里抓到 0xfe2c,引用里是 0x0000", "  应用这一侧:未 connect 的 UDP 套接字 sendto 之后 recvfrom → 没有任何错误(TimeoutError:超时);已 connect 的 UDP 套接字 send 之后 recv → ConnectionRefusedError: [Errno 61] Connection refused", "  所以 UDP 想知道对方端口是否关闭,必须 connect 后读错误;ICMP 差错里引用了原包头,内核靠引用的 四元组 找到是哪个套接字"], "cur": [], "mark": [], "done": []}, "mark": [1, 2, 4], "done": [0, 3, 5], "kv": {"items": [["ICMP", "类型 3 代码 3,IP 总长 56"], ["引用", "原包 IP 头 + UDP 头 = 28 字节"], ["connect 过的 UDP", "recv → Connection refused"], ["没 connect 的 UDP", "没有错误,只是超时"]], "hl": ["connect 过的 UDP"]}}}, {"note": "TCP 发到没人监听的端口,拒绝用的是 RST,不是 ICMP。lo0 上 connect 一个关闭的端口,0.27 ms 就报 Connection refused,只有 SYN 和 RST 两个包,ICMP 包 0 个。默认网关的 81 端口也是 RST 拒绝,但 connect 用了 1005 ms:线上第一个 SYN 带 ECN 标志(SEW),3.023 ms 收到 RST;1001 ms 时 macOS 又发一个 SYN,这次去掉了 ECN 标志(S),再被 RST 才报错——重发是不是 ECN 协商失败后的回退,没有进一步验证。公网某主机的 81 端口完全没有回应:3 秒内发了 3 个 SYN(0、1000.982、2002.020 ms),收到 0 个包,connect 一直等到 3001 ms 超时。对照同一主机的 80 端口(有服务)连上用了 180~237 ms。被拒绝是快速失败,被丢弃只能等超时。", "s": {"t": {"lines": ["  lo0 上 connect 一个没人监听的 TCP 端口:ConnectionRefusedError: [Errno 61] Connection refused,用时 0.27 ms;抓到 2 个包:", "  +   0.000 ms  IP 127.0.0.1.C1 > 127.0.0.1.C2: Flags [S], seq 2373677387, win 65535, options [mss 16344,nop,wscale 6,nop,nop,TS val", "  +   0.073 ms  IP 127.0.0.1.C2 > 127.0.0.1.C1: Flags [R.], seq 0, ack 2373677388, win 0, length 0", "  其中 ICMP 包 0 个——TCP 的拒绝是 RST,不是 ICMP", "  默认网关 81 端口的 connect 在线上是这样的(en0,地址已遮盖):", "  +   0.000 ms  IP <本机局域网IP>.49279 > <本机局域网IP>.81: Flags [SEW], seq 2125921335, win 65535, options [mss 1460,nop,wscale 6,nop,nop,TS val 661024073 ecr 0", "  +   3.023 ms  IP <本机局域网IP>.81 > <本机局域网IP>.49279: Flags [R.], seq 0, ack 2125921336, win 0, length 0", "  +1001.255 ms  IP <本机局域网IP>.49279 > <本机局域网IP>.81: Flags [S], seq 2125921335, win 65535, options [mss 1460,nop,wscale 6,nop,nop,TS val 661025074 ecr 0,s", "  +1003.819 ms  IP <本机局域网IP>.81 > <本机局域网IP>.49279: Flags [R.], seq 0, ack 1, win 0, length 0", "  第一个 SYN 带 ECN 标志(SEW),网关用 RST 拒绝;1 秒后 macOS 又发一个 SYN,这次 ECN 标志去掉了(S),再被 RST 拒绝,connect 才报 Connection refused——所以被拒绝用了约 1 秒;重发是不是 ECN 协商失败后的回退,没有进一步验证", "  公网主机 81 端口:3 秒内共发出 3 个 SYN(+ / +1000.982 / +2002.020 ms),收到该主机的包 0 个——没有任何回应(被防火墙丢弃),connect 一直等到超时", "  默认网关的 81 端口:3 次 connect 结果「ConnectionRefusedError: [Errno 61] Connection refused」,用时 1005 / 1005 / 1005 ms", "  公网某主机的 81 端口:3 次 connect 结果「TimeoutError」,用时 3001 / 3001 / 3001 ms", "  公网某主机的 80 端口(对照:有服务):3 次 connect 结果「连上了」,用时 237 / 192 / 180 ms"], "cur": [], "mark": [], "done": []}, "mark": [1, 5, 7, 9, 10, 12], "done": [0, 3, 11, 13], "b": {"items": [["lo0 关闭端口 · 拒绝", 0.27, "0.27 ms"], ["网关 81 端口 · 拒绝(重发一次 SYN)", 1005, "1005 ms"], ["公网 81 端口 · 丢弃", 3001, "3001 ms 超时"], ["公网 80 端口 · 有服务", 192, "约 192 ms"]], "max": 3001, "cur": [], "mark": [2], "done": [0, 1, 3]}, "kv": {"items": [["TCP 拒绝", "RST,不是 ICMP"], ["网关的拒绝", "第二个 SYN 才报错,共 1005 ms"], ["防火墙丢弃", "3 个 SYN 无回应,3001 ms 超时"]], "hl": ["防火墙丢弃"]}}}, {"note": "往 12 个不同的目的地发 UDP 数据报(端口 33435,没人监听),只有 4 个收到了差错报文:远端私有地址 10.x 由本机默认网关回 类型 3 代码 1(主机不可达),IP 总长 68;三台公网主机回 类型 3 代码 3(端口不可达)——都是目的地自己回的,总长 56 / 68 / 68。其余 8 个(默认网关、172.31.x、100.64.x、169.254.x、保留地址 240.0.0.1、三个文档地址)一个差错也没有。默认网关在这一轮里没回,再单独连发 10 个(间隔 1 s)却收到 7 个类型 3 代码 3——网关不是每次都回。没有回复不等于没有问题:发送方既不知道包到了没有,也不知道为什么没到。", "s": {"t": {"lines": ["  默认网关                    → 没有收到任何 ICMP 差错", "  远端私有地址 10.x             → 类型 3 代码 1(主机不可达),来自本机默认网关,IP 总长 68(引用 40 字节)", "  私有地址 172.31.x           → 没有收到任何 ICMP 差错", "  运营商级 NAT 地址段 100.64.x   → 没有收到任何 ICMP 差错", "  链路本地 169.254.x          → 没有收到任何 ICMP 差错", "  保留地址 240.0.0.1          → 没有收到任何 ICMP 差错", "  文档地址 198.51.100.7       → 没有收到任何 ICMP 差错", "  文档地址 203.0.113.9        → 没有收到任何 ICMP 差错", "  文档地址 192.0.2.1          → 没有收到任何 ICMP 差错", "  公网 DNS 服务器 A            → 类型 3 代码 3(端口不可达),来自目的地自己,IP 总长 56(引用 28 字节)", "  公网 DNS 服务器 B            → 类型 3 代码 3(端口不可达),来自目的地自己,IP 总长 68(引用 40 字节)", "  公网 Web 主机               → 类型 3 代码 3(端口不可达),来自目的地自己,IP 总长 68(引用 40 字节)", "  默认网关再单独试:间隔 1 s 连发 10 个到 33435 端口,收到 ICMP 差错 7 个(类型/代码:[(3, 3)])——网关不是每次都回", "  12 个目的地里 4 个收到了差错报文;出现过的 (类型, 代码):[(3, 1), (3, 3)]"], "cur": [], "mark": [], "done": []}, "mark": [1, 9, 10, 11, 12], "done": [0, 2, 3, 4, 5, 6, 7, 8, 13], "b": {"items": [["12 个目的地里收到差错", 4, "4"], ["没有任何回应", 8, "8"], ["网关 10 个里回了", 7, "7 / 10"]], "max": 12, "cur": [], "mark": [1], "done": [0, 2]}, "kv": {"items": [["3/1 主机不可达", "由网关代回(远端私有地址)"], ["3/3 端口不可达", "由目的主机自己回"], ["不回", "不能区分丢了、被禁、还是限速"], ["网关", "10 个里回了 7 个"]], "hl": ["不回"]}}}, {"note": "差错报文引用原包的长度因设备而异。同样 40 字节的 UDP 探测,TTL=2、3 的路由器回 Time Exceeded,IP 总长 68,引用 40 字节(整个原包,含载荷);TTL=4、10、11 的回 56 字节,引用 28 字节(IP 头 + 8 字节 UDP 头);第三节里三台公网主机引用的分别是 28、40、40 字节;本机内核回端口不可达引用 28 字节。能比较的字段都和原包一致:IP 头里的版本/长度/标识/协议/源/目的相同,UDP 头相同,40 字节的还包括载荷相同。规范要求至少引用 IP 头加 8 字节(28 字节),traceroute 就靠这 8 字节里的端口对应探测。", "s": {"t": {"lines": ["  TTL=2  的探测:Time Exceeded 的 IP 总长 68,引用 40 字节;引用的 IP 头(版本/长度/标识/协议/源/目的)与原包相同:True;引用的 UDP 头(端口、长度)和载荷与原包相同:True", "  TTL=3  的探测:Time Exceeded 的 IP 总长 68,引用 40 字节;引用的 IP 头(版本/长度/标识/协议/源/目的)与原包相同:True;引用的 UDP 头(端口、长度)和载荷与原包相同:True", "  TTL=4  的探测:Time Exceeded 的 IP 总长 56,引用 28 字节;引用的 IP 头(版本/长度/标识/协议/源/目的)与原包相同:True;引用的 UDP 头(端口、长度)与原包相同:True", "  TTL=10 的探测:Time Exceeded 的 IP 总长 56,引用 28 字节;引用的 IP 头(版本/长度/标识/协议/源/目的)与原包相同:True;引用的 UDP 头(端口、长度)与原包相同:True", "  TTL=11 的探测:Time Exceeded 的 IP 总长 56,引用 28 字节;引用的 IP 头(版本/长度/标识/协议/源/目的)与原包相同:True;引用的 UDP 头(端口、长度)与原包相同:True", "  各种 (类型, 引用字节数) 出现次数:{(11, 40): 2, (11, 28): 3}", "  规范要求至少引用原包的 IP 头 + 8 字节(= 28 字节);更多的话接收方能拿到更多信息", "  对照第一节:本机内核回端口不可达引用了 28 字节;第三节里三台公网主机引用的分别是 [28, 40, 40] 字节"], "cur": [], "mark": [], "done": []}, "mark": [0, 1, 2, 3, 4], "done": [5, 6, 7], "b": {"items": [["TTL=2、3 的路由器 · 引用", 40, "40 字节"], ["TTL=4、10、11 的路由器 · 引用", 28, "28 字节"], ["本机内核 · 引用", 28, "28 字节"]], "max": 40, "cur": [], "mark": [0], "done": [1, 2]}, "kv": {"items": [["最少", "IP 头 + 8 字节 = 28 字节"], ["有的设备", "引用整个 40 字节原包"], ["用途", "用端口对应哪个探测 / 套接字"]], "hl": ["最少"]}}}, {"note": "不对广播回差错:往子网广播地址的 33435 端口发 5 个 UDP 数据报,整个网段没有一台设备回 ICMP(0 个、0 台);同样发给默认网关(单播)5 个,收到 3 个差错、来自 1 台设备。规范(RFC 1122 / 1812)要求不对发给广播 / 组播地址的数据报回 ICMP 差错,否则一个广播会引来整网的回复;也不对 ICMP 差错本身再回差错。这里只验证了第一条在本机所在网段的表现。", "s": {"t": {"lines": ["  发 5 个到子网广播地址的 33435 端口:收到 ICMP 差错 0 个,来自 0 台设备", "  发 5 个到默认网关(单播)的 33435 端口:收到 ICMP 差错 3 个,来自 1 台设备", "  规范(RFC 1122 / 1812):不对发给广播 / 组播地址的数据报回 ICMP 差错,否则一个广播会引来整网的回复(广播风暴);也不对 ICMP 差错本身再回差错"], "cur": [], "mark": [], "done": []}, "mark": [0], "done": [1, 2], "b": {"items": [["发到广播地址 5 个 · 收到差错", 0, "0"], ["发到网关单播 5 个 · 收到差错", 3, "3"]], "max": 5, "cur": [], "mark": [0], "done": [1]}, "kv": {"items": [["发给广播", "没有任何差错回复"], ["发给单播", "网关回了 3 / 5"], ["规则", "不对广播回,不对差错再回差错"]], "hl": ["发给广播"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64(Apple 芯片)/ Python 3.14.8 / tcpdump(libpcap)/ scapy 2.8 / dpkt / dnspython / h2 / aioquic / OpenSSL / curl 8.7.1;抓包在 lo0(环回)上做,少数实验用真实网卡 en0(这台机器上 en0 是 Wi-Fi,tcpdump 看到的是系统转成以太网格式的帧,所以文中的“以太网头”都指这个 14 字节的头)或访问公网(会在文章里注明);需要丢包 / 延迟 / 限速时,用一个只作用于 lo0 端口 9400-9499 的 dummynet 辅助脚本(netlab);所有服务端都是本机自己起的进程;时间戳取自 tcpdump 的 -tt,数字每次运行会有小幅抖动。第一、二节的 lo0 部分在本机回环上抓包,其余在 en0 上抓包(dpkt 解析 ICMP 差错与引用的原包);默认网关与 MAC 做了遮盖,公网主机的地址不写出;网关 / 路由器是否回差错、回哪种每次运行并不完全一样(同一目的地不同轮次结果不同),文中为最后一次运行</li><li>没有验证:协议不可达(代码 2)、网络不可达(代码 0)、被管理禁止(代码 9 / 10 / 13)这些代码(本机网络没有触发);ICMP 重定向与源抑制;IPv6 的 ICMPv6 差错(见 IPv6 部分);ICMP 差错限速的具体阈值(见 ICMP 限速一篇);网关重发 SYN 是否因为 ECN 回退</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="network-pmtud.html">
+    <div>
+      <div class="t1">下一篇 · 网络协议 16</div>
+      <div class="t2">路径 MTU 发现:DF 位、ICMP 与“黑洞”</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>网络协议 · ICMP 差错报文:目的不可达、超时、需要分片 · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

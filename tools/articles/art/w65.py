@@ -1,0 +1,20 @@
+from lib import *
+S = SS('w65')
+steps = [
+    step("SYN 里的 MSS 选项来自出口接口的 MTU 减 40(IPv4 头 20 + TCP 基本头 20)。lo0 的 MTU 是 16384:本机 SYN 的 MSS = 16344,对端 SYN+ACK 的 MSS 也是 16344。en0 的 MTU 是 1500:本机连 example.com 的 SYN 里 MSS = 1460;但 example.com 的 SYN+ACK 里 MSS = 1400,比 1460 小——对端(或路径上的设备)把 MSS 压到了 1400。内核 tcp_info 里这条连接的 maxseg = 1388 = 1400 − 12(时间戳选项)。net.inet.tcp.mssdflt = 512 是没有路由信息时的默认值,minmss = 216。", t=tl(S(1)), mark=lidx(S(1), 'en0 → example.com', 'lo0:本机 SYN'), done=lidx(S(1), '接口 MTU', 'net.inet.tcp.mssdflt'), kv=KV([['lo0', 'MTU 16384 → MSS 16344(两端相同)'], ['en0 → example.com', '本机 1460,对端 1400'], ['生效的发送 MSS', '1400 − 12 = 1388(maxseg)']], ['en0 → example.com'])),
+    step("双方通告的 MSS 取小者,每个数据段的载荷再扣 12 字节的时间戳选项。往 example.com:80 发 POST 请求体:服务器没等收完就关了连接,请求体只发出 142964 / 200000 字节(Broken pipe)。本机发出 30 个数据段,载荷分布是 1388 字节 28 个、81 字节 2 个——最大载荷正好是 1388。如果对端没有压 MSS,本机本可以发 1460 − 12 = 1448 字节的段。也就是说对端通告的 1400 真的限制了我们的发送大小,每个段少了 60 字节(约 4%)的载荷。", t=tl(S(2)), mark=lidx(S(2), '本机发出的数据段', '实测最大载荷'), done=lidx(S(2), '请求体发出', '对照'), b=bars([['本机可以发(无钳制)', 1448, '1448'], ['实测最大载荷', 1388, '1388']], 1448, mark=[1], done=[0]), kv=KV([['本机通告', '1460'], ['对端通告', '1400'], ['实测最大载荷', '1388 = 1400 − 12']], ['实测最大载荷'])),
+    step("能不能手动用 TCP_MAXSEG 设小 MSS?(目标值 1000)客户端 connect 之前设置:setsockopt 返回 EINVAL,SYN 和 SYN+ACK 的 MSS 都还是 16344,实测最大数据段载荷 16332 字节。监听套接字 listen 之前设置:同样 EINVAL,同样没有效果。发送方(accept 出来的)连上之后设置:setsockopt 成功,读回 1000,实测服务端→客户端的最大数据段载荷变成 1000 字节;但握手里通告的 MSS 不会变(SYN / SYN+ACK 里仍是 16344),因为握手早已完成。所以在 macOS 上 TCP_MAXSEG 只能在连上之后限制本端发送的段大小,不能改变握手里通告给对端的 MSS——这与“钳制”(改握手里的选项)不是一回事。", t=tl(S(3)), mark=lidx(S(3), '设在发送方', '设在客户端 connect 之前', '设在监听套接字'), done=lidx(S(3), '设在发送方'), b=bars([['连上之后设 1000,实测载荷', 1000, '1000'], ['其余两种(设置失败)', 16332, '16332']], 16332, mark=[0], done=[1]), kv=KV([['connect 前 / listen 前', 'EINVAL,无效果'], ['连上之后(发送方)', '成功,段 ≤ 1000'], ['握手里通告的 MSS', '不变(16344)']], ['连上之后(发送方)'])),
+    step("典型隧道或链路该用的 MSS(计算值,不是测量):MSS = 路径 MTU − 40(IPv4)或 − 60(IPv6)。标准以太网 MTU 1500 → 1460;PPPoE 多 8 字节封装 MTU 1492 → 1452;GRE 24 字节 MTU 1476 → 1436;本机 utun1 接口的 MTU 实测是 1380 → 1340;WireGuard 常见默认 1420 → 1380;IPv6 最小 MTU 1280 → IPv4 1240 / IPv6 1220。“MSS 钳制”是路由器或防火墙把经过的 SYN / SYN+ACK 里的 MSS 改小到这些值,让两端一开始就别发会被分片或丢弃的大包;它不碰数据段,与靠 ICMP 3/4 反馈的 PMTUD 互补——ICMP 被防火墙丢掉时,PMTUD 失效而钳制仍然有效。本篇没有实测任何一台做钳制的路由器。", t=tl(S(4)), mark=lidx(S(4), 'PPPoE', 'GRE 隧道'), done=lidx(S(4), '标准以太网', 'WireGuard', 'IPv6 最小 MTU', '本机 utun1'), b=bars([['以太网 1500', 1460, '1460'], ['PPPoE 1492', 1452, '1452'], ['GRE 1476', 1436, '1436'], ['WireGuard 1420', 1380, '1380'], ['utun1 1380', 1340, '1340']], 1460, mark=[], done=[0, 1, 2, 3, 4]), kv=KV([['IPv4', 'MSS = MTU − 40'], ['IPv6', 'MSS = MTU − 60'], ['钳制', '路由器改写 SYN 里的 MSS']], ['钳制'])),
+]
+A = mkartw('w65', 65, '网络协议,TCP,MSS,MSS钳制,TCP_MAXSEG,MTU,真实验证,动画演示',
+    '实测 MSS 协商:SYN 里的 MSS = 接口 MTU − 40(lo0 16344、en0 1460);example.com 把 MSS 压到 1400,本机实际发出的最大段载荷 1388 = 1400 − 12;TCP_MAXSEG 在 connect/listen 前设置返回 EINVAL,连上后设置能把段限制在 1000 但不改握手;附各隧道应有 MSS 的计算表。',
+    'MSS 是 TCP 双方在握手时说好的最大段大小,取决于接口的 MTU,也常被路径上的设备“钳制”得更小。这篇看 SYN 里的 MSS 从哪来、example.com 把我们的发送大小压到了多少、macOS 上手动设置 TCP_MAXSEG 能做到什么,最后列出 PPPoE、GRE、WireGuard 这些隧道该用的 MSS。',
+    [('1460 → 1400', '本机在 SYN 里通告的 MSS 与 example.com 在 SYN+ACK 里通告的 MSS'), ('1388', '实测发给 example.com 的最大数据段载荷 = 1400 − 12 字节时间戳'), ('EINVAL', 'TCP_MAXSEG 在 connect 之前或 listen 之前设置的结果')],
+    [('MSS 的来源', '<p>SYN 里的 MSS = 出口接口 MTU − 40:lo0 16344,en0 1460。</p>'),
+     ('取小者再减时间戳', '<p>双方通告取小者(1460 对 1400 → 1400),再扣 12 字节时间戳,实测最大载荷 1388。</p>'),
+     ('手动设置', '<p>TCP_MAXSEG 在 connect / listen 之前是 EINVAL;连上之后设置能把本端的段限制到 1000,但握手里的 MSS 已定,不再变化。</p>'),
+     ('隧道与钳制', '<p>PPPoE 1452、GRE 1436、WireGuard 1380 等是计算值;钳制由路由器改写 SYN 里的 MSS,与 PMTUD 互补。</p>')],
+    steps,
+    [ENV_W + '。第一节 lo0 与 en0 → example.com:80 抓包;第二节的 POST 请求体只发出 142964 字节,服务器就关了连接;第三节在 lo0 上;第四节全是计算值',
+     '没有验证:任何一台真正做 MSS 钳制的路由器(本机不是路由器,也没有隧道设备可用);example.com 把 MSS 压到 1400 的原因(服务器自己的设置还是路径上的设备,没有区分);IPv6 的 MSS 协商;路由表里按目的地缓存的 MTU / MSS 对新连接的影响;TCP_MAXSEG 在 en0 真实连接上的行为'],
+    'MSS 协商与钳制')

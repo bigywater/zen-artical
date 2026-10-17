@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>数组的 hashCode()/equals() 真实验证:基于身份,不是基于内容</title>
+<meta name="description" content="真实验证两个内容完全相同的int[]数组,直接调用equals()真实认为不相等,hashCode()真实也不同,因为数组没有重写Object默认的基于身份的实现;真实验证Arrays.equals()和Arrays.hashCode()才是基于内容的正确版本;真实验证把数组直接当HashMap的key会真实导致查找失效;真实验证Arrays.equals()对二维数组只比较内层引用,必须用deepEquals()才够深。">
+<link rel="canonical" href="https://bigywater.tech/java-array-hashcode-equals.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="数组的 hashCode()/equals() 真实验证">
+<meta property="og:description" content="真实验证数组的equals()/hashCode()基于身份而非内容,以及Arrays.equals()/deepEquals()的真实差异。">
+<meta property="og:url" content="https://bigywater.tech/java-array-hashcode-equals.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="数组 hashCode()/equals() 真实验证">
+<meta name="twitter:description" content="真实验证数组默认基于身份而非内容的 equals()/hashCode() 行为。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --java-c:#E76F00; --java-c-soft:#FBEADA;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --java-c:#FF9A44; --java-c-soft:#3A2914;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --java-c:#FF9A44; --java-c-soft:#3A2914;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--java-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--java-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--java-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--java-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--java-c); background:var(--java-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--java-c-soft); color:var(--java-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--java-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--java-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--java-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--java-c); color:var(--java-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--java-c-soft); color:var(--ink);}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Java 内部原理 · 83</div>
+    <h1>数组的 hashCode()/equals() 真实验证:基于身份,不是基于内容</h1>
+    <p>数组是Java里一个特殊的存在——它没有像String或包装类那样重写equals()/hashCode(),这篇真实验证这个"没重写"到底会带来什么后果,以及Arrays工具类如何补上这一课。</p>
+    <div class="hero-fact">
+      <div><div class="num">内容相同数组equals()真实为false</div><div class="lbl">真实验证:{1,2,3}和{1,2,3}两个数组直接equals()真实认为不相等,因为数组用的是Object默认的身份比较</div></div>
+      <div><div class="num">二维数组需要deepEquals才够深</div><div class="lbl">真实验证:Arrays.equals()对二维数组只比较内层数组的引用,真实为false,Arrays.deepEquals()才是真正递归比较</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+<p class="prev-post">上一篇:<a href="java-hashcode-contract.html" target="_blank" rel="noopener">hashCode() 契约真实验证</a></p>
+
+<section style="padding-top:8px;">
+  <h2>真实验证:内容相同的两个数组,equals()真实认为不相等</h2>
+  <p class="h2-sub">数组作为Java里唯一一种不是普通类、由JVM在运行时动态生成的引用类型,它的equals()和hashCode()到底来自哪里。</p>
+  <blockquote class="src">
+    <span class="path">ArrayHashcodeEqualsDemo.java</span>
+int[] a1 = {1, 2, 3};
+int[] a2 = {1, 2, 3};
+System.out.println(a1.equals(a2));
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">a1.equals(a2) 真实结果: false（内容相同的两个数组，equals()真实认为不相等）
+a1 == a2: false
+a1.hashCode() = 349885916
+a2.hashCode() = 414493378
+hashCode真实相同吗: false（同样基于身份，不基于内容）</pre>
+  </div>
+  <p>真实结果证明数组类型没有重写 <span class="mono">Object</span> 默认的 <span class="mono">equals()</span> 和 <span class="mono">hashCode()</span>,继续使用的是基于对象身份(引用本身)的默认实现——即使两个数组元素完全一致,只要不是同一个数组对象,<span class="mono">equals()</span> 就真实是 <span class="mono">false</span>,<span class="mono">hashCode()</span> 也真实是两个不相关的值。这也是所有数组类型(包括基本类型数组和对象数组)的统一行为。</p>
+</section>
+
+<section>
+  <h2>真实验证:Arrays.equals()/Arrays.hashCode() 才是基于内容的版本</h2>
+  <p class="h2-sub">java.util.Arrays 工具类提供了专门基于内容比较的静态方法,弥补数组实例方法的这个"缺陷"。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">Arrays.equals(a1, a2) 真实结果: true
+Arrays.hashCode(a1) == Arrays.hashCode(a2): true</pre>
+  </div>
+  <p>真实结果证明 <span class="mono">Arrays.equals()</span> 和 <span class="mono">Arrays.hashCode()</span> 才是"看起来应该有"的基于内容的比较——逐个元素比较值是否相同、基于元素值组合计算哈希。这两个方法的存在,恰好说明了 Java 语言设计者有意让数组的实例方法保持"身份语义",把"内容语义"的能力单独放进工具类,而不是覆盖数组本身的默认行为。</p>
+</section>
+
+<section>
+  <h2>真实验证:把数组直接当 HashMap 的 key,查找真实失效</h2>
+  <p class="h2-sub">这是数组身份语义在真实工程代码里最容易踩中的坑——用数组做key,内容相同但不是同一个引用时查不到。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">用a1存入后，badMap.get(a2) 真实结果: null（内容相同但不是同一个数组对象，真实查不到）
+用a1存入后，badMap.get(a1) 真实结果: value（同一个引用真实查得到）</pre>
+  </div>
+  <div class="callout b">
+    <b>正确的替代方案。</b>这个真实结果解释了为什么"直接用数组当 <span class="mono">HashMap</span> 的 key"是一个常见的初学者陷阱——它能编译通过、能正常存值,只有取值的时候才会发现,除非用的是完全相同的引用,否则永远查不到。真实的解决方案是:把数组包装成 <span class="mono">List</span>(<span class="mono">Arrays.asList()</span>,真实验证 <span class="mono">List.equals()</span> 是基于内容比较的),或者用字符串拼接、<span class="mono">Arrays.hashCode()</span> 计算出的值作为真正的 key。
+  </div>
+</section>
+
+<section>
+  <h2>真实验证:二维数组需要 deepEquals(),普通 equals() 不够深</h2>
+  <p class="h2-sub">二维数组的元素类型本身是数组(引用类型),Arrays.equals()对它做的仍然只是"一层"比较。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">Arrays.equals(m1, m2) 真实结果(二维数组): false（Arrays.equals对二维数组只比较内层数组的引用，不够深）
+Arrays.deepEquals(m1, m2) 真实结果: true（deepEquals才是真正递归比较内容）</pre>
+  </div>
+  <p>真实结果印证了系列前面 <a href="java-array-clone.html" target="_blank" rel="noopener">数组 clone() 只深拷贝第一层</a>那篇验证过的同一条规律:<span class="mono">Arrays.equals()</span> 对 <span class="mono">int[][]</span> 来说,元素类型是 <span class="mono">int[]</span>,它真实只是逐个比较这些内层数组的引用是否相等(依然是身份比较),两个内容相同但独立创建的二维数组因此真实被判定为不相等。<span class="mono">Arrays.deepEquals()</span> 会真实递归下探,对每一层的数组都改用基于内容的比较,这才是处理多维数组时应该使用的正确方法。</p>
+</section>
+
+<section>
+  <h2>分步演示:为什么数组不能直接用 equals() 比较内容</h2>
+  <p>每一行都是真实运行这段代码得到的结果。</p>
+<div class="demo" id="demo"><div class="demo-head">数组的 equals/hashCode 真实从来没有被重写,内容比较必须用 Arrays.equals/hashCode/deepEquals</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>这一步新验证的比较</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>
+(function(){
+const D = {"panels":[{"id":"kv","kind":"kv","label":"真实运行结果(逐步累加)"},{"id":"info","kind":"text","label":"这一步发生了什么"}],"steps":[{"note":"int[] a1={1,2,3}, a2={1,2,3};(内容完全相同,但是两个不同数组对象);a1.equals(a2):真实结果是 false——数组类没有重写 equals(),用的是 Object 的默认实现,比较的是引用是否相同,不是内容。","s":{"kv":{"items":[["a1.equals(a2)(内容相同,对象不同)","false(数组不重写 equals)"]],"hl":["a1.equals(a2)(内容相同,对象不同)"]},"info":{"text":"int[] a1={1,2,3}, a2={1,2,3};(内容完全相同,但是两个不同数组对象);a1.equals(a2):真实结果是 false——数组类没有重写 equals(),用的是 Object 的默认实现,比较的是引用是否相同,不是内容。"}}},{"note":"换成 Arrays.equals(a1,a2)(工具类方法,真实逐个元素比较):真实结果是 true——想比较数组内容,必须用 Arrays.equals(),不能直接用 .equals()。","s":{"kv":{"items":[["a1.equals(a2)(内容相同,对象不同)","false(数组不重写 equals)"],["Arrays.equals(a1,a2)","true(真实逐元素比较内容)"]],"hl":["Arrays.equals(a1,a2)"]},"info":{"text":"换成 Arrays.equals(a1,a2)(工具类方法,真实逐个元素比较):真实结果是 true——想比较数组内容,必须用 Arrays.equals(),不能直接用 .equals()。"}}},{"note":"同样的道理验证 hashCode():a1.hashCode()==a2.hashCode() 真实是 false(基于对象身份计算,两个不同对象哈希不同),但 Arrays.hashCode(a1)==Arrays.hashCode(a2) 真实是 true(基于数组内容按公式计算)。","s":{"kv":{"items":[["a1.equals(a2)(内容相同,对象不同)","false(数组不重写 equals)"],["Arrays.equals(a1,a2)","true(真实逐元素比较内容)"],["a1.hashCode()==a2.hashCode() / Arrays.hashCode(a1)==Arrays.hashCode(a2)","false / true"]],"hl":["a1.hashCode()==a2.hashCode() / Arrays.hashCode(a1)==Arrays.hashCode(a2)"]},"info":{"text":"同样的道理验证 hashCode():a1.hashCode()==a2.hashCode() 真实是 false(基于对象身份计算,两个不同对象哈希不同),但 Arrays.hashCode(a1)==Arrays.hashCode(a2) 真实是 true(基于数组内容按公式计算)。"}}},{"note":"二维数组陷阱:int[][] nested1={{1,2},{3,4}}, nested2={{1,2},{3,4}}(内容看起来完全一样);Arrays.equals(nested1,nested2)(注意 Arrays.equals 只做一层比较):真实结果是 false——因为这一层比较的是内层的 int[] 引用是否相同,内层数组本身就是两个不同对象,所以浅层的 Arrays.equals 判定不相等。","s":{"kv":{"items":[["a1.equals(a2)(内容相同,对象不同)","false(数组不重写 equals)"],["Arrays.equals(a1,a2)","true(真实逐元素比较内容)"],["a1.hashCode()==a2.hashCode() / Arrays.hashCode(a1)==Arrays.hashCode(a2)","false / true"],["Arrays.equals(nested1,nested2)(二维数组,只做一层比较)","false(内层数组引用不同,浅层比较判定不相等)"]],"hl":["Arrays.equals(nested1,nested2)(二维数组,只做一层比较)"]},"info":{"text":"二维数组陷阱:int[][] nested1={{1,2},{3,4}}, nested2={{1,2},{3,4}}(内容看起来完全一样);Arrays.equals(nested1,nested2)(注意 Arrays.equals 只做一层比较):真实结果是 false——因为这一层比较的是内层的 int[] 引用是否相同,内层数组本身就是两个不同对象,所以浅层的 Arrays.equals 判定不相等。"}}},{"note":"换成 Arrays.deepEquals(nested1,nested2)(递归比较,连内层数组的内容也真实展开比较):真实结果才是 true——这是二维/多维数组内容比较最容易踩的坑,必须用 deepEquals 而不是 equals。","s":{"kv":{"items":[["a1.equals(a2)(内容相同,对象不同)","false(数组不重写 equals)"],["Arrays.equals(a1,a2)","true(真实逐元素比较内容)"],["a1.hashCode()==a2.hashCode() / Arrays.hashCode(a1)==Arrays.hashCode(a2)","false / true"],["Arrays.equals(nested1,nested2)(二维数组,只做一层比较)","false(内层数组引用不同,浅层比较判定不相等)"],["Arrays.deepEquals(nested1,nested2)","true(递归比较到最内层)"]],"hl":["Arrays.deepEquals(nested1,nested2)"]},"info":{"text":"换成 Arrays.deepEquals(nested1,nested2)(递归比较,连内层数组的内容也真实展开比较):真实结果才是 true——这是二维/多维数组内容比较最容易踩的坑,必须用 deepEquals 而不是 equals。"}}},{"note":"把 a1 放进 HashSet<int[]>,再用内容相同但引用不同的 a2 去 contains() 查询:真实结果是 false——因为 HashSet 底层依赖 hashCode/equals 判断\"是否已存在\",而数组的这两个方法都是基于身份的,所以拿内容相同的另一个数组对象去查,真实查不到。这是把裸数组当 HashSet/HashMap 的 key 时最容易踩的坑。","s":{"kv":{"items":[["a1.equals(a2)(内容相同,对象不同)","false(数组不重写 equals)"],["Arrays.equals(a1,a2)","true(真实逐元素比较内容)"],["a1.hashCode()==a2.hashCode() / Arrays.hashCode(a1)==Arrays.hashCode(a2)","false / true"],["Arrays.equals(nested1,nested2)(二维数组,只做一层比较)","false(内层数组引用不同,浅层比较判定不相等)"],["Arrays.deepEquals(nested1,nested2)","true(递归比较到最内层)"],["HashSet<int[]>.add(a1) 后 contains(a2)(内容同,引用不同)","false(数组当 key 的经典陷阱)"]],"hl":["HashSet<int[]>.add(a1) 后 contains(a2)(内容同,引用不同)"]},"info":{"text":"把 a1 放进 HashSet<int[]>,再用内容相同但引用不同的 a2 去 contains() 查询:真实结果是 false——因为 HashSet 底层依赖 hashCode/equals 判断\"是否已存在\",而数组的这两个方法都是基于身份的,所以拿内容相同的另一个数组对象去查,真实查不到。这是把裸数组当 HashSet/HashMap 的 key 时最容易踩的坑。"}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1000); };
+go(0);
+})();
+</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文全部结果均在本机真实运行 Java 17 得到,数组身份比较行为重复运行结果一致(hashCode具体数值每次JVM运行可能不同)。</li>
+      <li>和<a href="java-hashcode-contract.html" target="_blank" rel="noopener">hashCode() 契约</a>那篇一起看,能理解为什么数组没有遵循"内容相等即hashCode相等"这条规则——因为它压根没有覆盖默认实现,规则对它不适用。</li>
+      <li>没有涉及:Arrays.deepHashCode() 与 deepEquals() 的配对使用、record 类型对数组字段的默认equals/hashCode处理方式(record同样不会自动做深度数组比较,这是一个容易被忽视的陷阱)——这两个话题留给系列后面按需再写。</li>
+    </ul>
+  </div>
+</section>
+
+<a class="next-post" href="java-classloader-parent-delegation.html" target="_blank" rel="noopener">
+  <div><div class="t1">下一篇 · Java 内部原理 84</div><div class="t2">双亲委派真实验证:自定义ClassLoader真实无法覆盖java.lang.String</div></div>
+  <span>→</span>
+</a>
+
+</div>
+<footer>Java 内部原理 · 数组的 hashCode/equals · 数据来自本机 Java 17 实验</footer>
+</body>
+</html>

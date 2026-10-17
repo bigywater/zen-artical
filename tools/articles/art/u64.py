@@ -1,0 +1,17 @@
+from lib import *
+S = SS('u64')
+steps = [
+    step("(1..4).map(|x| x * 2).collect() 不给目标类型:error[E0283]: type annotations needed,note 说「the type must implement `FromIterator<i32>`」,help 建议给 v 一个明确类型。collect 是泛型方法 collect<B: FromIterator<Item>>,B 必须从上下文里确定。", t=tl(S(1)), mark=lidx(S(1), 'error[E0283]', 'FromIterator'), kv=KV([['没有目标类型', 'E0283']], ['没有目标类型'])),
+    step("三种给类型的方式都能工作:标注变量 let a: Vec<i32>、turbofish collect::<VecDeque<i32>>()、turbofish 加占位符 collect::<Vec<_>>()(元素类型由编译器推断),以及函数返回类型 -> Vec<u32> 推断。", t=tl(S(1)), done=lidx(S(1), '标注变量类型'), kv=KV([['let a: Vec<_>', '变量标注'], ['collect::<T>()', 'turbofish'], ['返回类型', '倒推']], ['turbofish'])),
+    step("目标类型很多:HashMap<&str, usize>(从 (键,值) 元组)、BTreeSet<char>、String(可以从 char、&str、String 三种元素收集)、Box<[i32]>、Result<(), ()>;partition 与 unzip 则一次产出两个集合。", t=tl(S(1)), done=lidx(S(1), 'HashMap(排序', 'BTreeSet<char>', 'String 可以', 'Box<[i32]>', 'partition', 'unzip'), kv=KV([['String', 'char / &str / String'], ['partition', '(Vec, Vec)'], ['unzip', '(Vec, Vec)']], ['String'])),
+    step("collect 成 Result<Vec<_>, _>:[\"1\",\"2\",\"x\",\"4\",\"5\"] 得 Err(ParseIntError { kind: InvalidDigit }),闭包只被调用了 3 次(5 个元素里处理到第 3 个就停,后面两个根本没处理);全部成功的 Option<Vec<u32>> 得 Some([1,2,3]),调用 3 次。", t=tl(S(2)), done=lidx(S(2), 'Result<Vec', '全部成功'), mark=lidx(S(2), '3 次(共 5 个'), kv=KV([['Result<Vec<_>,_>', '遇到第一个 Err 就停'], ['闭包调用次数', '3 / 5']], ['闭包调用次数'])),
+    step("同样的原理用在 sum:[Some(1), None, Some(3)] 求和得 None,[Some(1), Some(3)] 得 Some(4)。", t=tl(S(2)), done=lidx(S(2), 'Option 的 sum'), kv=KV([['Option 的 sum', '有 None 就是 None']], ['Option 的 sum'])),
+    step("推断出的类型决定语义:同一组 [(\"a\",1),(\"b\",2),(\"a\",3)],Vec 保留 3 个;BTreeMap(和 HashMap)遇到重复键,后者覆盖前者,剩 2 个,a 对应 3;HashSet 只取键,也剩 2 个。", t=tl(S(3)), done=lidx(S(3), 'Vec 保留', 'BTreeMap', 'HashSet', 'HashMap'), kv=KV([['Vec', '3 个'], ['BTreeMap', '2 个,a = 3'], ['HashSet(键)', '2 个']], ['BTreeMap'])),
+    step("预分配:(0..10000).map(…).collect() 的 size_hint 是 (10000, Some(10000)),所以 Vec 只分配 1 次、realloc 0 次,cap 恰好 10000;加了 filter 后 size_hint 下界是 0,变成 1 次 alloc + 11 次 realloc,最终 len 5000、cap 8192。filter 后再接 map 也是 11 次 realloc。", t=tl(S(4)), done=lidx(S(4), 'map:'), mark=lidx(S(4), 'filter:', 'filter+map'), b=bars([['map 的 realloc 次数', 0, '0'], ['filter 的 realloc 次数', 11, '11'], ['filter+map 的 realloc 次数', 11, '11']], 12, cur=[1, 2], done=[0]), kv=KV([['size_hint', 'map (10000, Some(10000)) / filter (0, Some(10000))'], ['cap', '10000 对 8192(len 5000)']], ['size_hint'])),
+]
+A = mkart('u64', 64, 'Rust,Iterator,collect,类型推断,真实验证,动画演示',
+    'collect 的目标类型必须能从上下文确定,否则 E0283;三种给类型的方式;HashMap/BTreeSet/String/Box<[T]>/Result/Option 等目标;collect 成 Result 在第一个 Err 就停止(5 个元素只调用 3 次);重复键在 BTreeMap 里后者覆盖;size_hint 决定预分配:map 0 次 realloc,filter 11 次。',
+    'collect 看似简单,实际上是个泛型方法,返回什么类型全靠推断。这篇验证它什么时候报错、能收集成哪些类型、收集成 Result 时何时停止、同一份数据在不同类型里语义怎么变,以及 size_hint 如何影响 Vec 的预分配。',
+    [('E0283', 'collect 没有目标类型的错误'), ('3 / 5', '收集成 Result 时,5 个元素里闭包被调用的次数'), ('0 对 11', 'map 链与 filter 链收集 10000 个元素的 realloc 次数')],
+    [('目标类型与推断', None), ('Result 与 Option', None), ('收集成不同类型', '<p>HashMap 与 BTreeMap 的区别见<a href="rust-btreemap-vs-hashmap.html">BTreeMap 与 HashMap 对比</a>。</p>'), ('size_hint 与预分配', '<p>Vec 的扩容规则见<a href="rust-vec-growth.html">Vec 扩容机制</a>。</p>')],
+    steps, [ENV_U, '没有验证:自定义类型实现 FromIterator 的写法(在 Iterator 相关文章之外未涉及)、collect 成 Cow/Rc<[T]> 等较少见目标、size_hint 的更多适配器(chain、flat_map、take)、HashMap 收集时的预分配'], 'collect')

@@ -1,0 +1,549 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>分片策略:一条查询是怎么知道该去问哪个 shard 的</title>
+<meta name="description" content="本机真实搭建 1 配置服务器 + 2 分片 + 1 mongos 的分片集群,真实迁移 chunk,用 explain() 对比三种查询的分片路由结果,对照 mongos 真实源码解释快速路径与兜底路径。">
+<link rel="canonical" href="https://bigywater.tech/mongo-sharding.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="分片策略:一条查询是怎么知道该去问哪个 shard 的">
+<meta property="og:description" content="本机真实搭建 1 配置服务器 + 2 分片 + 1 mongos 的分片集群,真实迁移 chunk,用 explain() 对比三种查询的分片路由结果,对照 mongos 真实源码解释快速路径与兜底路径。">
+<meta property="og:url" content="https://bigywater.tech/mongo-sharding.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="分片策略:一条查询是怎么知道该去问哪个 shard 的">
+<meta name="twitter:description" content="本机真实搭建 1 配置服务器 + 2 分片 + 1 mongos 的分片集群,真实迁移 chunk,用 explain() 对比三种查询的分片路由结果,对照 mongos 真实源码解释快速路径与兜底路径。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F5F8F7; --paper:#FFFFFF; --ink:#1B2422; --ink-dim:#5C6B67; --line:#DCE7E4;
+  --mongo-c:#1C7C74; --mongo-c-soft:#DCEEEC;
+  --idx-c:#B8791E; --idx-c-soft:#F6ECD9;
+  --durable-c:#8A4FA0; --durable-c-soft:#EFE4F5;
+  --code-bg:#16211F; --code-ink:#E6F0EE;
+  --shadow: 0 1px 2px rgba(10,30,25,.06), 0 8px 24px -12px rgba(10,30,25,.16);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0F1614; --paper:#18211F; --ink:#E6F0EE; --ink-dim:#A2B5B0; --line:#2C3A37;
+    --mongo-c:#4FC9BE; --mongo-c-soft:#173330;
+    --idx-c:#E0AC5C; --idx-c-soft:#382C18;
+    --durable-c:#C79BDA; --durable-c-soft:#2E2038;
+    --code-bg:#0E1614; --code-ink:#E2EFED;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0F1614; --paper:#18211F; --ink:#E6F0EE; --ink-dim:#A2B5B0; --line:#2C3A37;
+  --mongo-c:#4FC9BE; --mongo-c-soft:#173330;
+  --idx-c:#E0AC5C; --idx-c-soft:#382C18;
+  --durable-c:#C79BDA; --durable-c-soft:#2E2038;
+  --code-bg:#0E1614; --code-ink:#E2EFED;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--mongo-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--mongo-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--mongo-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--mongo-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.a .tag{background:var(--mongo-c-soft); color:var(--mongo-c);}
+.card.b .tag{background:var(--idx-c-soft); color:var(--idx-c);}
+.card.c .tag{background:var(--durable-c-soft); color:var(--durable-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#A2B5B0; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#8FE0D4;}
+
+.callout{border-left:3px solid var(--mongo-c); background:var(--mongo-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--idx-c); background:var(--idx-c-soft);}
+.callout.c{border-color:var(--durable-c); background:var(--durable-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--mongo-c-soft); color:var(--mongo-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#8FE0D4;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+.term .cm{color:#7C8C88;}
+.term pre.code{margin:0 0 10px; color:#8FE0D4; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem; display:flex; justify-content:space-between; align-items:center;}
+.demo-head .step-badge{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; color:var(--mongo-c); background:var(--mongo-c-soft); padding:3px 9px; border-radius:6px; font-weight:600;}
+.demo-narration{min-height:52px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--mongo-c-soft); color:var(--mongo-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:20px;}
+
+.query-line{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.83rem; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px 14px; margin-bottom:16px; overflow-x:auto; white-space:pre;}
+.shards-row{display:grid; grid-template-columns:repeat(2,1fr); gap:10px; margin-bottom:16px;}
+.shard-box{border:1.5px solid var(--line); border-radius:10px; padding:10px 12px; background:var(--bg); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.78rem; text-align:center; transition:background .2s,border-color .2s;}
+.shard-box .nt{font-weight:700; margin-bottom:4px;}
+.shard-box[data-hit="true"]{border-color:var(--mongo-c); background:var(--mongo-c-soft); font-weight:700;}
+.checks{display:flex; flex-direction:column; gap:8px; margin-bottom:16px;}
+.check{border:1.5px solid var(--line); border-radius:10px; padding:10px 14px; background:var(--bg); font-size:.85rem; display:flex; justify-content:space-between; align-items:center; gap:10px; transition:background .2s,border-color .2s;}
+.check .label{flex:1;}
+.check .verdict{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; font-weight:700; padding:2px 9px; border-radius:6px;}
+.check[data-verdict="pass"]{border-color:var(--mongo-c); background:var(--mongo-c-soft);}
+.check[data-verdict="pass"] .verdict{background:var(--mongo-c); color:#fff;}
+.check[data-verdict="fail"]{border-color:var(--idx-c); background:var(--idx-c-soft);}
+.check[data-verdict="fail"] .verdict{background:var(--idx-c); color:#fff;}
+.result-row{display:flex; align-items:center; gap:10px; margin-bottom:14px; flex-wrap:wrap;}
+.result-badge{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; font-weight:700; padding:6px 14px; border-radius:8px;}
+.result-badge.good{background:var(--mongo-c); color:#fff;}
+.result-badge.warn{background:var(--idx-c); color:#fff;}
+.evidence-line{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.78rem; color:var(--ink-dim); background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px 14px; white-space:pre-wrap; word-break:break-word;}
+
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--mongo-c); color:var(--mongo-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--mongo-c); border-color:var(--mongo-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--mongo-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="eyebrow"><span class="dot"></span>MongoDB 系列 · 第八篇 · 完结篇</div>
+  <div class="hero-inner">
+    <h1>分片策略:一条查询是怎么知道该去问哪个 shard 的</h1>
+    <p>这是 MongoDB 系列的最后一篇。前面七篇都在单个副本集内打转——这一篇往上再加一层:数据量大到一个副本集放不下时,MongoDB 怎么把它拆到多个"分片"(shard)上,而 <span class="mono">mongos</span> 这个路由层,又是怎么在不知道数据具体在哪的情况下,决定一条查询该往哪几个分片发。</p>
+    <p>本机真实搭了一个最小可用的分片集群:1 个配置服务器、2 个分片、1 个 <span class="mono">mongos</span>,手动把一个 collection 的数据真实分布到两个分片上,再用真实的 <span class="mono">explain()</span> 看不同写法的查询到底问了哪几个分片。</p>
+    <div class="hero-fact">
+      <div><div class="num">4 个真实进程组成的集群</div><div class="lbl">1 配置服务器 + 2 分片 + 1 mongos,本机真实跑起来,真实做过一次 chunk 迁移</div></div>
+      <div><div class="num">3 处真实源码</div><div class="lbl">mongos 判断查询该发给几个分片的核心函数,逐行核对过路由逻辑</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <h2>真实实验:搭一个最小分片集群</h2>
+  <p class="h2-sub">配置服务器和每个分片本身也是副本集(这里都用单节点简化),<span class="mono">mongos</span> 只连配置服务器,不直接管理数据。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ mongod --configsvr --replSet cfgrs --port 27101 --dbpath ./cfg &
+$ mongod --shardsvr  --replSet shard1rs --port 27102 --dbpath ./shard1 &
+$ mongod --shardsvr  --replSet shard2rs --port 27103 --dbpath ./shard2 &
+$ mongosh --port 27101 --eval 'rs.initiate({_id:"cfgrs", configsvr:true, members:[{_id:0,host:"127.0.0.1:27101"}]})'
+$ mongosh --port 27102 --eval 'rs.initiate({_id:"shard1rs", members:[{_id:0,host:"127.0.0.1:27102"}]})'
+$ mongosh --port 27103 --eval 'rs.initiate({_id:"shard2rs", members:[{_id:0,host:"127.0.0.1:27103"}]})'
+
+$ mongos --configdb cfgrs/127.0.0.1:27101 --port 27100 &
+$ mongosh --port 27100 --eval '
+  sh.addShard("shard1rs/127.0.0.1:27102");
+  sh.addShard("shard2rs/127.0.0.1:27103");
+'</pre>
+<span class="ok">[ { _id: 'shard1rs', host: 'shard1rs/127.0.0.1:27102' },
+  { _id: 'shard2rs', host: 'shard2rs/127.0.0.1:27103' } ]</span>
+  </div>
+  <p>这跟前两篇搭多节点副本集的手法完全一样——本机随便起几个 mongod/mongos 进程,不需要容器、不需要网络,组一个真实的分片集群。<span class="mono">mongos</span> 全程不存一份用户数据,它手里只有"分片元数据"(哪个 collection、哪段 key 范围、在哪个分片上),这份元数据来自配置服务器。</p>
+</section>
+
+<section>
+  <h2>真实实验:把一个 collection 真实拆到两个分片上</h2>
+  <p class="h2-sub">对 <span class="mono">shopdb.orders</span> 按 <span class="mono">{region:1, _id:1}</span> 分片,插入 400 篇文档(4 个地区各 100 篇),手动把一半地区迁到 shard2。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ mongosh --port 27100 --eval '
+  sh.enableSharding("shopdb");
+  db.getSiblingDB("shopdb").orders.createIndex({region:1, _id:1});
+  sh.shardCollection("shopdb.orders", {region:1, _id:1});
+  sh.splitAt("shopdb.orders", {region:"south", _id:MinKey});
+  sh.moveChunk("shopdb.orders", {region:"south", _id:0}, "shard2rs");
+'</pre>
+<span class="ok">{ millis: 304, ok: 1, ... }   // chunk 迁移真实完成,耗时 304ms</span>
+<span class="cm"># 绕过 mongos,直接连每个分片确认数据真的分开了:</span>
+<span class="cmd">$ mongosh --port 27102 shopdb --eval 'db.orders.aggregate([{$group:{_id:"$region",n:{$sum:1}}}])'  // shard1</span>
+<span class="ok">[ { _id: 'east', n: 100 }, { _id: 'north', n: 100 } ]</span>
+<span class="cmd">$ mongosh --port 27103 shopdb --eval 'db.orders.aggregate([{$group:{_id:"$region",n:{$sum:1}}}])'  // shard2</span>
+<span class="ok">[ { _id: 'south', n: 100 }, { _id: 'west', n: 100 } ]</span>
+  </div>
+  <p>分片键 <span class="mono">{region:1, _id:1}</span> 按 <span class="mono">region</span> 字母序切了一刀:<span class="mono">region &lt; "south"</span>(<span class="mono">east</span>、<span class="mono">north</span>)留在 shard1,<span class="mono">region &gt;= "south"</span>(<span class="mono">south</span>、<span class="mono">west</span>)真实搬到了 shard2——这不是配置,是磁盘上真实发生的数据搬迁。</p>
+</section>
+
+<section>
+  <h2>真实源码:mongos 怎么决定发给哪个分片</h2>
+  <p class="h2-sub">核心是一个"快速路径 + 兜底路径"的两段逻辑,都在同一个函数里。</p>
+  <blockquote class="src">
+    <span class="path">src/mongo/s/query/shard_key_pattern_query_util.cpp · <a href="https://github.com/mongodb/mongo/blob/r8.3.7/src/mongo/s/query/shard_key_pattern_query_util.cpp#L535" target="_blank" rel="noopener">mongodb/mongo @ r8.3.7, L535</a></span>
+// Fast path for targeting equalities on the shard key.
+auto shardKeyToFind = extractShardKeyFromQuery(cm.getShardKeyPattern(), query);
+if (!shardKeyToFind.isEmpty()) {
+    try {
+        auto chunk = cm.findIntersectingChunk(shardKeyToFind, commandCollation, ...);
+        shardIds->insert(chunk.getShardId());
+        return;
+    } catch (const DBException&amp;) {
+        // The query uses multiple shards
+    }
+}
+  </blockquote>
+  <blockquote class="src">
+    <span class="path">src/mongo/s/query/shard_key_pattern_query_util.cpp · <a href="https://github.com/mongodb/mongo/blob/r8.3.7/src/mongo/s/query/shard_key_pattern_query_util.cpp#L235" target="_blank" rel="noopener">mongodb/mongo @ r8.3.7, L235</a></span>
+BSONObj extractShardKeyFromQuery(const ShardKeyPattern&amp; shardKeyPattern,
+                                 const CanonicalQuery&amp; query) {
+    // We only care about extracting the full key pattern paths - if they don't exist
+    // (or are conflicting), we don't contain the shard key.
+    ...
+}
+  </blockquote>
+  <p>只有查询条件里对分片键<b>每一个字段</b>都给出精确相等值,才走"快速路径":直接算出这个分片键值落在哪个 chunk 范围里,只问那一个分片。少了任意一个字段(哪怕只差 <span class="mono">_id</span>),这条快速路径就直接不走了——<span class="mono">extractShardKeyFromQuery</span> 返回空,退回下面的兜底逻辑。</p>
+</section>
+
+<section>
+  <h2>真实源码:没有完整分片键时,兜底逻辑怎么算范围</h2>
+  <blockquote class="src">
+    <span class="path">src/mongo/s/query/shard_key_pattern_query_util.cpp · <a href="https://github.com/mongodb/mongo/blob/r8.3.7/src/mongo/s/query/shard_key_pattern_query_util.cpp#L556" target="_blank" rel="noopener">mongodb/mongo @ r8.3.7, L556</a></span>
+// Transforms query into bounds for each field in the shard key
+// for example :
+//   Key { a: 1, b: 1 },
+//   Query { a : { $gte : 1, $lt : 2 }, b : { $gte : 3, $lt : 4 } }
+//   => Bounds { a : [1, 2), b : [3, 4) }
+auto bounds = getIndexBoundsForQuery(cm.getShardKeyPattern().toBSON(), query);
+...
+cm.getShardIdsForRange(min, max, shardIds, ...);
+  </blockquote>
+  <p>走不了快速路径,mongos 会把分片键里<b>每一个字段</b>各自的查询条件转成一段范围——查询里完全没提到的字段,范围就是无约束的 <span class="mono">[MinKey, MaxKey]</span>。把各字段的范围拼起来,就是一段完整分片键范围,拿这段范围去跟每个 chunk 的边界比对,重叠的 chunk 归属哪个分片,就往哪个分片发。如果这段范围覆盖了所有 chunk,那就是每个分片都要问一遍——也就是常说的 scatter-gather。</p>
+</section>
+
+<section>
+  <h2>交互演示:3 种查询,3 种路由结果</h2>
+  <p class="h2-sub">同一个分片集合,只是查询条件不一样,mongos 问的分片数量就完全不同。</p>
+  <div class="demo" id="shardDemo">
+    <div class="demo-head"><span>分片路由实录</span><span class="step-badge" id="shStep">未开始</span></div>
+    <div class="demo-narration" id="shNarration">点击"下一步"或"播放"开始。</div>
+    <div class="demo-body">
+      <div class="query-line" id="shQuery">—</div>
+      <div class="shards-row" id="shShards"></div>
+      <div class="checks" id="shChecks"></div>
+      <div class="result-row">
+        <span class="result-badge" id="shResultBadge">—</span>
+      </div>
+      <div class="evidence-line" id="shEvidence"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="shReset">⏮ 重来</button>
+      <button class="btn" id="shPrev">‹ 上一步</button>
+      <button class="btn primary" id="shNext">下一步 ›</button>
+      <button class="btn" id="shPlay">▶ 自动播放</button>
+      <span class="step-counter" id="shCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">路由判断由 Python 脚本按上面两段真实源码转写:快速路径要求分片键每个字段都有相等值,兜底路径把缺失字段当成 <span class="mono">[MinKey,MaxKey]</span> 无约束范围。3 个场景的模型判断结果,和真实 <span class="mono">mongos</span> <span class="mono">explain()</span> 里 <span class="mono">winningPlan.shards</span> 列出的分片名逐一断言相等;chunk 定位函数还有一套完全独立实现的遍历算法交叉核对过。</p>
+</section>
+
+<section>
+  <h2>真实实验的一个意外收获:直连分片会看到"幽灵数据"</h2>
+  <p class="h2-sub">chunk 迁移之后,原来那个分片上的旧数据是立刻删除,还是留了一手?</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ mongosh --port 27102 --eval 'db.getSiblingDB("config").rangeDeletions.find()'</pre>
+<span class="ok">[ { nss: 'shopdb.orders', donorShardId: 'shard1rs',
+    range: { min: {region:'south',...}, max: {region:MaxKey,...} },
+    whenToClean: 'delayed', numOrphanDocs: 200 } ]</span>
+<span class="cm"># 通过 mongos 查,数量是对的:</span>
+<span class="cmd">$ mongosh --port 27100 shopdb --eval 'db.orders.countDocuments({region:"south"})'</span>
+<span class="ok">100</span>
+<span class="cm"># 但直接连 shard1(旧主人)查,south 的"幽灵数据"还在:</span>
+<span class="cmd">$ mongosh --port 27102 shopdb --eval 'db.orders.countDocuments({region:"south"})'</span>
+<span class="ok">100          // 这 100 条本该属于 shard2 的文档,物理上还没被删</span>
+  </div>
+  <p>chunk 迁移完成后,数据的<b>归属权</b>(元数据)立刻切换,但物理删除是延迟执行的(<span class="mono">whenToClean: 'delayed'</span>),给还在读旧快照的请求留出缓冲时间。<span class="mono">mongos</span> 靠元数据过滤,查出来的数量永远是对的;但如果绕开 <span class="mono">mongos</span> 直接连某个分片查,就可能看到本不属于它、还没来得及清理的"孤儿文档"——这是分片集群里一条很具体的运维原则的来源:永远通过 <span class="mono">mongos</span> 访问数据,不要直连分片。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文源码引用(<span class="mono">getShardIdsAndChunksForCanonicalQuery</span> 快速路径与兜底路径、<span class="mono">extractShardKeyFromQuery</span>)均取自 <span class="mono">mongodb/mongo</span> 仓库 <span class="mono">r8.3.7</span> 标签,与本机安装的 MongoDB Community 8.3.7 版本一致,直接从 GitHub 拉取源文件核对过函数签名、关键调用和行号。</li>
+      <li>集群搭建、chunk 迁移、<span class="mono">explain()</span> 输出、直连分片查询结果均为本机真实跑起来的 1 配置服务器 + 2 分片 + 1 mongos 集群产生,未做删改;实验结束后已关闭全部 4 个测试用的进程。</li>
+      <li>演示数据的自检:3 个场景的分片路由结果,和真实 <span class="mono">explain()</span> 捕获的 <span class="mono">shards</span> 列表逐一断言相等;chunk 定位用两种完全不同的遍历算法独立算过,结果一致;"没有分片键字段的查询必须命中全部分片"这条断言也验证过。</li>
+      <li>没有涉及:哈希分片(hashed sharding)与范围分片的选型权衡、balancer 自动均衡的触发条件、分片键选择不当导致的"热点分片"问题、跨分片事务与聚合的具体执行方式(第四篇聚合管道提到过管道下推,分片场景下 mongos 还要再做一层跨分片合并)。</li>
+    </ul>
+  </div>
+
+  <div class="callout" style="margin-top:24px;">
+    到这里,MongoDB 系列按照最初那条招聘要求的顺序全部写完了:整体架构 → WiredTiger 存储引擎 → 索引优化 → 聚合管道 → oplog → 副本集选举 → 读写一致性 → 分片策略。下一个系列会回到之前搁置的 Kubernetes,从控制平面往下继续。
+  </div>
+
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>MongoDB 系列 · 第八篇(完结) · 分片策略 · 源码引用自 mongodb/mongo r8.3.7,实验数据来自本机真实运行的 4 进程分片集群</footer>
+
+<script>
+const DATA = {"scenarios": [
+  {
+    "narration": "查询同时给出了分片键的两个字段(region 和 _id)的精确值——命中快速路径,直接算出这个分片键值落在哪个 chunk,只问一个分片。",
+    "query_display": "db.orders.find({ region: \"north\", _id: 5 })",
+    "shards_hit": ["shard1rs"],
+    "check_label": "查询是否对分片键每个字段都给出了相等值(快速路径条件)?",
+    "verdict": "pass",
+    "result_badge": "快速路径 → 只问 shard1rs",
+    "result_class": "good",
+    "evidence": "真实 explain(): winningPlan.shards = [ 'shard1rs' ]"
+  },
+  {
+    "narration": "查询完全没提到分片键的任何字段——region 和 _id 的范围都退化成无约束的 [MinKey, MaxKey],这段范围跟两个 chunk 都重叠,只能挨个问。",
+    "query_display": "db.orders.find({ item: \"sku-5\" })",
+    "shards_hit": ["shard1rs", "shard2rs"],
+    "check_label": "查询是否对分片键每个字段都给出了相等值?",
+    "verdict": "fail",
+    "result_badge": "兜底路径(无约束范围) → 广播两个分片",
+    "result_class": "warn",
+    "evidence": "真实 explain(): winningPlan.shards = [ 'shard2rs', 'shard1rs' ] (scatter-gather)"
+  },
+  {
+    "narration": "查询只给了 region(分片键的第一个字段),_id 没有约束。region=\"west\" 这一段范围只跟 shard2 的 chunk 重叠,虽然没走快速路径,兜底逻辑算出来的范围依然只命中一个分片。",
+    "query_display": "db.orders.find({ region: \"west\" })",
+    "shards_hit": ["shard2rs"],
+    "check_label": "查询是否对分片键每个字段都给出了相等值?",
+    "verdict": "fail",
+    "result_badge": "兜底路径(但范围恰好只落在一个 chunk) → 只问 shard2rs",
+    "result_class": "good",
+    "evidence": "真实 explain(): winningPlan.shards = [ 'shard2rs' ] ——没走快速路径,但结果一样精确"
+  }
+]};
+
+(function(){
+  const scenarios = DATA.scenarios;
+  const ALL_SHARDS = ["shard1rs", "shard2rs"];
+  const narration = document.getElementById('shNarration');
+  const stepBadge = document.getElementById('shStep');
+  const queryLine = document.getElementById('shQuery');
+  const shardsEl = document.getElementById('shShards');
+  const checksEl = document.getElementById('shChecks');
+  const resultBadge = document.getElementById('shResultBadge');
+  const evidenceEl = document.getElementById('shEvidence');
+  const counter = document.getElementById('shCounter');
+  let idx = -1, playing = false, playTimer = null;
+
+  function render(){
+    idx = Math.max(-1, Math.min(scenarios.length - 1, idx));
+    if(idx < 0){
+      narration.textContent = '点击"下一步"或"播放"开始。';
+      stepBadge.textContent = '未开始';
+      queryLine.textContent = '—';
+      shardsEl.innerHTML = '';
+      checksEl.innerHTML = '';
+      resultBadge.textContent = '—';
+      resultBadge.className = 'result-badge';
+      evidenceEl.textContent = '';
+      counter.textContent = `0 / ${scenarios.length}`;
+      document.getElementById('shPrev').disabled = true;
+      document.getElementById('shNext').disabled = false;
+      return;
+    }
+
+    const s = scenarios[idx];
+    narration.textContent = s.narration;
+    stepBadge.textContent = `第 ${idx+1} / ${scenarios.length} 步`;
+    queryLine.textContent = s.query_display;
+
+    shardsEl.innerHTML = '';
+    ALL_SHARDS.forEach(name => {
+      const box = document.createElement('div');
+      box.className = 'shard-box';
+      box.dataset.hit = String(s.shards_hit.includes(name));
+      const nt = document.createElement('div');
+      nt.className = 'nt';
+      nt.textContent = name;
+      const st = document.createElement('div');
+      st.textContent = s.shards_hit.includes(name) ? '被问到' : '未被问到';
+      box.appendChild(nt); box.appendChild(st);
+      shardsEl.appendChild(box);
+    });
+
+    checksEl.innerHTML = '';
+    const row = document.createElement('div');
+    row.className = 'check';
+    row.dataset.verdict = s.verdict;
+    const label = document.createElement('span');
+    label.className = 'label';
+    label.textContent = s.check_label;
+    const verdict = document.createElement('span');
+    verdict.className = 'verdict';
+    verdict.textContent = s.verdict === 'pass' ? '成立' : '不成立';
+    row.appendChild(label); row.appendChild(verdict);
+    checksEl.appendChild(row);
+
+    resultBadge.textContent = s.result_badge;
+    resultBadge.className = 'result-badge ' + s.result_class;
+    evidenceEl.textContent = s.evidence;
+
+    counter.textContent = `${idx+1} / ${scenarios.length}`;
+    document.getElementById('shPrev').disabled = idx <= -1;
+    document.getElementById('shNext').disabled = idx >= scenarios.length - 1;
+  }
+
+  document.getElementById('shNext').onclick = () => { idx++; render(); stopPlay(); };
+  document.getElementById('shPrev').onclick = () => { idx--; render(); stopPlay(); };
+  document.getElementById('shReset').onclick = () => { idx = -1; render(); stopPlay(); };
+  function stopPlay(){ playing = false; clearInterval(playTimer); document.getElementById('shPlay').textContent = '▶ 自动播放'; }
+  document.getElementById('shPlay').onclick = () => {
+    if(playing){ stopPlay(); return; }
+    playing = true; document.getElementById('shPlay').textContent = '⏸ 暂停';
+    playTimer = setInterval(() => {
+      if(idx >= scenarios.length - 1){ stopPlay(); return; }
+      idx++; render();
+    }, 2200);
+  };
+
+  render();
+})();
+</script>
+
+</body>
+</html>

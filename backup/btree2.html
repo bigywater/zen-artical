@@ -1,0 +1,583 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>回表:二级索引为什么要多走一次</title>
+<meta name="description" content="二级索引命中后回主键索引查完整行的代价。">
+<link rel="canonical" href="https://bigywater.tech/btree2.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="回表:二级索引为什么要多走一次">
+<meta property="og:description" content="二级索引命中后回主键索引查完整行的代价。">
+<meta property="og:url" content="https://bigywater.tech/btree2.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="回表:二级索引为什么要多走一次">
+<meta name="twitter:description" content="二级索引命中后回主键索引查完整行的代价。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#EFF1F3; --paper:#FFFFFF; --ink:#1B1F24; --ink-dim:#5B6470; --line:#D8DCE1;
+  --node-c:#1F6FA8; --node-c-soft:#E4EFF6;
+  --key-c:#8B5A2B; --key-c-soft:#F3E9DD;
+  --io-c:#A13D3D; --io-c-soft:#F7E7E5;
+  --code-bg:#1B1F24; --code-ink:#E7EAED;
+  --shadow: 0 1px 2px rgba(20,25,30,.06), 0 8px 24px -12px rgba(20,25,30,.15);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#12151A; --paper:#1A1E24; --ink:#E7EAED; --ink-dim:#9AA4B0; --line:#2B3138;
+    --node-c:#5FA8DE; --node-c-soft:#1D2C38;
+    --key-c:#D6A15C; --key-c-soft:#332619;
+    --io-c:#E27A7A; --io-c-soft:#3A2323;
+    --code-bg:#0E1013; --code-ink:#DCE1E6;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#12151A; --paper:#1A1E24; --ink:#E7EAED; --ink-dim:#9AA4B0; --line:#2B3138;
+  --node-c:#5FA8DE; --node-c-soft:#1D2C38;
+  --key-c:#D6A15C; --key-c-soft:#332619;
+  --io-c:#E27A7A; --io-c-soft:#3A2323;
+  --code-bg:#0E1013; --code-ink:#DCE1E6;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--node-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--io-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--io-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow);}
+.hero-fact>div{flex:1; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.5rem; font-weight:600; color:var(--io-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+.section-inner{max-width:920px; margin:0 auto;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.node .tag{background:var(--node-c-soft); color:var(--node-c);}
+.card.key .tag{background:var(--key-c-soft); color:var(--key-c);}
+.card.io .tag{background:var(--io-c-soft); color:var(--io-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#8B95A1; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#8FC7EA;}
+
+.callout{border-left:3px solid var(--node-c); background:var(--node-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.io{border-color:var(--io-c); background:var(--io-c-soft);}
+.callout.key{border-color:var(--key-c); background:var(--key-c-soft);}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;}
+.demo-title{font-weight:600; font-size:.95rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--key-c-soft); color:var(--key-c); padding:1px 6px; border-radius:5px;}
+.demo-narration .kio{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--io-c-soft); color:var(--io-c); padding:1px 6px; border-radius:5px;}
+.demo-panels{display:grid; grid-template-columns:1fr; gap:0;}
+.panel{padding:16px 20px; border-bottom:1px solid var(--line);}
+.panel:last-child{border-bottom:none;}
+.panel-label{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-dim); margin-bottom:8px; display:flex; justify-content:space-between;}
+.panel-label .badge{background:var(--node-c-soft); color:var(--node-c); padding:1px 7px; border-radius:5px;}
+.panel.pri .panel-label .badge{background:var(--io-c-soft); color:var(--io-c);}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--node-c); color:var(--node-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--io-c); border-color:var(--io-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+.tally{display:flex; gap:14px; padding:12px 20px; background:var(--bg); border-top:1px solid var(--line); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; flex-wrap:wrap;}
+.tally b{color:var(--io-c); font-variant-numeric:tabular-nums;}
+.tally .cov b{color:var(--node-c);}
+
+svg text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+.tnode{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.tnode.active{stroke:var(--io-c); stroke-width:2.5;}
+.tnode.leaf{fill:var(--node-c-soft);}
+.tnode.visited{stroke:var(--key-c); stroke-width:2;}
+.tnode.found{fill:var(--key-c-soft); stroke:var(--key-c); stroke-width:2.5;}
+.tkey{font-size:11px; fill:var(--ink);}
+.tlink{stroke:var(--line); stroke-width:1.5; fill:none;}
+.tlink.leaf-link{stroke:var(--key-c); stroke-dasharray:3 2;}
+.nodelabel{font-size:8px; fill:var(--ink-dim);}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{display:flex; align-items:center; gap:10px; margin-bottom:24px; font-size:.88rem; color:var(--ink-dim);}
+.prev-post a{font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--node-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>MySQL / InnoDB 存储引擎系列 · 第二篇</div>
+    <h1>用二级索引查到了行,为什么还要"回表"?</h1>
+    <p>上一篇讲了 B+树的结构和查找,顺带提了一句:<b>聚簇索引的叶子存整行,二级索引的叶子只存索引列 + 主键</b>。这篇文章把这句话的后果講清楚——为什么"通过二级索引查到数据"经常意味着<b>走两棵树</b>,以及这多出来的一趟(回表)在数据库里到底贵在哪。</p>
+    <p>同样不是背答案:下面的页面访问次数对比,是在本机 MySQL 9.7.1 上,用 <span class="mono">performance_schema</span> 实测出来的数字。</p>
+    <div class="hero-fact">
+      <div><div class="num">63 vs 16</div><div class="lbl">同一次查询,需要回表 vs 覆盖索引,实测缓冲池页访问次数</div></div>
+      <div><div class="num">5.5×</div><div class="lbl"><span class="mono">EXPLAIN ANALYZE</span> 实测执行时间倍数差</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <div class="prev-post">← 接上篇 <a href="btree.html" target="_blank" rel="noopener">InnoDB B+树的结构与查找</a></div>
+  <h2>两棵树,两种叶子</h2>
+  <p class="h2-sub">一张有二级索引的表,物理上其实是好几棵独立的 B+树,共享同一份数据靠的是"叶子里存了什么"。</p>
+  <div class="cards">
+    <div class="card node">
+      <span class="tag">聚簇索引(主键)</span>
+      <h3>叶子 = 完整的一行</h3>
+      <p>整张表只有<b>一份</b>数据,以主键顺序组织成 B+树。叶子节点里躺着这一行的所有列。</p>
+    </div>
+    <div class="card key">
+      <span class="tag">二级索引</span>
+      <h3>叶子 = 索引列 + 主键值</h3>
+      <p>每建一个二级索引,就是<b>另起一棵</b>更瘦的 B+树,叶子里只放"被索引的列 + 这一行的主键",不放整行。</p>
+    </div>
+    <div class="card io">
+      <span class="tag">回表 / Back to table</span>
+      <h3>拿着主键,再查一次聚簇索引</h3>
+      <p>如果查询要的列超出了二级索引叶子里存的那几列,就必须拿刚查到的主键,<b>再走一遍聚簇索引这棵树</b>,才能拿到完整行。</p>
+    </div>
+  </div>
+  <blockquote class="src">
+    <span class="path">storage/innobase/row/row0sel.cc · <a href="https://github.com/mysql/mysql-server/blob/mysql-9.7.1/storage/innobase/row/row0sel.cc#L793" target="_blank" rel="noopener">mysql-server @ mysql-9.7.1, L793</a> —— "回表"在源码里就是这一个函数</span>
+/** Retrieves the clustered index record corresponding to a record in a
+ non-clustered index. Does the necessary locking.
+ @return DB_SUCCESS or error code */
+static dberr_t row_sel_get_clust_rec(...)
+  </blockquote>
+  <p>换句话说,"回表"不是一个比喻——InnoDB 源码里确实有一个专门的函数,名字就叫"根据二级索引记录,去取对应的聚簇索引记录"。每次调用它,都是一次额外的、独立的 B+树查找。</p>
+</section>
+
+<section>
+  <h2>演示:一次"回表"是怎么发生的</h2>
+  <p class="h2-sub">还是上一篇的 10 行玩具数据。查询条件 <span class="mono">WHERE user_id = 101</span>,但要拿 <span class="mono">status</span>——这一列不在二级索引里,所以必须回表。</p>
+  <div class="demo" id="fanbiaoDemo">
+    <div class="demo-head">
+      <div class="demo-title">SELECT id, status FROM orders WHERE user_id = 101</div>
+    </div>
+    <div class="demo-narration" id="fbNarration"></div>
+    <div class="demo-panels">
+      <div class="panel sec">
+        <div class="panel-label"><span>① 二级索引树 · idx_user_id · 叶子存 (user_id, id)</span><span class="badge">SECONDARY</span></div>
+        <svg id="secSvg" width="100%" viewBox="0 0 880 180" style="min-width:640px;"></svg>
+      </div>
+      <div class="panel pri">
+        <div class="panel-label"><span>② 聚簇索引树 · PRIMARY · 叶子存整行</span><span class="badge">CLUSTERED</span></div>
+        <svg id="priSvg" width="100%" viewBox="0 0 880 220" style="min-width:640px;"></svg>
+      </div>
+    </div>
+    <div class="tally" id="fbTally"></div>
+    <div class="demo-controls">
+      <button class="btn" id="fbReset">⏮ 重来</button>
+      <button class="btn" id="fbPrev">‹ 上一步</button>
+      <button class="btn primary" id="fbNext">下一步 ›</button>
+      <button class="btn" id="fbPlay">▶ 自动播放</button>
+      <span class="step-counter" id="fbCounter"></span>
+    </div>
+  </div>
+  <div class="callout io">
+    最终结果:命中 3 行(id=1,3,6)。二级索引树本身只访问了 <b>3</b> 个页面(含跟着叶子链表多翻一页);但因为要回表,每命中一行就要在聚簇索引树上<b>单独再走一遍</b>——3 次回表一共又访问了 <b>9</b> 个页面。总共 <b>12</b> 页。如果查询只要 <span class="mono">user_id</span>(二级索引已经覆盖的列),原本 <b>3</b> 页就能结束。
+  </div>
+</section>
+
+<section>
+  <h2>数据库里量出来的代价</h2>
+  <p class="h2-sub">玩具树的"12 页 vs 3 页"是缩小版。下面回到上一篇那张 49.7 万行的 <span class="mono">orders</span> 表,跑两条只差一个字段的查询,实测差距。</p>
+  <blockquote class="src">
+    <span class="path">CREATE TABLE orders (id BIGINT PK, user_id BIGINT, status TINYINT, amount, created_at, note ...)
+KEY idx_user_id (user_id)              -- 只有 user_id,查其他列必须回表
+KEY idx_user_status (user_id, status)  -- 多带一列 status,刚好覆盖下面第二条查询</span>
+SELECT * FROM orders WHERE user_id = 12345;                 -- 用 idx_user_id,需要回表
+SELECT user_id, status FROM orders WHERE user_id = 12345;   -- 用 idx_user_status,覆盖索引,无需回表
+  </blockquote>
+  <p><span class="mono">EXPLAIN ANALYZE</span> 已经能从执行计划的措辞上看出区别——注意第二条计划里多出来的那个词:</p>
+  <blockquote class="src">
+-> Index lookup on orders using idx_user_id (user_id = 12345)
+   (cost=4.2 rows=12) (actual time=0.176..0.285 rows=12 loops=1)
+
+-> Covering index lookup on orders using idx_user_status (user_id = 12345)
+   (cost=2.22 rows=12) (actual time=0.042..0.0515 rows=12 loops=1)
+  </blockquote>
+  <p>"Covering index lookup" 里的 <b>Covering</b> 就是优化器在告诉你"这次不用回表"。同样 12 行结果,实测执行时间从 0.285ms 降到 0.0515ms,快了 <b>5.5 倍</b>——这还是数据已经全部缓存在内存里的情况,如果叶子页要从磁盘读,差距只会更大。</p>
+
+  <div class="callout key">
+    一个踩过的坑:一开始想用 <span class="mono">Handler_read_key</span> / <span class="mono">Handler_read_next</span> 这些 SQL 层的计数器去证明"多读了主键索引",结果两条查询的计数器<b>完全一样</b>。原因是回表发生在存储引擎内部(就是上面那个 <span class="mono">row_sel_get_clust_rec</span>),SQL 层的 Handler API 把它抽象掉了,根本看不见。真正能看到差异的,是再往下一层、InnoDB Buffer Pool 的页访问计数。
+  </div>
+
+  <p>换成 <span class="mono">performance_schema.global_status</span> 里的 <span class="mono">Innodb_buffer_pool_read_requests</span>(缓冲池逻辑页访问次数,命中缓存也会计数),在同一个会话里查询前后各测一次:</p>
+  <table class="mono">
+    <tr><th>查询</th><th>是否回表</th><th>命中行数</th><th>页访问次数(实测)</th></tr>
+    <tr><td>SELECT * ... idx_user_id</td><td>是</td><td>12</td><td>63</td></tr>
+    <tr><td>SELECT user_id,status ... idx_user_status</td><td>否(覆盖索引)</td><td>12</td><td>16</td></tr>
+    <tr><td>SELECT * ... idx_user_id(换一个 user_id 复测)</td><td>是</td><td>11</td><td>60</td></tr>
+    <tr><td>SELECT user_id,status ... idx_user_status(同上复测)</td><td>否</td><td>11</td><td>16</td></tr>
+  </table>
+  <p style="font-size:.85rem; color:var(--ink-dim);">两次复测结果一致:回表版本比覆盖索引版本多访问 <b>~45~47</b> 个页面,和"每命中一行、多做一次独立的聚簇索引树查找"这个模型对得上——上一篇测出 PRIMARY 索引树高是 3 层,11~12 行每行多花约 4 次页访问,量级吻合。</p>
+</section>
+
+<section>
+  <h2>覆盖索引:让查询"不用回表"</h2>
+  <p class="h2-sub">既然回表贵在"多走一趟树",最直接的优化就是让二级索引本身就装下查询需要的所有列——这样查询在第一棵树里就能拿到答案,连第二棵树都不用碰。</p>
+  <p>本文用的 <span class="mono">idx_user_status (user_id, status)</span> 就是一个覆盖索引——但只覆盖"查 user_id 和 status"这一种查询形态。多加一列能覆盖更多查询,但索引本身会变宽、写入(INSERT/UPDATE 这一列时)要维护的索引也多了一个,不是免费的。</p>
+  <div class="callout">
+    覆盖索引不是"更好的索引",是"更适合这条查询的索引"。设计索引时先看清楚:这条高频查询到底要哪几列,索引里刚好把它们都放上,仅此而已——贪多会拖慢写入,还占更多空间(上一篇的表格也看到了:窄索引的叶子密度是宽索引/整行的 4~5 倍,这个密度差在写入放大上同样成立)。
+  </div>
+  <p>如果实在做不到完全覆盖,MySQL 5.6+ 还有一个折中:<b>索引条件下推(ICP, Index Condition Pushdown)</b>——把 <span class="mono">WHERE</span> 里能在二级索引列上直接判断的条件,提前在二级索引这一层过滤掉,只有真正通过筛选的行才会触发回表,而不是"先回表拿到所有列,再筛选"。这能减少回表<b>次数</b>,但没有消除回表本身,这里不展开,留作后续话题。</p>
+</section>
+
+<section>
+  <h2>和上一篇连起来看</h2>
+  <p>上一篇的结论是:一次树内查找最多访问 <span class="mono">h</span>(树高)个页面。这一篇把它扩展成:</p>
+  <blockquote class="src">一次"需要回表"的二级索引查询,最坏页访问次数 ≈ h(二级索引) + 命中行数 × h(聚簇索引)</blockquote>
+  <p>命中行数越多,回表的代价越是线性叠加——这也是为什么"索引扫描返回的行数"和"是否需要回表"两件事经常被放在一起讨论:命中 1 行时,多一次树查找可能感觉不出来;命中几万行时,几万次独立的聚簇索引树查找,就是实打实的几万次额外页访问。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>演示用的双树玩具模型(阶为 4)延续上一篇的规则和实现;二级索引树按 <span class="mono">(user_id, id)</span> 元组排序,这里的元组比较顺带演示了 InnoDB 的规则——二级索引记录始终携带主键作为隐式的末位排序列,同索引值内部按主键升序排列。</li>
+      <li><span class="mono">row_sel_get_clust_rec</span> 的源码引用取自 <span class="mono">mysql/mysql-server</span> 仓库 <span class="mono">mysql-9.7.1</span> 标签(commit <span class="mono">a26ea1a2</span>),与本机安装的 MySQL 9.7.1 完全一致。</li>
+      <li>"页访问次数"实验统计的是 <span class="mono">Innodb_buffer_pool_read_requests</span>(逻辑页访问,含缓存命中),不是物理磁盘 I/O(<span class="mono">Innodb_buffer_pool_reads</span>)——本文测试表已经整体常驻在 128MB 的 Buffer Pool 里,重点展示的是"访问了几次页面"这个操作次数本身的差距,而不是磁盘 I/O 延迟;生产环境如果数据没有完全缓存,回表触发的额外页面还可能是货真价实的磁盘随机读,代价会比这里量出来的更明显。</li>
+      <li>没有涉及:索引条件下推(ICP)的具体机制、自适应哈希索引对重复主键查找的加速、MVCC 读视图对回表路径的影响——这些是相关但更深的话题。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="bufferpool.html" target="_blank" rel="noopener" style="text-decoration:none; color:inherit;">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">Buffer Pool 与刷脏:为什么一次全表扫描挤不走热数据</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>InnoDB B+树系列 · 第二篇 · 回表与覆盖索引 · 数据来自本机 MySQL 9.7.1 真实实测</footer>
+
+<script>
+const DATA = {"order": 4, "rows": {"1": {"user_id": 101, "status": 1, "amount": 88.0}, "2": {"user_id": 103, "status": 0, "amount": 12.5}, "3": {"user_id": 101, "status": 2, "amount": 45.0}, "4": {"user_id": 105, "status": 1, "amount": 9.9}, "5": {"user_id": 102, "status": 0, "amount": 200.0}, "6": {"user_id": 101, "status": 3, "amount": 61.2}, "7": {"user_id": 104, "status": 1, "amount": 15.0}, "8": {"user_id": 103, "status": 2, "amount": 33.3}, "9": {"user_id": 102, "status": 0, "amount": 77.7}, "10": {"user_id": 106, "status": 1, "amount": 5.0}}, "queryUserId": 101, "events": [{"nodeId": 4, "snapshot": {"rootId": 4, "nodes": {"4": {"id": 4, "leaf": false, "keys": [[101, 6], [103, 2], [104, 7]], "children": [1, 7, 3, 9], "next": null}, "9": {"id": 9, "leaf": true, "keys": [[104, 7], [105, 4], [106, 10]], "children": [], "next": null}, "3": {"id": 3, "leaf": true, "keys": [[103, 2], [103, 8]], "children": [], "next": 9}, "7": {"id": 7, "leaf": true, "keys": [[101, 6], [102, 5], [102, 9]], "children": [], "next": 3}, "1": {"id": 1, "leaf": true, "keys": [[101, 1], [101, 3]], "children": [], "next": 7}}}, "keys": [[101, 6], [103, 2], [104, 7]], "isLeaf": false, "type": "sec-descend"}, {"nodeId": 1, "snapshot": {"rootId": 4, "nodes": {"4": {"id": 4, "leaf": false, "keys": [[101, 6], [103, 2], [104, 7]], "children": [1, 7, 3, 9], "next": null}, "9": {"id": 9, "leaf": true, "keys": [[104, 7], [105, 4], [106, 10]], "children": [], "next": null}, "3": {"id": 3, "leaf": true, "keys": [[103, 2], [103, 8]], "children": [], "next": 9}, "7": {"id": 7, "leaf": true, "keys": [[101, 6], [102, 5], [102, 9]], "children": [], "next": 3}, "1": {"id": 1, "leaf": true, "keys": [[101, 1], [101, 3]], "children": [], "next": 7}}}, "keys": [[101, 1], [101, 3]], "isLeaf": true, "type": "sec-descend"}, {"nodeId": 1, "snapshot": {"rootId": 4, "nodes": {"4": {"id": 4, "leaf": false, "keys": [[101, 6], [103, 2], [104, 7]], "children": [1, 7, 3, 9], "next": null}, "9": {"id": 9, "leaf": true, "keys": [[104, 7], [105, 4], [106, 10]], "children": [], "next": null}, "3": {"id": 3, "leaf": true, "keys": [[103, 2], [103, 8]], "children": [], "next": 9}, "7": {"id": 7, "leaf": true, "keys": [[101, 6], [102, 5], [102, 9]], "children": [], "next": 3}, "1": {"id": 1, "leaf": true, "keys": [[101, 1], [101, 3]], "children": [], "next": 7}}}, "keys": [[101, 1], [101, 3]], "matchedSoFar": [1, 3], "type": "sec-leaf-scan"}, {"nodeId": 7, "snapshot": {"rootId": 4, "nodes": {"4": {"id": 4, "leaf": false, "keys": [[101, 6], [103, 2], [104, 7]], "children": [1, 7, 3, 9], "next": null}, "9": {"id": 9, "leaf": true, "keys": [[104, 7], [105, 4], [106, 10]], "children": [], "next": null}, "3": {"id": 3, "leaf": true, "keys": [[103, 2], [103, 8]], "children": [], "next": 9}, "7": {"id": 7, "leaf": true, "keys": [[101, 6], [102, 5], [102, 9]], "children": [], "next": 3}, "1": {"id": 1, "leaf": true, "keys": [[101, 1], [101, 3]], "children": [], "next": 7}}}, "keys": [[101, 6], [102, 5], [102, 9]], "matchedSoFar": [1, 3, 6], "type": "sec-leaf-scan"}, {"matched": [1, 3, 6], "secPagesVisited": 3, "type": "sec-done"}, {"pk": 1, "snapshot": {"rootId": 13, "nodes": {"13": {"id": 13, "leaf": false, "keys": [7], "children": [6, 12], "next": null}, "12": {"id": 12, "leaf": false, "keys": [9], "children": [10, 11], "next": null}, "11": {"id": 11, "leaf": true, "keys": [9, 10], "children": [], "next": null}, "10": {"id": 10, "leaf": true, "keys": [7, 8], "children": [], "next": 11}, "6": {"id": 6, "leaf": false, "keys": [3, 5], "children": [2, 5, 8], "next": null}, "8": {"id": 8, "leaf": true, "keys": [5, 6], "children": [], "next": 10}, "5": {"id": 5, "leaf": true, "keys": [3, 4], "children": [], "next": 8}, "2": {"id": 2, "leaf": true, "keys": [1, 2], "children": [], "next": 5}}}, "type": "fanbiao-start"}, {"pk": 1, "nodeId": 13, "keys": [7], "leaf": false, "found": null, "snapshot": {"rootId": 13, "nodes": {"13": {"id": 13, "leaf": false, "keys": [7], "children": [6, 12], "next": null}, "12": {"id": 12, "leaf": false, "keys": [9], "children": [10, 11], "next": null}, "11": {"id": 11, "leaf": true, "keys": [9, 10], "children": [], "next": null}, "10": {"id": 10, "leaf": true, "keys": [7, 8], "children": [], "next": 11}, "6": {"id": 6, "leaf": false, "keys": [3, 5], "children": [2, 5, 8], "next": null}, "8": {"id": 8, "leaf": true, "keys": [5, 6], "children": [], "next": 10}, "5": {"id": 5, "leaf": true, "keys": [3, 4], "children": [], "next": 8}, "2": {"id": 2, "leaf": true, "keys": [1, 2], "children": [], "next": 5}}}, "type": "fanbiao-step"}, {"pk": 1, "nodeId": 6, "keys": [3, 5], "leaf": false, "found": null, "snapshot": {"rootId": 13, "nodes": {"13": {"id": 13, "leaf": false, "keys": [7], "children": [6, 12], "next": null}, "12": {"id": 12, "leaf": false, "keys": [9], "children": [10, 11], "next": null}, "11": {"id": 11, "leaf": true, "keys": [9, 10], "children": [], "next": null}, "10": {"id": 10, "leaf": true, "keys": [7, 8], "children": [], "next": 11}, "6": {"id": 6, "leaf": false, "keys": [3, 5], "children": [2, 5, 8], "next": null}, "8": {"id": 8, "leaf": true, "keys": [5, 6], "children": [], "next": 10}, "5": {"id": 5, "leaf": true, "keys": [3, 4], "children": [], "next": 8}, "2": {"id": 2, "leaf": true, "keys": [1, 2], "children": [], "next": 5}}}, "type": "fanbiao-step"}, {"pk": 1, "nodeId": 2, "keys": [1, 2], "leaf": true, "found": true, "snapshot": {"rootId": 13, "nodes": {"13": {"id": 13, "leaf": false, "keys": [7], "children": [6, 12], "next": null}, "12": {"id": 12, "leaf": false, "keys": [9], "children": [10, 11], "next": null}, "11": {"id": 11, "leaf": true, "keys": [9, 10], "children": [], "next": null}, "10": {"id": 10, "leaf": true, "keys": [7, 8], "children": [], "next": 11}, "6": {"id": 6, "leaf": false, "keys": [3, 5], "children": [2, 5, 8], "next": null}, "8": {"id": 8, "leaf": true, "keys": [5, 6], "children": [], "next": 10}, "5": {"id": 5, "leaf": true, "keys": [3, 4], "children": [], "next": 8}, "2": {"id": 2, "leaf": true, "keys": [1, 2], "children": [], "next": 5}}}, "type": "fanbiao-step"}, {"pk": 1, "row": {"user_id": 101, "status": 1, "amount": 88.0}, "type": "fanbiao-row"}, {"pk": 3, "snapshot": {"rootId": 13, "nodes": {"13": {"id": 13, "leaf": false, "keys": [7], "children": [6, 12], "next": null}, "12": {"id": 12, "leaf": false, "keys": [9], "children": [10, 11], "next": null}, "11": {"id": 11, "leaf": true, "keys": [9, 10], "children": [], "next": null}, "10": {"id": 10, "leaf": true, "keys": [7, 8], "children": [], "next": 11}, "6": {"id": 6, "leaf": false, "keys": [3, 5], "children": [2, 5, 8], "next": null}, "8": {"id": 8, "leaf": true, "keys": [5, 6], "children": [], "next": 10}, "5": {"id": 5, "leaf": true, "keys": [3, 4], "children": [], "next": 8}, "2": {"id": 2, "leaf": true, "keys": [1, 2], "children": [], "next": 5}}}, "type": "fanbiao-start"}, {"pk": 3, "nodeId": 13, "keys": [7], "leaf": false, "found": null, "snapshot": {"rootId": 13, "nodes": {"13": {"id": 13, "leaf": false, "keys": [7], "children": [6, 12], "next": null}, "12": {"id": 12, "leaf": false, "keys": [9], "children": [10, 11], "next": null}, "11": {"id": 11, "leaf": true, "keys": [9, 10], "children": [], "next": null}, "10": {"id": 10, "leaf": true, "keys": [7, 8], "children": [], "next": 11}, "6": {"id": 6, "leaf": false, "keys": [3, 5], "children": [2, 5, 8], "next": null}, "8": {"id": 8, "leaf": true, "keys": [5, 6], "children": [], "next": 10}, "5": {"id": 5, "leaf": true, "keys": [3, 4], "children": [], "next": 8}, "2": {"id": 2, "leaf": true, "keys": [1, 2], "children": [], "next": 5}}}, "type": "fanbiao-step"}, {"pk": 3, "nodeId": 6, "keys": [3, 5], "leaf": false, "found": null, "snapshot": {"rootId": 13, "nodes": {"13": {"id": 13, "leaf": false, "keys": [7], "children": [6, 12], "next": null}, "12": {"id": 12, "leaf": false, "keys": [9], "children": [10, 11], "next": null}, "11": {"id": 11, "leaf": true, "keys": [9, 10], "children": [], "next": null}, "10": {"id": 10, "leaf": true, "keys": [7, 8], "children": [], "next": 11}, "6": {"id": 6, "leaf": false, "keys": [3, 5], "children": [2, 5, 8], "next": null}, "8": {"id": 8, "leaf": true, "keys": [5, 6], "children": [], "next": 10}, "5": {"id": 5, "leaf": true, "keys": [3, 4], "children": [], "next": 8}, "2": {"id": 2, "leaf": true, "keys": [1, 2], "children": [], "next": 5}}}, "type": "fanbiao-step"}, {"pk": 3, "nodeId": 5, "keys": [3, 4], "leaf": true, "found": true, "snapshot": {"rootId": 13, "nodes": {"13": {"id": 13, "leaf": false, "keys": [7], "children": [6, 12], "next": null}, "12": {"id": 12, "leaf": false, "keys": [9], "children": [10, 11], "next": null}, "11": {"id": 11, "leaf": true, "keys": [9, 10], "children": [], "next": null}, "10": {"id": 10, "leaf": true, "keys": [7, 8], "children": [], "next": 11}, "6": {"id": 6, "leaf": false, "keys": [3, 5], "children": [2, 5, 8], "next": null}, "8": {"id": 8, "leaf": true, "keys": [5, 6], "children": [], "next": 10}, "5": {"id": 5, "leaf": true, "keys": [3, 4], "children": [], "next": 8}, "2": {"id": 2, "leaf": true, "keys": [1, 2], "children": [], "next": 5}}}, "type": "fanbiao-step"}, {"pk": 3, "row": {"user_id": 101, "status": 2, "amount": 45.0}, "type": "fanbiao-row"}, {"pk": 6, "snapshot": {"rootId": 13, "nodes": {"13": {"id": 13, "leaf": false, "keys": [7], "children": [6, 12], "next": null}, "12": {"id": 12, "leaf": false, "keys": [9], "children": [10, 11], "next": null}, "11": {"id": 11, "leaf": true, "keys": [9, 10], "children": [], "next": null}, "10": {"id": 10, "leaf": true, "keys": [7, 8], "children": [], "next": 11}, "6": {"id": 6, "leaf": false, "keys": [3, 5], "children": [2, 5, 8], "next": null}, "8": {"id": 8, "leaf": true, "keys": [5, 6], "children": [], "next": 10}, "5": {"id": 5, "leaf": true, "keys": [3, 4], "children": [], "next": 8}, "2": {"id": 2, "leaf": true, "keys": [1, 2], "children": [], "next": 5}}}, "type": "fanbiao-start"}, {"pk": 6, "nodeId": 13, "keys": [7], "leaf": false, "found": null, "snapshot": {"rootId": 13, "nodes": {"13": {"id": 13, "leaf": false, "keys": [7], "children": [6, 12], "next": null}, "12": {"id": 12, "leaf": false, "keys": [9], "children": [10, 11], "next": null}, "11": {"id": 11, "leaf": true, "keys": [9, 10], "children": [], "next": null}, "10": {"id": 10, "leaf": true, "keys": [7, 8], "children": [], "next": 11}, "6": {"id": 6, "leaf": false, "keys": [3, 5], "children": [2, 5, 8], "next": null}, "8": {"id": 8, "leaf": true, "keys": [5, 6], "children": [], "next": 10}, "5": {"id": 5, "leaf": true, "keys": [3, 4], "children": [], "next": 8}, "2": {"id": 2, "leaf": true, "keys": [1, 2], "children": [], "next": 5}}}, "type": "fanbiao-step"}, {"pk": 6, "nodeId": 6, "keys": [3, 5], "leaf": false, "found": null, "snapshot": {"rootId": 13, "nodes": {"13": {"id": 13, "leaf": false, "keys": [7], "children": [6, 12], "next": null}, "12": {"id": 12, "leaf": false, "keys": [9], "children": [10, 11], "next": null}, "11": {"id": 11, "leaf": true, "keys": [9, 10], "children": [], "next": null}, "10": {"id": 10, "leaf": true, "keys": [7, 8], "children": [], "next": 11}, "6": {"id": 6, "leaf": false, "keys": [3, 5], "children": [2, 5, 8], "next": null}, "8": {"id": 8, "leaf": true, "keys": [5, 6], "children": [], "next": 10}, "5": {"id": 5, "leaf": true, "keys": [3, 4], "children": [], "next": 8}, "2": {"id": 2, "leaf": true, "keys": [1, 2], "children": [], "next": 5}}}, "type": "fanbiao-step"}, {"pk": 6, "nodeId": 8, "keys": [5, 6], "leaf": true, "found": true, "snapshot": {"rootId": 13, "nodes": {"13": {"id": 13, "leaf": false, "keys": [7], "children": [6, 12], "next": null}, "12": {"id": 12, "leaf": false, "keys": [9], "children": [10, 11], "next": null}, "11": {"id": 11, "leaf": true, "keys": [9, 10], "children": [], "next": null}, "10": {"id": 10, "leaf": true, "keys": [7, 8], "children": [], "next": 11}, "6": {"id": 6, "leaf": false, "keys": [3, 5], "children": [2, 5, 8], "next": null}, "8": {"id": 8, "leaf": true, "keys": [5, 6], "children": [], "next": 10}, "5": {"id": 5, "leaf": true, "keys": [3, 4], "children": [], "next": 8}, "2": {"id": 2, "leaf": true, "keys": [1, 2], "children": [], "next": 5}}}, "type": "fanbiao-step"}, {"pk": 6, "row": {"user_id": 101, "status": 3, "amount": 61.2}, "type": "fanbiao-row"}, {"matched": [1, 3, 6], "secPagesVisited": 3, "clustPagesTotal": 9, "totalNoncover": 12, "hypotheticalCovering": 3, "type": "summary"}], "secFinalSnapshot": {"rootId": 4, "nodes": {"4": {"id": 4, "leaf": false, "keys": [[101, 6], [103, 2], [104, 7]], "children": [1, 7, 3, 9], "next": null}, "9": {"id": 9, "leaf": true, "keys": [[104, 7], [105, 4], [106, 10]], "children": [], "next": null}, "3": {"id": 3, "leaf": true, "keys": [[103, 2], [103, 8]], "children": [], "next": 9}, "7": {"id": 7, "leaf": true, "keys": [[101, 6], [102, 5], [102, 9]], "children": [], "next": 3}, "1": {"id": 1, "leaf": true, "keys": [[101, 1], [101, 3]], "children": [], "next": 7}}}, "priFinalSnapshot": {"rootId": 13, "nodes": {"13": {"id": 13, "leaf": false, "keys": [7], "children": [6, 12], "next": null}, "12": {"id": 12, "leaf": false, "keys": [9], "children": [10, 11], "next": null}, "11": {"id": 11, "leaf": true, "keys": [9, 10], "children": [], "next": null}, "10": {"id": 10, "leaf": true, "keys": [7, 8], "children": [], "next": 11}, "6": {"id": 6, "leaf": false, "keys": [3, 5], "children": [2, 5, 8], "next": null}, "8": {"id": 8, "leaf": true, "keys": [5, 6], "children": [], "next": 10}, "5": {"id": 5, "leaf": true, "keys": [3, 4], "children": [], "next": 8}, "2": {"id": 2, "leaf": true, "keys": [1, 2], "children": [], "next": 5}}}, "matched": [1, 3, 6], "secPagesVisited": 3, "clustPagesTotal": 9, "totalNoncover": 12, "hypotheticalCovering": 3};
+
+function buildAdj(snapshot){
+  const nodes = snapshot.nodes;
+  const rootId = String(snapshot.rootId);
+  const depthOf = {}; const order = [];
+  const q = [[rootId,0]]; const seen = new Set();
+  while(q.length){
+    const [id,d] = q.shift();
+    if(seen.has(id)) continue;
+    seen.add(id); depthOf[id]=d; order.push(id);
+    const n = nodes[id];
+    if(!n.leaf){ for(const c of n.children) q.push([String(c), d+1]); }
+  }
+  const byDepth = {};
+  for(const id of order){ (byDepth[depthOf[id]] = byDepth[depthOf[id]]||[]).push(id); }
+  return {byDepth, maxDepth: Math.max(...Object.values(depthOf))};
+}
+function layoutPositions(snapshot, W, H){
+  const {byDepth, maxDepth} = buildAdj(snapshot);
+  const pos = {}; const rowH = H/(maxDepth+1);
+  for(let d=0; d<=maxDepth; d++){
+    const ids = byDepth[d] || [];
+    const colW = W/(ids.length+1);
+    ids.forEach((id,i)=>{ pos[id] = {x: colW*(i+1), y: rowH*d + rowH/2}; });
+  }
+  return pos;
+}
+function keyLabel(k){ return Array.isArray(k) ? `(${k.join(',')})` : k; }
+function nodeWidth(n){ return Math.max(46, n.keys.length*(n.keys[0] && Array.isArray(n.keys[0]) ? 42 : 24) + 20); }
+
+function renderTree(svg, snapshot, opts, H){
+  opts = opts || {};
+  const W=880;
+  const pos = layoutPositions(snapshot, W, H-20);
+  let html = '';
+  for(const id in snapshot.nodes){
+    const n = snapshot.nodes[id];
+    if(!n.leaf){
+      n.children.forEach((cid)=>{
+        const p1=pos[id], p2=pos[String(cid)];
+        if(!p1||!p2) return;
+        html += `<path class="tlink" d="M${p1.x},${p1.y+16} C${p1.x},${(p1.y+p2.y)/2} ${p2.x},${(p1.y+p2.y)/2} ${p2.x},${p2.y-16}"/>`;
+      });
+    }
+  }
+  for(const id in snapshot.nodes){
+    const n = snapshot.nodes[id];
+    if(n.leaf && n.next){
+      const p1=pos[id], p2=pos[String(n.next)];
+      if(p1&&p2){ html += `<path class="tlink leaf-link" d="M${p1.x+nodeWidth(n)/2+4},${p1.y} L${p2.x-nodeWidth(snapshot.nodes[String(n.next)])/2-4},${p2.y}"/>`; }
+    }
+  }
+  for(const id in snapshot.nodes){
+    const n = snapshot.nodes[id];
+    const p = pos[id];
+    if(!p) continue;
+    const w = nodeWidth(n);
+    let cls = 'tnode' + (n.leaf?' leaf':'');
+    if(opts.activeId===id) cls += ' active';
+    if(opts.visitedIds && opts.visitedIds.has(id)) cls += ' visited';
+    if(opts.foundId===id) cls += ' found';
+    html += `<g>`;
+    html += `<rect class="${cls}" x="${p.x-w/2}" y="${p.y-16}" width="${w}" height="32" rx="7"></rect>`;
+    html += `<text class="tkey" x="${p.x}" y="${p.y+4}" text-anchor="middle">${n.keys.map(keyLabel).join(' ')}</text>`;
+    html += `<text class="nodelabel" x="${p.x}" y="${p.y-20}" text-anchor="middle">#${id}</text>`;
+    html += `</g>`;
+  }
+  svg.innerHTML = html;
+}
+
+(function(){
+  const events = DATA.events;
+  const secSvg = document.getElementById('secSvg');
+  const priSvg = document.getElementById('priSvg');
+  const narration = document.getElementById('fbNarration');
+  const counter = document.getElementById('fbCounter');
+  const tally = document.getElementById('fbTally');
+  let idx = 0, playing=false, playTimer=null;
+
+  function secVisited(uptoIdx){
+    const s = new Set();
+    for(let i=0;i<=uptoIdx;i++){
+      const e = events[i];
+      if(e.type==='sec-descend' || e.type==='sec-leaf-scan') s.add(String(e.nodeId));
+    }
+    return s;
+  }
+  function priVisited(uptoIdx, pk){
+    const s = new Set();
+    for(let i=0;i<=uptoIdx;i++){
+      const e = events[i];
+      if(e.type==='fanbiao-step' && e.pk===pk) s.add(String(e.nodeId));
+    }
+    return s;
+  }
+  function pagesSoFar(uptoIdx){
+    let sec=0, pri=0;
+    const secSeen = new Set(), priSeen = {};
+    for(let i=0;i<=uptoIdx;i++){
+      const e = events[i];
+      if(e.type==='sec-descend' || e.type==='sec-leaf-scan'){ if(!secSeen.has(e.nodeId)){secSeen.add(e.nodeId); sec++;} }
+      if(e.type==='fanbiao-step'){
+        priSeen[e.pk] = priSeen[e.pk]||new Set();
+        if(!priSeen[e.pk].has(e.nodeId)){ priSeen[e.pk].add(e.nodeId); pri++; }
+      }
+    }
+    return {sec, pri, total: sec+pri};
+  }
+
+  function describe(e){
+    switch(e.type){
+      case 'sec-descend': return `在二级索引树里向下走,定位 <span class="k">user_id=101</span> 可能在的叶子。节点 #${e.nodeId} 的 key:${e.keys.map(k=>Array.isArray(k)?`(${k.join(',')})`:k).join(', ')}`;
+      case 'sec-leaf-scan': return `扫描叶子 #${e.nodeId}(必要时沿叶子链表继续往右翻页),收集 <span class="k">user_id=101</span> 的匹配项。目前已匹配主键:${e.matchedSoFar.join(', ')}`;
+      case 'sec-done': return `二级索引树部分结束——命中 ${e.matched.length} 行(id=${e.matched.join(',')}),一共访问了 <b>${e.secPagesVisited}</b> 个页面。接下来,<span class="kio">因为要查 status 列,二级索引叶子里没有,必须回表</span>。`;
+      case 'fanbiao-start': return `开始为 id=<span class="kio">${e.pk}</span> 回表:在聚簇索引树里,从根重新查一遍这个主键。`;
+      case 'fanbiao-step': return e.leaf
+        ? `到达叶子 #${e.nodeId},找到 id=${e.pk} 这一整行。`
+        : `聚簇索引树内部节点 #${e.nodeId},key:${e.keys.join(', ')}——继续往下。`;
+      case 'fanbiao-row': return `拿到完整行:id=${e.pk}, user_id=${e.row.user_id}, status=${e.row.status}, amount=${e.row.amount}`;
+      case 'summary': return `全部完成。二级索引树访问 <b>${e.secPagesVisited}</b> 页 + 聚簇索引树累计访问 <b>${e.clustPagesTotal}</b> 页(3 次回表)= 共 <b>${e.totalNoncover}</b> 页。若查询只要 user_id(覆盖索引场景),本来只需要 <b>${e.hypotheticalCovering}</b> 页。`;
+      default: return e.type;
+    }
+  }
+
+  function render(){
+    idx = Math.max(0, Math.min(events.length-1, idx));
+    const e = events[idx];
+    narration.innerHTML = describe(e);
+
+    const sSnap = (e.type.startsWith('sec')) ? e.snapshot : (events.slice(0,idx+1).reverse().find(ev=>ev.type.startsWith('sec'))||{snapshot:DATA.secFinalSnapshot}).snapshot || DATA.secFinalSnapshot;
+    const secOpts = {visitedIds: secVisited(idx)};
+    if(e.type==='sec-descend' || e.type==='sec-leaf-scan') secOpts.activeId = String(e.nodeId);
+    renderTree(secSvg, DATA.secFinalSnapshot, secOpts, 180);
+
+    const priOpts = {};
+    if(e.type==='fanbiao-step' || e.type==='fanbiao-start' || e.type==='fanbiao-row'){
+      const pk = e.pk;
+      priOpts.visitedIds = priVisited(idx, pk);
+      if(e.type==='fanbiao-step'){
+        priOpts.activeId = String(e.nodeId);
+        if(e.leaf) priOpts.foundId = String(e.nodeId);
+      }
+    }
+    renderTree(priSvg, DATA.priFinalSnapshot, priOpts, 220);
+
+    const p = pagesSoFar(idx);
+    tally.innerHTML = `<span>二级索引页访问: <b>${p.sec}</b></span><span>聚簇索引页访问(回表累计): <b>${p.pri}</b></span><span>合计: <b>${p.sec+p.pri}</b></span><span class="cov">若覆盖索引本应: <b>${DATA.hypotheticalCovering}</b></span>`;
+
+    counter.textContent = `${idx+1} / ${events.length}`;
+    document.getElementById('fbPrev').disabled = idx===0;
+    document.getElementById('fbNext').disabled = idx===events.length-1;
+  }
+  document.getElementById('fbPrev').onclick=()=>{idx--;render();stopPlay();};
+  document.getElementById('fbNext').onclick=()=>{idx++;render();stopPlay();};
+  document.getElementById('fbReset').onclick=()=>{idx=0;render();stopPlay();};
+  function stopPlay(){ playing=false; clearInterval(playTimer); document.getElementById('fbPlay').textContent='▶ 自动播放'; }
+  document.getElementById('fbPlay').onclick=()=>{
+    if(playing){ stopPlay(); return; }
+    playing=true; document.getElementById('fbPlay').textContent='⏸ 暂停';
+    playTimer = setInterval(()=>{
+      if(idx>=events.length-1){ stopPlay(); return; }
+      idx++; render();
+    }, 1000);
+  };
+  render();
+})();
+</script>
+
+</body>
+</html>

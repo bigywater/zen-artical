@@ -1,0 +1,26 @@
+from lib import *
+S = SS('g78')
+steps = [
+    step("ReadHeaderTimeout 挡住慢速攻击:客户端只发了半个请求头就不再发。ReadHeaderTimeout = 0(不设):3001 ms(等了 3 秒)服务器都没有关闭连接;ReadHeaderTimeout = 200ms:200 ms 后服务器关闭了连接,客户端收到 0 字节。", t=tl(S(1)), mark=lidx(S(1), 'ReadHeaderTimeout = 0s'), done=lidx(S(1), 'ReadHeaderTimeout = 200ms'), b=bars([['不设:连接保持 (ms)', 3001, '≥3001'], ['ReadHeaderTimeout=200ms', 200, '200']], 3001, mark=[0], done=[1]), kv=KV([['不设', '半个请求头可以占着连接不放'], ['200 ms', '200 ms 后被关'], ['含义', '对外服务必须设置']], ['含义'])),
+    step("WriteTimeout 不会取消 Handler:WriteTimeout = 200 ms,handler 睡 500 ms 后写响应,写的时候 err = nil(写进了缓冲);客户端 502 ms 后看到连接被关闭、收到 0 字节。也就是说 handler 一直跑到结束,响应却没发出去。", t=tl(S(2)), done=lidx(S(2), 'err = <nil>'), mark=lidx(S(2), 'WriteTimeout = 200 ms'), kv=KV([['handler', '500 ms 跑完,Write 没报错'], ['客户端', '502 ms 后连接被关,0 字节'], ['含义', 'WriteTimeout 不会取消 handler']], ['含义'])),
+    step("IdleTimeout:IdleTimeout = 300 ms,一个请求完成后连接保持空闲,301 ms 后服务器关闭了连接,客户端读到 EOF。", t=tl(S(3)), mark=lidx(S(3), 'IdleTimeout = 300 ms'), kv=KV([['空闲时间', '301 ms 后被关'], ['作用', '回收 keep-alive 里没人用的连接']], ['作用'])),
+    step("http.TimeoutHandler:TimeoutHandler(100 ms),handler 要 500 ms:101 ms 后客户端收到 503 Service Unavailable,body 是 “服务超时”;handler 里的 r.Context() 状态是 context deadline exceeded——handler 也被通知了(handler 要自己监听才会收手)。", t=tl(S(4)), mark=lidx(S(4), 'http.TimeoutHandler(100 ms)'), done=lidx(S(4), 'r.Context() 的状态'), kv=KV([['客户端', '101 ms 后收到 503'], ['handler 的 ctx', 'deadline exceeded'], ['注意', 'handler 要监听 ctx 才会提前结束']], ['注意'])),
+    step("客户端三种超时,服务端立刻发响应头、之后每 100 ms 发 1 字节(共 10 个):Client.Timeout = 300ms:301 ms 后读 body 失败,读到 3 字节,context deadline exceeded (Client.Timeout or context cancellation while reading body);Transport.ResponseHeaderTimeout = 300ms:读了 1012 ms 把 10 字节都读完,err = nil(只管响应头);ctx WithTimeout(300ms):301 ms 后读到 3 字节,context deadline exceeded。", t=tl(S(5)), done=lidx(S(5), 'ResponseHeaderTimeout'), mark=lidx(S(5), 'Client.Timeout=300ms', 'ctx WithTimeout'), b=bars([['Client.Timeout=300ms:读到字节', 3, '3'], ['ResponseHeaderTimeout=300ms', 10, '10'], ['ctx WithTimeout(300ms)', 3, '3']], 10, mark=[0, 2], done=[1]), kv=KV([['Client.Timeout', '包含读 body,总时长'], ['ResponseHeaderTimeout', '只管等响应头'], ['ctx', '和 Client.Timeout 同样覆盖读 body']], ['ResponseHeaderTimeout'])),
+    step("连接超时:Dialer.Timeout = 300 ms,连接 10.255.255.1:80(不可达的地址):301 ms 后返回 dial tcp 10.255.255.1:80: i/o timeout。", t=tl(S(6)), mark=lidx(S(6), 'Dialer.Timeout = 300 ms'), kv=KV([['Dialer.Timeout', '300 ms'], ['实际', '301 ms 后 i/o timeout']], ['实际'])),
+    step("文档原文(go doc net/http.Server):ReadHeaderTimeout 是允许读取请求头的时间,读完请求头后连接的读截止时间会被重置,由 Handler 自己决定读 body 多慢算太慢;WriteTimeout 是写响应超时前的最长时间,每读到一个新请求头就重置,它不让 Handler 逐个请求做决定;IdleTimeout 是启用 keep-alive 时等下一个请求的最长时间,为零时用 ReadTimeout 的值,为负或两者都为零时没有超时。", t=tl(S(7)), done=lidx(S(7), 'ReadHeaderTimeout is the amount', 'WriteTimeout is the maximum duration'), mark=lidx(S(7), 'IdleTimeout is the maximum amount'), kv=KV([['ReadHeaderTimeout', '只管读请求头'], ['WriteTimeout', '从读到请求头起算,整个响应'], ['IdleTimeout', '等下一个请求']], ['WriteTimeout'])),
+]
+A = mkartg('g78', 78, 'Go,HTTP,超时,ReadHeaderTimeout,WriteTimeout,Client.Timeout,真实验证,动画演示',
+    '在 Go 1.27.1 里逐个验证 HTTP 超时:不设 ReadHeaderTimeout 时半个请求头能占着连接 3 秒以上,设了 200 ms 就被关;WriteTimeout 不会取消 Handler;IdleTimeout 回收空闲连接;TimeoutHandler 100 ms 返回 503;客户端的 Client.Timeout 和 ctx 会截断慢速响应体(3 字节),ResponseHeaderTimeout 不会(10 字节读完)。',
+    'Go 的 HTTP 超时分散在 Server、Transport、Client、context 好几处,每个管的阶段不同。这篇逐个用真实运行验证它们各自管什么、不管什么,尤其是 WriteTimeout 和 ResponseHeaderTimeout 这两个最容易被误解的。',
+    [('3001 ms vs 200 ms', '不设与设了 ReadHeaderTimeout 时,半个请求头占着连接的时间'), ('502 ms,0 字节', 'WriteTimeout 200 ms 而 handler 要 500 ms:连接被关,响应没送达,handler 跑到了结束'), ('3 vs 10 字节', '服务端慢速发 body 时,Client.Timeout 与 ResponseHeaderTimeout 下客户端读到的字节数')],
+    [('ReadHeaderTimeout', '<p>不设 <code>ReadHeaderTimeout</code>,客户端发半个请求头后就不动,连接可以一直占着(实验里等了 3 秒还在);设 200 ms 后 200 ms 就被关。对外服务必须设置。</p>'),
+     ('WriteTimeout 的坑', '<p>handler 睡 500 ms,<code>WriteTimeout</code> 只有 200 ms:handler 并没有被取消,它写响应时也没报错(写进了缓冲),但客户端 502 ms 后只看到连接被关,0 字节。</p>'),
+     ('IdleTimeout', '<p><code>IdleTimeout</code> 控制 keep-alive 连接空闲多久被回收:实验里设 300 ms,301 ms 后服务器关闭了连接。</p>'),
+     ('http.TimeoutHandler', '<p>想让慢 handler 能提前结束,用 <code>http.TimeoutHandler</code>:100 ms 后客户端得到 503 和自定义文字,handler 的 <code>r.Context()</code> 也变成 deadline exceeded——但 handler 要自己监听才会收手。</p>'),
+     ('客户端超时的范围', '<p>服务端先发响应头、再每 100 ms 发 1 字节。<code>Client.Timeout</code> 与 ctx 超时都会截断读 body(读到 3 字节);<code>Transport.ResponseHeaderTimeout</code> 只管等响应头,body 慢也不会超时(读完 10 字节用了约 1 秒)。想限制整个请求的时长用前两者。</p>'),
+     ('连接超时', '<p>往不可达的地址连接,<code>Dialer.Timeout</code> 设 300 ms 就在 301 ms 后返回 i/o timeout。<code>Transport</code> 的 <code>DialContext</code> 里要自己设这个超时。</p>'),
+     ('文档怎么说', '<p><code>ReadHeaderTimeout</code> 管读请求头,读完后读截止时间重置;<code>WriteTimeout</code> 每读到新请求头就重置,不让 Handler 逐请求决定;<code>IdleTimeout</code> 管 keep-alive 下等下一个请求,为零时借用 <code>ReadTimeout</code>。</p>')],
+    steps,
+    [ENV_G + '。服务端用 http.Server 的各个超时字段,客户端用原始 TCP(半个请求头)或 net/http Client;时间用 time.Since 测;连接超时用不可达地址 10.255.255.1(这台机器网络环境下得到 i/o timeout,不同网络可能是立即失败);文档摘自 go doc net/http.Server',
+     '没有验证:TLS 握手超时、ReadTimeout 与读 body 的关系、HTTP/2 下这些超时的行为、http.Server 的 Shutdown 超时、Expect: 100-continue 超时、10.255.255.1 在其它网络中的行为'],
+    'HTTP 超时')

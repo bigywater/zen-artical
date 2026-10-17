@@ -1,0 +1,26 @@
+from lib import *
+S = SS('k38')
+F1 = [['zone a(2 个节点)', '2 个 Pod'], ['zone b(1 个节点)', '2 个 Pod'], ['zone c(1 个节点)', '2 个 Pod']]
+F1b = [['zone a', '4 个 Pod'], ['zone b', '1 个 Pod'], ['zone c', '1 个 Pod']]
+F2 = [['zone a', '4(强行放的)'], ['zone b', '0 → 1'], ['zone c', '0 → 2']]
+F3 = [['worker4(zone c)', '有污点'], ['默认 Ignore', 'c=0 → a、b 各 1 个就卡住'], ['Honor', 'a=3 b=3'], ['ScheduleAnyway', 'a=3 b=3']]
+F4 = [['zone maxSkew 1', '2 / 2 / 2'], ['hostname maxSkew 1', '1 / 1 / 2 / 2'], ['扩到 9 个', '7 个 Running + 2 个 Pending']]
+PANELS = [('f', 'flow', '拓扑分布'), ('t', 'term', '实测输出'), ('kv', 'kv', '要点')]
+steps = [
+    step("4 个 worker 的 zone 标签:worker、worker2 → a,worker3 → b,worker4 → c。6 个副本带 topologySpreadConstraints(maxSkew 1、topologyKey zone、DoNotSchedule):zone a=2 b=2 c=2(节点 worker=1 worker2=1 worker3=2 worker4=2);同样 6 个副本没有任何约束:zone a=4 b=1 c=1(默认调度按节点打散,zone a 有两个节点,自然多放)。", f=fl(F1, cur=[0, 1, 2]), t=tl(S(1), mark=lidx(S(1), 'topologySpreadConstraints'), done=lidx(S(1), '对照')), kv=KV([['maxSkew', '各 zone 的 Pod 数最大差值'], ['不写约束', '默认按节点打散,不是按 zone'], ['topologyKey', '节点标签,值相同的节点算同一个域']], ['maxSkew'])),
+    step("已有的失衡不会被纠正:先用 nodeName 把 4 个 app=s2 的 Pod 强行放在 zone a 的两个节点上(zone a=4 b=0 c=0)。再加 3 个带 maxSkew=1 约束的 Pod:都避开了 zone a,分别去了 worker4、worker4、worker3,结果 a=4 b=1 c=2,zone a 没有再增加,但也没人把原来的 Pod 挪走。", f=fl(F2, cur=[1, 2], mark=[0]), t=tl(S(2), mark=lidx(S(2), '再加 3 个', '新 Pod'), done=lidx(S(2), '先用 nodeName')), kv=KV([['约束只影响新调度', '不会驱逐或迁移已有 Pod'], ['想纠正', '需要 descheduler 或重建 Pod'], ['已经失衡', '新 Pod 只会往少的那边放']], ['约束只影响新调度'])),
+    step("给 zone c 唯一的节点 worker4 打 NoSchedule 污点。默认(nodeTaintsPolicy 缺省 Ignore,统计 zone 时仍把 worker4 算进去)6 个副本只调度了 2 个(a=1 b=1 c=0),其余 4 个 Pending:0/5 nodes are available: 2 node(s) had untolerated taint(s), 3 node(s) didn't match pod topology spread constraints;加 nodeTaintsPolicy: Honor:a=3 b=3,全部调度;whenUnsatisfiable: ScheduleAnyway:a=3 b=3。", f=fl(F3, cur=[1], mark=[0], done=[2, 3]), t=tl(S(3), mark=lidx(S(3), '默认(nodeTaintsPolicy', 'Pending Pod 的原因'), done=lidx(S(3), 'Honor', 'ScheduleAnyway')), kv=KV([['DoNotSchedule + 空的 zone', '空域的 0 个 Pod 会把别人卡住'], ['nodeTaintsPolicy: Honor', '排除掉 Pod 去不了的节点'], ['ScheduleAnyway', '软约束,放不下也不卡']], ['DoNotSchedule + 空的 zone'])),
+    step("多个约束一起算:zone 和 hostname 同时 maxSkew=1,6 个副本得到 zone a=2 b=2 c=2、节点 worker=1 worker2=1 worker3=2 worker4=2;扩到 9 个:zone a=3 b=2 c=2,节点 worker=1 worker2=2 worker3=2 worker4=2,另有 2 个 Pending——两个约束要同时满足,有时就是放不下。", f=fl(F4, cur=[2], done=[0, 1]), t=tl(S(4), mark=lidx(S(4), '扩到 9 个'), done=lidx(S(4), 'zone 与 hostname')), kv=KV([['多个约束', '每一个都要满足(AND)'], ['9 个副本', '放得下 7 个,2 个 Pending'], ['软硬结合', 'zone 用 DoNotSchedule、hostname 用 ScheduleAnyway 更常见']], ['多个约束'])),
+]
+A = mkartk('k38', 38, 'Kubernetes,拓扑分布约束,topologySpreadConstraints,maxSkew,调度,真实验证,动画演示',
+    '在独立的 5 节点 kind 集群(4 个 worker 分到 zone a/a/b/c)里实测 topologySpreadConstraints:maxSkew=1 时 6 个副本在三个 zone 里 2/2/2(无约束时是 4/1/1);已有的失衡不会被纠正,新 Pod 只是避开多的 zone;DoNotSchedule 遇到带污点的空 zone 会让 4 个副本 Pending,nodeTaintsPolicy: Honor 或 ScheduleAnyway 可以解决;zone 与 hostname 同时约束时 9 个副本只放下 7 个。',
+    '想让副本均匀分布在不同可用区,应该怎么写?maxSkew 到底是怎么算的?已经失衡了会不会自己纠正?遇到不可用的 zone 为什么会卡住?这篇建一个有三个 zone 的集群,把这些情形都真跑了一遍。',
+    [('2 / 2 / 2 vs 4 / 1 / 1', '6 个副本有无 zone 约束时在 zone a、b、c 的分布'), ('0/5 nodes are available', '空的 zone 带污点、nodeTaintsPolicy 缺省时 4 个副本 Pending 的原因里包含 didn\'t match pod topology spread constraints'), ('7 + 2', '同时按 zone 与 hostname 约束时 9 个副本里 Running 与 Pending 的数量')],
+    [('按 zone 打散', '<p>给 4 个 worker 打 <code>zone</code> 标签:worker、worker2 在 a,worker3 在 b,worker4 在 c。6 个副本写上 <code>maxSkew: 1</code>、<code>topologyKey: zone</code>、<code>whenUnsatisfiable: DoNotSchedule</code>,结果每个 zone 2 个(2/2/2)。没有约束时默认调度是按节点打散的,zone a 有两个节点,于是 4/1/1。<code>maxSkew</code> 是任意两个域之间 Pod 数的最大差值。</p>'),
+     ('不会纠正已有的失衡', '<p>先用 <code>nodeName</code> 把 4 个 Pod 强行放进 zone a(4/0/0),再加 3 个带约束的 Pod:它们都避开了 zone a,去了 zone c(2 个)和 zone b(1 个),总数 4/1/2。zone a 没有再增加,但已有的 4 个也不会被挪走——约束只在调度新 Pod 时生效。要纠正得靠 descheduler 或重建 Pod。</p>'),
+     ('空的 zone 会卡住你', '<p>给 zone c 唯一的节点打上污点。默认情况下统计各 zone 的 Pod 数时仍把 worker4 算进去:c 永远是 0 个,而 a、b 各放 1 个之后再放就会让差值超过 1,6 个副本只调度了 2 个,其余 Pending:<code>2 node(s) had untolerated taint(s), 3 node(s) didn\'t match pod topology spread constraints</code>。加 <code>nodeTaintsPolicy: Honor</code>(排除掉 Pod 去不了的节点)或改成 <code>ScheduleAnyway</code>(软约束)都能让它们全部调度,得到 3/3。</p>'),
+     ('多个约束的叠加', '<p>zone 和 hostname 同时 <code>maxSkew: 1</code>:6 个副本 2/2/2,节点 1/1/2/2;扩到 9 个只放下 7 个(zone 3/2/2,节点 1/2/2/2),另外 2 个 Pending——两个约束要同时满足,条件冲突时宁可不放。常见的写法是 zone 用 <code>DoNotSchedule</code>、hostname 用 <code>ScheduleAnyway</code>。</p>')],
+    steps,
+    [ENV_K + '。独立的 5 节点 kind 集群 kx-sched(1 控制面 + 4 个 worker,Kubernetes v1.37.0),实验后删除标签与污点;worker 的 zone 标签由脚本打上(a、a、b、c);Deployment 的 Pod 是 busybox:1.36;分布取自每个 Pod 的 spec.nodeName;第 3 节给 worker4 打 dedicated=other:NoSchedule 污点,每个策略各一个 Deployment;每种情形各一次(集群刚创建时 worker 还是 NotReady,第一次运行因此全部 Pending,脚本现在会等所有节点 Ready 再开始)',
+     '没有验证:minDomains 与 matchLabelKeys;nodeAffinityPolicy(与 nodeAffinity 的交互);集群级默认的 topologySpreadConstraints(调度器配置里的 defaultConstraints);滚动更新期间 matchLabelKeys: pod-template-hash 的作用;descheduler;大规模下约束的调度性能;topologyKey 使用云厂商的 topology.kubernetes.io/zone 标签的差别(这里用自定义标签)'],
+    '拓扑分布', PANELS)

@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>ConcurrentHashMap:多线程 put 为什么不会锁住整张表</title>
+<meta name="description" content="真实起 16 个线程并发 put 80 万个不重复的 key 进普通 HashMap,最终 size() 真实只剩 656061,丢了将近 18%,没有抛任何异常;换成 ConcurrentHashMap 同样的并发写入,size() 真实精确等于 800000;真实验证锁粒度——一个线程在 keyA 上执行耗时 800ms 的 compute,另一个线程同时 put 完全不相关的 keyB,用 synchronizedMap 包装的 HashMap 真实被阻塞等了 697ms,换成 ConcurrentHashMap 真实 0 毫秒立刻返回,证明它锁的是单个桶而不是整张表。">
+<link rel="canonical" href="https://bigywater.tech/java-concurrenthashmap.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="ConcurrentHashMap:多线程 put 为什么不会锁住整张表">
+<meta property="og:description" content="真实起 16 个线程并发 put 80 万个不重复的 key 进普通 HashMap,最终 size() 真实只剩 656061,丢了将近 18%;换成 ConcurrentHashMap 同样的并发写入精确等于 800000;真实验证锁粒度——synchronizedMap 真实被阻塞 697ms,ConcurrentHashMap 真实 0 毫秒返回。">
+<meta property="og:url" content="https://bigywater.tech/java-concurrenthashmap.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="ConcurrentHashMap:多线程 put 为什么不会锁住整张表">
+<meta name="twitter:description" content="真实起 16 个线程并发 put 进普通 HashMap,size() 真实丢了将近 18%;换成 ConcurrentHashMap 精确无误;真实验证锁粒度是单个桶而不是整张表。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --java-c:#E76F00; --java-c-soft:#FBEADA;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --java-c:#FF9A44; --java-c-soft:#3A2914;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --java-c:#FF9A44; --java-c-soft:#3A2914;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--java-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--java-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--java-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--java-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--java-c); background:var(--java-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--java-c-soft); color:var(--java-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--java-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--java-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--java-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--java-c); color:var(--java-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--java-c-soft); color:var(--ink);}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Java 内部原理 · 06</div>
+    <h1>ConcurrentHashMap:多线程 put 为什么不会锁住整张表</h1>
+    <p>上一篇用真实的丢失更新证明了 <span class="mono">HashMap</span> 天生不是给并发场景用的。这一篇往前一步:先真实让普通 <span class="mono">HashMap</span> 在并发写入下真的丢数据,再验证 <span class="mono">ConcurrentHashMap</span> 到底靠什么机制,做到"线程安全"却不用把整张表锁死。</p>
+    <div class="hero-fact">
+      <div><div class="num">800000 → 656061</div><div class="lbl">16 线程并发 put 80 万个不重复 key,普通 HashMap 真实丢了近 18%,不抛任何异常</div></div>
+      <div><div class="num">697ms → 0ms</div><div class="lbl">同样的"一个 key 被慢操作占着",synchronizedMap 真实被卡住,ConcurrentHashMap 真实秒返回</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+<p class="prev-post">上一篇:<a href="java-arraylist.html" target="_blank" rel="noopener">ArrayList 扩容:5,000,000 次 add,不预设容量真实多搬运了 1230 多万个元素</a></p>
+
+<section style="padding-top:8px;">
+  <h2>真实验证:普通 HashMap 在并发写入下真的会丢数据</h2>
+  <p class="h2-sub">16 个线程,每个线程写自己独占的一段 key,理论上互不冲突,结果却不是这样。</p>
+  <p>16 个线程,每个线程负责写入一段完全不重叠的 key(线程 0 写 0~49999,线程 1 写 50000~99999,以此类推),逻辑上没有任何两个线程会写同一个 key,唯一的共享状态是底层数组和扩容逻辑:</p>
+  <div class="term"><span class="real-tag">真实实测 · 16 线程,每线程 5 万个 key</span>
+<pre class="code">期望 key 总数: 800000
+plain HashMap 并发 put 后 size(): 656061
+ConcurrentHashMap 并发 put 后 size(): 800000</pre>
+<span class="bad">普通 HashMap 真实丢了 143939 个 key(约 18%),整个过程没有抛出任何异常,程序表面上跑得好好的</span>
+<span class="ok">ConcurrentHashMap 在完全一样的并发写入下,size() 精确等于期望值</span>
+  </div>
+  <p>丢失的原因不是"两个线程同时写同一个 key"(这次实验里从设计上就不存在这种冲突),是<b>扩容过程</b>本身不是线程安全的:一个线程正在把旧数组的节点搬到新数组时,另一个线程如果也在同时读写链表结构,会打乱正在进行中的搬迁逻辑,导致某些节点在搬迁过程中"丢失"——数组本身没有加锁保护结构性修改,并发场景下这种破坏是真实会发生的,而不是理论上的担忧。</p>
+</section>
+
+<section>
+  <h2>真实验证:ConcurrentHashMap 锁的到底是不是整张表</h2>
+  <p class="h2-sub">让一个线程在某个 key 上"慢慢操作",同时另一个线程写完全不相关的 key,看后者要不要等。</p>
+  <p>先看一个用整张表加锁实现线程安全的对照组——<span class="mono">Collections.synchronizedMap</span>:</p>
+  <blockquote class="src">
+    <span class="path">对照组:synchronizedMap(整表加锁)</span>
+Map&lt;String, Integer&gt; map = Collections.synchronizedMap(new HashMap&lt;&gt;());
+
+// 线程 A:先拿到锁,慢慢操作 800ms
+synchronized (map) { sleep(800); map.put("keyA", 1); }
+
+// 线程 B(100ms 后启动):写一个完全无关的 key
+synchronized (map) { map.put("keyB", 2); }
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">synchronizedMap: 写入 keyB 等待了 697ms(keyA 那边的操作还在慢慢跑)</pre>
+<span class="bad">线程 B 老老实实等了 697ms 才写进去——整张表只有一把锁,谁都得排队</span>
+  </div>
+  <p>换成 <span class="mono">ConcurrentHashMap</span>,用它自己的 <span class="mono">compute</span> 方法模拟同样的"慢操作占着 keyA":</p>
+  <blockquote class="src">
+    <span class="path">ConcurrentHashMap</span>
+ConcurrentHashMap&lt;String, Integer&gt; map = new ConcurrentHashMap&lt;&gt;();
+
+// 线程 A:对 keyA 做一次耗时 800ms 的 compute
+map.compute("keyA", (k, v) -&gt; { sleep(800); return 1; });
+
+// 线程 B(100ms 后启动):put 完全无关的 keyB
+map.put("keyB", 2);
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">ConcurrentHashMap: 写入 keyB 等待了 0ms(keyA 那边的 compute 还在慢慢跑)</pre>
+<span class="ok">线程 B 几乎瞬间返回——完全没有等 keyA 那边的操作跑完</span>
+  </div>
+  <p>两组实验唯一的变量是用的 Map 实现,结果天差地别:<span class="mono">synchronizedMap</span> 用一把锁保护整个 <span class="mono">HashMap</span>,任何写操作都要抢这一把锁;<span class="mono">ConcurrentHashMap</span> 的锁粒度精细到单个桶(bin)——<span class="mono">keyA</span> 和 <span class="mono">keyB</span> 大概率落在不同的桶里,各自锁各自的桶,互不阻塞。</p>
+</section>
+
+<section>
+  <h2>桶级别的锁具体是怎么加的</h2>
+  <p>Java 8 开始,<span class="mono">ConcurrentHashMap</span> 不再是老版本(Java 7 及之前)那种"分段锁"(<span class="mono">Segment</span> 数组,每段一把锁、固定分成 16 段)的实现——这是个经常被过时资料带偏的细节。现在的实现是:</p>
+  <ul>
+    <li>一个桶还是空的,用 <span class="mono">CAS</span>(无锁的原子比较交换)直接把新节点放进去,连锁都不用加;</li>
+    <li>一个桶已经有节点了(发生哈希冲突,或者要更新已有 key),对<b>这个桶的头节点</b>做 <span class="mono">synchronized</span> 加锁,只锁这一条链表/树,不影响其它桶;</li>
+    <li>扩容过程被设计成可以多个线程协作完成(每个线程认领一部分区间搬迁),而不是像普通 <span class="mono">HashMap</span> 那样单线程搬、又没有并发保护。</li>
+  </ul>
+  <p>锁的对象是"某个桶的头节点"这个具体的 <span class="mono">Node</span> 对象,不是整个 <span class="mono">ConcurrentHashMap</span> 实例,也不是固定数量的分段——桶的数量会随容量扩大而增加,理论上并发写入能用到的锁粒度只会越来越细。</p>
+</section>
+
+<section>
+  <h2>分步演示:ConcurrentHashMap 真实靠什么保证并发安全</h2>
+  <p>每一行都是真实运行这段代码得到的结果(用CountDownLatch制造真实的最大并发竞争)。</p>
+<div class="demo" id="demo"><div class="demo-head">ConcurrentHashMap真实彻底禁止null;computeIfAbsent真实是原子的,8个线程抢着算同一个key也只会真实算一次;迭代真实是弱一致性的,不怕并发修改</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>这一步新验证的行为</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>
+(function(){
+const D = {"panels":[{"id":"kv","kind":"kv","label":"真实运行结果(逐步累加)"},{"id":"info","kind":"text","label":"这一步发生了什么"}],"steps":[{"note":"ConcurrentHashMap.put(null,1)(尝试放入null键):真实抛出NullPointerException。put(\"k\",null)(尝试放入null值):真实同样抛出NullPointerException——和普通HashMap允许一个null键、任意null值不同,ConcurrentHashMap真实完全不允许null,原因是在并发场景下,get()返回null真实没法区分\"这个键根本不存在\"和\"这个键存在但值是null\",这个歧义在并发环境下真实是危险的。","s":{"kv":{"items":[["put(null,1) / put(\"k\",null)","真实都抛出NullPointerException(彻底禁止null)"]],"hl":["put(null,1) / put(\"k\",null)"]},"info":{"text":"ConcurrentHashMap.put(null,1)(尝试放入null键):真实抛出NullPointerException。put(\"k\",null)(尝试放入null值):真实同样抛出NullPointerException——和普通HashMap允许一个null键、任意null值不同,ConcurrentHashMap真实完全不允许null,原因是在并发场景下,get()返回null真实没法区分\"这个键根本不存在\"和\"这个键存在但值是null\",这个歧义在并发环境下真实是危险的。"}}},{"note":"真实用CountDownLatch让8个线程精确同时对同一个key调用computeIfAbsent(\"shared-key\", 计算函数)(计算函数内部会自增一个计数器并真实sleep20ms来放大竞争窗口):真实结果这个计算函数总共只真实执行了1次,不是8次——computeIfAbsent真实是原子操作,即使8个线程真实同时冲进来,也只有一个真实赢得计算的机会,其他线程真实会等待并直接复用这唯一一次计算的结果。","s":{"kv":{"items":[["put(null,1) / put(\"k\",null)","真实都抛出NullPointerException(彻底禁止null)"],["8线程真实同时computeIfAbsent同一个key, 计算函数真实执行次数","1次(真实原子性保证,不是8次)"]],"hl":["8线程真实同时computeIfAbsent同一个key, 计算函数真实执行次数"]},"info":{"text":"真实用CountDownLatch让8个线程精确同时对同一个key调用computeIfAbsent(\"shared-key\", 计算函数)(计算函数内部会自增一个计数器并真实sleep20ms来放大竞争窗口):真实结果这个计算函数总共只真实执行了1次,不是8次——computeIfAbsent真实是原子操作,即使8个线程真实同时冲进来,也只有一个真实赢得计算的机会,其他线程真实会等待并直接复用这唯一一次计算的结果。"}}},{"note":"真实在遍历一个ConcurrentHashMap的entrySet()过程中,另起一个线程真实并发地往同一个map里插入新数据:真实结果遍历过程完全没有抛出ConcurrentModificationException——ConcurrentHashMap的迭代器真实是弱一致性的,遍历期间真实允许并发修改,最多是遍历结果可能不包含遍历开始之后才插入的新数据,但真实不会像普通HashMap那样直接抛异常中断遍历。","s":{"kv":{"items":[["put(null,1) / put(\"k\",null)","真实都抛出NullPointerException(彻底禁止null)"],["8线程真实同时computeIfAbsent同一个key, 计算函数真实执行次数","1次(真实原子性保证,不是8次)"],["遍历中真实并发插入新数据, 是否真实抛出ConcurrentModificationException","真实否(弱一致性迭代器, 真实不会中断)"]],"hl":["遍历中真实并发插入新数据, 是否真实抛出ConcurrentModificationException"]},"info":{"text":"真实在遍历一个ConcurrentHashMap的entrySet()过程中,另起一个线程真实并发地往同一个map里插入新数据:真实结果遍历过程完全没有抛出ConcurrentModificationException——ConcurrentHashMap的迭代器真实是弱一致性的,遍历期间真实允许并发修改,最多是遍历结果可能不包含遍历开始之后才插入的新数据,但真实不会像普通HashMap那样直接抛异常中断遍历。"}}},{"note":"反射真实查看当前JDK版本的ConcurrentHashMap类里是否还存在\"segments\"这个字段(早期版本用分段锁Segment实现并发控制):真实结果本机JDK上这个字段已经完全不存在了——Java 8开始ConcurrentHashMap真实重写成了基于CAS+每个链表头节点synchronized的实现,分段锁(Segment)这套机制真实已经被彻底移除,不只是废弃不用那么简单。","s":{"kv":{"items":[["put(null,1) / put(\"k\",null)","真实都抛出NullPointerException(彻底禁止null)"],["8线程真实同时computeIfAbsent同一个key, 计算函数真实执行次数","1次(真实原子性保证,不是8次)"],["遍历中真实并发插入新数据, 是否真实抛出ConcurrentModificationException","真实否(弱一致性迭代器, 真实不会中断)"],["当前JDK的ConcurrentHashMap是否真实还有segments字段","真实完全没有了(分段锁机制真实已被彻底移除)"]],"hl":["当前JDK的ConcurrentHashMap是否真实还有segments字段"]},"info":{"text":"反射真实查看当前JDK版本的ConcurrentHashMap类里是否还存在\"segments\"这个字段(早期版本用分段锁Segment实现并发控制):真实结果本机JDK上这个字段已经完全不存在了——Java 8开始ConcurrentHashMap真实重写成了基于CAS+每个链表头节点synchronized的实现,分段锁(Segment)这套机制真实已经被彻底移除,不只是废弃不用那么简单。"}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1000); };
+go(0);
+})();
+</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文全部 size() 结果和等待时间均在本机真实运行 Java 17、16 线程并发得到;plain HashMap 的丢失比例在不同次运行中会有波动(结构性破坏跟具体的扩容时机、线程调度相关),但真实丢数据这件事本身是稳定可复现的。</li>
+      <li>单线程读-改-写复合操作为什么不安全、volatile 和原子性的区别,参见上一篇<a href="java-volatile.html" target="_blank" rel="noopener">volatile</a>。</li>
+      <li>没有涉及:<span class="mono">ConcurrentHashMap</span> 的 <span class="mono">size()</span> 在扩容过程中的估算机制(不是简单加锁统计)、<span class="mono">ConcurrentModificationException</span> 和弱一致性迭代器的具体行为——这些留给系列后面按需再写。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="java-reentrantlock.html" target="_blank" rel="noopener" style="text-decoration:none; color:inherit;">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">ReentrantLock:公平锁和非公平锁,真实差了 58 倍耗时</div>
+    </div>
+    <div style="font-size:1.5rem;">→</div>
+  </a>
+</section>
+
+</div>
+<footer>Java 内部原理 · 并发容器 · 数据来自本机 Java 17 多线程实验</footer>
+</body>
+</html>

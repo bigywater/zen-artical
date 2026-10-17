@@ -1,0 +1,15 @@
+from lib import *
+S = SS('f18')
+R = J('f18')
+steps = [
+    step("内置转换器(200 = 匹配,404 = 不匹配):string 匹配 'abc' 与 '中文'(视图收到 str),不匹配带斜杠的 'a/b' 和空串;int 匹配 '5' → 5、'007' → 7、很大的整数 99999999999999999999 照样是 int,不匹配 '-5'、'1.5'、'abc';float 只匹配带小数点的 '1.5' → 1.5,不匹配 '1'、'-1.5'、'.5'、'1e3';path 匹配 'a' 与 'a/b/c',以 / 开头的 '/x' 得到 308 重定向;uuid 只匹配标准的带连字符形式(收到 UUID 对象),不匹配无连字符的 32 位十六进制;省略转换器等同 string。", t=tl(S(1)), done=lidx(S(1), "'abc'", "'5'", "'1.5'", "'a/b/c'"), mark=lidx(S(1), '308', 'not-a-uuid', "'1'      "), kv=KV([['int', '不匹配负数与小数'], ['float', '必须带小数点'], ['path', '可含 /'], ['uuid', '要带连字符']], ['float'])),
+    step("转换器参数:int(fixed_digits=3) 只匹配 3 位的 '007'(→ 7);int(min=1,max=100) 匹配 1 与 100,不匹配 0 与 101;int(signed=True) 才匹配 '-5';string(length=3) 只匹配恰好 3 个字符;string(minlength=2,maxlength=4) 匹配 2 到 4 个字符;any(cat,dog) 只匹配 cat 与 dog。", t=tl(S(2)), done=lidx(S(2), 'int(fixed_digits=3)', 'int(min=1,max=100)', 'int(signed=True)'), mark=lidx(S(2), 'string(length=3)', 'any(cat,dog)'), kv=KV([['int(min,max)', '范围外 404'], ['int(signed=True)', '允许负号'], ['any(cat,dog)', '枚举']], ['int(min,max)'])),
+    step("url_for 反向生成:int 5 → /i/5、字符串 '007' → /i/7;float 1.5 → /f/1.5、整数 1 → /f/1.0;path 与 string 的 'a/b' 都生成 /…/a/b(string 里的 / 不会被转义);'中文 空格' 被百分号转义;uuid 对象 → /u/00000000-…-0000000000ff;给 int 转换器传 'abc' 抛 ValueError(invalid literal for int());int(min=1,max=100) 传 500 却生成了 /ir/500 —— 反向生成时不检查范围。", t=tl(S(3)), done=lidx(S(3), 'int 5', 'float 1.5', 'uuid 对象'), mark=lidx(S(3), 'ValueError', 'int 超出 max'), kv=KV([['int \"007\"', '/i/7'], ['float 1', '/f/1.0'], ['超出 max 的 500', '照样生成 /ir/500'], ['int \"abc\"', 'ValueError']], ['超出 max 的 500'])),
+    step("转换器的正则与权重(werkzeug.routing.converters):UnicodeConverter(string)regex = [^/]+、权重 100;IntegerConverter regex = \\d+、权重 50;FloatConverter regex = \\d+\\.\\d+、权重 50;PathConverter regex = [^/].*?、权重 200;UUIDConverter 权重 100。默认注册的名字是 any、default、float、int、path、string、uuid。", t=tl(S(4)), done=lidx(S(4), 'UnicodeConverter', 'IntegerConverter', 'FloatConverter', 'PathConverter', 'UUIDConverter'), mark=lidx(S(4), '默认注册的名字'), kv=KV([['string', '[^/]+ ,权重 100'], ['int', '\\d+ ,权重 50'], ['float', '\\d+\\.\\d+ ,权重 50'], ['path', '[^/].*? ,权重 200']], ['path'])),
+]
+A = mkartf('f18', 18, 'Flask,URL 转换器,路由,真实验证,动画演示',
+    '逐个验证 Flask 内置 URL 转换器:string、int、float、path、uuid、any 各自匹配什么、视图收到什么类型;int/string 的参数;url_for 反向生成时的转换;每个转换器的正则与权重。',
+    '/<int:id> 能不能匹配负数?/<float:x> 能不能匹配 1?path 为什么能带斜杠?uuid 要什么格式?这篇每个都试一遍,并看 url_for 反过来怎么生成。',
+    [('7', '默认注册的转换器名字个数(any、default、float、int、path、string、uuid)'), ('404', '不匹配时的状态码(int 遇到 -5、float 遇到 1 都是 404)'), ('/ir/500', 'int(min=1,max=100) 传入 500 时 url_for 仍然生成的结果')],
+    [('内置转换器的匹配', '<p>上一篇:<a href="flask-url-rule-matching-order.html">URL Rule 与路由匹配顺序</a>;下一篇:<a href="flask-custom-url-converter.html">自定义 URL Converter</a>。</p>'), ('转换器参数', None), ('url_for 反向生成', None), ('正则与权重', None)],
+    steps, [ENV_F, '没有验证:非 ASCII 的 URL 在不同客户端编码下的匹配(见第 30 篇)、float 转换器与科学计数法的组合、转换器在蓝图 URL 前缀里的表现、Python 3.14 以外的版本里 int 对超长数字的限制'], 'URL 转换器')

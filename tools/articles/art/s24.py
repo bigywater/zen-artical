@@ -1,0 +1,22 @@
+from lib import *
+S = SS('s24')
+steps = [
+    step("用原始套接字服务器看默认发出的字节:请求行 GET /a HTTP/1.1,头依次是 Accept、Accept-Language、User-Agent、Accept-Encoding、Host,没有 Connection 头。Accept 和 Accept-Language 来自 DefaultHeadersMiddleware(DEFAULT_REQUEST_HEADERS),User-Agent 来自 UserAgentMiddleware(USER_AGENT),Accept-Encoding 来自 HttpCompressionMiddleware,Host 最后由传输层加上。", t=tl(S(1)), mark=lidx(S(1), 'Accept:', 'Accept-Language', 'User-Agent', 'Accept-Encoding', 'Host'), done=lidx(S(1), 'GET /a'), kv=KV([['Accept、Accept-Language', 'DefaultHeadersMiddleware'], ['User-Agent', 'UserAgentMiddleware'], ['Accept-Encoding', 'HttpCompressionMiddleware'], ['Host', '传输层最后加']], ['User-Agent'])),
+    step("内置默认值:USER_AGENT = Scrapy/2.19.0 (+https://scrapy.org);DEFAULT_REQUEST_HEADERS 只有两项:Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8 和 Accept-Language: en。Accept-Encoding 不在设置里,是压缩中间件写死的 gzip, deflate, br, zstd。", t=tl(S(2)), mark=lidx(S(2), 'USER_AGENT', 'DEFAULT_REQUEST_HEADERS'), kv=KV([['USER_AGENT', 'Scrapy/2.19.0 (+https://scrapy.org)'], ['DEFAULT_REQUEST_HEADERS', 'Accept + Accept-Language: en'], ['Accept-Encoding', 'gzip, deflate, br, zstd(写死)']], ['USER_AGENT'])),
+    step("谁覆盖谁(都是 setdefault 语义,请求自己的头最优先):改 USER_AGENT 设置 → User-Agent: MyBot/1.0;Request 的 headers 里写 User-Agent: PerRequest/9 → 用请求自己的,并且排在最前;DEFAULT_REQUEST_HEADERS 整个替换成 {Accept: application/json, Accept-Language: zh-CN, X-Token: t} → 三项都发出;Request 的 headers 写 Accept-Language: fr → 压过默认的 en;USER_AGENT 设成空串 → 根本没有 User-Agent 头;COMPRESSION_ENABLED = 0 → 没有 Accept-Encoding 头。", t=tl(S(3)), mark=lidx(S(3), 'PerRequest/9', 'Accept-Language: fr', '没有 User-Agent 头'), done=lidx(S(3), 'MyBot/1.0', 'zh-CN', 'COMPRESSION_ENABLED=0'), kv=KV([['请求自己的 headers', '最优先'], ['DEFAULT_REQUEST_HEADERS', '补缺(setdefault)'], ['USER_AGENT = ""', '不发 User-Agent'], ['COMPRESSION_ENABLED = 0', '不发 Accept-Encoding']], ['请求自己的 headers'])),
+    step("头名规范化与多值:headers={'user-agent': 'lower', 'ACCEPT': 'UPPER', 'x-custom-header': 'v', 'X-Multi': ['a', 'b']} 发出时头名都变成首字母大写的写法(User-Agent、Accept、X-Custom-Header),值保持原样;列表值变成两行 X-Multi: a 和 X-Multi: b;请求自己的头排在最前面,默认头跟在后面。", t=tl(S(4)), mark=lidx(S(4), 'X-Multi', 'X-Custom-Header'), done=lidx(S(4), 'User-Agent: lower', 'Accept: UPPER'), kv=KV([['头名', '规范成 Title-Case'], ['列表值', '拆成多行同名头'], ['顺序', '请求自己的 → 默认头 → Host']], ['列表值'])),
+    step("POST 请求的头:scrapy.Request(method='POST', body='a=1&b=2') 只会带 Content-Length: 7,不带 Content-Type;scrapy.FormRequest(formdata={...}) 同样的正文,多了 Content-Type: application/x-www-form-urlencoded。用 Request 发表单时要自己写 Content-Type,否则很多服务器不会解析正文。", t=tl(S(5)), mark=lidx(S(5), 'Content-Type', 'FormRequest'), done=lidx(S(5), 'Content-Length'), kv=KV([['Request(method="POST", body=…)', '只有 Content-Length'], ['FormRequest(formdata=…)', '加 Content-Type: application/x-www-form-urlencoded']], ['Request(method="POST", body=…)'])),
+]
+A = mkarts('s24', 24, 'Scrapy,请求头,User-Agent,DEFAULT_REQUEST_HEADERS,Accept-Encoding,真实验证,动画演示',
+    '用原始套接字服务器看 Scrapy 2.19 发出的请求字节:默认头顺序是 Accept、Accept-Language、User-Agent、Accept-Encoding(gzip, deflate, br, zstd)、Host;请求自己的头 > DEFAULT_REQUEST_HEADERS > USER_AGENT 设置;USER_AGENT 设空串就不发 UA;头名规范成 Title-Case,列表值拆成多行;Request 的 POST 不带 Content-Type,FormRequest 才带。',
+    '默认请求头从哪来?设置、请求、spider 里都能写 User-Agent,谁最终生效?发出的头是什么顺序和大小写?这篇用原始套接字服务器看真正出现在网络上的字节。',
+    [('5 个', '默认 GET 请求的头:Accept、Accept-Language、User-Agent、Accept-Encoding、Host'), ('gzip, deflate, br, zstd', '默认的 Accept-Encoding(压缩中间件写死)'), ('0 个', 'USER_AGENT 设成空串时发出的 User-Agent 头')],
+    [('三个来源', '<p><code>DefaultHeadersMiddleware</code>(DEFAULT_REQUEST_HEADERS)、<code>UserAgentMiddleware</code>(USER_AGENT)和 <code>HttpCompressionMiddleware</code>(Accept-Encoding)各自用 setdefault 补头;请求自己的头永远优先。</p>'),
+     ('默认值', '<p>Accept 和 Accept-Language 在 <code>DEFAULT_REQUEST_HEADERS</code> 里,USER_AGENT 带着版本号;Accept-Encoding 不在设置里。</p>'),
+     ('覆盖规则', '<p>替换 <code>DEFAULT_REQUEST_HEADERS</code> 是整体替换;把 <code>USER_AGENT</code> 设空串则不发这个头;关闭压缩中间件则不发 Accept-Encoding。</p>'),
+     ('头名与多值', '<p>头名在发出前规范成首字母大写,值是列表时拆成多行。</p>'),
+     ('POST 与表单', '<p>手写 POST 的 <code>Request</code> 只有 Content-Length;<code>FormRequest</code> 会加上表单的 Content-Type。</p>')],
+    steps,
+    [ENV_Y + '。用 RawSrv(原始套接字服务器)读取并原样记录请求头块;每个情形是一个单文件 spider',
+     '没有验证:HTTPS 请求的头(ALPN、TLS 层之外的头相同,但没有抓包);HTTP/2 处理器发出的头(见后面的文章);aiohttp 处理器(无 reactor 模式)是否改变头的顺序和 Connection 头;spider 的 user_agent 属性(2.19 里已弃用,没有再测);Cookie、Referer、Authorization 等由别的中间件添加的头(见 cookies、重定向篇)'],
+    '请求头')

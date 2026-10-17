@@ -1,0 +1,17 @@
+from lib import *
+S = SS('f67')
+R = J('f67')
+steps = [
+    step("from_object 接受模块名字符串、模块对象、类、类实例:from_object('settings') 加载 settings.py 里的大写属性(DEBUG = True、SECRET_KEY、ITEMS),小写的 lower、下划线开头的 _private、函数 func、类 Nested 都不会进 config;类 Dev(继承 Base)得到 DEBUG=True、PAGE=10、TAGS=['t'](继承来的属性也算);类 Prod 得到 PAGE=100;实例 Dev() 效果相同;带点的字符串 'settings_dir.base.Dev' 指向类,同样可用。", t=tl(S(1)), done=lidx(S(1), 'from_object("settings")', 'from_object(模块对象)', '类 Dev'), mark=lidx(S(1), '类 Prod', '实例 Dev()', 'settings_dir.base.Dev'), kv=KV([['参数', '模块名 / 模块 / 类 / 实例'], ['收什么', '大写属性(含继承来的)'], ['不收', '小写、_private、函数、类']], ['收什么'])),
+    step("可变值是同一个对象:两个 app 都 from_object(Base),a1.config['TAGS'].append('polluted') 之后,a2.config['TAGS'] 也变成 ['t', 'polluted'],Base.TAGS 本身也被改了,三者是同一个列表。用类做配置时,列表与字典要小心共享;需要时用 copy.deepcopy。", t=tl(S(2)), done=lidx(S(2), 'a1 改了 TAGS 后'), kv=KV([['可变值', '多个 app 与类共享同一个对象'], ['对策', 'deepcopy 或工厂里每次新建']], ['可变值'])),
+    step("from_pyfile 把文件当 Python 代码执行:dyn.cfg 里的 HOME_SET = \"HOME\" in os.environ、COMPUTED = 6 * 7、列表推导都有效(HOME_SET True、COMPUTED 42、ITEMS [0, 2, 4]),文件里的 print 也会执行。文件不存在 → FileNotFoundError「Unable to load configuration file (No such file or directory)」;silent=True 返回 False;语法错误 → SyntaxError('(' was never closed)。配置文件能执行任意代码,不能让用户控制它的内容。", t=tl(S(3)), done=lidx(S(3), '加载 dyn.cfg 之后'), mark=lidx(S(3), '文件不存在', '语法错误'), kv=KV([['执行', '整个文件当 Python 运行'], ['不存在', 'FileNotFoundError(silent=True → False)'], ['语法错误', 'SyntaxError']], ['执行'])),
+    step("from_envvar:环境变量里存的是配置文件的路径,不是配置值。APP_SETTINGS 没设置 → RuntimeError「The environment variable 'APP_SETTINGS' is not set and as such configuration could not be loaded. Set this variable and make it point to a configuration file」;silent=True → 返回 False;设置成 dyn.cfg 的路径后返回 True,COMPUTED = 42。", t=tl(S(4)), mark=lidx(S(4), '环境变量没设置', 'silent=True'), done=lidx(S(4), '设置 APP_SETTINGS'), kv=KV([['没设置', 'RuntimeError'], ['silent=True', '返回 False'], ['设置了路径', '加载该文件']], ['没设置'])),
+    step("from_file 用任意解析器:tomllib.load(要用二进制模式 text=False)读 cfg.toml 得到 TITLE、PORT、DB = {'HOST': 'h'}(TOML 的表变成字典);json 文件里的小写键 title 不会被收进来、大写 UP 会;from_mapping 读同一份 json 同样只收大写。", t=tl(S(5)), done=lidx(S(5), 'tomllib', 'json 里的小写键'), mark=lidx(S(5), 'from_mapping 同一份 json'), kv=KV([['load=', 'json.load / tomllib.load(二进制)'], ['小写键', '被忽略']], ['小写键'])),
+    step("from_mapping 接受字典与关键字参数,同样只收大写:from_mapping({'A': 1, 'b': 2}, C=3, d=4) 之后 A=1、C=3 在 config 里,b 与 d 不在;而 config.update({'b': 2}) 与 config['d'] = 4 不过滤大小写(b、d 都进去了)。", t=tl(S(6)), done=lidx(S(6), 'from_mapping({"A"'), mark=lidx(S(6), 'update / 赋值'), kv=KV([['from_mapping', '只收大写'], ['update / 赋值', '不过滤']], ['update / 赋值'])),
+]
+A = mkartf('f67', 67, 'Flask,配置,from_object,from_pyfile,from_envvar,真实验证,动画演示',
+    '实测 config.from_object(模块名/模块/类/实例,只收大写)、from_pyfile(执行 Python 文件,不存在与语法错误)、from_envvar(环境变量里是文件路径)、from_file(json/toml)、from_mapping 与 update 的区别;从类加载时列表是共享的同一个对象。',
+    '三个 from_ 方法各自读什么、怎么出错?类配置里的列表会不会互相污染?环境变量里到底存配置值还是文件路径?这篇逐个试。',
+    [('大写', '所有 from_* 方法只加载的键的形式'), ('同一个列表', '两个 app 从同一个类加载后 TAGS 的关系'), ('执行代码', 'from_pyfile 对配置文件的处理(不是解析)')],
+    [('from_object', '<p>上一篇:<a href="flask-config-load-order.html">Flask Config 加载顺序</a>;下一篇:<a href="flask-env-var-config.html">环境变量配置</a>。</p>'), ('可变值共享', None), ('from_pyfile', None), ('from_envvar', None), ('from_file', None), ('from_mapping', None)],
+    steps, [ENV_F, '没有验证:from_object 加载带 @property 的类、配置文件的热重载、Windows 路径写法、from_pyfile 的编码与 BOM 处理'], '配置加载方法')

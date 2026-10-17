@@ -1,0 +1,558 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>断电之后,MySQL 怎么知道该留下什么</title>
+<meta name="description" content=" kill -9 崩溃测试,redo log 如何保证已提交事务不丢。">
+<link rel="canonical" href="https://bigywater.tech/redolog.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="断电之后,MySQL 怎么知道该留下什么">
+<meta property="og:description" content=" kill -9 崩溃测试,redo log 如何保证已提交事务不丢。">
+<meta property="og:url" content="https://bigywater.tech/redolog.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="断电之后,MySQL 怎么知道该留下什么">
+<meta name="twitter:description" content=" kill -9 崩溃测试,redo log 如何保证已提交事务不丢。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#EFF1F3; --paper:#FFFFFF; --ink:#1B1F24; --ink-dim:#5B6470; --line:#D8DCE1;
+  --node-c:#1F6FA8; --node-c-soft:#E4EFF6;
+  --key-c:#8B5A2B; --key-c-soft:#F3E9DD;
+  --io-c:#A13D3D; --io-c-soft:#F7E7E5;
+  --code-bg:#1B1F24; --code-ink:#E7EAED;
+  --shadow: 0 1px 2px rgba(20,25,30,.06), 0 8px 24px -12px rgba(20,25,30,.15);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#12151A; --paper:#1A1E24; --ink:#E7EAED; --ink-dim:#9AA4B0; --line:#2B3138;
+    --node-c:#5FA8DE; --node-c-soft:#1D2C38;
+    --key-c:#D6A15C; --key-c-soft:#332619;
+    --io-c:#E27A7A; --io-c-soft:#3A2323;
+    --code-bg:#0E1013; --code-ink:#DCE1E6;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#12151A; --paper:#1A1E24; --ink:#E7EAED; --ink-dim:#9AA4B0; --line:#2B3138;
+  --node-c:#5FA8DE; --node-c-soft:#1D2C38;
+  --key-c:#D6A15C; --key-c-soft:#332619;
+  --io-c:#E27A7A; --io-c-soft:#3A2323;
+  --code-bg:#0E1013; --code-ink:#DCE1E6;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--node-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--io-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--io-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--io-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.node .tag{background:var(--node-c-soft); color:var(--node-c);}
+.card.key .tag{background:var(--key-c-soft); color:var(--key-c);}
+.card.io .tag{background:var(--io-c-soft); color:var(--io-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#8B95A1; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#8FC7EA;}
+
+.callout{border-left:3px solid var(--node-c); background:var(--node-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.io{border-color:var(--io-c); background:var(--io-c-soft);}
+.callout.key{border-color:var(--key-c); background:var(--key-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--node-c-soft); color:var(--node-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#8FC7EA;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88A8A;}
+.term .cm{color:#8B95A1;}
+
+.timeline{display:flex; flex-direction:column; gap:2px; margin:16px 0;}
+.tl-row{display:flex; align-items:center; gap:12px; padding:10px 14px; border-radius:8px; border:1px solid var(--line); background:var(--paper); font-size:.88rem;}
+.tl-row .who{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; padding:2px 8px; border-radius:5px; flex:0 0 auto;}
+.tl-row.a .who{background:var(--node-c-soft); color:var(--node-c);}
+.tl-row.b .who{background:var(--key-c-soft); color:var(--key-c);}
+.tl-row.crash{background:var(--io-c-soft); border-color:var(--io-c); font-weight:600;}
+.tl-row.crash .who{background:var(--io-c); color:#fff;}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;}
+.demo-title{font-weight:600; font-size:.95rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--key-c-soft); color:var(--key-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:22px 20px;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--node-c); color:var(--node-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--node-c); border-color:var(--node-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.panels{display:grid; grid-template-columns:1fr 1fr; gap:14px;}
+@media (max-width:640px){.panels{grid-template-columns:1fr;}}
+.panel{border:1px solid var(--line); border-radius:10px; padding:14px 16px; background:var(--bg);}
+.panel h4{margin:0 0 10px; font-size:.78rem; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-dim); font-weight:600;}
+.rec{display:flex; justify-content:space-between; align-items:center; padding:6px 10px; border-radius:6px; margin-bottom:4px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; background:var(--paper); border:1px solid var(--line);}
+.rec.gone{opacity:.35; text-decoration:line-through;}
+.rec.flushed{border-color:var(--node-c);}
+.rec.unflushed{border-color:var(--key-c); border-style:dashed;}
+.lsn-track{display:flex; gap:4px; align-items:center; flex-wrap:wrap; margin-top:6px;}
+.lsn-dot{width:26px; height:26px; border-radius:6px; display:flex; align-items:center; justify-content:center; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; border:1.5px solid var(--line); background:var(--paper);}
+.lsn-dot.flushed{background:var(--node-c-soft); border-color:var(--node-c); color:var(--node-c);}
+.lsn-dot.buffer{background:var(--key-c-soft); border-color:var(--key-c); color:var(--key-c);}
+.txn-state{font-size:.82rem; margin-top:6px;}
+.txn-state .committed{color:var(--node-c); font-weight:600;}
+.txn-state .pending{color:var(--key-c); font-weight:600;}
+.txn-state .rolledback{color:var(--io-c); font-weight:600;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{display:flex; align-items:center; gap:10px; margin-bottom:24px; font-size:.88rem; color:var(--ink-dim); flex-wrap:wrap;}
+.prev-post a{font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--node-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>MySQL / InnoDB 存储引擎系列 · 第四篇</div>
+    <h1>为什么强行杀掉数据库进程,已提交的数据也不会丢?</h1>
+    <p>上一篇讲到:脏页不会立刻刷盘,后台慢慢刷就行,前提是"只要日志写盘了,崩溃后能靠日志把它重放回来"。这一篇把这句话坐实——不是讲道理,是<b>真的把本机运行的 MySQL 进程 <span class="mono">kill -9</span> 掉</b>,看已提交和未提交的数据分别会怎样。</p>
+    <p>这就是 redo log:先写日志、后写数据(Write-Ahead Logging)。下面所有现象都是本机 MySQL 9.7.1 崩溃、重启、查出来的结果。</p>
+    <div class="hero-fact">
+      <div><div class="num">kill -9</div><div class="lbl">两次杀死 mysqld 进程做的实验</div></div>
+      <div><div class="num">已提交 → 在</div><div class="lbl">进程被杀后重启,已 COMMIT 的行原样还在</div></div>
+      <div><div class="num">未提交 → 消失</div><div class="lbl">同样被杀,未 COMMIT 的行重启后不见了</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <div class="prev-post">← 接上篇 <a href="bufferpool.html" target="_blank" rel="noopener">Buffer Pool 与刷脏</a></div>
+  <h2>Write-Ahead Logging:先写日志,后写数据</h2>
+  <p class="h2-sub">核心原则一句话:任何修改要生效,必须先把"打算怎么改"写进日志(并且日志已经落盘),然后才谈得上"这个修改是安全的"——至于对应的数据页什么时候真正刷盘,上一篇已经说过,不着急。</p>
+  <div class="cards">
+    <div class="card node">
+      <span class="tag">LSN</span>
+      <h3>日志序列号</h3>
+      <p>单调递增的计数器,标记日志流写到哪了。每个页也记录着"最后一条应用到它身上的日志是第几号"——这是判断"这个页新不新"的依据。</p>
+    </div>
+    <div class="card key">
+      <span class="tag">mtr</span>
+      <h3>mini-transaction</h3>
+      <p>InnoDB 内部最小的原子日志单元——不是 SQL 那个"事务",而是"对页做的一小组修改,要么全记下来,要么都不记"。源码文件名直译就是"迷你事务缓冲区"。</p>
+    </div>
+    <div class="card io">
+      <span class="tag">崩溃恢复</span>
+      <h3>先重放,再回滚</h3>
+      <p>重启时分两步:先把日志里已经落盘的记录全部重放一遍(不管是谁的事务),再把那些"重放出来但没有提交记录"的事务,依据 undo log 撤销掉。</p>
+    </div>
+  </div>
+  <blockquote class="src">
+    <span class="path">storage/innobase/trx/trx0roll.cc · <a href="https://github.com/mysql/mysql-server/blob/mysql-9.7.1/storage/innobase/trx/trx0roll.cc#L708" target="_blank" rel="noopener">mysql-server @ mysql-9.7.1, L708</a> —— 这就是下面实验里"未提交的行消失了"背后真正执行的函数</span>
+/** Rollback or clean up any incomplete transactions which were
+ encountered in crash recovery. If the transaction already was
+ committed, then we clean up a possible insert undo log. If the
+ transaction was not yet committed, then we roll it back. */
+void trx_rollback_or_clean_recovered(bool all)
+  </blockquote>
+</section>
+
+<section>
+  <h2>实验:两次 kill -9</h2>
+  <p class="h2-sub">不是模拟——直接找到本机 mysqld 的进程号,发 <span class="mono">SIGKILL</span>,进程立刻消失,没有任何优雅关闭的机会。</p>
+
+  <h3 style="font-size:1.05rem; margin:24px 0 8px;">实验 A:提交之后立刻杀</h3>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cm">$ mysql -uroot redodemo -e "START TRANSACTION; INSERT INTO ledger VALUES (1,'committed_before_crash'); COMMIT;"</span>
+<span class="cm"># 命令成功返回之后……</span>
+<span class="cmd">$ PID=$(cat /opt/homebrew/var/mysql/*.pid); kill -9 $PID</span>
+<span class="bad">进程立即消失,没有任何关闭日志</span>
+
+<span class="cm">$ mysql.server start</span>
+<span class="ok">2026-08-27T14:06:47 [System] Starting XA crash recovery...</span>
+<span class="ok">2026-08-27T14:06:47 [System] XA crash recovery finished.</span>
+
+<span class="cm">$ mysql -uroot redodemo -e "SELECT * FROM ledger;"</span>
+id      marker
+1       <span class="ok">committed_before_crash</span>   ← 还在
+  </div>
+
+  <h3 style="font-size:1.05rem; margin:24px 0 8px;">实验 B:提交前杀(事务开着一直没 COMMIT)</h3>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cm">$ mysql -uroot redodemo &lt;&lt;'EOF' &amp;   # 后台开一个连接,故意不提交</span>
+<span class="cmd">START TRANSACTION;
+INSERT INTO ledger VALUES (2,'UNCOMMITTED_should_vanish');
+SELECT SLEEP(20);</span>
+<span class="cm">EOF</span>
+
+<span class="cm"># 这个连接还在 SLEEP,事务还开着……</span>
+<span class="cmd">$ PID=$(cat /opt/homebrew/var/mysql/*.pid); kill -9 $PID</span>
+<span class="bad">进程立即消失</span>
+<span class="bad">background: ERROR 2013 (HY000): Lost connection to MySQL server during query</span>
+
+<span class="cm">$ mysql.server start &amp;&amp; mysql -uroot redodemo -e "SELECT * FROM ledger;"</span>
+id      marker
+1       committed_before_crash
+<span class="cm">（id=2 那一行,没有了）</span>
+  </div>
+  <div class="callout io">
+    这不是巧合,也不是"运气好没丢数据"——这是 WAL 设计出来就该有的行为:<b>已经提交(并且已经 fsync 落盘)的东西,进程再怎么被强杀都丢不了;没提交的东西,哪怕已经改了内存里的页,重启后也会被系统主动撤销</b>,不会留下一半的痕迹。
+  </div>
+</section>
+
+<section>
+  <h2>时间线复盘</h2>
+  <div class="timeline">
+    <div class="tl-row a"><span class="who">事务 A</span> INSERT id=1 → 页在内存里被改了(这就是脏页,上一篇的话题)</div>
+    <div class="tl-row a"><span class="who">事务 A</span> COMMIT → <span class="mono">innodb_flush_log_at_trx_commit=1</span>(默认值),这一步会同步等日志 fsync 完成才返回</div>
+    <div class="tl-row b"><span class="who">事务 B</span> INSERT id=2 → 页在内存里也被改了,日志也生成了,但事务还没走到 COMMIT</div>
+    <div class="tl-row crash"><span class="who">💥</span> kill -9:内存里的一切(缓冲池、未提交状态)瞬间消失;唯独已经落盘的日志文件还在</div>
+    <div class="tl-row a"><span class="who">重启·阶段1</span> 重放(redo)磁盘上日志里记录的每一次页修改——不分是谁的事务,id=1 和 id=2 都会先被"重放"回来</div>
+    <div class="tl-row b"><span class="who">重启·阶段2</span> 扫描重放出来的事务:A 有提交记录,放行;B 没有提交记录,用 undo log 撤销——id=2 被拿掉</div>
+  </div>
+  <p>关键细节:id=2 的修改<b>确实被重放过一次</b>,不是"日志里压根没有它所以没重放"。真正让它消失的,是重放<b>之后</b>那道单独的"清理未提交事务"关卡。这也是为什么崩溃恢复要分两个阶段,而不是一步到位——重放阶段只管"页对不对得上日志",完全不关心事务提交与否;提交与否是第二阶段才处理的问题。</p>
+</section>
+
+<section>
+  <h2>演示:重放,再回滚</h2>
+  <p class="h2-sub">用上面实验的结构做了一个可验证的最小模型(两个事务、两条日志记录),重放规则和源码里的两阶段完全一致。</p>
+  <div class="demo" id="recoveryDemo">
+    <div class="demo-head"><div class="demo-title">崩溃恢复:先 redo 重放,再撤销未提交事务</div></div>
+    <div class="demo-narration" id="recNarration"></div>
+    <div class="demo-body">
+      <div class="panels">
+        <div class="panel">
+          <h4>日志(磁盘上,LSN 顺序)</h4>
+          <div id="recLog"></div>
+        </div>
+        <div class="panel">
+          <h4>页 / 数据状态</h4>
+          <div id="recPages"></div>
+          <div id="recTxns" class="txn-state"></div>
+        </div>
+      </div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="recReset">⏮ 重来</button>
+      <button class="btn" id="recPrev">‹ 上一步</button>
+      <button class="btn primary" id="recNext">下一步 ›</button>
+      <button class="btn" id="recPlay">▶ 自动播放</button>
+      <span class="step-counter" id="recCounter"></span>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2><span class="mono">innodb_flush_log_at_trx_commit</span>:durability 是可以调的</h2>
+  <p class="h2-sub">上面的实验用的是默认值 <span class="mono">1</span>——每次 COMMIT 都同步等 fsync 完成。这不是唯一选项。</p>
+  <table class="mono">
+    <tr><th>值</th><th>COMMIT 时做什么</th><th>能扛住什么</th></tr>
+    <tr><td>1(默认,本文实验用的值)</td><td>写日志 + 立即 fsync,等落盘才返回</td><td>mysqld 崩溃、操作系统崩溃、断电——一个都不丢</td></tr>
+    <tr><td>2</td><td>写日志到操作系统缓存,不等 fsync;由后台每秒左右 fsync 一次</td><td>mysqld 崩溃没事(数据在 OS 缓存里);但操作系统崩溃或断电,最近这一小段可能丢</td></tr>
+    <tr><td>0</td><td>连写到操作系统缓存都不是每次 COMMIT 就做,后台每秒左右统一处理</td><td>mysqld 崩溃就可能丢最近一小段——durability 最弱,换来最少的日志相关开销</td></tr>
+  </table>
+  <p>换句话说,<span class="mono">=1</span> 买的是"进程崩、系统崩、断电,三种情况都不丢"的保证,代价是每次提交都要等一次磁盘 fsync;调到 <span class="mono">0</span> 或 <span class="mono">2</span> 是在拿"最坏情况下丢一小段最近的提交"去换更高的吞吐——这是一个诚实的权衡,不是免费的性能提升。本文的两次实验都是在默认值 <span class="mono">1</span> 下做的,这也是为什么"已提交必然不丢"这句话在这里成立。</p>
+</section>
+
+<section>
+  <h2>机器上的 LSN</h2>
+  <p class="h2-sub">本机空闲时刻,三个 LSN 位点是相等的——因为没有新的修改在发生。</p>
+  <blockquote class="src">
+    <span class="path">SELECT * FROM performance_schema.global_status WHERE VARIABLE_NAME LIKE 'Innodb_redo_log%';</span>
+Innodb_redo_log_checkpoint_lsn        571476695
+Innodb_redo_log_current_lsn           571476695
+Innodb_redo_log_flushed_to_disk_lsn   571476695
+  </blockquote>
+  <p>三者的关系永远是 <span class="mono">checkpoint_lsn ≤ flushed_to_disk_lsn ≤ current_lsn</span>:<span class="mono">current_lsn</span> 是日志流内存里写到哪了;<span class="mono">flushed_to_disk_lsn</span> 是真正落盘到哪了——这条线以下的修改,进程崩了也丢不了,就是本文实验验证的那条线;<span class="mono">checkpoint_lsn</span> 更保守,它要求对应的<b>数据页本身</b>也已经刷盘(上一篇的话题),只有这条线以下的日志空间才能被安全地循环复用。三条线不重合的时候,差的就是"日志已经安全但页还没刷"和"日志还没来得及落盘"这两段窗口。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>"两次 kill -9"实验是本文的核心证据,不是复述文档——两次都在本机的 MySQL 9.7.1 进程上做的,终端输出、错误日志时间戳、重启后的查询结果均为记录,未做任何删改(只是截取了相关行)。</li>
+      <li>源码引用(<span class="mono">trx0roll.cc</span> 的 <span class="mono">trx_rollback_or_clean_recovered</span>)取自 <span class="mono">mysql/mysql-server</span> 仓库 <span class="mono">mysql-9.7.1</span> 标签(commit <span class="mono">a26ea1a2</span>),与本机安装的 MySQL 9.7.1 完全一致。</li>
+      <li>演示动画里"后台日志写入线程会独立于 COMMIT 主动 flush"这一细节是存在的机制(否则"回滚未提交事务"这个恢复阶段就没有存在的必要),但具体触发时机(缓冲区写满、周期性 flush 等)属于简化叙述,没有在源码层面逐条核对触发条件。</li>
+      <li>没有涉及:undo log 的物理结构、binlog 与 redo log 的两阶段提交(XA,本文错误日志片段里出现的"XA crash recovery"字样正是这个机制的一部分)——前者是系列第五篇的内容。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="mvcc.html" target="_blank" rel="noopener" style="text-decoration:none; color:inherit;">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">MVCC 如何做到读写不互相阻塞</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>InnoDB B+树系列 · 第四篇 · redo log 与崩溃恢复 · 数据来自本机 MySQL 9.7.1 真实实测(含两次进程崩溃)</footer>
+
+<script>
+const DATA = {"events": [{"txn": "A", "type": "begin"}, {"txn": "A", "page": "row1", "value": "committed_before_crash", "lsn": 1, "type": "write"}, {"reason": "commit(A), flush_log_at_trx_commit=1: fsync now", "flushedTo": 1, "type": "flush-log"}, {"txn": "A", "flushedTo": 1, "type": "commit"}, {"txn": "B", "type": "begin"}, {"txn": "B", "page": "row2", "value": "UNCOMMITTED_should_vanish", "lsn": 2, "type": "write"}, {"reason": "background log writer flush (independent of commit)", "flushedTo": 2, "type": "flush-log"}, {"lostLogRecords": [], "flushedToDiskLsn": 2, "currentLsn": 2, "type": "crash"}, {"appliedLsns": [1, 2], "pagesAfterRedo": {"row1": "committed_before_crash", "row2": "UNCOMMITTED_should_vanish"}, "type": "redo-phase"}, {"txn": "B", "pagesRemoved": ["row2"], "type": "rollback-incomplete-txn"}, {"finalPages": {"row1": "committed_before_crash"}, "type": "recovery-done"}], "finalPages": {"row1": "committed_before_crash"}};
+
+(function(){
+  const events = DATA.events;
+  const logPanel = document.getElementById('recLog');
+  const pagesPanel = document.getElementById('recPages');
+  const txnsPanel = document.getElementById('recTxns');
+  const narration = document.getElementById('recNarration');
+  const counter = document.getElementById('recCounter');
+  let idx = 0, playing=false, playTimer=null;
+
+  function describe(e){
+    switch(e.type){
+      case 'begin': return `事务 <span class="k">${e.txn}</span> 开始。`;
+      case 'write': return `事务 <span class="k">${e.txn}</span> 修改页 <span class="k">${e.page}</span>,生成日志记录 LSN=${e.lsn}(内存里的页立即变化,日志先进缓冲区)。`;
+      case 'flush-log': return `日志缓冲区被刷到磁盘,落盘位点推进到 LSN=${e.flushedTo}(${e.reason})。`;
+      case 'commit': return `事务 <span class="k">${e.txn}</span> COMMIT。`;
+      case 'crash': return `💥 崩溃!内存中的一切(页、事务状态)全部消失,只有落盘到 LSN=${e.flushedToDiskLsn} 的日志还在。`;
+      case 'redo-phase': return `重启·阶段1(redo):把磁盘上所有已落盘的日志记录(LSN ≤ ${Math.max(...e.appliedLsns)})全部重放一遍,不区分是谁的事务。`;
+      case 'rollback-incomplete-txn': return `重启·阶段2(undo):事务 <span class="k">${e.txn}</span> 没有提交记录,撤销它重放出来的修改(${e.pagesRemoved.join(', ')})。`;
+      case 'recovery-done': return `恢复完成。最终状态:${Object.keys(e.finalPages).length ? Object.entries(e.finalPages).map(([k,v])=>`${k}=${v}`).join(', ') : '(空)'}`;
+      default: return e.type;
+    }
+  }
+
+  function render(){
+    idx = Math.max(0, Math.min(events.length-1, idx));
+    const e = events[idx];
+    narration.innerHTML = describe(e);
+
+    // gather all write events up to idx to draw the log panel
+    let logHtml = '';
+    const writesUpTo = events.slice(0, idx+1).filter(ev=>ev.type==='write');
+    let flushedTo = 0;
+    for (let i=0;i<=idx;i++){
+      if(events[i].type==='flush-log') flushedTo = events[i].flushedTo;
+    }
+    const crashed = events.slice(0, idx+1).some(ev=>ev.type==='crash');
+    const recoveryStarted = events.slice(0, idx+1).some(ev=>ev.type==='redo-phase');
+    writesUpTo.forEach(w=>{
+      const isFlushed = w.lsn <= flushedTo;
+      logHtml += `<div class="rec ${isFlushed?'flushed':'unflushed'}"><span>LSN ${w.lsn} · ${w.txn} · ${w.page}=${w.value}</span><span>${isFlushed?'已落盘':'仅在缓冲区'}</span></div>`;
+    });
+    logPanel.innerHTML = logHtml || '<span style="color:var(--ink-dim); font-size:.85rem;">(暂无)</span>';
+
+    // pages panel: show current in-memory pages (pre-crash) or recovered pages (post-recovery)
+    let pagesHtml = '';
+    let pagesState = {};
+    let removedPages = new Set();
+    if (recoveryStarted) {
+      for (let i=0;i<=idx;i++){
+        if(events[i].type==='redo-phase') pagesState = Object.assign({}, events[i].pagesAfterRedo);
+        if(events[i].type==='rollback-incomplete-txn') events[i].pagesRemoved.forEach(p=>{ removedPages.add(p); });
+      }
+    } else if (!crashed) {
+      writesUpTo.forEach(w=>{ pagesState[w.page] = w.value; });
+    }
+    const allPageKeys = new Set([...Object.keys(pagesState), ...removedPages]);
+    if(crashed && !recoveryStarted){
+      pagesHtml = '<span style="color:var(--io-c); font-size:.85rem;">💥 内存已清空,等待重启恢复……</span>';
+    } else if(allPageKeys.size===0){
+      pagesHtml = '<span style="color:var(--ink-dim); font-size:.85rem;">(暂无)</span>';
+    } else {
+      allPageKeys.forEach(p=>{
+        const gone = removedPages.has(p);
+        pagesHtml += `<div class="rec ${gone?'gone':'flushed'}"><span>${p}</span><span>${gone ? '已撤销' : (pagesState[p]||'')}</span></div>`;
+      });
+    }
+    pagesPanel.innerHTML = pagesHtml;
+
+    // txn state
+    let txnHtml = '';
+    const txnCommitted = {};
+    const txnRolledBack = {};
+    for (let i=0;i<=idx;i++){
+      if(events[i].type==='commit') txnCommitted[events[i].txn]=true;
+      if(events[i].type==='rollback-incomplete-txn') txnRolledBack[events[i].txn]=true;
+    }
+    const allTxns = new Set(events.filter(ev=>ev.type==='begin').map(ev=>ev.txn));
+    allTxns.forEach(t=>{
+      let cls='pending', label='进行中';
+      if(txnRolledBack[t]){ cls='rolledback'; label='已回滚'; }
+      else if(txnCommitted[t]){ cls='committed'; label='已提交'; }
+      txnHtml += `<div>事务 ${t}:<span class="${cls}">${label}</span></div>`;
+    });
+    txnsPanel.innerHTML = txnHtml;
+
+    counter.textContent = `${idx+1} / ${events.length}`;
+    document.getElementById('recPrev').disabled = idx===0;
+    document.getElementById('recNext').disabled = idx===events.length-1;
+  }
+  document.getElementById('recPrev').onclick=()=>{idx--;render();stopPlay();};
+  document.getElementById('recNext').onclick=()=>{idx++;render();stopPlay();};
+  document.getElementById('recReset').onclick=()=>{idx=0;render();stopPlay();};
+  function stopPlay(){ playing=false; clearInterval(playTimer); document.getElementById('recPlay').textContent='▶ 自动播放'; }
+  document.getElementById('recPlay').onclick=()=>{
+    if(playing){ stopPlay(); return; }
+    playing=true; document.getElementById('recPlay').textContent='⏸ 暂停';
+    playTimer = setInterval(()=>{
+      if(idx>=events.length-1){ stopPlay(); return; }
+      idx++; render();
+    }, 1100);
+  };
+  render();
+})();
+</script>
+
+</body>
+</html>

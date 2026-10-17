@@ -1,0 +1,51 @@
+import sys, os, re, time, subprocess, json; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from dl import *
+tee('c85')
+img('python:3.12-alpine', 'alpine:3.20')
+purge()
+SECRET = 'S3CR3T-demo-value-123'
+def vm(cmd):
+    rc, o = dk('run', '--rm', '--privileged', '--pid=host', *LAB, 'alpine:3.20', 'nsenter', '-t', '1', '-m', '-u', '-n', '-i', 'sh', '-c', cmd, raw=True)
+    return o.strip()
+def vis(b): return '能看到' if SECRET in b else '看不到'
+print('== 一:用 -e 传入的环境变量,哪些地方能看到(Docker Engine 29.8.2;用一个假的秘密值 ' + SECRET + ')')
+n = 'bwlab-c85a'
+dk('run', '-d', '--name', n, *LAB, '-e', f'API_KEY={SECRET}', 'alpine:3.20', 'sh', '-c', 'sleep 300')
+time.sleep(1)
+pid = out('inspect', '--format', '{{.State.Pid}}', n)
+print('  docker inspect(Config.Env):' + vis(out('inspect', '--format', '{{json .Config.Env}}', n)))
+print('  docker inspect 整个输出:' + vis(out('inspect', n)))
+print('  docker exec 里 env:' + vis(dk('exec', n, 'env')[1]))
+print('  容器里 /proc/1/environ:' + vis(dk('exec', n, 'cat', '/proc/1/environ')[1]))
+print('  另一个容器(同一个网络)里 env:' + vis(dk('run', '--rm', 'alpine:3.20', 'env')[1]))
+print('  虚拟机里读 /proc/<容器主进程 PID>/environ:' + vis(vm(f'cat /proc/{pid}/environ | tr "\\0" "\\n"')))
+print('  docker events / docker logs / docker ps:' + vis(dk('logs', n)[1] + out('ps', '--no-trunc', '--format', '{{.Command}} {{.Names}}')))
+dk('exec', n, 'sh', '-c', 'sleep 30 &')
+print('  docker exec 起的后续进程继承环境变量:' + vis(dk('exec', n, 'sh', '-c', 'cat /proc/$(pgrep -n sleep)/environ | tr "\\0" "\\n"')[1]))
+dk('rm', '-f', n)
+print('== 二:命令行参数里的秘密')
+n = 'bwlab-c85b'; n2 = 'bwlab-c85b2'
+dk('run', '-d', '--name', n2, *LAB, 'alpine:3.20', 'sh', '-c', 'sleep 300; true', 'prog', f'--token={SECRET}')
+time.sleep(1)
+print('  docker ps --no-trunc 的 COMMAND 列(命令行里带 --token=…):' + vis(out('ps', '-a', '--no-trunc', '--format', '{{.Command}} {{.Names}}')))
+print('  docker top(命令行参数):' + vis(dk('top', n2)[1]))
+print('  docker inspect 的 Args / Path:' + vis(out('inspect', '--format', '{{.Path}} {{json .Args}}', n2)))
+print('  docker events:' + vis(dk('events', '--since', str(int(time.time()) - 30), '--until', str(int(time.time()) + 1), '--filter', f'container={n2}', '--format', '{{json .}}', timeout=30)[1]))
+print('  容器还在运行吗?' + out('inspect', '--format', '{{.State.Status}}', n2))
+dk('rm', '-f', n2)
+print('== 三:读完之后 unset 能不能从 /proc 里抹掉')
+PY = 'import os, time\nv = os.environ.pop("API_KEY", None)\nprint("读到了,长度", len(v))\nprint("os.environ 里还有吗:", "API_KEY" in os.environ)\nprint("/proc/self/environ 里还有吗:", b"API_KEY=" in open("/proc/self/environ","rb").read())\ntime.sleep(60)'
+n = 'bwlab-c85c'
+dk('run', '-d', '--name', n, *LAB, '-e', f'API_KEY={SECRET}', 'python:3.12-alpine', 'python', '-u', '-c', PY); time.sleep(2)
+for l in dk('logs', n)[1].splitlines(): print('  ' + l)
+print('  docker exec cat /proc/1/environ(进程自己 pop 之后):' + vis(dk('exec', n, 'cat', '/proc/1/environ')[1]))
+print('  docker inspect Config.Env(创建容器时的配置,与进程里是否 pop 无关):' + vis(out('inspect', '--format', '{{json .Config.Env}}', n)))
+dk('rm', '-f', n)
+print('== 四:不放进环境变量的做法:挂文件(只读),应用自己读')
+n = 'bwlab-c85d'
+sf = DT / 'c85-secret.txt'; sf.parent.mkdir(exist_ok=True); sf.write_text(SECRET)
+dk('run', '-d', '--name', n, *LAB, '-v', f'{sf}:/run/secrets/api_key:ro', 'alpine:3.20', 'sleep', '300'); time.sleep(1)
+print('  docker inspect 整个输出:' + vis(out('inspect', n)) + ';docker exec env:' + vis(dk('exec', n, 'env')[1]) + ';/proc/1/environ:' + vis(dk('exec', n, 'cat', '/proc/1/environ')[1]))
+print('  应用仍然读得到文件:' + vis(dk('exec', n, 'cat', '/run/secrets/api_key')[1]) + ';docker inspect 里能看到文件的路径:' + str('/run/secrets/api_key' in out('inspect', '--format', '{{json .Mounts}}', n)))
+dk('rm', '-f', n)
+purge()

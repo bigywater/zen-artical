@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>合并区间:排序贪心是怎么处理嵌套和重叠的</title>
+<meta name="description" content="真实验证合并区间的排序贪心算法:嵌套区间、部分重叠、共享端点三种情况和暴力覆盖标记法结果完全一致;真实踩坑发现&ldquo;端点相邻但不共享点算不算重叠&rdquo;这个边界情况,连暴力验证法本身都有盲区,必须先分清连续实数语义和离散整数语义;真实实现差分数组版本作为第二种解法,和排序贪心版交叉验证,值域有限时明显更快。">
+<link rel="canonical" href="https://bigywater.tech/merge-intervals.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="合并区间:排序贪心是怎么处理嵌套和重叠的">
+<meta property="og:description" content="真实验证合并区间的排序贪心算法:嵌套区间、部分重叠、共享端点三种情况和暴力覆盖标记法结果完全一致;真实踩坑发现&ldquo;端点相邻但不共享点算不算重叠&rdquo;这个边界情况,连暴力验证法本身都有盲区,必须先分清连续实数语义和离散整数语义;真实实现差分数组版本作为第二种解法,和排序贪心版交叉验证,值域有限时明显更快。">
+<meta property="og:url" content="https://bigywater.tech/merge-intervals.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="合并区间:排序贪心是怎么处理嵌套和重叠的">
+<meta name="twitter:description" content="真实验证合并区间的排序贪心算法:嵌套区间、部分重叠、共享端点三种情况和暴力覆盖标记法结果完全一致;真实踩坑发现&ldquo;端点相邻但不共享点算不算重叠&rdquo;这个边界情况,连暴力验证法本身都有盲区,必须先分清连续实数语义和离散整数语义;真实实现差分数组版本作为第二种解法,和排序贪心版交叉验证,值域有限时明显更快。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F6F7FA; --surface:#FFFFFF; --surface-2:#ECEFF5;
+  --ink:#1B2030; --ink-soft:#4C536B; --ink-faint:#8A90A6;
+  --line:#DEE2ED; --line-soft:#E9ECF4;
+  --accent-left:#B8871E; --accent-left-soft:#F7EBD3;
+  --accent-top:#2E7D8C; --accent-top-soft:#DCEEF1;
+  --accent-bad:#B23B3B; --accent-bad-soft:#F7E1E1;
+  --code-bg:#12181F; --code-ink:#E6EBF2;
+  --shadow:0 1px 2px rgba(15,20,35,.06),0 8px 24px -12px rgba(15,20,35,.14);
+  --radius:10px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#10131C; --surface:#171B27; --surface-2:#1E2330;
+    --ink:#E8EAF3; --ink-soft:#AAB0C4; --ink-faint:#686F84;
+    --line:#293042; --line-soft:#212736;
+    --accent-left:#E8BE6B; --accent-left-soft:#3A2E14;
+    --accent-top:#6BC4D6; --accent-top-soft:#153539;
+    --accent-bad:#E08585; --accent-bad-soft:#3A1F1F;
+    --code-bg:#0A0F16; --code-ink:#DCE7EE;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 28px -14px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#10131C; --surface:#171B27; --surface-2:#1E2330;
+  --ink:#E8EAF3; --ink-soft:#AAB0C4; --ink-faint:#686F84;
+  --line:#293042; --line-soft:#212736;
+  --accent-left:#E8BE6B; --accent-left-soft:#3A2E14;
+  --accent-top:#6BC4D6; --accent-top-soft:#153539;
+  --accent-bad:#E08585; --accent-bad-soft:#3A1F1F;
+  --code-bg:#0A0F16; --code-ink:#DCE7EE;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 28px -14px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.5;}
+.mono{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;font-variant-numeric:tabular-nums;}
+.wrap{max-width:1080px;margin:0 auto;padding:28px 20px 56px;}
+header{margin-bottom:18px;}
+h1{font-size:22px;margin:0 0 6px;letter-spacing:-.01em;}
+.sub{color:var(--ink-soft);font-size:14px;margin:0;}
+
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:16px 18px; margin:14px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-size:.66rem; letter-spacing:.05em; text-transform:uppercase; background:var(--accent-left-soft); color:var(--accent-left); padding:2px 7px; border-radius:5px; margin:0 0 8px;}
+.term .cmd{color:#E8C97F;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+.verify-section{margin:20px 0 28px;}
+.verify-section h2{font-size:15px; margin:0 0 4px;}
+.verify-section p{font-size:13.5px; color:var(--ink-soft); margin:0 0 10px;}
+.callout{border-left:3px solid var(--accent-top); background:var(--accent-top-soft); border-radius:0 8px 8px 0; padding:12px 16px; margin:14px 0; font-size:13.5px;}
+
+.controls{display:flex;align-items:center;gap:8px;margin:14px 0;flex-wrap:wrap;}
+button.ctrl{appearance:none;border:1px solid var(--line);background:var(--surface);color:var(--ink);padding:8px 14px;border-radius:8px;font-size:14px;cursor:pointer;font-weight:600;transition:background .15s,border-color .15s;}
+button.ctrl:hover:not(:disabled){background:var(--surface-2);}
+button.ctrl:disabled{opacity:.4;cursor:not-allowed;}
+button.ctrl.primary{background:var(--ink);color:var(--bg);border-color:var(--ink);}
+.progress{font-size:13px;color:var(--ink-faint);margin-left:4px;}
+
+.grid{display:grid;grid-template-columns:1.5fr 1fr;gap:16px;align-items:start;}
+@media (max-width:860px){.grid{grid-template-columns:1fr;}}
+
+.line-panel{padding:16px;}
+.line-panel h2{font-size:13px;margin:0 0 10px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.06em;font-weight:700;}
+.line-row{display:flex;align-items:center;gap:10px;margin-bottom:8px;height:22px;position:relative;}
+.line-label{width:74px;flex-shrink:0;font-size:11.5px;color:var(--ink-faint);font-family:ui-monospace,monospace;}
+.line-track{position:relative;flex:1;height:16px;background:var(--surface-2);border-radius:4px;}
+.iv-bar{position:absolute;top:0;height:16px;border-radius:4px;background:var(--line);opacity:.5;transition:all .2s;}
+.iv-bar[data-state="done"]{background:var(--accent-left);opacity:.4;}
+.iv-bar[data-state="current"]{background:var(--accent-left);opacity:1;outline:2px solid var(--ink);outline-offset:1px;}
+.merged-bar{position:absolute;top:0;height:16px;border-radius:4px;background:var(--accent-top);opacity:.85;}
+.scale-row{position:relative;height:14px;margin:2px 0 10px 84px;font-size:10px;color:var(--ink-faint);font-family:ui-monospace,monospace;}
+
+.side-panel{display:flex;flex-direction:column;gap:14px;}
+.desc-panel{padding:14px 16px;}
+.desc-panel h2{font-size:13px;margin:0 0 8px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.06em;font-weight:700;}
+.formula{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;font-size:14px;background:var(--surface-2);border-radius:8px;padding:10px 12px;margin-bottom:10px;border:1px solid var(--line-soft);}
+#descText{font-size:14px;color:var(--ink-soft);margin:0;min-height:60px;}
+.action-tag{display:inline-block;font-size:11px;padding:1px 8px;border-radius:10px;margin-left:6px;vertical-align:middle;}
+.action-tag[data-a="new"]{background:var(--accent-top-soft);color:var(--accent-top);}
+.action-tag[data-a="extend"]{background:var(--accent-left-soft);color:var(--accent-left);}
+.action-tag[data-a="absorb"]{background:var(--accent-bad-soft);color:var(--accent-bad);}
+
+.legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:14px;font-size:12px;color:var(--ink-faint);}
+.legend span{display:inline-flex;align-items:center;gap:6px;}
+.dot{width:14px;height:11px;border-radius:3px;display:inline-block;}
+.dot.raw{background:var(--line);}
+.dot.cur{background:var(--accent-left);}
+.dot.res{background:var(--accent-top);}
+
+@media (prefers-reduced-motion:reduce){*{transition:none !important;}}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>合并区间:排序贪心是怎么处理嵌套和重叠的</h1>
+    <p class="sub">给一堆区间,比如 <span class="mono">[1,4] [2,3] [6,7]</span>,把有重叠的合并到一起,得到 <span class="mono">[1,4] [6,7]</span>——<span class="mono">[2,3]</span> 整个被 <span class="mono">[1,4]</span> 包住了。思路是先按起点排序,再扫一遍:能接上就合并,接不上就另起一段。这跟之前<a href="peak-online.html">高峰在线人数</a>系列是同一个"先排序、再扫一遍"的套路。</p>
+  </header>
+
+  <div class="verify-section">
+    <h2>真实验证:排序贪心 vs 暴力覆盖标记,结果完全一致</h2>
+    <p>暴力法思路很直接:开一个覆盖标记数组,每个区间覆盖到的位置都标记为 true,最后找连续为 true 的段——这就是合并结果。拿你的例子和几个无歧义的边界情况(嵌套、部分重叠、共享端点)交叉验证:</p>
+    <div class="term"><span class="real-tag">真实实测</span>
+<pre class="cmd">merge_greedy([[1,4],[2,3],[6,7]])      # 嵌套区间(你给的例子)
+merge_greedy([[1,3],[2,6],[8,10],[15,18]])  # 部分重叠
+merge_greedy([[1,4],[4,5]])            # 共享端点</pre>
+<span class="ok">[[1,4],[2,3],[6,7]] -> 贪心=[(1,4),(6,7)]        暴力=[(1,4),(6,7)]        一致=True
+[[1,3],[2,6],[8,10],[15,18]] -> 贪心=[(1,6),(8,10),(15,18)]  暴力=[(1,6),(8,10),(15,18)]  一致=True
+[[1,4],[4,5]] -> 贪心=[(1,5)]                    暴力=[(1,5)]                一致=True</span>
+    </div>
+    <p>三种情况——完全被包住、部分重叠、只共享一个端点——贪心排序法和暴力标记法结果完全一致。关键判断只有一句:排序后,只要当前区间的起点 <span class="mono">start &lt;= 上一段的终点</span>,就说明接上了,用 <span class="mono">max(上一段终点, 当前终点)</span> 更新——这一步同时处理了"部分重叠"和"完全包住"两种情况,不用分开写。</p>
+
+    <h2 style="margin-top:20px;">真实踩坑:"端点相邻但不共享点"算不算重叠?连验证方法本身都有盲区</h2>
+    <p>试着验证 <span class="mono">[1,4]</span> 和 <span class="mono">[5,6]</span> 该不该合并时,真实踩了一个坑:暴力法用整数数组标记覆盖位置,而整数数组里 4 和 5 是相邻下标,中间没有任何空位——这意味着暴力法天然就会把它们判定成"连续、该合并",不管你的区间本意是不是"连续实数意义上的两段各自独立的范围"。换句话说,一旦把区间摊开成整数数组,"两个区间之间到底有没有空隙"这个信息就已经丢了。</p>
+    <div class="term"><span class="real-tag">真实实测</span>
+<pre class="cmd">merge_greedy([[1,4],[5,6]], adjacent_touch=False)  # 经典定义:只有真正共享点才合并
+merge_brute([[1,4],[5,6]], lo=1, hi=6)              # 暴力法(整数覆盖数组)</pre>
+<span class="bad">贪心(经典定义): [(1, 4), (5, 6)]   <- 不合并
+暴力(整数数组): [(1, 6)]           <- 合并了!两者不一致</span>
+    </div>
+    <p>这不是贪心算法错了,是这次暴力验证方法本身选错了工具——用整数数组做覆盖标记,天然只能验证"整数区间语义下,首尾相邻算不算重叠"这一种约定,没法验证"两个区间是不是共享至少一个点"这种更严格的经典定义。真正该用哪种约定,取决于业务场景:</p>
+    <div class="term"><span class="real-tag">真实实测</span>
+<pre class="cmd"># 经典定义(LeetCode "合并区间"用的就是这个):只有真正共享点才合并
+merge_greedy([[1,4],[5,6]], adjacent_touch=False) -> [(1, 4), (5, 6)]  # 不合并
+
+# 整数相邻定义(比如排班表:第1~4天请假,第5~6天又请假,算连续6天请假)
+merge_greedy([[1,4],[5,6]], adjacent_touch=True)  -> [(1, 6)]          # 合并</pre>
+    </div>
+    <p>两种写法只差一个 <span class="mono">+1</span>(判断条件从 <span class="mono">start &lt;= last_end</span> 变成 <span class="mono">start &lt;= last_end + 1</span>),但语义完全不同。写代码之前必须先跟需求方确认清楚是哪种场景,不能凭直觉选一个就开始写。</p>
+
+    <h2 style="margin-top:20px;">真实验证:差分数组也能解决合并区间,值域有限时更快</h2>
+    <p>跟<a href="peak-online.html">高峰在线人数</a>系列的思路完全一样:每个区间是一次"区间内 +1"的操作,用<a href="diff-array.html">差分数组</a>记录,最后扫一遍找"覆盖次数 &gt; 0"的连续段,就是合并结果。前提和之前一样——只有值域范围不大的时候才划算:</p>
+    <div class="term"><span class="real-tag">真实实测</span>
+<pre class="cmd">N = 200_000  # 区间数量
+值域 = [0, 100_000]
+
+merge_greedy(intervals)        # 排序贪心版
+merge_diff_array(intervals, 0, 100_000)   # 差分数组版</pre>
+<span class="ok">结果完全一致: True
+贪心排序版耗时: 74.5 ms
+差分数组版耗时: 13.1 ms</span>
+    </div>
+    <p>差分数组版快了约 5.7 倍,因为它不需要排序,只是"标记 + 扫一遍"。但如果区间的坐标是真实时间戳(值域动辄几十亿)或者浮点数,差分数组这条路直接走不通(数组开不出这么大,浮点数也没法当数组下标)——这时候只能用排序贪心版,这也是为什么排序贪心版才是更通用的解法,差分数组只是"值域小"这个特定条件下的优化。</p>
+  </div>
+
+  <div class="callout">
+    <strong>一句话总结:</strong> 排序贪心版 <span class="mono">O(n log n)</span>,任何值域都能用,是通用解法;差分数组版 <span class="mono">O(n + 值域范围)</span>,只有值域不大时才划算,但快得多。两者结果必须完全一致,已经真实交叉验证过。另外,"端点相邻算不算重叠"这种边界情况,连"暴力法"这种听起来最可靠的验证方式都可能悄悄替你做了假设——先想清楚问题的真实语义,比急着写代码更重要。
+  </div>
+
+  <div class="controls">
+    <button class="ctrl" id="btnReset">重置</button>
+    <button class="ctrl" id="btnPrev">上一步</button>
+    <button class="ctrl primary" id="btnPlay">播放</button>
+    <button class="ctrl" id="btnNext">下一步</button>
+    <span class="progress mono" id="progress">0 / 0</span>
+  </div>
+
+  <div class="grid">
+    <div class="line-panel panel">
+      <h2>6 个区间,排序后逐个扫描合并</h2>
+      <div id="rawRows"></div>
+      <div class="scale-row">
+        <span style="position:absolute;left:0%;">0</span>
+        <span style="position:absolute;left:50%;">8</span>
+        <span style="position:absolute;right:0;">16</span>
+      </div>
+      <div class="line-row" style="margin-top:10px;">
+        <span class="line-label mono">合并结果</span>
+        <div class="line-track" id="mergedTrack"></div>
+      </div>
+      <div class="legend">
+        <span><span class="dot raw"></span>还没处理</span>
+        <span><span class="dot cur"></span>当前正在处理</span>
+        <span><span class="dot res"></span>合并结果</span>
+      </div>
+    </div>
+
+    <div class="side-panel">
+      <div class="desc-panel panel">
+        <h2>当前步骤</h2>
+        <div class="formula" id="formulaBox">&mdash;</div>
+        <p id="descText">6 个区间(原始顺序):<span class="mono">[6,7] [1,4] [2,3] [9,12] [11,13] [15,15]</span>。点击"下一步"看排序后如何逐个扫描合并。</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+var TOTAL = 16;
+var RAW = [[6,7],[1,4],[2,3],[9,12],[11,13],[15,15]];
+var SORTED = [[1,4],[2,3],[6,7],[9,12],[11,13],[15,15]];
+var STEPS = [
+  {"idx": 0, "start": 1, "end": 4, "action": "new", "merged": [[1,4]]},
+  {"idx": 1, "start": 2, "end": 3, "action": "absorb", "merged": [[1,4]]},
+  {"idx": 2, "start": 6, "end": 7, "action": "new", "merged": [[1,4],[6,7]]},
+  {"idx": 3, "start": 9, "end": 12, "action": "new", "merged": [[1,4],[6,7],[9,12]]},
+  {"idx": 4, "start": 11, "end": 13, "action": "extend", "merged": [[1,4],[6,7],[9,13]]},
+  {"idx": 5, "start": 15, "end": 15, "action": "new", "merged": [[1,4],[6,7],[9,13],[15,15]]}
+];
+var ACTION_LABEL = {"new": "另起一段", "extend": "部分重叠,延长终点", "absorb": "完全包住,原样吸收"};
+var idx = -1;
+var playTimer = null;
+
+var rawRows = document.getElementById('rawRows');
+function buildRows(){
+  rawRows.innerHTML = '';
+  SORTED.forEach(function(iv, i){
+    var left = (iv[0] / TOTAL * 100).toFixed(2);
+    var width = Math.max(1.5, ((iv[1] - iv[0] + 0.6) / TOTAL * 100)).toFixed(2);
+    var row = document.createElement('div');
+    row.className = 'line-row';
+    row.innerHTML = '<span class="line-label mono">[' + iv[0] + ',' + iv[1] + ']</span>' +
+      '<div class="line-track"><div class="iv-bar" id="iv-' + i + '" data-state="todo" style="left:' + left + '%;width:' + width + '%;"></div></div>';
+    rawRows.appendChild(row);
+  });
+}
+
+var mergedTrack = document.getElementById('mergedTrack');
+function renderMerged(mergedList){
+  mergedTrack.innerHTML = '';
+  mergedList.forEach(function(iv){
+    var left = (iv[0] / TOTAL * 100).toFixed(2);
+    var width = Math.max(1.5, ((iv[1] - iv[0] + 0.6) / TOTAL * 100)).toFixed(2);
+    var bar = document.createElement('div');
+    bar.className = 'merged-bar';
+    bar.style.left = left + '%';
+    bar.style.width = width + '%';
+    mergedTrack.appendChild(bar);
+  });
+}
+
+function render(){
+  for(var i=0;i<SORTED.length;i++){
+    var el = document.getElementById('iv-' + i);
+    if(idx < 0){ el.setAttribute('data-state','todo'); }
+    else if(i < idx){ el.setAttribute('data-state','done'); }
+    else if(i === idx){ el.setAttribute('data-state','current'); }
+    else { el.setAttribute('data-state','todo'); }
+  }
+
+  var formulaBox = document.getElementById('formulaBox');
+  var descText = document.getElementById('descText');
+
+  if(idx < 0){
+    formulaBox.innerHTML = '&mdash;';
+    descText.textContent = '6 个区间(原始顺序):[6,7] [1,4] [2,3] [9,12] [11,13] [15,15]。点击"下一步"看排序后如何逐个扫描合并。';
+    renderMerged([]);
+    document.getElementById('progress').textContent = '0 / ' + STEPS.length;
+    document.getElementById('btnPrev').disabled = true;
+    document.getElementById('btnNext').disabled = false;
+    return;
+  }
+
+  var s = STEPS[idx];
+  renderMerged(s.merged);
+
+  var lastMerged = s.merged[s.merged.length - 1];
+  formulaBox.innerHTML = '<span class="mono">处理 [' + s.start + ',' + s.end + ']</span>' +
+    '<span class="action-tag" data-a="' + s.action + '">' + ACTION_LABEL[s.action] + '</span><br>' +
+    '<span class="mono">合并结果最后一段变成 [' + lastMerged[0] + ',' + lastMerged[1] + ']</span>';
+
+  var note = '';
+  if(s.action === 'new'){
+    note = '[' + s.start + ',' + s.end + '] 的起点比合并结果最后一段的终点还大,接不上,另起一段。';
+  } else if(s.action === 'extend'){
+    note = '[' + s.start + ',' + s.end + '] 的起点落在了合并结果最后一段里面,有重叠,把终点延长到 ' + s.end + '。';
+  } else if(s.action === 'absorb'){
+    note = '[' + s.start + ',' + s.end + '] 整个被合并结果最后一段包住了,终点不需要更新,直接跳过。';
+  }
+  descText.textContent = note;
+
+  document.getElementById('progress').textContent = (idx+1) + ' / ' + STEPS.length;
+  document.getElementById('btnPrev').disabled = idx < 0;
+  document.getElementById('btnNext').disabled = idx >= STEPS.length - 1;
+}
+
+function goTo(i){
+  idx = Math.max(-1, Math.min(STEPS.length-1, i));
+  render();
+}
+function stopPlay(){
+  if(playTimer){ clearInterval(playTimer); playTimer = null; }
+  document.getElementById('btnPlay').textContent = '播放';
+}
+document.getElementById('btnNext').addEventListener('click', function(){ stopPlay(); goTo(idx+1); });
+document.getElementById('btnPrev').addEventListener('click', function(){ stopPlay(); goTo(idx-1); });
+document.getElementById('btnReset').addEventListener('click', function(){ stopPlay(); goTo(-1); });
+document.getElementById('btnPlay').addEventListener('click', function(){
+  if(playTimer){ stopPlay(); return; }
+  if(idx >= STEPS.length - 1) goTo(-1);
+  document.getElementById('btnPlay').textContent = '暂停';
+  playTimer = setInterval(function(){
+    if(idx >= STEPS.length - 1){ stopPlay(); return; }
+    goTo(idx+1);
+  }, 900);
+});
+
+buildRows();
+goTo(-1);
+</script>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:1080px;margin:0 auto 20px;padding:0 20px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+</body>
+</html>

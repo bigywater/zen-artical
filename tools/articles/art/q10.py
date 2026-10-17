@@ -1,0 +1,26 @@
+from lib import *
+S = SS('q10')
+steps = [
+    step("消息被 reject(requeue=False)后进入队列配置的死信交换机 dlx,死信队列收到的消息 routing key 是原来的 m1,body 不变,自定义头 k=v 也保留,并且多了 x-death 头:一个数组,每个元素描述“在哪个队列因为什么死了几次”——{count: 1, reason: 'rejected', queue: 'm1', exchange: '', routing-keys: ['m1']},每个元素还有 time 字段。另外还加了 x-first-death-queue / reason / exchange 和 x-last-death-… 三对头,分别记第一次和最近一次死亡。", t=tl(S(1)), mark=lidx(S(1), 'x-death = ', '全部键'), done=lidx(S(1), '死信队列收到', '其它头'), kv=KV([['x-death', '数组:每个队列+原因一项'], ['count', '在该队列因该原因死了几次'], ['x-first-death-* / x-last-death-*', '首次和最近一次死亡'], ['原有的头和 body', '原样保留']], ['x-death'])),
+    step("TTL 过期也会死信:队列级 x-message-ttl=300 的队列 m2 里的消息、单条消息 expiration='300' 的队列 m2b 里的消息,过一会儿都出现在死信队列,x-death 的 reason 都是 expired,queue 分别是 m2 和 m2b。所以 x-death 的 reason 能区分“被拒绝(rejected)”和“过期(expired)”。", t=tl(S(2)), mark=lidx(S(2), "'msg-ttl'"), done=lidx(S(2), "'queue-ttl'"), kv=KV([['x-message-ttl', '队列级,所有消息'], ['expiration', '单条消息'], ['reason', 'expired']], ['reason'])),
+    step("队列长度超限:x-max-length=3、默认溢出策略 drop-head,发 msg0~msg5 共 6 条。主队列留下最新的 msg3、msg4、msg5;被挤出去的最老的 msg0、msg1、msg2 进入死信队列,reason 都是 maxlen。drop-head 丢的是队头(最老),并且在配了死信交换机时不是真的丢,而是死信。", t=tl(S(3)), mark=lidx(S(3), "('msg0', 'maxlen')"), done=lidx(S(3), '主队列里剩'), b=bars([['留在主队列', 3, '3 条(msg3~5)'], ['死信 maxlen', 3, '3 条(msg0~2)']], 3, mark=[1], done=[0]), kv=KV([['drop-head', '挤出最老的'], ['配了 DLX', '被挤出的变成死信'], ['reason', 'maxlen']], ['reason'])),
+    step("x-dead-letter-routing-key:m4a 不设,死信沿用原来的 routing key orig,被绑了 orig 的 dlq.a 收到;m4b 设成 fixed,死信用 fixed 路由,被绑了 fixed 的 dlq.b 收到,而 x-death 里记录的 routing-keys 仍是原来的 orig。死信交换机本身的绑定决定谁收得到——DLX 是个普通 exchange,走的是正常的路由规则。", t=tl(S(4)), mark=lidx(S(4), 'dlq.b(绑定 key=fixed)'), done=lidx(S(4), 'dlq.a(绑定 key=orig)', 'm4a 没设'), kv=KV([['不设', '沿用原 routing key'], ['x-dead-letter-routing-key', '改用指定的 key'], ['x-death 里的 routing-keys', '仍是原来的']], ['x-dead-letter-routing-key'])),
+    step("死信路由不到会怎样:DLX 存在但没有匹配的绑定,拒绝的 3 条消息 m5 里 (ready, unacked) = (0, 0),死信也没有被任何队列收下——消息消失;x-dead-letter-exchange 指向一个根本不存在的 exchange,拒绝后同样是 (0, 0),channel 仍然打开,没有任何错误。死信交换机配错了,消息就是静悄悄没了,监控上也看不出来。", t=tl(S(5)), mark=lidx(S(5), '拒绝了 3 条', 'DLX 指向一个不存在'), done=lidx(S(5), '拒绝了 3 条'), kv=KV([['DLX 无绑定', '消息消失'], ['DLX 不存在', '消息消失,无报错'], ['排查', '看 x-dead-letter-exchange 是否存在、有无绑定']], ['DLX 不存在'])),
+    step("用死信做重试:main 被拒绝 → 经 retry.dlx 进 wait 队列(TTL 300 ms)→ 过期后经 main.dlx 回到 main。连续拒绝 4 次,拿到消息的时刻(ms)分别是 0、319、628、962,每次间隔 309~334 ms(300 ms TTL 加调度),x-death 里 main 的 count 依次是 0、1、2、3(redelivered 从第二次起是 True)。第 5 次拿到时 x-death 有两项:{wait, expired, count 4} 和 {main, rejected, count 4},x-first-death 是 main/rejected,x-last-death 是 wait/expired。用 count 就能数重试次数,超过就别再 requeue。", t=tl(S(6)), mark=lidx(S(6), '每次拿到消息', '第 5 次拿到时'), done=lidx(S(6), 'first-death'), b=bars([['第 2 次拿到', 319, '319 ms'], ['第 3 次', 628, '628 ms'], ['第 4 次', 962, '962 ms']], 962, mark=[0, 1, 2]), kv=KV([['重试环', 'main → wait(TTL) → main'], ['x-death count', '每绕一圈加 1'], ['间隔', '≈ TTL + 调度,309~334 ms']], ['x-death count'])),
+    step("死信绕回自己:loopq 的死信交换机是 fanout 又绑回 loopq,TTL 200 ms,发一条消息。1.5 秒后 loopq 里是 0 条——没有无限循环。broker 日志里记了一条:消息被丢弃,因为按死亡顺序排的队列列表 [loopq, loopq] 构成了一个“没有 rejected 原因的死信环”,这个列表以后不再记录。有 rejected 的环(像上一节的重试)是允许的,因为消费者每次的拒绝都是显式动作。", t=tl(S(7)), mark=lidx(S(7), '1.5 秒后', 'Message dropped'), done=lidx(S(7), 'broker 日志里'), kv=KV([['全是 expired 的环', '检测到,丢弃并记日志(只记一次)'], ['含 rejected 的环', '允许,靠 x-death count 控制'], ['结果', '没有无限循环']], ['全是 expired 的环'])),
+]
+A = mkartq('q10', 10, 'RabbitMQ,死信队列,DLX,x-death,TTL,maxlen,真实验证,动画演示',
+    '在 RabbitMQ 4.3.6 上实测死信:reject / TTL 过期 / 队列超长三种原因的 x-death 头(count、reason、queue、exchange、routing-keys)和 x-first/last-death;x-dead-letter-routing-key 的影响;DLX 配错消息静默消失;用 wait 队列 + TTL 实现重试并用 count 计数;全是 expired 的死信环会被检测并丢弃。',
+    '死信队列是 RabbitMQ 里处理失败消息、做延迟和重试的基础。消息什么时候会死、死的时候带着什么信息、死信交换机配错了会怎样、死信能不能转圈?这篇一项项在 RabbitMQ 4.3.6 上验证。',
+    [('3 个原因', 'rejected(被拒绝)、expired(过期)、maxlen(队列超长),都写在 x-death 的 reason 里'), ('count 0→3', '重试环里消息每绕一圈,x-death 中 main 的 count 加 1'), ('(0, 0)', 'DLX 无绑定或不存在时,死信的去向:消息直接消失,没有报错')],
+    [('什么时候死', '<p>消息成为死信有三种常见原因:被 <code>reject / nack</code> 且 <code>requeue=false</code>(rejected)、TTL 到期(expired)、队列超过 <code>x-max-length</code> 被挤出(maxlen)。队列声明时设置了 <code>x-dead-letter-exchange</code>,死信才会被重新发布到那个 exchange,否则就是丢弃。</p>'),
+     ('x-death 头', '<p>死信会带上 <code>x-death</code> 数组,每项记录某队列因某原因死亡的 count、queue、exchange、routing-keys 和 time;另有 <code>x-first-death-*</code> 与 <code>x-last-death-*</code>。原来的 body 和自定义头原样保留。</p>'),
+     ('队列超长', '<p>设置 <code>x-max-length</code> 且溢出策略是默认的 drop-head 时,队头(最老的)被挤出,配了死信交换机就变成 reason=maxlen 的死信,而不是被丢弃。</p>'),
+     ('routing key', '<p>死信的 routing key 默认沿用原来的,可以用 <code>x-dead-letter-routing-key</code> 改写。死信交换机就是普通 exchange,有没有队列收到完全取决于它的绑定。</p>'),
+     ('配错了不会报错', '<p>DLX 没有匹配的绑定,或者根本不存在,死信就直接消失,既不报错也不影响 channel。</p>'),
+     ('重试', '<p>main 的死信交换机指向一个带 TTL 的 wait 队列,wait 的死信再回到 main,就组成了“失败 → 等一会 → 重试”的环;x-death 里的 count 可以用来限制重试次数。</p>'),
+     ('死信环', '<p>如果环路上全是 expired 之类的非显式原因,RabbitMQ 会检测到并丢弃消息、日志里提示一次;含有 rejected 的环是允许的。</p>')],
+    steps,
+    [ENV_Q + '。主队列都是经典队列;x-death 的内容用 pika 读出 headers;重试环里每次的间隔用 perf_counter 计',
+     '没有验证:quorum 队列的 at-least-once 死信(dead-letter-strategy);delivery-limit 触发的死信(第 16 篇);集群里死信交换机在别的节点上;大量死信时的吞吐;死信消息的 expiration 属性是否被保留(只看了头和 body);x-death 数组很长时的头大小上限'],
+    '死信队列')

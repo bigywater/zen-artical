@@ -1,0 +1,485 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>bisect:二分次数与 bisect run</title>
+<meta name="description" content="在 1000 个提交的历史上实测 git bisect:手工回答时剩余可疑提交数 499 → 249 → 124 → 62 → 30 逐步减半;bisect run 用 10 次测试找到第 637 个提交;100 个随机 bug 位置全部找对,测试次数 9~10(平均 9.95);非线性历史按“可疑集合折半”选提交;脚本退出 125 可跳过无法测试的提交。">
+<link rel="canonical" href="https://bigywater.tech/git-bisect.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="bisect:二分次数与 bisect run">
+<meta property="og:description" content="在 1000 个提交的历史上实测 git bisect:手工回答时剩余可疑提交数 499 → 249 → 124 → 62 → 30 逐步减半;bisect run 用 10 次测试找到第 637 个提交;100 个随机 bug 位置全部找对,测试次数 9~10(平均 9.95);非线性历史按“可疑集合折半”选提交;脚本退出 125 可跳过无法测试的提交。">
+<meta property="og:url" content="https://bigywater.tech/git-bisect.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="bisect:二分次数与 bisect run">
+<meta name="twitter:description" content="在 1000 个提交的历史上实测 git bisect:手工回答时剩余可疑提交数 499 → 249 → 124 → 62 → 30 逐步减半;bisect run 用 10 次测试找到第 637 个提交;100 个随机 bug 位置全部找对,测试次数 9~10(平均 9.95);非线性历史按“可疑集合折半”选提交;脚本退出 125 可跳过无法测试的提交。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">2339</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">97</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">56</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">54</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">114</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">111</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#8B3FA0; --series-c-soft:#F1E3F6;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#C48AD6; --series-c-soft:#2E1838;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#C48AD6; --series-c-soft:#2E1838;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Git · 55</div>
+  <h1>bisect:二分次数与 bisect run</h1>
+  <p>1000 个提交里找出引入 bug 的那一个,要测试几次?bisect 选提交的依据是什么?历史里有合并时它怎么选?脚本不能测试某些提交怎么办?这篇用 1000 个提交的历史做了 100 次实验。</p>
+  <div class="hero-fact">
+<div><div class="num">10 次</div><div class="lbl">1000 个提交里找到引入 bug 的那个所需的测试次数上限(⌈log2 1000⌉)</div></div><div><div class="num">100 / 100</div><div class="lbl">随机的 100 个 bug 位置全部找对,测试次数 9~10,平均 9.95</div></div><div><div class="num">exit 125</div><div class="lbl">脚本用它表示“跳过这个无法测试的提交”</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="git-reset-modes.html">reset 的 soft、mixed、hard 对三个区域的影响</a></div>
+<section>
+  <h2>二分</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  $ git bisect start main $(git rev-list --max-parents=0 HEAD) 2&gt;&amp;1 | sed -E "s/[0-9a-f]{40}/&lt;sha&gt;/g; s/\[[0-9a-f]+\]/[&lt;sha&gt;]/"
+  Bisecting: 499 revisions left to test after this (roughly 9 steps)
+  [&lt;sha&gt;] 提交 500
+  测试当前提交 f.txt=“版本 500” → 标记 good
+    $ git bisect good 2&gt;&amp;1 | head -1 | sed -E "s/[0-9a-f]{40}/&lt;sha&gt;/g"
+    Bisecting: 249 revisions left to test after this (roughly 8 steps)
+  测试当前提交 f.txt=“版本 750” → 标记 bad
+    $ git bisect bad 2&gt;&amp;1 | head -1 | sed -E "s/[0-9a-f]{40}/&lt;sha&gt;/g"
+    Bisecting: 124 revisions left to test after this (roughly 7 steps)
+  测试当前提交 f.txt=“版本 625” → 标记 good
+    $ git bisect good 2&gt;&amp;1 | head -1 | sed -E "s/[0-9a-f]{40}/&lt;sha&gt;/g"
+    Bisecting: 62 revisions left to test after this (roughly 6 steps)
+  测试当前提交 f.txt=“版本 687” → 标记 bad
+    $ git bisect bad 2&gt;&amp;1 | head -1 | sed -E "s/[0-9a-f]{40}/&lt;sha&gt;/g"
+    Bisecting: 30 revisions left to test after this (roughly 5 steps)
+  $ git bisect log | grep -E "^git bisect" | sed -E "s/[0-9a-f]{40}/&lt;sha&gt;/g" | head -5
+  git bisect start 'main' '&lt;sha&gt;'
+  git bisect good &lt;sha&gt;
+  git bisect bad &lt;sha&gt;
+  git bisect good &lt;sha&gt;
+  git bisect bad &lt;sha&gt;</pre></div>
+  <p>git bisect 在“好的提交”和“坏的提交”之间检出中点,你回答 good 或 bad,可疑范围折半。1000 个提交最多 10 次测试。</p>
+</section>
+<section>
+  <h2>bisect run</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  脚本被调用 10 次(用于测试的提交数);找到的第一个坏提交: '提交 637'(期望 “提交 637”)
+  bisect run 的输出里每一步都有一行 Bisecting: …,共 9 行:
+    Bisecting: 249 revisions left to test after this (roughly 8 steps)
+    Bisecting: 124 revisions left to test after this (roughly 7 steps)
+    Bisecting: 62 revisions left to test after this (roughly 6 steps)
+        …
+    Bisecting: 1 revision left to test after this (roughly 1 step)
+    Bisecting: 0 revisions left to test after this (roughly 0 steps)
+    &lt;sha&gt; is the first bad commit</pre></div>
+  <p><code>git bisect run 脚本</code> 用脚本的退出码自动回答:0 为 good,1~124/126/127 为 bad,125 为跳过,≥128 终止。整个过程不需要人工参与,最后输出 <code>is the first bad commit</code>。</p>
+</section>
+<section>
+  <h2>次数</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  找对了 100/100;测试次数 最少 9 最多 10 平均 9.95(log2(1000) = 9.97)
+  分布: 9 次×5  10 次×95</pre></div>
+  <p>随机 100 个 bug 位置的实验里,测试次数全部在 9 到 10 之间,和 ⌈log₂1000⌉ 吻合,而且全部找对。</p>
+</section>
+<section>
+  <h2>非线性历史</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  $ git log --graph --format='%s' | sed -E 's/^/  /'
+    * M5
+    * M4
+    *   Merge branch 'side'
+    |\
+    | * S8
+    | * S7
+    | * S6
+    | * S5
+    | * S4
+    | * S3
+    | * S2
+    | * S1
+    * | M3
+    * | M2
+    |/
+    * M1
+  $ git bisect start main c3d1a526787418d686aff0f74449993dedd23352 2&gt;&amp;1 | sed -E 's/[0-9a-f]{40}/&lt;sha&gt;/g; s/\[[0-9a-f]+\]/[&lt;sha&gt;]/'; git log -1 --format='当前检出: %s'; git bisect reset &gt;/dev/null
+  Bisecting: 6 revisions left to test after this (roughly 3 steps)
+  [&lt;sha&gt;] S6
+  当前检出: S6
+  Previous HEAD position was 4ac3082 S6
+  Switched to branch 'main'
+  main 比 M1 多 13 个提交(可疑集合)。每个候选提交“自己加上它的祖先里属于可疑集合的个数”:
+   S1=1  S2=2  S3=3  S4=4  S5=5  S6=6  S7=7  S8=8  M2=1  M3=2  Merge branch 'side'=11  M4=12  M5=13
+  可疑集合是 13 个,折半约 6.5;计数最接近一半的是 S6(=6),bisect 选的就是它</pre></div>
+  <p>历史里有合并时,bisect 选的是能把“可疑集合”(坏提交的祖先减去好提交的祖先)分成最接近两半的提交,按祖先个数而不是提交时间。</p>
+</section>
+<section>
+  <h2>跳过</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  遇到“版本 500~520 无法编译”的提交(脚本 exit 125),bisect 跳过它们继续,共 10 步;前三步:
+    Bisecting: 499 revisions left to test after this (roughly 9 steps)
+    Bisecting: 439 revisions left to test after this (roughly 9 steps)
+    Bisecting: 219 revisions left to test after this (roughly 8 steps)
+    …
+    &lt;sha&gt; is the first bad commit | 提交 637
+  退出码:0 = good,1~124 与 126~127 = bad,125 = 跳过,≥128 = 终止整个 bisect(文档约定)</pre></div>
+  <p>无法编译或无法测试的提交让脚本 exit 125,bisect 排除它们、换一个相邻的提交继续,可能多花几步。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">bisect</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "b", "kind": "bars", "label": "数字对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "1000 个提交的线性历史,第 1 个是好的、第 1000 个是坏的。git bisect start 之后 git 立刻检出中间的“提交 500”,并输出 Bisecting: 499 revisions left to test after this (roughly 9 steps)。我们按 bug 在第 637 个提交引入来回答:500 是 good → 还剩 249(roughly 8 steps),检出 750;750 是 bad → 还剩 124(7 步),检出 625;625 good → 还剩 62(6 步),检出 687;687 bad → 还剩 30(5 步)。每次剩余的可疑提交数约减半。git bisect log 记下了每一步,可以保存并重放。", "s": {"t": {"lines": ["  $ git bisect start main $(git rev-list --max-parents=0 HEAD) 2>&1 | sed -E \"s/[0-9a-f]{40}/<sha>/g; s/\\[[0-9a-f]+\\]/[<sha>]/\"", "  Bisecting: 499 revisions left to test after this (roughly 9 steps)", "  [<sha>] 提交 500", "  测试当前提交 f.txt=“版本 500” → 标记 good", "    $ git bisect good 2>&1 | head -1 | sed -E \"s/[0-9a-f]{40}/<sha>/g\"", "    Bisecting: 249 revisions left to test after this (roughly 8 steps)", "  测试当前提交 f.txt=“版本 750” → 标记 bad", "    $ git bisect bad 2>&1 | head -1 | sed -E \"s/[0-9a-f]{40}/<sha>/g\"", "    Bisecting: 124 revisions left to test after this (roughly 7 steps)", "  测试当前提交 f.txt=“版本 625” → 标记 good", "    $ git bisect good 2>&1 | head -1 | sed -E \"s/[0-9a-f]{40}/<sha>/g\"", "    Bisecting: 62 revisions left to test after this (roughly 6 steps)", "  测试当前提交 f.txt=“版本 687” → 标记 bad", "    $ git bisect bad 2>&1 | head -1 | sed -E \"s/[0-9a-f]{40}/<sha>/g\"", "    Bisecting: 30 revisions left to test after this (roughly 5 steps)", "  $ git bisect log | grep -E \"^git bisect\" | sed -E \"s/[0-9a-f]{40}/<sha>/g\" | head -5", "  git bisect start 'main' '<sha>'", "  git bisect good <sha>", "  git bisect bad <sha>", "  git bisect good <sha>", "  git bisect bad <sha>"], "cur": [], "mark": [], "done": []}, "mark": [1, 5, 8, 11, 14], "done": [3, 6, 9, 12, 15], "b": {"items": [["开始", 999, "999 个可疑"], ["第 1 步后", 499, "499"], ["第 2 步后", 249, "249"], ["第 3 步后", 124, "124"], ["第 4 步后", 62, "62"], ["第 5 步后", 30, "30"]], "max": 999, "cur": [], "mark": [5], "done": [0, 1, 2, 3, 4]}, "kv": {"items": [["每一步", "检出可疑范围的中点"], ["你的回答", "good / bad"], ["剩余", "约减半"]], "hl": ["每一步"]}}}, {"note": "git bisect run 让脚本自动回答 good / bad(退出码决定)。bug 在第 637 个提交引入:脚本被调用 10 次,每次输出一行 Bisecting: …(共 9 行,从 249 revisions left 一路到 0 revisions left),最后输出 <sha> is the first bad commit,找到的就是“提交 637”,和预期一致。", "s": {"t": {"lines": ["  脚本被调用 10 次(用于测试的提交数);找到的第一个坏提交: '提交 637'(期望 “提交 637”)", "  bisect run 的输出里每一步都有一行 Bisecting: …,共 9 行:", "    Bisecting: 249 revisions left to test after this (roughly 8 steps)", "    Bisecting: 124 revisions left to test after this (roughly 7 steps)", "    Bisecting: 62 revisions left to test after this (roughly 6 steps)", "        …", "    Bisecting: 1 revision left to test after this (roughly 1 step)", "    Bisecting: 0 revisions left to test after this (roughly 0 steps)", "    <sha> is the first bad commit"], "cur": [], "mark": [], "done": []}, "mark": [0, 8], "done": [0, 2, 7], "kv": {"items": [["bisect run <脚本>", "脚本退出码 0 = good,非 0 = bad"], ["次数", "10 次测试找到 1000 个里的 1 个"], ["结果", "first bad commit"]], "hl": ["bisect run <脚本>"]}}}, {"note": "100 个随机的 bug 位置(在 2 到 1000 之间)各跑一次 bisect run:100 个全部找对(100/100);测试次数最少 9、最多 10,平均 9.95(log2(1000) = 9.97)。分布:9 次的 5 个、10 次的 95 个。二分的次数就是 ⌈log2 N⌉,不管 bug 在哪。", "s": {"t": {"lines": ["  找对了 100/100;测试次数 最少 9 最多 10 平均 9.95(log2(1000) = 9.97)", "  分布: 9 次×5  10 次×95"], "cur": [], "mark": [], "done": []}, "mark": [0], "done": [1], "b": {"items": [["9 次", 5, "5 个"], ["10 次", 95, "95 个"]], "max": 95, "cur": [], "mark": [1], "done": [0]}, "kv": {"items": [["找对", "100 / 100"], ["测试次数", "9 ~ 10,平均 9.95"], ["理论", "⌈log2 1000⌉ = 10"]], "hl": ["测试次数"]}}}, {"note": "历史不是直线时,bisect 按“可疑集合里每个提交加上它的祖先的个数”来折半,而不是按时间。例子:M1 之后 main 有 13 个可疑提交(M2、M3,侧枝的 S1~S8,合并提交,M4、M5)。每个候选的计数:S1~S8 是 1~8,M2、M3 是 1、2,合并提交是 11,M4、M5 是 12、13。一半是 6.5,S6(=6)和 S7(=7)一样接近;git bisect start 检出的是 S6,输出 Bisecting: 6 revisions left to test after this (roughly 3 steps)。", "s": {"t": {"lines": ["  $ git log --graph --format='%s' | sed -E 's/^/  /'", "    * M5", "    * M4", "    *   Merge branch 'side'", "    |\\", "    | * S8", "    | * S7", "    | * S6", "    | * S5", "    | * S4", "    | * S3", "    | * S2", "    | * S1", "    * | M3", "    * | M2", "    |/", "    * M1", "  $ git bisect start main c3d1a526787418d686aff0f74449993dedd23352 2>&1 | sed -E 's/[0-9a-f]{40}/<sha>/g; s/\\[[0-9a-f]+\\]/[<sha>]/'; git log -1 --format='当前检出: %s'; git bisect reset >/dev/null", "  Bisecting: 6 revisions left to test after this (roughly 3 steps)", "  [<sha>] S6", "  当前检出: S6", "  Previous HEAD position was 4ac3082 S6", "  Switched to branch 'main'", "  main 比 M1 多 13 个提交(可疑集合)。每个候选提交“自己加上它的祖先里属于可疑集合的个数”:", "   S1=1  S2=2  S3=3  S4=4  S5=5  S6=6  S7=7  S8=8  M2=1  M3=2  Merge branch 'side'=11  M4=12  M5=13", "  可疑集合是 13 个,折半约 6.5;计数最接近一半的是 S6(=6),bisect 选的就是它"], "cur": [], "mark": [], "done": []}, "mark": [7, 18, 19, 20, 21, 24, 25], "done": [1, 24, 25], "kv": {"items": [["可疑集合", "bad 的祖先减去 good 的祖先"], ["选择标准", "让两边的可疑数尽量相等"], ["不看", "提交时间"]], "hl": ["选择标准"]}}}, {"note": "脚本退出 125 表示“这个提交无法测试,跳过”:这里把版本 500~520 当作无法编译的区间(脚本 exit 125),bisect 仍然找到“提交 637”,一共 10 步;前三步:499 → 439 → 219 revisions left——第 2 步剩余不是 249 而是 439,因为中点落在了不能测的区间里,git 把它们排除后换了一个提交。退出码约定:0 = good;1~124、126、127 = bad;125 = skip;≥128 = 终止整个 bisect。", "s": {"t": {"lines": ["  遇到“版本 500~520 无法编译”的提交(脚本 exit 125),bisect 跳过它们继续,共 10 步;前三步:", "    Bisecting: 499 revisions left to test after this (roughly 9 steps)", "    Bisecting: 439 revisions left to test after this (roughly 9 steps)", "    Bisecting: 219 revisions left to test after this (roughly 8 steps)", "    …", "    <sha> is the first bad commit | 提交 637", "  退出码:0 = good,1~124 与 126~127 = bad,125 = 跳过,≥128 = 终止整个 bisect(文档约定)"], "cur": [], "mark": [], "done": []}, "mark": [2, 5], "done": [1, 3, 6], "kv": {"items": [["exit 125", "跳过这个提交"], ["≥ 128", "终止 bisect"], ["跳过的代价", "可能多几步"]], "hl": ["exit 125"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / git 2.54.0(Apple Git-157);每个实验在临时目录里新建仓库,HOME 和全局配置指向实验专用的空目录(不读用户自己的 git 配置),提交的作者与时间固定以便复现;需要网络协议的实验用本机的 file:// 或 git daemon 回环端口(9800 以上),不碰任何远程仓库;计时用 time.perf_counter,数字每次运行会有小幅抖动。1000 个提交由 git fast-import 生成;“bug”由测试脚本模拟(f.txt 里的版本号 ≥ K 为坏),而不是真正的代码缺陷;步数是脚本被调用的次数;输出里的 hash 做了省略</li><li>没有验证:bisect 在含大量合并的真实历史上的步数;git bisect skip 手工跳过多个提交后“只剩被跳过的提交”的情形;自定义术语 git bisect terms(old/new);--first-parent 选项;bisect visualize;子模块或构建很慢时的使用技巧</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="git-blame-move-detection.html">
+    <div>
+      <div class="t1">下一篇 · GIT 56</div>
+      <div class="t2">blame:-M、-C 怎么追踪搬运的代码</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Git · bisect:二分次数与 bisect run · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

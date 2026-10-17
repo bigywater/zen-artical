@@ -1,0 +1,20 @@
+from lib import *
+S = SS('w82')
+steps = [
+    step("真实的重定向。http://www.python.org/ 和 http://python.org/ 各发一次明文请求(不跟随):都返回 301 Moved Permanently,Location: https://www.python.org/,消息体 0 字节,响应里没有 Cache-Control。也就是说 python.org 同时做了两件事:把明文 HTTP 升级到 HTTPS、把不带 www 的域名收敛到带 www 的。用 requests 跟随 http://python.org/:经过 1 次重定向,最终 200 https://www.python.org/,总用时 1187 ms(这两次不跟随的请求各约 1014、1030 ms,每个重定向都白白多一次往返,还没算 HTTPS 握手)。", t=tl(S(1)), mark=lidx(S(1), 'http://www.python.org/', 'http://python.org/ →'), done=lidx(S(1), 'requests 跟随'), kv=KV([['http://www.python.org/', '301 → https://www.python.org/'], ['http://python.org/', '301 → https://www.python.org/'], ['跟随后', '1 次重定向,最终 200']], ['跟随后'])),
+    step("同一个重定向,不同客户端对方法和请求体的处理。本机服务器收到 POST /start(5 字节请求体 \"hello\"),回重定向到 /final,/final 记下最终收到的方法和请求体。301:requests 变成 GET + 0 字节;urllib3 保持 POST + 5 字节;urllib.request 变成 GET + 0 字节。302:同 301。303:三个客户端都变成 GET + 0 字节。307:requests 和 urllib3 保持 POST + 5 字节;urllib.request 直接抛 HTTP 307 异常,不跟随。308:同 307。所以同一个 301 或 302,requests 与 urllib3 对 POST 的处理不一样——前者像浏览器那样改成 GET,后者保持 POST;307 / 308 才是“保持方法和请求体”的明确承诺。写会产生副作用的接口时,要用 307 / 308,并且不要依赖客户端的默认行为。", t=tl(S(2)), mark=lidx(S(2), '301      GET+0B', '307      POST+5B'), done=lidx(S(2), '状态码', '302      GET+0B', '303      GET+0B', '308      POST+5B'), kv=KV([['301 / 302', 'requests、urllib.request → GET;urllib3 → POST'], ['303', '都变成 GET'], ['307 / 308', 'requests、urllib3 保持 POST + 请求体;urllib.request 抛异常']], ['301 / 302'])),
+    step("重定向循环。/loop 不停地 302 到 /loop?n=k+1,看客户端在放弃之前走了多少步。requests:服务器共收到 31 次 /loop 请求后放弃(默认最多跟随 30 次),异常 TooManyRedirects;urllib3 默认:收到 4 次后放弃(默认 3 次重定向),异常 MaxRetryError;urllib.request:收到 11 次后放弃(默认最多 10 次),异常 HTTPError。每一跳都是一次网络往返,所以循环重定向不会死循环,但各库的上限从 3 到 30 不等。", t=tl(S(3)), mark=lidx(S(3), 'requests        :', 'urllib3 默认', 'urllib.request  :'), done=lidx(S(3), 'requests        :'), b=bars([['urllib3 默认', 4, '4 次'], ['urllib.request', 11, '11 次'], ['requests', 31, '31 次']], 31, mark=[], done=[0, 1, 2]), kv=KV([['requests', '31 次请求后 TooManyRedirects'], ['urllib3', '4 次后 MaxRetryError'], ['urllib.request', '11 次后 HTTPError']], ['requests'])),
+    step("Location 的写法。服务器发 302,Location 是各种写法,看 requests 最终请求的路径:/abs/path → /abs/path(绝对路径);rel/path → /rel/path(相对于当前目录解析);../up → /up(父目录);//127.0.0.1:…/proto-rel(协议相对,沿用当前的 http)→ /proto-rel;/with?x=1#frag → 请求路径 /with?x=1,片段 #frag 不会发给服务器,但客户端保留在最终 URL 里。所以 Location 不一定是完整 URL,客户端要负责按基准 URL 解析。", t=tl(S(4)), mark=lidx(S(4), 'Location: rel/path', 'Location: ../up', 'Location: //127.0.0.1'), done=lidx(S(4), 'Location: /abs/path', 'Location: /with'), kv=KV([['/abs/path', '绝对路径'], ['rel/path', '相对当前目录 → /rel/path'], ['../up', '父目录 → /up'], ['#frag', '不发给服务器']], ['rel/path'])),
+]
+A = mkartw('w82', 82, '网络协议,HTTP,重定向,301,302,303,307,308,Location,真实验证,动画演示',
+    '实测重定向:python.org 明文 301 到 https://www.python.org/;同一个 301 / 302,requests 把 POST 变 GET 而 urllib3 保持 POST + 请求体,307 / 308 才保证保持,urllib.request 对 307 / 308 直接抛异常;循环重定向 requests 31 次、urllib3 4 次、urllib.request 11 次后放弃;Location 的相对写法。',
+    '重定向看起来只是“换个地址”,但 301、302、303、307、308 对请求方法和请求体的处理并不一样,不同的 HTTP 客户端库处理 301 / 302 的方式甚至互相矛盾。这篇用本机服务器逐个试,再看循环重定向的上限和 Location 的各种写法。',
+    [('POST+5B vs GET+0B', '同一个 302,urllib3 与 requests 在 /final 收到的方法和请求体'), ('31 / 4 / 11', 'requests / urllib3 / urllib.request 在循环重定向里放弃前服务器收到的 /loop 请求数'), ('1 次', 'http://python.org/ 在 requests 里要经历的重定向(301 到 https://www.python.org/)')],
+    [('真实重定向', '<p>python.org 明文请求 301 到 https://www.python.org/,同时升级 HTTPS 并统一 www。</p>'),
+     ('方法与请求体', '<p>301 / 302 各库不一致:requests、urllib.request 改成 GET,urllib3 保持 POST;303 都变 GET;307 / 308 保持方法(urllib.request 不跟随)。</p>'),
+     ('循环', '<p>各库默认的最大重定向数不同:urllib3 3,urllib.request 10,requests 30。</p>'),
+     ('Location', '<p>可以是绝对路径、相对路径、父目录或协议相对 URL;片段不发给服务器。</p>')],
+    steps,
+    [ENV_W + '。第一节是对 python.org 的明文请求与 requests(2.34.2);第二至四节用本机脚本服务器与 requests / urllib3 2.8.0 / urllib.request;浏览器的行为我没有直接测',
+     '没有验证:301 / 308 的缓存(浏览器会永久缓存);HSTS 与 301 的配合;跨域重定向时 Authorization 头是否被保留;Refresh 头与 <meta refresh> 这类非 HTTP 重定向;重定向后 Referer 的处理;POST 301 在浏览器里的真实行为(只测了库)'],
+    '重定向')

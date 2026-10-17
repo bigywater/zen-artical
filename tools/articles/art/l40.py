@@ -1,0 +1,22 @@
+from lib import *
+S = SS('l40')
+steps = [
+    step("最简单的分叉:M0 → M1 之后,main 继续 M2、M3,feature 从 M1 出去 F1、F2。git log --graph 画出分叉,git merge-base main feature 输出 M1。用集合验证:main 的祖先集合与 feature 的祖先集合的交集是 {M0, M1},其中 M0 是 M1 的祖先,所以“最佳”公共祖先(不是其它公共祖先的祖先)只有 M1。", t=tl(S(1)), mark=lidx(S(1), 'git merge-base main feature → M1', 'M0', 'M1'), done=lidx(S(1), '* F2', '* M3', '* M1', '* M0'), kv=KV([['公共祖先', '两边祖先集合的交集'], ['merge-base', '其中“最佳”的(不是别的公共祖先的祖先)'], ['本例', 'M1']], ['merge-base'])),
+    step("criss-cross(交叉合并):A 和 B 互相合并过对方的不同提交(A 合并了 B1,B 合并了 A1),各自再提交一次。git merge-base A B(不带 --all)只输出 1 个,git merge-base --all A B 输出 2 个:A1 和 B1。这两个最佳公共祖先谁也不是谁的祖先,所以“最近公共祖先”不唯一;git 的 ort 合并策略对这种情形会先把多个基础合成一个虚拟基础再三方合并。", t=tl(S(2)), mark=lidx(S(2), '最佳公共祖先: A1', '最佳公共祖先: B1'), done=lidx(S(2), 'git merge-base A B | wc -l'), kv=KV([['不带 --all', '只给一个'], ['--all', '给出所有最佳公共祖先'], ['criss-cross', '可能有多个,互不为祖先']], ['--all'])),
+    step("用 Python 暴力算最佳公共祖先(两个提交祖先集合的交集,去掉其中是别的公共祖先的祖先的那些),和 git merge-base --all 对比:随机生成 300 个提交的 DAG(每个提交有 1~2 个 parent),随机取 300 对提交。时间戳正常递增时:没有 commit-graph 与写入 commit-graph 之后都是 300/300 一致,其中有 13 对存在多个最佳公共祖先;把提交时间打乱(±2 小时,模拟时钟不同步)时:同样 300/300 一致(50 对有多个)。时间戳只影响 git 遍历的顺序,不影响结果的正确性。", t=tl(S(3)), mark=lidx(S(3), '时间戳乱序', '300/300 一致'), done=lidx(S(3), '时间戳正常递增'), b=bars([['时间戳正常:无 commit-graph', 300, '300 / 300'], ['时间戳正常:有 commit-graph', 300, '300 / 300'], ['时间戳乱序:无 commit-graph', 300, '300 / 300'], ['时间戳乱序:有 commit-graph', 300, '300 / 300']], 300, mark=[2, 3], done=[0, 1]), kv=KV([['验证方法', '暴力集合运算 vs git merge-base --all'], ['结果', '四组全部一致'], ['含多个基础的对子', '13 对 / 50 对']], ['结果'])),
+    step("相关选项:--is-ancestor feature main 退出码 1(feature 不是 main 的祖先),--is-ancestor main~2 main 退出码 0;--octopus main feature third 输出三个分支共同的祖先 M0(third 是从 main~3 开的分支);--independent main feature third main~1 输出彼此不是祖先的提交:M3、F2、T1(main~1 是 main 的祖先,被去掉)。", t=tl(S(4)), mark=lidx(S(4), '退出码 1', '退出码 0', '三个分支的公共祖先: M0', '独立的'), done=lidx(S(4), 'is-ancestor'), kv=KV([['--is-ancestor', '用退出码回答'], ['--octopus', '多个分支的公共祖先'], ['--independent', '去掉是别人祖先的提交']], ['--is-ancestor'])),
+    step("--fork-point:topic 基于上游的 U2 开了 T1、T2;上游随后把 U2 强推成“U2 重写”和 U3。普通的 git merge-base origin/main topic 只能找到两条历史唯一共同的祖先 U1;git merge-base --fork-point origin/main topic 用 origin/main 的 reflog(fetch -q origin: forced-update 这一条记着旧位置)找到 topic 当年真正的分叉点 U2。典型用法:git rebase --onto origin/main $(git merge-base --fork-point origin/main topic) topic,只把 topic 自己的提交搬到新的上游上。", t=tl(S(5)), mark=lidx(S(5), '--fork-point origin/main topic → U2', 'forced-update'), done=lidx(S(5), '普通 git merge-base origin/main topic', 'U2 重写成'), kv=KV([['merge-base', '只看提交图'], ['--fork-point', '再参考 origin/main 的 reflog'], ['用途', '上游被改写后找回真正的分叉点']], ['--fork-point'])),
+]
+A = mkarti('l40', 40, 'Git,merge-base,最近公共祖先,fork-point,真实验证,动画演示',
+    '验证 git merge-base:分叉点是两边祖先交集里“最佳”的那个;criss-cross 交叉合并有两个最佳公共祖先,要 --all 才全部给出;用 Python 暴力集合运算在随机 DAG(300 个提交)上对比,有无 commit-graph、时间戳正常或乱序四种组合都是 300/300 一致;--fork-point 借助 reflog 找到上游被强推之前的分叉点。',
+    'git merge-base 是怎么找出两个分支的分叉点的?当历史里有交叉合并时它会返回几个?提交时间不准会不会出错?这篇用暴力集合运算在随机生成的 DAG 上逐对比对,再看 --fork-point 怎样借助 reflog 找回被强推改写之前的分叉点。',
+    [('300 / 300', '随机 DAG 上 git merge-base --all 与暴力算法一致的对子数,有无 commit-graph、时间戳乱序均如此'), ('2 个', 'criss-cross 合并历史中最佳公共祖先的数量,git merge-base 不带 --all 只给 1 个'), ('--fork-point', '借助 origin/main 的 reflog 找到上游被强推之前的分叉点 U2;普通 merge-base 只能给出 U1')],
+    [('定义', '<p>两个提交的公共祖先是它们祖先集合的交集;其中“最佳”的是那些不是其它公共祖先的祖先的提交。多数情况下只有一个,就是分叉点。</p>'),
+     ('多个最佳基础', '<p>历史里有交叉合并(criss-cross)时,可能有多个互不为祖先的最佳公共祖先。<code>git merge-base</code> 不带 <code>--all</code> 只输出其中一个;<code>--all</code> 全部输出。合并时 ort 策略会处理多基础的情形。</p>'),
+     ('与暴力算法对账', '<p>在随机生成的 300 个提交的 DAG 上,300 对提交的 <code>git merge-base --all</code> 结果与暴力集合运算一致,不论有没有 commit-graph、提交时间是否乱序。时间戳只影响 git 内部的遍历顺序,不影响结果的正确性。</p>'),
+     ('相关选项', '<p><code>--is-ancestor</code> 用退出码回答,<code>--octopus</code> 算多个分支的公共祖先,<code>--independent</code> 去掉是别人祖先的提交。</p>'),
+     ('--fork-point', '<p>上游被 rebase 或强推后,提交图里只剩更早的共同祖先。<code>--fork-point</code> 额外参考上游分支的 reflog,找到这个分支开出去时上游所在的位置,用于 <code>git rebase --onto</code>。</p>')],
+    steps,
+    [ENV_I_GIT + '。随机 DAG 由 git fast-import 生成(固定种子),暴力算法是 Python 集合运算;时间戳乱序是给每个提交的 committer 时间加 ±7200 秒的随机偏差;--fork-point 一节的提交使用真实时间(reflog 依赖时间)',
+     '没有验证:更大的 DAG(几万提交)上 git 的遍历性能;三个以上 parent 的章鱼合并作为 merge-base 候选的情形;ort 策略如何把多个基础合成虚拟基础(只在文字上提及);--fork-point 在 reflog 过期之后的行为'],
+    'merge-base')

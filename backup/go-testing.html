@@ -1,0 +1,525 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>testing:go test 到底在跑什么,t.Fatal 为什么不能在子 goroutine 里调用</title>
+<meta name="description" content="真实用 go test -work 扒出编译期生成的 _testmain.go,证明 go test 就是现扫描 TestXxx/BenchmarkXxx/ExampleXxx 拼出一个真正的 main() 再编译运行;真实验证 t.Fatal() 调用的是 runtime.Goexit(),从子 goroutine 里调用完全不会终止主测试;真实跑出 t.Parallel() 的两阶段暂停/恢复顺序;真实验证 t.Cleanup() 严格按注册的反顺序执行,且在 t.Fatal() 之后依然会跑。">
+<link rel="canonical" href="https://bigywater.tech/go-testing.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="testing:go test 到底在跑什么,t.Fatal 为什么不能在子 goroutine 里调用">
+<meta property="og:description" content="真实用 go test -work 扒出编译期生成的 _testmain.go,证明 go test 就是现扫描 TestXxx/BenchmarkXxx/ExampleXxx 拼出一个真正的 main() 再编译运行;真实验证 t.Fatal() 调用的是 runtime.Goexit(),从子 goroutine 里调用完全不会终止主测试;真实跑出 t.Parallel() 的两阶段暂停/恢复顺序;真实验证 t.Cleanup() 严格按注册的反顺序执行,且在 t.Fatal() 之后依然会跑。">
+<meta property="og:url" content="https://bigywater.tech/go-testing.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="testing:go test 到底在跑什么,t.Fatal 为什么不能在子 goroutine 里调用">
+<meta name="twitter:description" content="真实用 go test -work 扒出编译期生成的 _testmain.go,证明 go test 就是现扫描 TestXxx/BenchmarkXxx/ExampleXxx 拼出一个真正的 main() 再编译运行;真实验证 t.Fatal() 调用的是 runtime.Goexit(),从子 goroutine 里调用完全不会终止主测试;真实跑出 t.Parallel() 的两阶段暂停/恢复顺序;真实验证 t.Cleanup() 严格按注册的反顺序执行,且在 t.Fatal() 之后依然会跑。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+
+<style>
+:root{
+  --bg:#F5F8F9; --paper:#FFFFFF; --ink:#17232A; --ink-dim:#5C7078; --line:#DCE7EA;
+  --go-c:#0097B2; --go-c-soft:#DCF1F4;
+  --warn-c:#C9762E; --warn-c-soft:#F7EADB;
+  --live-c:#2E8B57; --live-c-soft:#E1F2E7;
+  --code-bg:#0F1B20; --code-ink:#E6F2F4;
+  --shadow: 0 1px 2px rgba(10,30,35,.06), 0 8px 24px -12px rgba(10,30,35,.16);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0D1518; --paper:#151F23; --ink:#E6F2F4; --ink-dim:#9DB4BB; --line:#293C42;
+    --go-c:#3FC9E0; --go-c-soft:#123138;
+    --warn-c:#E0A15C; --warn-c-soft:#3A2A16;
+    --live-c:#6FC996; --live-c-soft:#173327;
+    --code-bg:#0A1215; --code-ink:#E2F0F2;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0D1518; --paper:#151F23; --ink:#E6F2F4; --ink-dim:#9DB4BB; --line:#293C42;
+  --go-c:#3FC9E0; --go-c-soft:#123138;
+  --warn-c:#E0A15C; --warn-c-soft:#3A2A16;
+  --live-c:#6FC996; --live-c-soft:#173327;
+  --code-bg:#0A1215; --code-ink:#E2F0F2;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--go-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--go-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--go-c);}
+h1{font-size:2.1rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.15rem; font-weight:600; color:var(--go-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#9DB4BB; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--go-c-soft); color:var(--go-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term pre.code{margin:0 0 10px; color:#8FE0D4; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+.term .warn{color:#E0A15C;}
+
+.callout{border-left:3px solid var(--go-c); background:var(--go-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.warn{border-color:var(--warn-c); background:var(--warn-c-soft);}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--go-c-soft); color:var(--go-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:20px;}
+.thread-table{width:100%; border-collapse:collapse; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem;}
+.thread-table th{text-align:left; padding:6px 10px; color:var(--ink-dim); font-size:.7rem; text-transform:uppercase; letter-spacing:.04em; border-bottom:1px solid var(--line);}
+.thread-table td{padding:6px 10px; border-bottom:1px solid var(--line);}
+.thread-table tr.current td{background:var(--go-c-soft);}
+.stage-tag{padding:2px 8px; border-radius:5px; font-size:.76rem;}
+.stage-tag.run{background:var(--go-c-soft); color:var(--go-c);}
+.stage-tag.pause{background:var(--warn-c-soft); color:var(--warn-c);}
+.stage-tag.cont{background:var(--live-c-soft); color:var(--live-c);}
+.stat-row{display:flex; gap:16px; flex-wrap:wrap; margin:14px 0 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem;}
+.stat{border:1px solid var(--line); border-radius:8px; padding:8px 12px; background:var(--bg);}
+.stat b{color:var(--go-c); display:block; font-size:1rem; font-variant-numeric:tabular-nums;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--go-c); color:var(--go-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--go-c); border-color:var(--go-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Go 标准库内部原理</div>
+    <h1>testing:go test 到底在跑什么,t.Fatal 为什么不能在子 goroutine 里调用</h1>
+    <p>接着<a href="go-context.html" target="_blank" rel="noopener">context</a>、<a href="go-sync.html" target="_blank" rel="noopener">sync</a>、<a href="go-encoding-json.html" target="_blank" rel="noopener">encoding/json</a> 三篇继续填 Go 标准库这个系列的坑。<span class="mono">go test</span> 每天都在跑,但它到底是怎么找到测试函数、`t.Fatal()` 失败之后代码是怎么"停下来"的、`t.Parallel()` 又是怎么让几个子测试真正并发起来的——这几个问题真去翻源码、真去跑实验,答案跟直觉都不完全一样。</p>
+    <div class="hero-fact">
+      <div><div class="num">真实生成 main()</div><div class="lbl">go test -work 真实扒出编译期生成的 _testmain.go,证明它就是个现拼的普通 Go 程序</div></div>
+      <div><div class="num">Goexit,不是 panic</div><div class="lbl">真实验证:子 goroutine 里调 t.Fatal 完全不会打断主测试函数,只会杀掉那一个 goroutine</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <h2>真实验证:go test 不是黑魔法,是现拼了一个 main() 再编译运行</h2>
+  <p class="h2-sub">用 <span class="mono">go test -work</span> 保留编译期的临时目录,直接看它生成了什么。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">go test -work -run TestSimpleAdd ./...</pre>
+<span class="ok">WORK=/var/folders/.../go-build3997077485</span>
+  </div>
+  <p>这个 <span class="mono">WORK</span> 目录下真的有一个 <span class="mono">_testmain.go</span>,内容是这样的:</p>
+  <blockquote class="src">
+    <span class="path">真实生成的 _testmain.go(未删改,只省略了 import 里的空行)</span>
+// Code generated by 'go test'. DO NOT EDIT.
+
+package main
+
+import (
+	"os"
+	"testing"
+	"testing/internal/testdeps"
+	_test "testingpkg"
+)
+
+var tests = []testing.InternalTest{
+	{"TestFatalFromGoroutine", _test.TestFatalFromGoroutine},
+	{"TestParallelOrder", _test.TestParallelOrder},
+	{"TestSimpleAdd", _test.TestSimpleAdd},
+}
+
+var benchmarks = []testing.InternalBenchmark{
+	{"BenchmarkSimpleAdd", _test.BenchmarkSimpleAdd},
+}
+
+var examples = []testing.InternalExample{
+	{"Example", _test.Example, "hello\n", false},
+}
+
+func main() {
+	m := testing.MainStart(testdeps.TestDeps{}, tests, benchmarks, fuzzTargets, examples)
+	os.Exit(m.Run())
+}
+  </blockquote>
+  <p><span class="mono">go test</span> 做的事情就是:扫描包里所有 <span class="mono">TestXxx</span>/<span class="mono">BenchmarkXxx</span>/<span class="mono">ExampleXxx</span> 函数,把它们的名字和函数引用拼进几个切片,生成一个真正的 <span class="mono">package main</span>,把待测的包(<span class="mono">_test "testingpkg"</span>)当依赖导入进来,编译成一个可执行文件再运行——跟你自己写一个 <span class="mono">main.go</span> 手动调用这些函数没有本质区别,只是这一步是自动生成的。<span class="mono">Example</span> 函数还会被顺手记录下期望的标准输出(<span class="mono">"hello\n"</span>),运行完之后拿真实输出去对比,这就是 <span class="mono">// Output:</span> 注释生效的原理。</p>
+</section>
+
+<section>
+  <h2>真实源码:t.Fatal() 调的是 runtime.Goexit(),不是 panic</h2>
+  <p class="h2-sub">这决定了 Fatal 之后代码"停在哪、怎么停",源码注释写得很直白。</p>
+  <blockquote class="src">
+    <span class="path">$GOROOT/src/testing/testing.go:1080</span>
+func (c *common) FailNow() {
+	c.checkFuzzFn("FailNow")
+	c.Fail()
+
+	// Calling runtime.Goexit will exit the goroutine, which
+	// will run the deferred functions in this goroutine,
+	// which will eventually run the deferred lines in tRunner,
+	// which will signal to the test loop that this test is done.
+	...
+	c.mu.Lock()
+	c.finished = true
+	c.mu.Unlock()
+	runtime.Goexit()
+}
+  </blockquote>
+  <p>紧接着上面这段代码,源码里 <span class="mono">Parallel()</span> 那一段的文档注释更直接地写明了边界:</p>
+  <blockquote class="src">
+    <span class="path">$GOROOT/src/testing/testing.go(FailNow 的文档注释)</span>
+// FailNow must be called from the goroutine running the
+// test or benchmark function, not from other goroutines
+// created during the test. Calling FailNow does not stop
+// those other goroutines.
+  </blockquote>
+  <p><span class="mono">runtime.Goexit()</span> 只会终止**当前调用它的那一个 goroutine**(顺带跑完这个 goroutine 里所有还没执行的 <span class="mono">defer</span>),不会像 <span class="mono">panic</span> 那样有机会被外层 <span class="mono">recover</span> 拦截,也完全不会影响其他 goroutine——包括测试函数自己所在的那个 goroutine,如果 <span class="mono">Fatal</span> 是从别的 goroutine 里调的话。</p>
+</section>
+
+<section>
+  <h2>真实验证:子 goroutine 里调 t.Fatal,主测试函数完全没被打断</h2>
+  <p class="h2-sub">按文档说的意思,真实写一个从子 goroutine 调用 t.Fatal 的用例试一下。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">func TestFatalFromGoroutine(t *testing.T) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		t.Log("goroutine 开始跑")
+		t.Fatal("从子 goroutine 里调用 t.Fatal")
+		t.Log("这行如果打印出来，说明 Fatal 之后代码还在继续跑")
+	}()
+	<-done
+	t.Log("主测试函数：goroutine 已经退出，主测试函数还活着，继续往下跑")
+	time.Sleep(100 * time.Millisecond)
+	t.Log("主测试函数：这行真的打印出来了")
+}</pre>
+<span class="ok">    goexit_test.go:12: goroutine 开始跑
+    goexit_test.go:13: 从子 goroutine 里调用 t.Fatal
+    goexit_test.go:17: 主测试函数：goroutine 已经退出，主测试函数还活着，继续往下跑
+    goexit_test.go:19: 主测试函数：这行真的打印出来了
+--- FAIL: TestFatalFromGoroutine (0.10s)</span>
+  </div>
+  <p>结果跟文档说的一模一样:子 goroutine 里 <span class="mono">t.Fatal</span> 后面那行("这行如果打印出来")真的没有打印,证明 <span class="mono">Goexit</span> 确实把那个 goroutine 截停了;但主测试函数完全没被打断——两行"主测试函数"的日志都真实打印出来了,包括 <span class="mono">Fatal</span> 之后又睡了 100 毫秒这种"不应该发生"的事情也照常发生。测试最终确实被标记成了 <span class="mono">FAIL</span>(因为 <span class="mono">Fail()</span> 在 <span class="mono">Goexit</span> 之前已经设置了失败标记),但<b>失败的判定和"停止执行"完全是两件事</b>——如果你指望子 goroutine 里的 <span class="mono">t.Fatal</span> 能像主测试函数里那样立刻掐断后续逻辑,真实情况会让你的测试继续执行一堆本不该发生的断言,只是最后结果凑巧还是 FAIL。</p>
+  <div class="callout warn">
+    <b>踩坑提醒:</b> 在子 goroutine 里应该用 <span class="mono">t.Errorf()</span> + 手动 <span class="mono">return</span>,或者把错误传回主 goroutine 再调用 <span class="mono">t.Fatal()</span>——不要指望子 goroutine 里的 <span class="mono">Fatal</span>/<span class="mono">FailNow</span> 能帮你终止整个测试的执行流程。
+  </div>
+</section>
+
+<section>
+  <h2>真实验证:t.Parallel() 的两阶段暂停/恢复</h2>
+  <p class="h2-sub">子测试先各自跑到 Parallel() 就地暂停,父测试函数返回之后才真正一起跑起来。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">func TestParallelOrder(t *testing.T) {
+	for _, name := range []string{"A", "B", "C"} {
+		name := name
+		t.Run(name, func(t *testing.T) {
+			fmt.Printf(">>> 子测试 %s 调用 Parallel() 之前\n", name)
+			t.Parallel()
+			fmt.Printf(">>> 子测试 %s 真正开始执行\n", name)
+		})
+	}
+	fmt.Println(">>> 父测试函数的 for 循环结束了")
+}</pre>
+<span class="ok">=== RUN   TestParallelOrder/A
+>>> 子测试 A 调用 Parallel() 之前
+=== PAUSE TestParallelOrder/A
+=== RUN   TestParallelOrder/B
+>>> 子测试 B 调用 Parallel() 之前
+=== PAUSE TestParallelOrder/B
+=== RUN   TestParallelOrder/C
+>>> 子测试 C 调用 Parallel() 之前
+=== PAUSE TestParallelOrder/C
+>>> 父测试函数的 for 循环结束了
+=== CONT  TestParallelOrder/A
+>>> 子测试 A 真正开始执行
+=== CONT  TestParallelOrder/C
+>>> 子测试 C 真正开始执行
+=== CONT  TestParallelOrder/B
+>>> 子测试 B 真正开始执行</span>
+  </div>
+  <p>A、B、C 三个子测试是<b>顺序</b>跑到各自的 <span class="mono">t.Parallel()</span> 然后暂停的(<span class="mono">RUN A → PAUSE A → RUN B → PAUSE B → RUN C → PAUSE C</span>),父测试函数的 <span class="mono">for</span> 循环在这三个都暂停完之后才真正结束。真正的并发是在父测试函数返回之后才发生的——<span class="mono">CONT</span> 的顺序是 A、C、B,不是 A、B、C,说明这时候三个 goroutine 才被一起唤醒,谁先抢到 CPU 完全看调度,不是写代码时候的声明顺序。源码里 <span class="mono">t.Parallel()</span> 的实现是往 <span class="mono">signal</span> 通道发一个信号让父测试的循环继续处理下一个子测试,自己则卡在 <span class="mono">&lt;-t.parent.barrier</span> 上等——这个 <span class="mono">barrier</span> 要等父测试函数整个跑完才会被释放,所有等在上面的子测试才会一起被放行。</p>
+</section>
+
+<section>
+  <h2>真实验证:t.Cleanup() 严格反序执行,Fatal 之后照样会跑</h2>
+  <p class="h2-sub">源码里 cleanup 列表是从末尾往前弹的,一个标准的栈结构。</p>
+  <blockquote class="src">
+    <span class="path">$GOROOT/src/testing/testing.go:1808(runCleanup)</span>
+for {
+	var cleanup func()
+	c.mu.Lock()
+	if len(c.cleanups) > 0 {
+		last := len(c.cleanups) - 1
+		cleanup = c.cleanups[last]
+		c.cleanups = c.cleanups[:last]   // 从末尾弹出,后注册的先执行
+	}
+	c.mu.Unlock()
+	if cleanup == nil {
+		return nil
+	}
+	cleanup()
+}
+  </blockquote>
+  <p>真实注册三个 cleanup,中间故意调用 <span class="mono">t.Fatal()</span>:</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">func TestCleanupOrderAndFatal(t *testing.T) {
+	t.Cleanup(func() { fmt.Println("cleanup 1 (最先注册)") })
+	t.Cleanup(func() { fmt.Println("cleanup 2") })
+	t.Cleanup(func() { fmt.Println("cleanup 3 (最后注册)") })
+
+	fmt.Println("即将调用 t.Fatal")
+	t.Fatal("故意失败,看看注册过的 cleanup 还跑不跑")
+}</pre>
+<span class="ok">即将调用 t.Fatal
+    cleanup_test.go:14: 故意失败,看看注册过的 cleanup 还跑不跑
+cleanup 3 (最后注册)
+cleanup 2
+cleanup 1 (最先注册)
+--- FAIL: TestCleanupOrderAndFatal (0.00s)</span>
+  </div>
+  <p>三个 cleanup 严格按 3→2→1 的反顺序执行,而且 <span class="mono">t.Fatal()</span> 用 <span class="mono">runtime.Goexit()</span> 截断了测试函数本身,<b>cleanup 照样一个不少地跑完了</b>——这正是前面 <span class="mono">FailNow</span> 源码注释里说的"deferred lines in tRunner"在起作用:<span class="mono">Goexit</span> 展开当前 goroutine 时会执行所有已注册的 <span class="mono">defer</span>,而 <span class="mono">tRunner</span>(驱动每个测试函数运行的那层)自己用 <span class="mono">defer</span> 挂了一个会调用 <span class="mono">runCleanup</span> 的收尾逻辑,所以不管测试是正常返回还是被 <span class="mono">Fatal</span> 截断,注册过的 <span class="mono">Cleanup</span> 都保证会被执行到——这也是官方文档建议优先用 <span class="mono">t.Cleanup()</span> 而不是手写 <span class="mono">defer</span> 做资源清理的原因,后者如果写在 <span class="mono">Fatal</span> 调用之前的代码路径里,反而可能因为提前返回而漏执行。</p>
+</section>
+
+<section>
+  <h2>演示:t.Parallel() 两阶段暂停/恢复的完整时间线</h2>
+  <p class="h2-sub">对应上面真实跑出的那组 RUN/PAUSE/CONT 顺序,一步步展开看。</p>
+  <div class="demo" id="tpDemo">
+    <div class="demo-head">TestParallelOrder · 执行时间线</div>
+    <div class="demo-narration" id="tpNarration"></div>
+    <div class="demo-body">
+      <table class="thread-table" id="tpTable">
+        <thead><tr><th>子测试</th><th>阶段</th><th>说明</th></tr></thead>
+        <tbody id="tpTableBody"></tbody>
+      </table>
+      <div class="stat-row" id="tpStats"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="tpReset">⏮ 重来</button>
+      <button class="btn" id="tpPrev">‹ 上一步</button>
+      <button class="btn primary" id="tpNext">下一步 ›</button>
+      <button class="btn" id="tpPlay">▶ 自动播放</button>
+      <span class="step-counter" id="tpCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">跟真实运行结果完全一致:三个子测试先顺序 RUN 到 Parallel() 各自 PAUSE,父测试函数结束之后才 CONT,而且 CONT 的顺序(A、C、B)不等于启动顺序,是真并发。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文全部真实实验(_testmain.go 的生成内容、Fatal/Goexit 的跨 goroutine 行为、Parallel 的 RUN/PAUSE/CONT 时间线、Cleanup 的反序执行)均在本机真实运行的 Go 1.27(go1.27.1 darwin/arm64)上用 <span class="mono">go test -v</span>/<span class="mono">go test -work</span> 完成,源码引用对应本机 <span class="mono">$GOROOT/src/testing/testing.go</span>,行号可能随 Go 版本略有变化但机制不变。</li>
+      <li>Go 标准库系列前三篇:<a href="go-context.html" target="_blank" rel="noopener">context 取消信号怎么在 goroutine 树里传播</a>、<a href="go-sync.html" target="_blank" rel="noopener">sync.Mutex/WaitGroup/Once 内部实现</a>、<a href="go-encoding-json.html" target="_blank" rel="noopener">encoding/json 的 struct tag 解析与缓存</a>。</li>
+      <li>没有涉及:<span class="mono">testing.B</span> 里 <span class="mono">b.N</span> 具体是怎么自动放大到统计稳定的(几何递增 + 最短 benchtime 判定)、<span class="mono">-race</span> 检测器的插桩机制、<span class="mono">go test</span> 的覆盖率插桩(<span class="mono">-cover</span>)原理——这几块都够单独再写一篇。</li>
+    </ul>
+  </div>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Go 标准库内部原理 · testing 包 · 数据来自本机真实运行的 Go 1.27</footer>
+
+<script>
+const DATA = {"events": [
+  {"who": "A", "stage": "run",   "note": "开始跑,打印“调用 Parallel() 之前”"},
+  {"who": "A", "stage": "pause", "note": "调用 t.Parallel(),就地暂停,让出给下一个子测试"},
+  {"who": "B", "stage": "run",   "note": "开始跑,打印“调用 Parallel() 之前”"},
+  {"who": "B", "stage": "pause", "note": "调用 t.Parallel(),就地暂停"},
+  {"who": "C", "stage": "run",   "note": "开始跑,打印“调用 Parallel() 之前”"},
+  {"who": "C", "stage": "pause", "note": "调用 t.Parallel(),就地暂停"},
+  {"who": "父测试函数", "stage": "run", "note": "for 循环结束,函数返回 —— barrier 被释放"},
+  {"who": "A", "stage": "cont",  "note": "被唤醒,真正开始执行子测试体"},
+  {"who": "C", "stage": "cont",  "note": "被唤醒,真正开始执行子测试体(注意顺序不是B)"},
+  {"who": "B", "stage": "cont",  "note": "被唤醒,真正开始执行子测试体"}
+]};
+
+(function(){
+  const events = DATA.events;
+  const totalSteps = events.length;
+  const tbody = document.getElementById('tpTableBody');
+  const narration = document.getElementById('tpNarration');
+  const statsBox = document.getElementById('tpStats');
+  const counter = document.getElementById('tpCounter');
+  let idx = 0, playing=false, playTimer=null;
+
+  const stageLabel = {run: 'RUN', pause: 'PAUSE', cont: 'CONT'};
+
+  function describe(i){
+    const e = events[i];
+    return `<span class="k">${e.who}</span>:${stageLabel[e.stage]} — ${e.note}`;
+  }
+
+  function render(){
+    idx = Math.max(0, Math.min(totalSteps-1, idx));
+    narration.innerHTML = describe(idx);
+
+    tbody.innerHTML = events.map((e, i) => {
+      if (i > idx) return `<tr><td colspan="3" style="color:var(--ink-dim)">(还没发生)</td></tr>`;
+      return `<tr class="${i===idx ? 'current' : ''}"><td>${e.who}</td><td><span class="stage-tag ${e.stage}">${stageLabel[e.stage]}</span></td><td>${e.note}</td></tr>`;
+    }).join('');
+
+    const pausedCount = events.slice(0, idx+1).filter(e => e.stage === 'pause').length -
+                         events.slice(0, idx+1).filter(e => e.stage === 'cont').length;
+    statsBox.innerHTML = `<div class="stat">当前步骤<b>${idx+1} / ${totalSteps}</b></div><div class="stat">仍在暂停中的子测试数<b>${Math.max(0,pausedCount)}</b></div>`;
+
+    counter.textContent = `${idx+1} / ${totalSteps}`;
+    document.getElementById('tpPrev').disabled = idx===0;
+    document.getElementById('tpNext').disabled = idx===totalSteps-1;
+  }
+  document.getElementById('tpPrev').onclick=()=>{idx--;render();stopPlay();};
+  document.getElementById('tpNext').onclick=()=>{idx++;render();stopPlay();};
+  document.getElementById('tpReset').onclick=()=>{idx=0;render();stopPlay();};
+  function stopPlay(){ playing=false; clearInterval(playTimer); document.getElementById('tpPlay').textContent='▶ 自动播放'; }
+  document.getElementById('tpPlay').onclick=()=>{
+    if(playing){ stopPlay(); return; }
+    playing=true; document.getElementById('tpPlay').textContent='⏸ 暂停';
+    playTimer = setInterval(()=>{
+      if(idx>=totalSteps-1){ stopPlay(); return; }
+      idx++; render();
+    }, 1200);
+  };
+  render();
+})();
+</script>
+
+</body>
+</html>

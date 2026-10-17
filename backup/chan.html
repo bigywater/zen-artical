@@ -1,0 +1,928 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>Go channel 内部原理</title>
+<meta name="description" content="有缓冲/无缓冲 channel 的发送接收路径与 goroutine 交接机制。">
+<link rel="canonical" href="https://bigywater.tech/chan.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Go channel 内部原理">
+<meta property="og:description" content="有缓冲/无缓冲 channel 的发送接收路径与 goroutine 交接机制。">
+<meta property="og:url" content="https://bigywater.tech/chan.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Go channel 内部原理">
+<meta name="twitter:description" content="有缓冲/无缓冲 channel 的发送接收路径与 goroutine 交接机制。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#FAF8F5; --surface:#FFFFFF; --surface-2:#F1EEE8; --surface-3:#E9E4D8;
+  --ink:#201C2B; --ink-soft:#55506A; --ink-faint:#8B85A0;
+  --line:#E4DFD5; --line-soft:#EDE9DF;
+  --buf-c:#B8801E; --buf-soft:#F7E8CE;
+  --queue-c:#7449C4; --queue-soft:#ECE4FA;
+  --direct-c:#1E9E63; --direct-soft:#DDF3E7;
+  --warn:#B8791A; --warn-soft:#FBEBD3;
+  --code-bg:#211D30; --code-ink:#E7E2F5; --code-comment:#8D84AE; --code-kw:#7FD4C7; --code-str:#E3B368;
+  --shadow:0 1px 2px rgba(32,28,43,.06),0 10px 28px -14px rgba(32,28,43,.16);
+  --radius:12px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#15121F; --surface:#1D1930; --surface-2:#241F3B; --surface-3:#2C2647;
+    --ink:#EDE9F7; --ink-soft:#B5AECB; --ink-faint:#756D91;
+    --line:#332C4D; --line-soft:#2A2440;
+    --buf-c:#E3A94C; --buf-soft:#3A2A16;
+    --queue-c:#A688EA; --queue-soft:#2A2247;
+    --direct-c:#4FD190; --direct-soft:#15382A;
+    --warn:#E3A94C; --warn-soft:#3A2A16;
+    --code-bg:#0F0D1A; --code-ink:#E7E2F5; --code-comment:#786F9C; --code-kw:#7FD4C7; --code-str:#E3B368;
+    --shadow:0 1px 2px rgba(0,0,0,.35),0 14px 32px -16px rgba(0,0,0,.55);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#15121F; --surface:#1D1930; --surface-2:#241F3B; --surface-3:#2C2647;
+  --ink:#EDE9F7; --ink-soft:#B5AECB; --ink-faint:#756D91;
+  --line:#332C4D; --line-soft:#2A2440;
+  --buf-c:#E3A94C; --buf-soft:#3A2A16;
+  --queue-c:#A688EA; --queue-soft:#2A2247;
+  --direct-c:#4FD190; --direct-soft:#15382A;
+  --warn:#E3A94C; --warn-soft:#3A2A16;
+  --code-bg:#0F0D1A; --code-ink:#E7E2F5; --code-comment:#786F9C; --code-kw:#7FD4C7; --code-str:#E3B368;
+  --shadow:0 1px 2px rgba(0,0,0,.35),0 14px 32px -16px rgba(0,0,0,.55);
+}
+*{box-sizing:border-box;}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;}
+.wide{max-width:1080px;margin:0 auto;padding:0 22px;}
+.prose{max-width:1080px;margin:0 auto;padding:0 22px;}
+h1,h2,h3{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;letter-spacing:-.01em;text-wrap:balance;}
+
+header.hero{padding:64px 0 30px;}
+.eyebrow{font-size:12.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-faint);margin:0 0 14px;}
+h1{font-size:clamp(30px,5vw,44px);margin:0 0 16px;line-height:1.12;}
+.hero-sub{font-size:17px;color:var(--ink-soft);margin:0 0 22px;}
+.meta-row{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--ink-faint);}
+.meta-row span{display:inline-flex;align-items:center;gap:6px;}
+
+.legend-row{display:flex;gap:10px;flex-wrap:wrap;margin:28px 0 4px;}
+.legend-chip{display:inline-flex;align-items:center;gap:8px;padding:7px 13px;border-radius:999px;border:1px solid var(--line);background:var(--surface);font-size:13px;font-weight:600;}
+.legend-dot{width:11px;height:11px;border-radius:50%;flex:none;}
+.legend-chip .buf-dot{background:var(--buf-c);} .legend-chip .queue-dot{background:var(--queue-c);} .legend-chip .direct-dot{background:var(--direct-c);}
+
+section{padding:40px 0;}
+section.divider-top{border-top:1px solid var(--line);}
+h2{font-size:22px;margin:0 0 4px;}
+.section-kicker{font-size:12.5px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.08em;font-weight:700;margin:0 0 8px;}
+p{font-size:15.5px;color:var(--ink-soft);margin:0 0 16px;}
+.prose p b, .prose li b{color:var(--ink);font-weight:700;}
+.prose ul{padding-left:22px;font-size:15.5px;color:var(--ink-soft);}
+.prose li{margin-bottom:8px;}
+.buf-tag{color:var(--buf-c);font-weight:700;}
+.queue-tag{color:var(--queue-c);font-weight:700;}
+.direct-tag{color:var(--direct-c);font-weight:700;}
+
+.entity-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:22px 0;}
+@media (max-width:760px){.entity-cards{grid-template-columns:1fr;}}
+.ecard{border:1px solid var(--line);border-radius:var(--radius);padding:18px;background:var(--surface);box-shadow:var(--shadow);}
+.ecard .etitle{font-family:ui-monospace,monospace;font-size:18px;font-weight:700;display:flex;align-items:center;gap:9px;margin-bottom:8px;}
+.ecard.buf .etitle{color:var(--buf-c);} .ecard.queue .etitle{color:var(--queue-c);} .ecard.direct .etitle{color:var(--direct-c);}
+.ecard p{font-size:14px;margin:0;}
+.edot{width:13px;height:13px;border-radius:50%;flex:none;}
+.ecard.buf .edot{background:var(--buf-c);} .ecard.queue .edot{background:var(--queue-c);} .ecard.direct .edot{background:var(--direct-c);}
+
+.code-quote{background:var(--code-bg);border-radius:var(--radius);overflow:hidden;margin:20px 0;box-shadow:var(--shadow);}
+.code-head{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;background:rgba(255,255,255,.04);border-bottom:1px solid rgba(255,255,255,.08);}
+.code-path{font-family:ui-monospace,monospace;font-size:12.5px;color:var(--code-comment);}
+.code-link{font-family:ui-monospace,monospace;font-size:12px;color:var(--code-kw);text-decoration:none;white-space:nowrap;}
+.code-link:hover{text-decoration:underline;}
+.code-quote pre{margin:0;padding:16px;overflow-x:auto;}
+.code-quote code{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;font-size:12.8px;line-height:1.6;color:var(--code-ink);white-space:pre;}
+
+.callout{border-left:3px solid var(--warn);background:var(--warn-soft);border-radius:0 8px 8px 0;padding:12px 16px;font-size:14px;color:var(--ink);margin:18px 0;}
+.callout b{color:var(--warn);}
+.callout.good{border-left-color:var(--direct-c);background:var(--direct-soft);}
+.callout.good b{color:var(--direct-c);}
+
+/* ---- simulator ---- */
+.sim-panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px;margin:22px 0;}
+.sim-controls{display:flex;align-items:center;gap:8px;margin-bottom:18px;flex-wrap:wrap;}
+button.ctrl{appearance:none;border:1px solid var(--line);background:var(--surface-2);color:var(--ink);padding:8px 14px;border-radius:8px;font-size:14px;cursor:pointer;font-weight:600;transition:background .15s,border-color .15s;font-family:ui-monospace,monospace;}
+button.ctrl:hover:not(:disabled){background:var(--surface-3);}
+button.ctrl:disabled{opacity:.4;cursor:not-allowed;}
+button.ctrl.primary{background:var(--ink);color:var(--bg);border-color:var(--ink);}
+button.ctrl:focus-visible{outline:2px solid var(--queue-c);outline-offset:2px;}
+.sim-progress{font-size:12.5px;color:var(--ink-faint);margin-left:2px;font-family:ui-monospace,monospace;}
+.spacer{flex:1;}
+select.ctrl{padding:6px 10px;font-family:ui-monospace,monospace;}
+
+.tabs{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;}
+.tab{appearance:none;border:1px solid var(--line);background:var(--surface-2);color:var(--ink-soft);padding:8px 16px;border-radius:999px;font-size:13.5px;cursor:pointer;font-weight:600;transition:background .15s,color .15s,border-color .15s;font-family:ui-monospace,monospace;}
+.tab[data-active="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink);}
+.tab:focus-visible{outline:2px solid var(--queue-c);outline-offset:2px;}
+
+.closed-badge{border:1.5px solid var(--warn);background:var(--warn-soft);border-radius:10px;padding:8px 14px;margin-bottom:16px;font-family:ui-monospace,monospace;font-size:13px;color:var(--ink);display:none;}
+.closed-badge[data-show="true"]{display:block;}
+
+.buffer-block{margin-bottom:16px;}
+.block-label{font-size:11.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-faint);font-weight:700;margin-bottom:6px;font-family:ui-monospace,monospace;}
+.buf-cells{display:flex;gap:6px;flex-wrap:wrap;}
+.buf-cell{width:64px;border-radius:8px;border:2px solid var(--line);background:var(--surface);overflow:hidden;transition:border-color .25s,background .25s;position:relative;}
+.buf-cell[data-filled="true"]{border-color:var(--buf-c);background:var(--buf-soft);}
+.buf-cell[data-flash="true"]{border-color:var(--direct-c);box-shadow:0 0 0 3px var(--direct-soft);}
+.cell-idx{font-size:9.5px;color:var(--ink-faint);text-align:center;padding-top:3px;font-family:ui-monospace,monospace;}
+.cell-val{font-size:14px;font-weight:700;text-align:center;padding:5px 0;font-family:ui-monospace,monospace;color:var(--ink);}
+.cell-ptr{font-size:8.5px;text-align:center;padding-bottom:3px;font-family:ui-monospace,monospace;color:var(--queue-c);font-weight:700;min-height:11px;}
+
+.queues-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;}
+@media (max-width:640px){.queues-row{grid-template-columns:1fr;}}
+.queue-col{border:1.5px dashed var(--line);border-radius:10px;padding:10px 12px;min-height:56px;}
+.queue-col-label{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-faint);margin-bottom:7px;font-weight:700;font-family:ui-monospace,monospace;}
+.queue-chips{display:flex;gap:6px;flex-wrap:wrap;}
+.g-chip{border:1.5px solid var(--queue-c);background:var(--queue-soft);color:var(--ink);border-radius:7px;padding:5px 10px;font-size:12px;font-family:ui-monospace,monospace;font-weight:700;transition:opacity .3s;}
+.g-chip[data-leaving="true"]{opacity:.3;}
+.queue-empty{font-size:12px;color:var(--ink-faint);font-style:italic;}
+
+.sim-desc{background:var(--surface-2);border-radius:8px;padding:12px 14px;font-size:13.5px;color:var(--ink-soft);margin-bottom:14px;min-height:44px;border:1px solid var(--line-soft);}
+.sim-desc b{color:var(--ink);}
+.sim-formula{font-family:ui-monospace,monospace;font-size:13px;color:var(--ink-faint);margin-bottom:8px;}
+
+.sim-log{max-height:190px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:8px;}
+.log-item{padding:6px 9px;border-radius:6px;font-size:12.5px;color:var(--ink-faint);cursor:pointer;font-family:ui-monospace,monospace;display:flex;gap:8px;}
+.log-item:hover{background:var(--surface-2);}
+.log-item[data-active="true"]{background:var(--queue-soft);color:var(--ink);font-weight:600;}
+.log-idx{min-width:22px;color:var(--ink-faint);}
+
+.refs{font-size:14px;color:var(--ink-soft);}
+.refs li{margin-bottom:10px;}
+.refs a{color:var(--queue-c);}
+footer.endnote{border-top:1px solid var(--line);padding:26px 0 60px;font-size:13px;color:var(--ink-faint);}
+
+.legend2{display:flex;gap:16px;flex-wrap:wrap;margin-top:14px;font-size:12.5px;color:var(--ink-faint);}
+.legend2 span{display:inline-flex;align-items:center;gap:6px;}
+.lg-cell{width:14px;height:14px;border-radius:4px;border:2px solid var(--buf-c);background:var(--buf-soft);display:inline-block;}
+.lg-chip{width:14px;height:14px;border-radius:4px;border:2px solid var(--queue-c);background:var(--queue-soft);display:inline-block;}
+.lg-flash{width:14px;height:14px;border-radius:4px;border:2px solid var(--direct-c);display:inline-block;}
+
+@media (prefers-reduced-motion:reduce){*{transition:none !important;}}
+</style>
+
+<article>
+<header class="hero prose">
+  <p class="eyebrow">GO 运行时内部原理</p>
+  <h1>Go channel 内部原理</h1>
+  <p class="hero-sub">channel 常被简单地理解成"线程安全的队列",但它实际管理的是三样东西:一段<b>环形缓冲区</b>、两条<b>等待队列</b>(卡住的发送者/接收者),以及一套"能直接交接就不进缓冲区"的优化路径。这篇文章配了一个<b>和真实 <code class="mono">go run</code> 输出逐项比对过</b>的调度模拟场景,专门还原一个大多数人不知道的细节:缓冲区满了、又有发送者在排队时,一次接收到底做了几件事。</p>
+  <div class="meta-row">
+    <span>· 引用 Go 源码 commit <code class="mono">72aa6db7</code>,文件 <code class="mono">src/runtime/chan.go</code> 与 <code class="mono">select.go</code></span>
+    <span>· 源码遵循 BSD-3-Clause 协议,版权归 The Go Authors 所有,下文均为简短引用并附原文链接</span>
+  </div>
+  <div class="legend-row">
+    <span class="legend-chip"><span class="legend-dot buf-dot"></span>缓冲区 · 一段环形数组,发送先攒在这里</span>
+    <span class="legend-chip"><span class="legend-dot queue-dot"></span>等待队列 · 缓冲区帮不上忙时,goroutine 在这里排队</span>
+    <span class="legend-chip"><span class="legend-dot direct-dot"></span>直接交接 · 有对家在等,直接跳过缓冲区</span>
+  </div>
+</header>
+
+<section class="prose">
+  <p class="section-kicker">01 · channel 不只是一个队列</p>
+  <h2>三样东西:缓冲区、等待队列、直接交接</h2>
+  <p>一个 <code class="mono">chan T</code> 在运行时对应一个 <code class="mono">hchan</code>:</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">chan.go · L34-L60</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/runtime/chan.go#L34-L60" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>type hchan struct {
+	qcount   uint           // total data in the queue
+	dataqsiz uint           // size of the circular queue
+	buf      unsafe.Pointer // points to an array of dataqsiz elements
+	elemsize uint16
+	closed   uint32
+	timer    *timer // timer feeding this chan
+	elemtype *_type // element type
+	sendx    uint   // send index
+	recvx    uint   // receive index
+	recvq    waitq  // list of recv waiters
+	sendq    waitq  // list of send waiters
+	bubble   *synctestBubble
+
+	// lock protects all fields in hchan, as well as several
+	// fields in sudogs blocked on this channel.
+	//
+	// Do not change another G's status while holding this lock
+	// (in particular, do not ready a G), as this can deadlock
+	// with stack shrinking.
+	lock mutex
+}
+
+type waitq struct {
+	first *sudog
+	last  *sudog
+}</code></pre>
+  </div>
+  <p><code class="mono">buf</code>/<code class="mono">dataqsiz</code>/<code class="mono">sendx</code>/<code class="mono">recvx</code>/<code class="mono">qcount</code> 这几个字段就是一个标准的<b>环形缓冲区</b>(circular buffer):<code class="mono">make(chan T, n)</code> 里的 <code class="mono">n</code> 就是 <code class="mono">dataqsiz</code>,无缓冲 channel 的 <code class="mono">dataqsiz</code> 就是 0。<code class="mono">sendq</code>/<code class="mono">recvq</code> 是两条<b>等待队列</b>,挂着因为"缓冲区帮不上忙"而被挂起的 goroutine(用 <code class="mono">sudog</code> 包一层)。整个结构体靠一把 <code class="mono">mutex</code> 保护——channel 操作在底层其实都是"加锁、判断、可能唤醒别人、解锁"。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">02 · 三个核心概念</p>
+  <h2>缓冲区 / 等待队列 / 直接交接</h2>
+  <div class="entity-cards">
+    <div class="ecard buf"><div class="etitle"><span class="edot"></span>缓冲区</div><p>发送时,只要 <code class="mono">qcount &lt; dataqsiz</code> 就直接把值拷进 <code class="mono">buf[sendx]</code>,不涉及任何 goroutine 调度——这是最快的路径,和普通队列没什么区别。</p></div>
+    <div class="ecard queue"><div class="etitle"><span class="edot"></span>等待队列</div><p>缓冲区满了(发送)或空了(接收)、又没有直接交接的机会时,goroutine 把自己包成一个 <code class="mono">sudog</code> 挂到 <code class="mono">sendq</code>/<code class="mono">recvq</code>,然后真正休眠,把 CPU 让给别的 goroutine。</p></div>
+    <div class="ecard direct"><div class="etitle"><span class="edot"></span>直接交接</div><p>发送时如果 <code class="mono">recvq</code> 里已经有人在等,值会被直接拷贝到那个接收者的内存里,<b>完全跳过缓冲区</b>——哪怕这个 channel 是有缓冲的。这是无缓冲 channel"握手"语义的根基,也是整个设计里最容易被忽略的优化。</p></div>
+  </div>
+</section>
+
+<section class="prose divider-top" id="sim-section">
+  <p class="section-kicker">03 · 现场直播</p>
+  <h2>缓冲区满了、又有人排队发送时,接收做了什么</h2>
+  <p>下面这段场景<b>先用 <code class="mono">go run</code>(配合真实的两个 goroutine 和 <code class="mono">-race</code> 检测)跑出真实结果,再逐项比对生成的轨迹</b>:一个容量为 2 的 channel,连续发送三次、接收三次、关闭、再收两次、最后再发一次。</p>
+</section>
+
+<section class="wide">
+  <div class="sim-panel">
+    <div class="tabs" id="tabs">
+      <button class="tab" data-scenario="buffered">场景一:有缓冲 channel(cap=2)</button>
+      <button class="tab" data-scenario="unbuffered">场景二:无缓冲 channel 的握手</button>
+    </div>
+
+    <div class="closed-badge" id="closedBadge">🔒 channel 已关闭</div>
+
+    <div class="buffer-block" id="bufferBlock">
+      <div class="block-label" id="bufferLabel">缓冲区 buf</div>
+      <div class="buf-cells" id="bufCells"></div>
+    </div>
+
+    <div class="queues-row">
+      <div class="queue-col">
+        <div class="queue-col-label">sendq(等待发送)</div>
+        <div class="queue-chips" id="sendqChips"></div>
+      </div>
+      <div class="queue-col">
+        <div class="queue-col-label">recvq(等待接收)</div>
+        <div class="queue-chips" id="recvqChips"></div>
+      </div>
+    </div>
+
+    <div class="sim-desc">
+      <div class="sim-formula" id="simFormula">&mdash;</div>
+      <div id="simDesc">点击"下一步"或"播放"开始。</div>
+    </div>
+
+    <div class="sim-controls">
+      <button class="ctrl" id="btnReset">重置</button>
+      <button class="ctrl" id="btnPrev">上一步</button>
+      <button class="ctrl primary" id="btnPlay">播放</button>
+      <button class="ctrl" id="btnNext">下一步</button>
+      <span class="sim-progress" id="simProgress">0 / 0</span>
+      <div class="spacer"></div>
+      <label class="sim-progress" for="simSpeed">速度</label>
+      <select class="ctrl" id="simSpeed">
+        <option value="2200">慢</option>
+        <option value="1300" selected>中</option>
+        <option value="600">快</option>
+      </select>
+    </div>
+
+    <div class="sim-log" id="simLog"></div>
+
+    <div class="legend2">
+      <span><span class="lg-cell"></span>缓冲区里已占用的格子</span>
+      <span><span class="lg-chip"></span>排队等待的 goroutine</span>
+      <span><span class="lg-flash"></span>这一步刚发生变化的格子</span>
+    </div>
+  </div>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">04 · 发送时的优先级</p>
+  <h2>chansend 先问"有没有人在等"</h2>
+  <p>抛开非阻塞快速路径和各种检测代码,<code class="mono">chansend</code> 的核心判断顺序是:channel 关了就 panic;<code class="mono">recvq</code> 里有等待的接收者就直接交给它(跳过缓冲区);缓冲区还有空位就塞进去;都不行、又允许阻塞,才真的把自己挂起来:</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">chan.go · L214-L247(chansend 节选)</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/runtime/chan.go#L214-L247" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>	lock(&amp;c.lock)
+
+	if c.closed != 0 {
+		unlock(&amp;c.lock)
+		panic(plainError("send on closed channel"))
+	}
+
+	if sg := c.recvq.dequeue(); sg != nil {
+		// Found a waiting receiver. We pass the value we want to send
+		// directly to the receiver, bypassing the channel buffer (if any).
+		send(c, sg, ep, func() { unlock(&amp;c.lock) }, 3)
+		return true
+	}
+
+	if c.qcount &lt; c.dataqsiz {
+		// Space is available in the channel buffer. Enqueue the element to send.
+		qp := chanbuf(c, c.sendx)
+		if raceenabled {
+			racenotify(c, c.sendx, nil)
+		}
+		typedmemmove(c.elemtype, qp, ep)
+		c.sendx++
+		if c.sendx == c.dataqsiz {
+			c.sendx = 0
+		}
+		c.qcount++
+		unlock(&amp;c.lock)
+		return true
+	}
+
+	if !block {
+		unlock(&amp;c.lock)
+		return false
+	}</code></pre>
+  </div>
+  <p>注意"有等待的接收者"这个判断排在"缓冲区还有空位"<b>前面</b>——即使是有缓冲的 channel,只要恰好有人已经在 <code class="mono">recvq</code> 里等着,新的发送也会跳过缓冲区,直接交给那个接收者。这不只是抄近路,更是为了保证 FIFO 语义:如果 A 先在等,B 后发送的值理应先给 A,而不是排到缓冲区队尾。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">05 · 无缓冲 channel 的"握手"</p>
+  <h2>一个 goroutine 直接写进另一个的栈</h2>
+  <p>"直接交给它"具体是怎么交的?<code class="mono">sendDirect</code> 会把值直接 <code class="mono">memmove</code> 到接收者那个 goroutine 的栈内存里——这也是 Go 运行时里少数几个"一个正在运行的 goroutine 会直接写另一个 goroutine 栈"的地方,需要特殊的写屏障处理配合 GC:</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">chan.go · L374-L404</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/runtime/chan.go#L374-L404" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>// Sends and receives on unbuffered or empty-buffered channels are the
+// only operations where one running goroutine writes to the stack of
+// another running goroutine. The GC assumes that stack writes only
+// happen when the goroutine is running and are only done by that
+// goroutine. Using a write barrier is sufficient to make up for
+// violating that assumption, but the write barrier has to work.
+// typedmemmove will call bulkBarrierPreWrite, but the target bytes
+// are not in the heap, so that will not help. We arrange to call
+// memmove and typeBitsBulkBarrier instead.
+
+func sendDirect(t *_type, sg *sudog, src unsafe.Pointer) {
+	// src is on our stack, dst is a slot on another stack.
+
+	// Once we read sg.elem out of sg, it will no longer
+	// be updated if the destination's stack gets copied (shrunk).
+	// So make sure that no preemption points can happen between read &amp; use.
+	dst := sg.elem.get()
+	typeBitsBulkBarrier(t, uintptr(dst), uintptr(src), t.Size_)
+	// No need for cgo write barrier checks because dst is always
+	// Go memory.
+	memmove(dst, src, t.Size_)
+}
+
+func recvDirect(t *_type, sg *sudog, dst unsafe.Pointer) {
+	// dst is on our stack or the heap, src is on another stack.
+	// The channel is locked, so src will not move during this
+	// operation.
+	src := sg.elem.get()
+	typeBitsBulkBarrier(t, uintptr(dst), uintptr(src), t.Size_)
+	memmove(dst, src, t.Size_)
+}</code></pre>
+  </div>
+  <p>这正是无缓冲 channel 常被称为"同步/握手"的原因:发送方和接收方必须同时到场,数据才能从一个栈"跳"到另一个栈,中间没有任何缓冲区可以让二者错开时间。模拟器场景二演示了这个过程——发送方先到,自己挂起等待;接收方一到,值被直接搬走,发送方立刻被唤醒继续执行,<b>缓冲区自始至终没有被用到</b>。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">06 · 一个鲜为人知的细节</p>
+  <h2>缓冲区满了、又有人排队发送时,接收会做两件事</h2>
+  <p>这是整篇文章里最值得记住的一段。设想缓冲区已经满了,还有一个发送者因此被挂在 <code class="mono">sendq</code> 里排队。这时候来一次接收,会发生什么?直觉上大概是"从缓冲区拿一个,然后单独去唤醒那个排队的发送者,让它下次自己把值塞进缓冲区"——但真实实现更聪明:</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">chan.go · L580-L621(chanrecv 节选)</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/runtime/chan.go#L580-L621" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>	lock(&amp;c.lock)
+
+	if c.closed != 0 {
+		if c.qcount == 0 {
+			if raceenabled {
+				raceacquire(c.raceaddr())
+			}
+			unlock(&amp;c.lock)
+			if ep != nil {
+				typedmemclr(c.elemtype, ep)
+			}
+			return true, false
+		}
+		// The channel has been closed, but the channel's buffer have data.
+	} else {
+		// Just found waiting sender with not closed.
+		if sg := c.sendq.dequeue(); sg != nil {
+			// Found a waiting sender. If buffer is size 0, receive value
+			// directly from sender. Otherwise, receive from head of queue
+			// and add sender's value to the tail of the queue (both map to
+			// the same buffer slot because the queue is full).
+			recv(c, sg, ep, func() { unlock(&amp;c.lock) }, 3)
+			return true, true
+		}
+	}
+
+	if c.qcount &gt; 0 {
+		// Receive directly from queue
+		qp := chanbuf(c, c.recvx)
+		if raceenabled {
+			racenotify(c, c.recvx, nil)
+		}
+		if ep != nil {
+			typedmemmove(c.elemtype, ep, qp)
+		}
+		typedmemclr(c.elemtype, qp)
+		c.recvx++
+		if c.recvx == c.dataqsiz {
+			c.recvx = 0
+		}
+		c.qcount--
+		unlock(&amp;c.lock)
+		return true, true
+	}</code></pre>
+  </div>
+  <p>关键在那句注释:<b>"receive from head of queue and add sender's value to the tail of the queue"</b>。接收操作会：①从缓冲区头部(<code class="mono">recvx</code>)取走一个值给自己;②把排队发送者手里那个值,直接搬进缓冲区刚空出来的那个槽位(也就是新的队尾);③唤醒那个发送者,告诉它"你的值已经放进去了,可以走了"。<b>全程只有一次数据搬动被"存"进了缓冲区,发送者不需要真的醒来再抢锁塞值</b>——这就是模拟器场景一里 G2 接收时,G1 立刻被唤醒、且它的值(3)紧接着出现在缓冲区里的原因。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">07 · close 做了什么</p>
+  <h2>唤醒所有人,但唤醒的方式不一样</h2>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">chan.go · L414-L469(closechan 节选)</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/runtime/chan.go#L414-L469" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>	lock(&amp;c.lock)
+	if c.closed != 0 {
+		unlock(&amp;c.lock)
+		panic(plainError("close of closed channel"))
+	}
+
+	if raceenabled {
+		callerpc := sys.GetCallerPC()
+		racewritepc(c.raceaddr(), callerpc, abi.FuncPCABIInternal(closechan))
+		racerelease(c.raceaddr())
+	}
+
+	c.closed = 1
+
+	var glist gList
+
+	// release all readers
+	for {
+		sg := c.recvq.dequeue()
+		if sg == nil {
+			break
+		}
+		if sg.elem.get() != nil {
+			typedmemclr(c.elemtype, sg.elem.get())
+			sg.elem.set(nil)
+		}
+		if sg.releasetime != 0 {
+			sg.releasetime = cputicks()
+		}
+		gp := sg.g
+		gp.param = unsafe.Pointer(sg)
+		sg.success = false
+		if raceenabled {
+			raceacquireg(gp, c.raceaddr())
+		}
+		glist.push(gp)
+	}
+
+	// release all writers (they will panic)
+	for {
+		sg := c.sendq.dequeue()
+		if sg == nil {
+			break
+		}
+		sg.elem.set(nil)
+		if sg.releasetime != 0 {
+			sg.releasetime = cputicks()
+		}
+		gp := sg.g
+		gp.param = unsafe.Pointer(sg)
+		sg.success = false
+		if raceenabled {
+			raceacquireg(gp, c.raceaddr())
+		}
+		glist.push(gp)
+	}</code></pre>
+  </div>
+  <p>两条等待队列都会被清空、对应的 goroutine 都会被唤醒,但唤醒之后的命运不同:<code class="mono">recvq</code> 里的接收者会拿到零值(<code class="mono">sg.elem</code> 被清空)和 <code class="mono">ok=false</code>;<code class="mono">sendq</code> 里的发送者被唤醒后会检查 <code class="mono">sg.success</code>,发现是 <code class="mono">false</code>,直接 <code class="mono">panic("send on closed channel")</code>——close 唤醒了它们,不是为了让发送成功,而是为了让它们"体面地"崩溃,而不是永远卡在那里。缓冲区里<b>已经存在的数据不会被清空</b>,后续的接收还能正常读到,直到缓冲区变空才会开始返回零值——这正是模拟器场景一里 close 之后 G4 还能收到 3、G5 才收到零值的原因。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">08 · select 怎么保证公平</p>
+  <h2>先打乱顺序,再挨个问一遍</h2>
+  <p>当 <code class="mono">select</code> 里有多个 case 同时就绪,Go 不会按代码里写的顺序挑,也不会有任何优先级——它会先把所有 case 的检查顺序随机打乱:</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">select.go · L167-L196(生成随机顺序)</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/runtime/select.go#L167-L196" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>	// generate permuted order
+	norder := 0
+	allSynctest := true
+	for i := range scases {
+		cas := &amp;scases[i]
+
+		// Omit cases without channels from the poll and lock orders.
+		if cas.c == nil {
+			cas.elem = nil // allow GC
+			continue
+		}
+
+		if cas.c.bubble != nil {
+			if getg().bubble != cas.c.bubble {
+				fatal("select on synctest channel from outside bubble")
+			}
+		} else {
+			allSynctest = false
+		}
+
+		if cas.c.timer != nil {
+			cas.c.timer.maybeRunChan(cas.c)
+		}
+
+		j := cheaprandn(uint32(norder + 1))
+		pollorder[norder] = pollorder[j]
+		pollorder[j] = uint16(i)
+		norder++
+	}
+	pollorder = pollorder[:norder]</code></pre>
+  </div>
+  <p>然后严格按这个打乱后的顺序(<code class="mono">pollorder</code>)挨个检查,<b>第一个发现已经就绪的 case 获胜</b>:</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">select.go · L265-L301(按随机顺序轮询)</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/runtime/select.go#L265-L301" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>	var casi int
+	var cas *scase
+	var caseSuccess bool
+	var caseReleaseTime int64 = -1
+	var recvOK bool
+	for _, casei := range pollorder {
+		casi = int(casei)
+		cas = &amp;scases[casi]
+		c = cas.c
+
+		if casi &gt;= nsends {
+			sg = c.sendq.dequeue()
+			if sg != nil {
+				goto recv
+			}
+			if c.qcount &gt; 0 {
+				goto bufrecv
+			}
+			if c.closed != 0 {
+				goto rclose
+			}
+		} else {
+			if raceenabled {
+				racereadpc(c.raceaddr(), casePC(casi), chansendpc)
+			}
+			if c.closed != 0 {
+				goto sclose
+			}
+			sg = c.recvq.dequeue()
+			if sg != nil {
+				goto send
+			}
+			if c.qcount &lt; c.dataqsiz {
+				goto bufsend
+			}
+		}
+	}</code></pre>
+  </div>
+  <p>实测验证一下:两个已经就绪的 channel 各跑一万次 <code class="mono">select</code>,统计各自被选中的次数(<code class="mono">go run</code>,Go 1.26):</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">go run 真实输出</span><span class="code-path">已验证</span></div>
+    <pre><code>countA: 4984 countB: 5016</code></pre>
+  </div>
+  <p>接近 50/50,符合"公平随机挑一个"的说法。这也是为什么不能指望 <code class="mono">select</code> 在多个 case 同时就绪时有稳定的优先级——想要优先级,得自己在外面用嵌套 <code class="mono">select</code> 或者显式的信号量来实现。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">09 · 三个经典的坑</p>
+  <h2>顺手提三个常见问题</h2>
+  <ul>
+    <li><b>对 <code class="mono">nil</code> channel 发送或接收会永远阻塞,而不是 panic。</b> <code class="mono">chansend</code>/<code class="mono">chanrecv</code> 一开头就检查 <code class="mono">c == nil</code>,直接 <code class="mono">gopark</code> 让这个 goroutine 永久休眠——常见于结构体里的 channel 字段忘了初始化,代码能编译、能跑,但相关的 goroutine 悄无声息地永远卡住,连报错都没有。</li>
+    <li><b>关闭一个已经关闭的 channel 会 panic,给已关闭的 channel 发送也会 panic,但从已关闭的 channel 接收永远不会 panic。</b> 接收是"安全"的那一侧:缓冲区有数据先给数据,没数据就给零值 + <code class="mono">ok=false</code>——这也是为什么 <code class="mono">for v := range ch</code> 能在 channel 被关闭且清空后自动、干净地退出循环,不需要额外判断。</li>
+    <li><b>该由谁来关闭 channel?</b> 只有发送方应该关闭 channel,而且要确保没有其它 goroutine 还在往里发送——多个发送者共用同一个 channel 时,"谁关闭"要么提前约定好只由一方负责,要么额外用一个协调机制(比如 <code class="mono">sync.Once</code>),否则就会撞上"关闭已关闭的 channel"或者"向已关闭的 channel 发送"这两个 panic 中的一个。</li>
+  </ul>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">10 · 参考与说明</p>
+  <h2>引用与这个模拟器做了哪些简化</h2>
+  <ul class="refs">
+    <li>本文所有源码引用均来自 <a href="https://github.com/golang/go" target="_blank" rel="noopener">golang/go</a>,commit <code class="mono">72aa6db7943024b48c4d41c1fbc32b57b9fa036e</code>,文件 <code class="mono">src/runtime/chan.go</code> 与 <code class="mono">src/runtime/select.go</code>,遵循 Go 项目的 BSD-3-Clause 协议(© The Go Authors)。每段引用都标了具体文件、行号,并附了指向该 commit 的永久链接。</li>
+    <li>模拟器场景、以及第 08 节的一万次 select 统计,都是真实跑过的(<code class="mono">go run</code>,部分加了 <code class="mono">-race</code>,Go 1.26)——第 06 节那个"接收顺带帮排队发送者腾位置"的行为,专门用两个真实 goroutine + 显式同步(而不是猜测)复现并核对过。</li>
+    <li>模拟器省略了 <code class="mono">race</code>/<code class="mono">msan</code>/<code class="mono">asan</code> 检测分支、<code class="mono">timer</code> channel 的特殊路径,以及 <code class="mono">synctest</code> bubble 相关的检查——它们都不影响缓冲区/等待队列/直接交接这条主线逻辑。</li>
+    <li><code class="mono">sudog</code>(挂在等待队列里、代表一个等待中 goroutine 的结构体)本身没有单独展开,模拟器里直接用一个"goroutine 名字 + 待发送的值"简化表示。</li>
+  </ul>
+</section>
+
+<footer class="endnote prose">
+  Go 运行时系列 · channel 的核心心智模型就一句话:能直接交给正在等的人,就不进缓冲区;缓冲区能放下,就不阻塞;都不行,才真的排队睡觉。
+</footer>
+</article>
+
+<script>
+var SIMS = {"buffered": [{"g": "G1", "value": 1, "type": "send-buffered", "snapshot": {"cap": 2, "buf": [1, null], "qcount": 1, "sendx": 1, "recvx": 0, "sendq": [], "recvq": [], "closed": false}}, {"g": "G1", "value": 2, "type": "send-buffered", "snapshot": {"cap": 2, "buf": [1, 2], "qcount": 2, "sendx": 0, "recvx": 0, "sendq": [], "recvq": [], "closed": false}}, {"g": "G1", "value": 3, "type": "send-block", "snapshot": {"cap": 2, "buf": [1, 2], "qcount": 2, "sendx": 0, "recvx": 0, "sendq": [{"g": "G1", "value": 3}], "recvq": [], "closed": false}}, {"g": "G2", "value": 1, "wokeG": "G1", "wokeValue": 3, "type": "recv-headplus-wake", "snapshot": {"cap": 2, "buf": [3, 2], "qcount": 2, "sendx": 1, "recvx": 1, "sendq": [], "recvq": [], "closed": false}}, {"g": "G3", "value": 2, "type": "recv-buffered", "snapshot": {"cap": 2, "buf": [3, null], "qcount": 1, "sendx": 1, "recvx": 0, "sendq": [], "recvq": [], "closed": false}}, {"woke": [], "type": "close", "snapshot": {"cap": 2, "buf": [3, null], "qcount": 1, "sendx": 1, "recvx": 0, "sendq": [], "recvq": [], "closed": true}}, {"g": "G4", "value": 3, "type": "recv-buffered", "snapshot": {"cap": 2, "buf": [null, null], "qcount": 0, "sendx": 1, "recvx": 1, "sendq": [], "recvq": [], "closed": true}}, {"g": "G5", "type": "recv-closed-empty", "snapshot": {"cap": 2, "buf": [null, null], "qcount": 0, "sendx": 1, "recvx": 1, "sendq": [], "recvq": [], "closed": true}}, {"g": "G6", "value": 4, "type": "send-panic", "snapshot": {"cap": 2, "buf": [null, null], "qcount": 0, "sendx": 1, "recvx": 1, "sendq": [], "recvq": [], "closed": true}}, {"type": "done", "snapshot": {"cap": 2, "buf": [null, null], "qcount": 0, "sendx": 1, "recvx": 1, "sendq": [], "recvq": [], "closed": true}}], "unbuffered": [{"g": "P", "value": 42, "type": "send-block", "snapshot": {"cap": 0, "buf": [], "qcount": 0, "sendx": 0, "recvx": 0, "sendq": [{"g": "P", "value": 42}], "recvq": [], "closed": false}}, {"g": "C", "from_": "P", "value": 42, "type": "recv-direct", "snapshot": {"cap": 0, "buf": [], "qcount": 0, "sendx": 0, "recvx": 0, "sendq": [], "recvq": [], "closed": false}}, {"type": "done", "snapshot": {"cap": 0, "buf": [], "qcount": 0, "sendx": 0, "recvx": 0, "sendq": [], "recvq": [], "closed": false}}]};
+var CURRENT_SCENARIO = 'buffered';
+var SIM = SIMS[CURRENT_SCENARIO];
+var idx = -1;
+var playTimer = null;
+var CAP_BY_SCENARIO = {buffered: 2, unbuffered: 0};
+
+var bufferBlock = document.getElementById('bufferBlock');
+var bufCells = document.getElementById('bufCells');
+var sendqChips = document.getElementById('sendqChips');
+var recvqChips = document.getElementById('recvqChips');
+var closedBadge = document.getElementById('closedBadge');
+var simLog = document.getElementById('simLog');
+
+function render(){
+  var snap = idx >= 0 ? SIM[idx].snapshot : null;
+  var e = idx >= 0 ? SIM[idx] : null;
+  var cap_ = CAP_BY_SCENARIO[CURRENT_SCENARIO];
+
+  bufferBlock.style.display = cap_ === 0 ? 'none' : '';
+  bufCells.innerHTML = '';
+  if(snap && cap_ > 0){
+    for(var i=0;i<snap.buf.length;i++){
+      var cell = document.createElement('div');
+      cell.className = 'buf-cell';
+      var filled = snap.buf[i] !== null && snap.buf[i] !== undefined;
+      cell.dataset.filled = filled ? 'true' : 'false';
+      var flash = e && (
+        (e.type === 'send-buffered' && filled && i === (snap.sendx - 1 + snap.buf.length) % snap.buf.length) ||
+        (e.type === 'recv-headplus-wake' && i === (snap.recvx - 1 + snap.buf.length) % snap.buf.length) ||
+        (e.type === 'recv-buffered' && false)
+      );
+      cell.dataset.flash = flash ? 'true' : 'false';
+      var idxEl = document.createElement('div');
+      idxEl.className = 'cell-idx';
+      idxEl.textContent = '[' + i + ']';
+      var valEl = document.createElement('div');
+      valEl.className = 'cell-val';
+      valEl.textContent = filled ? snap.buf[i] : '·';
+      var ptrEl = document.createElement('div');
+      ptrEl.className = 'cell-ptr';
+      var ptrs = [];
+      if(i === snap.sendx) ptrs.push('sendx');
+      if(i === snap.recvx) ptrs.push('recvx');
+      ptrEl.textContent = ptrs.join('/');
+      cell.appendChild(idxEl); cell.appendChild(valEl); cell.appendChild(ptrEl);
+      bufCells.appendChild(cell);
+    }
+  }
+
+  function renderQueue(container, list, label){
+    container.innerHTML = '';
+    if(!list || list.length === 0){
+      var em = document.createElement('span');
+      em.className = 'queue-empty';
+      em.textContent = '(空)';
+      container.appendChild(em);
+      return;
+    }
+    list.forEach(function(item){
+      var chip = document.createElement('span');
+      chip.className = 'g-chip';
+      chip.textContent = item.g + (item.value !== undefined ? (': ' + item.value) : '');
+      container.appendChild(chip);
+    });
+  }
+  renderQueue(sendqChips, snap ? snap.sendq : []);
+  renderQueue(recvqChips, snap ? snap.recvq : []);
+
+  closedBadge.dataset.show = (snap && snap.closed) ? 'true' : 'false';
+
+  var formulaEl = document.getElementById('simFormula');
+  var descEl = document.getElementById('simDesc');
+  if(idx < 0){
+    formulaEl.textContent = '—';
+    descEl.innerHTML = '点击"下一步"或"播放"开始。';
+  } else {
+    formulaEl.textContent = formulaFor(e);
+    descEl.innerHTML = descFor(e);
+  }
+
+  document.getElementById('simProgress').textContent = (idx+1) + ' / ' + SIM.length;
+  document.getElementById('btnPrev').disabled = idx < 0;
+  document.getElementById('btnNext').disabled = idx >= SIM.length - 1;
+
+  var items = simLog.children;
+  for(var i2=0;i2<items.length;i2++){
+    items[i2].setAttribute('data-active', i2 === idx ? 'true' : 'false');
+  }
+  if(idx >= 0 && items[idx]) items[idx].scrollIntoView({block:'nearest'});
+}
+
+function formulaFor(e){
+  if(e.type === 'send-buffered') return e.g + ': ch <- ' + e.value + '  // 缓冲区有空位,原地写入';
+  if(e.type === 'send-block') return e.g + ': ch <- ' + e.value + '  // 缓冲区满、无接收者,阻塞';
+  if(e.type === 'send-direct') return e.g + ': ch <- ' + e.value + '  // 直接交给等待中的 ' + e.to;
+  if(e.type === 'send-panic') return e.g + ': ch <- ' + e.value + '  // panic: send on closed channel';
+  if(e.type === 'recv-buffered') return 'v := <-ch  // ' + e.g + ' 从缓冲区头部取走 ' + e.value;
+  if(e.type === 'recv-direct') return 'v := <-ch  // ' + e.g + ' 直接从 ' + e.from_ + ' 手里接过 ' + e.value;
+  if(e.type === 'recv-headplus-wake') return 'v := <-ch  // ' + e.g + ' 取走 ' + e.value + ',同时把 ' + e.wokeG + ' 的值搬进缓冲区';
+  if(e.type === 'recv-closed-empty') return 'v, ok := <-ch  // ' + e.g + ' 得到零值, ok=false';
+  if(e.type === 'close') return 'close(ch)';
+  if(e.type === 'done') return '// 演示结束';
+  return '—';
+}
+
+function descFor(e){
+  if(e.type === 'send-buffered') return '<b>' + e.g + '</b> 发送 ' + e.value + '。缓冲区还有空位(qcount &lt; cap),直接拷贝进 buf,不涉及任何等待队列。';
+  if(e.type === 'send-block') return '<b>' + e.g + '</b> 发送 ' + e.value + ',但缓冲区已经满了,也没有接收者在等——<b>' + e.g + '</b> 把自己挂到 sendq,真正休眠。';
+  if(e.type === 'send-direct') return '<b>' + e.g + '</b> 发送 ' + e.value + ' 时,recvq 里已经有 <b>' + e.to + '</b> 在等——值直接 memmove 到 ' + e.to + ' 的栈上,缓冲区完全没被用到,' + e.to + ' 立刻被唤醒。';
+  if(e.type === 'send-panic') return '<b>' + e.g + '</b> 试图向已关闭的 channel 发送 ' + e.value + '——<code class="mono">chansend</code> 一开始就检查 c.closed,直接 panic。';
+  if(e.type === 'recv-buffered') return '<b>' + e.g + '</b> 接收。缓冲区非空、也没有排队的发送者——从 recvx 指向的槽位取走 ' + e.value + '。';
+  if(e.type === 'recv-direct') return '<b>' + e.g + '</b> 接收。这是无缓冲 channel(cap=0),发现 sendq 里有 <b>' + e.from_ + '</b> 正在等——直接从它那里拿到 ' + e.value + ',无缓冲区参与,' + e.from_ + ' 同时被唤醒。';
+  if(e.type === 'recv-headplus-wake') return '<b>' + e.g + '</b> 接收。缓冲区满(qcount==cap),同时 sendq 里有 <b>' + e.wokeG + '</b> 排队——① ' + e.g + ' 拿走缓冲区头部的 ' + e.value + ';② ' + e.wokeG + ' 排队的值(' + e.wokeValue + ')被直接搬进那个刚空出来的槽位;③ ' + e.wokeG + ' 被唤醒,它的发送"完成"了,全程它自己完全不需要再抢锁。';
+  if(e.type === 'recv-closed-empty') return '<b>' + e.g + '</b> 接收。channel 已关闭且缓冲区已空——立即返回零值,ok=false,不阻塞。';
+  if(e.type === 'close') return '<code class="mono">close(ch)</code>:closed 标志位置 1。此刻两条等待队列都是空的,没有谁需要被唤醒;缓冲区里已有的数据完全不受影响,后面还能正常收到。';
+  if(e.type === 'done') return '演示结束。';
+  return '';
+}
+
+function labelForEvent(e){
+  if(e.type === 'send-buffered') return e.g + ' 发送 ' + e.value + ' → 缓冲区';
+  if(e.type === 'send-block') return e.g + ' 发送 ' + e.value + ' → 阻塞排队';
+  if(e.type === 'send-direct') return e.g + ' 发送 ' + e.value + ' → 直接交给 ' + e.to;
+  if(e.type === 'send-panic') return e.g + ' 发送 → panic!';
+  if(e.type === 'recv-buffered') return e.g + ' 接收 ' + e.value + ' ← 缓冲区';
+  if(e.type === 'recv-direct') return e.g + ' 接收 ' + e.value + ' ← ' + e.from_ + '(直接)';
+  if(e.type === 'recv-headplus-wake') return e.g + ' 接收 ' + e.value + ',顺带唤醒 ' + e.wokeG;
+  if(e.type === 'recv-closed-empty') return e.g + ' 接收 → 零值,ok=false';
+  if(e.type === 'close') return 'close(ch)';
+  if(e.type === 'done') return '结束';
+  return '';
+}
+
+function buildLog(){
+  simLog.innerHTML = '';
+  SIM.forEach(function(e,i){
+    var item = document.createElement('div');
+    item.className = 'log-item';
+    item.setAttribute('data-active','false');
+    var idxSpan = document.createElement('span');
+    idxSpan.className = 'log-idx';
+    idxSpan.textContent = i+1;
+    var txt = document.createElement('span');
+    txt.textContent = labelForEvent(e);
+    item.appendChild(idxSpan); item.appendChild(txt);
+    item.addEventListener('click', function(ii){ return function(){ stopPlay(); idx = ii; render(); }; }(i));
+    simLog.appendChild(item);
+  });
+}
+
+function goTo(i){
+  idx = Math.max(-1, Math.min(SIM.length-1, i));
+  render();
+}
+function stopPlay(){
+  if(playTimer){ clearInterval(playTimer); playTimer = null; }
+  document.getElementById('btnPlay').textContent = '播放';
+}
+document.getElementById('btnNext').addEventListener('click', function(){ stopPlay(); goTo(idx+1); });
+document.getElementById('btnPrev').addEventListener('click', function(){ stopPlay(); goTo(idx-1); });
+document.getElementById('btnReset').addEventListener('click', function(){ stopPlay(); goTo(-1); });
+document.getElementById('btnPlay').addEventListener('click', function(){
+  if(playTimer){ stopPlay(); return; }
+  if(idx >= SIM.length - 1) goTo(-1);
+  document.getElementById('btnPlay').textContent = '暂停';
+  var speed = parseInt(document.getElementById('simSpeed').value, 10);
+  playTimer = setInterval(function(){
+    if(idx >= SIM.length - 1){ stopPlay(); return; }
+    goTo(idx+1);
+  }, speed);
+});
+document.getElementById('simSpeed').addEventListener('change', function(){
+  if(playTimer){ stopPlay(); document.getElementById('btnPlay').click(); }
+});
+
+var tabs = document.getElementById('tabs');
+Array.prototype.forEach.call(tabs.children, function(b){
+  b.dataset.active = (b.dataset.scenario === CURRENT_SCENARIO) ? 'true' : 'false';
+  b.addEventListener('click', function(){
+    var sc = b.dataset.scenario;
+    if(sc === CURRENT_SCENARIO) return;
+    stopPlay();
+    CURRENT_SCENARIO = sc;
+    SIM = SIMS[CURRENT_SCENARIO];
+    Array.prototype.forEach.call(tabs.children, function(bb){
+      bb.dataset.active = (bb.dataset.scenario === CURRENT_SCENARIO) ? 'true' : 'false';
+    });
+    buildLog();
+    goTo(-1);
+  });
+});
+
+buildLog();
+goTo(-1);
+</script>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+</body>
+</html>

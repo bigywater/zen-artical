@@ -1,0 +1,57 @@
+import sys, os, re, time, subprocess, json; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from dl import *
+tee('c66')
+img('alpine:3.20')
+purge()
+def vm(cmd):
+    rc, o = dk('run', '--rm', '--privileged', '--pid=host', *LAB, 'alpine:3.20', 'nsenter', '-t', '1', '-m', '-u', '-n', '-i', 'sh', '-c', cmd, raw=True)
+    return o.strip()
+def cdir(cid): return f'/var/lib/docker/containers/{cid}'
+print('== 一:Docker Desktop 的默认日志驱动是 local,不是 json-file(Docker Engine 29.8.2)')
+print('  docker info 的 Logging Driver = ' + out('info', '--format', '{{.LoggingDriver}}'))
+print('  虚拟机里 daemon.json 的日志配置:' + vm("grep -i -E 'log' /run/config/docker/daemon.json | tr -d ' \\n'"))
+n = 'bwlab-c66a'
+dk('run', '-d', '--name', n, *LAB, 'alpine:3.20', 'sh', '-c', 'echo line-one; echo err-line >&2; sleep 60'); time.sleep(1.5)
+cid = out('inspect', '--format', '{{.Id}}', n)
+print('  HostConfig.LogConfig = ' + out('inspect', '--format', '{{json .HostConfig.LogConfig}}', n) + ';LogPath = ' + repr(out('inspect', '--format', '{{.LogPath}}', n)) + '(local 驱动没有 LogPath)')
+print('  容器目录下的日志相关文件:' + vm(f"find {cdir(cid)} -type f | grep -i log | sed 's#{cdir(cid)}/##' | tr '\\n' ' '"))
+print('  local 日志文件的前 48 个字节(十六进制):' + vm(f"head -c 48 {cdir(cid)}/local-logs/container.log | od -An -tx1 | tr -d '\\n'") + '(不是 JSON 文本)')
+print('  docker logs 仍然能读:' + dk('logs', n)[1].replace('\n', ' ⏎ '))
+dk('rm', '-f', n)
+print('== 二:显式用 json-file 驱动,日志文件是什么样')
+n = 'bwlab-c66b'
+dk('run', '-d', '--name', n, *LAB, '--log-driver', 'json-file', 'alpine:3.20', 'sh', '-c', 'echo line-one; echo err-line >&2; printf "no-newline"; sleep 60'); time.sleep(1.5)
+cid = out('inspect', '--format', '{{.Id}}', n)
+print('  LogPath = ' + out('inspect', '--format', '{{.LogPath}}', n).replace(cid, '<容器ID>'))
+for l in vm(f'cat {cdir(cid)}/{cid}-json.log').splitlines(): print('    ' + l)
+print('  docker logs 的输出:' + dk('logs', n)[1].replace('\n', ' ⏎ '))
+dk('rm', '-f', n)
+print('== 三:json-file 里超长的一行会被拆开')
+n = 'bwlab-c66c'
+dk('run', '-d', '--name', n, *LAB, '--log-driver', 'json-file', 'alpine:3.20', 'sh', '-c', 'head -c 40000 /dev/zero | tr "\\0" "x"; echo; sleep 60'); time.sleep(1.5)
+cid = out('inspect', '--format', '{{.Id}}', n)
+lines = vm(f'cat {cdir(cid)}/{cid}-json.log').splitlines()
+print(f'  输出 1 行 40000 个字符:日志文件里有 {len(lines)} 条记录;每条 log 字段的长度 ' + str([len(json.loads(l)['log']) for l in lines]))
+print(f'  docker logs 读出来是 {len(dk("logs", n, raw=True)[1].splitlines())} 行')
+dk('rm', '-f', n)
+print('== 四:日志轮转 --log-opt max-size / max-file(json-file)')
+CMD = 'i=0; while [ $i -lt 1000 ]; do echo "line $i padding-padding-padding-padding-padding-padding"; i=$((i+1)); done; sleep 60'
+n = 'bwlab-c66d'
+dk('run', '-d', '--name', n, *LAB, '--log-driver', 'json-file', '--log-opt', 'max-size=10k', '--log-opt', 'max-file=3', 'alpine:3.20', 'sh', '-c', CMD); time.sleep(3)
+cid = out('inspect', '--format', '{{.Id}}', n)
+print('  max-size=10k max-file=3,日志目录里的文件:' + vm(f"ls -l {cdir(cid)}/ | grep json | awk '{{print $5, $9}}'").replace(cid, '<ID>').replace('\n', ' ; '))
+lg = dk('logs', n, raw=True)[1].strip().splitlines()
+print(f'  脚本一共输出 1000 行;docker logs 能读到 {len(lg)} 行,第一行是「{lg[0][:12]}」,最后一行是「{lg[-1][:12]}」')
+dk('rm', '-f', n)
+n = 'bwlab-c66e'
+dk('run', '-d', '--name', n, *LAB, '--log-driver', 'json-file', 'alpine:3.20', 'sh', '-c', CMD); time.sleep(3)
+cid = out('inspect', '--format', '{{.Id}}', n)
+print('  对比:json-file 不设 --log-opt(默认没有上限)日志文件:' + vm(f"ls -l {cdir(cid)}/ | grep json | awk '{{print $5, $9}}'").replace(cid, '<ID>').replace('\n', ' ; ') + f';docker logs 读到 {len(dk("logs", n, raw=True)[1].strip().splitlines())} 行')
+dk('rm', '-f', n)
+print('== 五:容器删除后日志去哪了')
+n = 'bwlab-c66f'
+dk('run', '-d', '--name', n, *LAB, '--log-driver', 'json-file', 'alpine:3.20', 'sh', '-c', 'echo bye; sleep 60'); time.sleep(1)
+cid = out('inspect', '--format', '{{.Id}}', n)
+dk('rm', '-f', n)
+print('  docker rm -f 之后容器目录还在吗?' + (vm(f"[ -d {cdir(cid)} ] && echo 还在 || echo 已删除")))
+purge()

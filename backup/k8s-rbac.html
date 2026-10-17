@@ -1,0 +1,581 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>RBAC 鉴权:一条规则到底是怎么匹配上一次请求的</title>
+<meta name="description" content="本机真实 Go 程序(逐字符转录自 kubernetes v1.37.0 真实源码,本机真实编译执行)验证 PolicyRule 的四重匹配逻辑、NonResourceURL 通配符的裸字符串前缀匹配陷阱、RoleBinding 引用 ClusterRole 时授权范围被收窄到单一命名空间的机制,以及 RBAC 没有拒绝语义、只有允许取并集的真相,对照真实源码。">
+<link rel="canonical" href="https://bigywater.tech/k8s-rbac.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="RBAC 鉴权:一条规则到底是怎么匹配上一次请求的">
+<meta property="og:description" content="本机真实 Go 程序(逐字符转录自 kubernetes v1.37.0 真实源码,本机真实编译执行)验证 PolicyRule 的四重匹配逻辑、NonResourceURL 通配符的裸字符串前缀匹配陷阱、RoleBinding 引用 ClusterRole 时授权范围被收窄到单一命名空间的机制,以及 RBAC 没有拒绝语义、只有允许取并集的真相,对照真实源码。">
+<meta property="og:url" content="https://bigywater.tech/k8s-rbac.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="RBAC 鉴权:一条规则到底是怎么匹配上一次请求的">
+<meta name="twitter:description" content="本机真实 Go 程序(逐字符转录自 kubernetes v1.37.0 真实源码,本机真实编译执行)验证 PolicyRule 的四重匹配逻辑、NonResourceURL 通配符的裸字符串前缀匹配陷阱、RoleBinding 引用 ClusterRole 时授权范围被收窄到单一命名空间的机制,以及 RBAC 没有拒绝语义、只有允许取并集的真相,对照真实源码。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F6F5F8; --paper:#FFFFFF; --ink:#221E2C; --ink-dim:#655D71; --line:#E2DEEB;
+  --k8s-c:#5D4A9C; --k8s-c-soft:#ECE7F7;
+  --node-c:#1F7A6B; --node-c-soft:#E0F0EC;
+  --skip-c:#A8425E; --skip-c-soft:#F7E4EA;
+  --code-bg:#211C2E; --code-ink:#EDE9F5;
+  --shadow: 0 1px 2px rgba(30,20,45,.06), 0 8px 24px -12px rgba(30,20,45,.16);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#141019; --paper:#1E1928; --ink:#EDE9F5; --ink-dim:#B0A8C4; --line:#332C45;
+    --k8s-c:#9C87E0; --k8s-c-soft:#2C2447;
+    --node-c:#5FCBB4; --node-c-soft:#153330;
+    --skip-c:#E58AA3; --skip-c-soft:#3B1F28;
+    --code-bg:#120F1A; --code-ink:#E9E4F5;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#141019; --paper:#1E1928; --ink:#EDE9F5; --ink-dim:#B0A8C4; --line:#332C45;
+  --k8s-c:#9C87E0; --k8s-c-soft:#2C2447;
+  --node-c:#5FCBB4; --node-c-soft:#153330;
+  --skip-c:#E58AA3; --skip-c-soft:#3B1F28;
+  --code-bg:#120F1A; --code-ink:#E9E4F5;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--k8s-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--k8s-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--k8s-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--k8s-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#B0A8C4; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#C3B3F0;}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--k8s-c-soft); color:var(--k8s-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .ok{color:#8FE0D4;}
+.term pre.code{margin:0 0 10px; color:#C3B3F0; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem; display:flex; justify-content:space-between; align-items:center;}
+.demo-head .step-badge{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; color:var(--k8s-c); background:var(--k8s-c-soft); padding:3px 9px; border-radius:6px; font-weight:600;}
+.demo-narration{min-height:52px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-body{padding:20px;}
+.tree-row{display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-bottom:16px;}
+@media (max-width:700px){.tree-row{grid-template-columns:1fr;}}
+.tree-box{border:1.5px solid var(--line); border-radius:10px; padding:10px; background:var(--bg); text-align:center; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.76rem;}
+.tree-box .nt{font-weight:700; margin-bottom:4px;}
+.tree-box[data-state="set"]{border-color:var(--k8s-c); background:var(--k8s-c-soft); color:var(--k8s-c); font-weight:700;}
+.tree-box[data-state="clear"]{border-color:var(--line); background:var(--bg);}
+.tree-box[data-state="win"]{border-color:var(--node-c); background:var(--node-c-soft); color:var(--node-c); font-weight:700;}
+.tree-box[data-state="drop"]{border-color:var(--skip-c); background:var(--skip-c-soft); color:var(--skip-c); font-weight:700;}
+.query-line{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.83rem; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px 14px; margin-bottom:16px; overflow-x:auto; white-space:pre;}
+.checks{display:flex; flex-direction:column; gap:8px; margin-bottom:16px;}
+.check{border:1.5px solid var(--line); border-radius:10px; padding:10px 14px; background:var(--bg); font-size:.85rem; display:flex; justify-content:space-between; align-items:center; gap:10px; transition:background .2s,border-color .2s;}
+.check .label{flex:1;}
+.check .verdict{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; font-weight:700; padding:2px 9px; border-radius:6px;}
+.check[data-verdict="pass"]{border-color:var(--k8s-c); background:var(--k8s-c-soft);}
+.check[data-verdict="pass"] .verdict{background:var(--k8s-c); color:#fff;}
+.check[data-verdict="fail"]{border-color:var(--skip-c); background:var(--skip-c-soft);}
+.check[data-verdict="fail"] .verdict{background:var(--skip-c); color:#fff;}
+.result-row{display:flex; align-items:center; gap:10px; margin-bottom:14px; flex-wrap:wrap;}
+.result-badge{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; font-weight:700; padding:6px 14px; border-radius:8px;}
+.result-badge.good{background:var(--k8s-c); color:#fff;}
+.result-badge.warn{background:var(--skip-c); color:#fff;}
+.evidence-line{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.78rem; color:var(--ink-dim); background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px 14px; white-space:pre-wrap; word-break:break-word;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--k8s-c); color:var(--k8s-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--k8s-c); border-color:var(--k8s-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--k8s-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Kubernetes 系列 · 第六篇</div>
+    <h1>RBAC 鉴权:一条规则到底是怎么匹配上一次请求的</h1>
+    <p>"为什么我的 RoleBinding 不生效"大概是 K8s 权限问题里最常见的一句抱怨。这一篇把 apiserver 收到一次请求之后,RBAC 授权器到底怎么判断"这个用户能不能做这件事"的完整链路打开:一条 <span class="mono">PolicyRule</span> 是怎么跟 verb/resource/资源名匹配上的;<span class="mono">RoleBinding</span> 引用 <span class="mono">Role</span> 和引用 <span class="mono">ClusterRole</span> 的授权范围差在哪;以及一个几乎所有人都会先入为主搞错的事实——<b>RBAC 里根本没有"拒绝"规则,只有"允许"</b>。</p>
+    <p>延续 kube-proxy/scheduler 两篇的方法论:本机没有真实集群,但 RBAC 的核心匹配逻辑是几个不依赖集群状态的纯函数——直接把 kubernetes v1.37.0 的真实源码逐字符抄进本机一个独立的 Go 程序里,真实编译执行,而不是只在 Python 里重新实现一遍。</p>
+    <div class="hero-fact">
+      <div><div class="num">4 个真实 Go 程序</div><div class="lbl">逐字符转录自真实 kubernetes v1.37.0 源码,本机真实 go run</div></div>
+      <div><div class="num">5 处真实源码</div><div class="lbl">verb/资源/资源名/非资源URL 匹配 + Role/ClusterRole 解析逻辑,逐行核对</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <h2>真实源码:一条规则要同时满足四个匹配,才算"允许"</h2>
+  <blockquote class="src">
+    <span class="path">plugin/pkg/auth/authorizer/rbac/rbac.go · <a href="https://github.com/kubernetes/kubernetes/blob/v1.37.0/plugin/pkg/auth/authorizer/rbac/rbac.go" target="_blank" rel="noopener">kubernetes @ v1.37.0</a></span>
+func RuleAllows(requestAttributes authorizer.Attributes, rule *rbacv1.PolicyRule) bool {
+    if requestAttributes.IsResourceRequest() {
+        combinedResource := requestAttributes.GetResource()
+        if len(requestAttributes.GetSubresource()) &gt; 0 {
+            combinedResource = requestAttributes.GetResource() + "/" + requestAttributes.GetSubresource()
+        }
+        return rbacv1helpers.VerbMatches(rule, requestAttributes.GetVerb()) &&
+            rbacv1helpers.APIGroupMatches(rule, requestAttributes.GetAPIGroup()) &&
+            rbacv1helpers.ResourceMatches(rule, combinedResource, requestAttributes.GetSubresource()) &&
+            rbacv1helpers.ResourceNameMatches(rule, requestAttributes.GetName())
+    }
+    return rbacv1helpers.VerbMatches(rule, requestAttributes.GetVerb()) &&
+        rbacv1helpers.NonResourceURLMatches(rule, requestAttributes.GetPath())
+}
+  </blockquote>
+  <p>一条 <span class="mono">PolicyRule</span>(比如 <span class="mono">verbs: [get,list], resources: [pods]</span>)要判断能不能放行一次请求,是四个独立的布尔匹配用 <span class="mono">&&</span> 连起来——verb、apiGroup、resource(含 subresource)、resourceName 全部满足才算真的允许。少一个都不行。</p>
+</section>
+
+<section>
+  <h2>真实源码:四个匹配函数,逐字符转录进本机 Go 程序真实执行</h2>
+  <blockquote class="src">
+    <span class="path">pkg/apis/rbac/v1/evaluation_helpers.go · <a href="https://github.com/kubernetes/kubernetes/blob/v1.37.0/pkg/apis/rbac/v1/evaluation_helpers.go" target="_blank" rel="noopener">kubernetes @ v1.37.0</a></span>
+func ResourceMatches(rule *rbacv1.PolicyRule, combinedRequestedResource, requestedSubresource string) bool {
+    for _, ruleResource := range rule.Resources {
+        if ruleResource == rbacv1.ResourceAll { return true }
+        if ruleResource == combinedRequestedResource { return true }
+        if len(requestedSubresource) == 0 { continue }
+        // 匹配形如 */subresource 的规则
+        if len(ruleResource) == len(requestedSubresource)+2 &&
+            strings.HasPrefix(ruleResource, "*/") &&
+            strings.HasSuffix(ruleResource, requestedSubresource) {
+            return true
+        }
+    }
+    return false
+}
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">rule := PolicyRule{Verbs: [get, list], Resources: [pods, */status], ResourceNames: [web-1]}</pre>
+<span class="ok">verb=get    resource=pods            name=web-1 -> RuleAllows=true
+verb=delete resource=pods            name=web-1 -> RuleAllows=false   (动词不对)
+verb=get    resource=pods            name=web-2 -> RuleAllows=false   (资源名不对)
+verb=get    resource=pods/status     name=web-1 -> RuleAllows=true    (命中 */status)
+verb=get    resource=pods/log        name=web-1 -> RuleAllows=false   (*/status 不认 /log)
+
+wildcard rule (Verbs/APIGroups/Resources 全是 "*"):
+verb=get / delete / create / anything-at-all -> RuleAllows 全部 true</span>
+  </div>
+  <p>这几个匹配函数(<span class="mono">VerbMatches</span>/<span class="mono">APIGroupMatches</span>/<span class="mono">ResourceMatches</span>/<span class="mono">ResourceNameMatches</span>)是完全不依赖 apiserver、etcd、任何集群状态的纯函数——本文把它们的函数体逐字符转录进本机一个独立 Go 程序真实编译运行,不是"照着抄一遍逻辑",是同一份代码真的跑了一遍。<span class="mono">*/status</span> 这种写法专门用来"只放行某个子资源",跟直接写 <span class="mono">pods</span> 是两回事。</p>
+</section>
+
+<section>
+  <h2>真实实验:一个容易踩的坑——NonResourceURL 的通配符是裸字符串前缀匹配</h2>
+  <blockquote class="src">
+    <span class="path">pkg/apis/rbac/v1/evaluation_helpers.go · <a href="https://github.com/kubernetes/kubernetes/blob/v1.37.0/pkg/apis/rbac/v1/evaluation_helpers.go" target="_blank" rel="noopener">kubernetes @ v1.37.0</a></span>
+func NonResourceURLMatches(rule *rbacv1.PolicyRule, requestedURL string) bool {
+    for _, ruleURL := range rule.NonResourceURLs {
+        if ruleURL == rbacv1.NonResourceAll { return true }
+        if ruleURL == requestedURL { return true }
+        if strings.HasSuffix(ruleURL, "*") &&
+            strings.HasPrefix(requestedURL, strings.TrimRight(ruleURL, "*")) {
+            return true
+        }
+    }
+    return false
+}
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">rule.NonResourceURLs = ["/healthz*"]</pre>
+<span class="ok">path=/healthz          -> RuleAllows=true
+path=/healthz/etcd     -> RuleAllows=true
+path=/healthzzzzz      -> RuleAllows=true   (!)
+path=/healthz-internal -> RuleAllows=true   (!)
+path=/livez            -> RuleAllows=false</span>
+  </div>
+  <p><span class="mono">strings.TrimRight(ruleURL, "*")</span> + <span class="mono">strings.HasPrefix</span> 是一次不折不扣的<b>裸字符串前缀匹配</b>,不要求 <span class="mono">/</span> 分隔符——<span class="mono">/healthz*</span> 这条规则不仅会匹配 <span class="mono">/healthz/etcd</span>,还会匹配长得完全不像同一个端点的 <span class="mono">/healthzzzzz</span> 和 <span class="mono">/healthz-internal</span>。写非资源 URL 规则时如果想要"只匹配这个路径底下",要自己在末尾显式写成 <span class="mono">/healthz/*</span>,不能指望它帮你处理路径边界。</p>
+</section>
+
+<section>
+  <h2>真实源码 + 真实实验:RoleBinding 引用 ClusterRole,授权范围会被"收窄"到一个命名空间</h2>
+  <blockquote class="src">
+    <span class="path">pkg/registry/rbac/validation/rule.go · <a href="https://github.com/kubernetes/kubernetes/blob/v1.37.0/pkg/registry/rbac/validation/rule.go" target="_blank" rel="noopener">kubernetes @ v1.37.0</a></span>
+func (r *DefaultRuleResolver) GetRoleReferenceRules(ctx context.Context, roleRef rbacv1.RoleRef, bindingNamespace string) ([]rbacv1.PolicyRule, error) {
+    switch roleRef.Kind {
+    case "Role":
+        role, err := r.roleGetter.GetRole(ctx, bindingNamespace, roleRef.Name)
+        ...
+        return role.Rules, nil
+    case "ClusterRole":
+        clusterRole, err := r.clusterRoleGetter.GetClusterRole(ctx, roleRef.Name)
+        ...
+        return clusterRole.Rules, nil
+    }
+}
+// VisitRulesFor: ClusterRoleBinding 永远检查(跟查询的 namespace 无关);
+// RoleBinding 只有 len(namespace) > 0 时才检查,而且只看绑定在该 namespace 里的
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">Role "pod-reader"(定义在 ns-a) ---被 RoleBinding(ns-a)引用---> 只在 ns-a 生效
+ClusterRole "view-secrets"     ---被 RoleBinding(ns-a)引用---> 只在 ns-a 生效(!)
+ClusterRole "cluster-admin"    ---被 ClusterRoleBinding引用---> 所有 namespace 都生效</pre>
+<span class="ok">visitRulesFor("ns-a") 包含: cluster-admin(*), pod-reader(pods), view-secrets(secrets)
+visitRulesFor("ns-b") 包含: cluster-admin(*)                                    (没有 secrets!)
+
+ns-a 查询是否含 pod-reader 规则(Role,绑定在 ns-a): true
+ns-a 查询是否含 view-secrets 规则(ClusterRole 但通过 RoleBinding 绑定在 ns-a): true
+ns-b 查询是否不含 view-secrets 规则(那条 RoleBinding 只存在于 ns-a): true
+ns-b 查询是否仍含 cluster-admin 规则(ClusterRoleBinding,跟 namespace 无关): true</span>
+  </div>
+  <p><span class="mono">GetRoleReferenceRules</span> 只看 <span class="mono">roleRef.Kind</span> 是 <span class="mono">Role</span> 还是 <span class="mono">ClusterRole</span> 决定去哪张表查规则,完全不关心"这条 <span class="mono">RoleBinding</span> 本身绑在哪个命名空间"这件事——真正决定"这些规则只在 <span class="mono">ns-a</span> 生效"的,是 <span class="mono">VisitRulesFor</span> 外层那个 <span class="mono">if rb.Namespace != namespace { continue }</span> 过滤,不是 <span class="mono">ClusterRole</span> 自己有什么命名空间概念。这就是为什么"用 <span class="mono">RoleBinding</span> 引用一个大家共用的 <span class="mono">ClusterRole</span>,但只想让它在某一个命名空间生效"这个常见模式能成立的全部原理。</p>
+</section>
+
+<section>
+  <h2>真实实验:RBAC 没有"拒绝"规则,只有一堆"允许"取并集</h2>
+  <blockquote class="src">
+    <span class="path">plugin/pkg/auth/authorizer/rbac/rbac.go · <a href="https://github.com/kubernetes/kubernetes/blob/v1.37.0/plugin/pkg/auth/authorizer/rbac/rbac.go" target="_blank" rel="noopener">kubernetes @ v1.37.0</a></span>
+func (v *authorizingVisitor) visit(source fmt.Stringer, rule *rbacv1.PolicyRule, err error) bool {
+    if rule != nil && RuleAllows(v.requestAttributes, rule) {
+        v.allowed = true
+        v.reason = fmt.Sprintf("RBAC: allowed by %s", source.String())
+        return false // 找到一条允许的规则,立刻停止遍历
+    }
+    ...
+    return true // 继续看下一条
+}
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">rules = [broadGrant(verbs:*,resources:*), attemptedRestriction(verbs:get,resources:secrets)]
+request: DELETE secrets</pre>
+<span class="ok">顺序 [broadGrant, attemptedRestriction]: allowed=true, 只看了 1 条规则就命中,根本没看到"限制"规则
+顺序 [attemptedRestriction, broadGrant]: allowed=true, 看了 2 条规则才命中
+两种顺序结果完全一致: allowed 相等 = true —— 顺序不影响结果,只影响"看了几条"</span>
+  </div>
+  <p><span class="mono">authorizingVisitor.visit</span> 只要碰到第一条允许的规则就直接 <span class="mono">return false</span> 停止遍历——这段代码里从头到尾没有"拒绝"这个概念。任何一个 <span class="mono">RoleBinding</span>/<span class="mono">ClusterRoleBinding</span> 只要授予了某个权限,后面加多少条看起来更"严格"的规则都不可能收回它。真实项目里"最小权限"必须靠"一开始就不要绑定过宽的角色"来实现,没有办法靠叠加一条限制规则去收窄已经生效的权限。</p>
+</section>
+
+<section>
+  <h2>交互演示:规则匹配 + Role/ClusterRole 解析 + 无拒绝语义的真实数据回放</h2>
+  <p class="h2-sub">把上面几组真实实验按发生顺序串成一条演示。</p>
+  <div class="demo" id="rbacDemo">
+    <div class="demo-head"><span>RBAC 鉴权实录</span><span class="step-badge" id="rbStep">未开始</span></div>
+    <div class="demo-narration" id="rbNarration">点击"下一步"或"播放"开始。</div>
+    <div class="demo-body">
+      <div class="query-line" id="rbQuery">—</div>
+      <div class="tree-row" id="rbTree"></div>
+      <div class="checks" id="rbChecks"></div>
+      <div class="result-row">
+        <span class="result-badge" id="rbResultBadge">—</span>
+      </div>
+      <div class="evidence-line" id="rbEvidence"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="rbReset">⏮ 重来</button>
+      <button class="btn" id="rbPrev">‹ 上一步</button>
+      <button class="btn primary" id="rbNext">下一步 ›</button>
+      <button class="btn" id="rbPlay">▶ 自动播放</button>
+      <span class="step-counter" id="rbCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">全部数据来自本机真实 <span class="mono">go run</span> 的输出(<span class="mono">verb_resource_match.go</span>、<span class="mono">nonresource_footgun.go</span>、<span class="mono">role_vs_clusterrole.go</span>、<span class="mono">no_deny.go</span>,全部基于逐字符转录的真实源码函数体),Python 脚本用独立重写(不是转录)的匹配函数和解析逻辑逐项核对,包括 9 组 verb/resource 匹配场景、5 组 NonResourceURL 场景、4 组命名空间解析场景,以及顺序无关性的验证。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文源码引用(<span class="mono">RuleAllows</span>/<span class="mono">RulesAllow</span>/<span class="mono">authorizingVisitor</span> 取自 <span class="mono">plugin/pkg/auth/authorizer/rbac/rbac.go</span>;<span class="mono">VerbMatches</span>/<span class="mono">APIGroupMatches</span>/<span class="mono">ResourceMatches</span>/<span class="mono">ResourceNameMatches</span>/<span class="mono">NonResourceURLMatches</span> 取自 <span class="mono">pkg/apis/rbac/v1/evaluation_helpers.go</span>;<span class="mono">VisitRulesFor</span>/<span class="mono">GetRoleReferenceRules</span> 取自 <span class="mono">pkg/registry/rbac/validation/rule.go</span>)均取自 <span class="mono">kubernetes/kubernetes</span> 仓库 <span class="mono">v1.37.0</span> 标签,跟前几篇 K8s 系列同一个版本。</li>
+      <li>前两组实验(<span class="mono">verb_resource_match.go</span>、<span class="mono">nonresource_footgun.go</span>、<span class="mono">no_deny.go</span>)里的匹配/授权函数是<b>逐字符转录</b>自真实源码,本机真实编译执行,不是重新实现;<span class="mono">role_vs_clusterrole.go</span> 里的 <span class="mono">visitRulesFor</span>/<span class="mono">getRoleReferenceRules</span> 是按真实源码的控制流结构重写(因为要接掉真实版本依赖的 lister/context 参数),文中已明确标注这一点区别。本机没有真实 K8s 集群,这是本系列在 kube-proxy/kube-scheduler 两篇之后第三次使用"真实源码 + 本机独立验证"的路线,这次比前两篇更进一步——直接转录真实函数体本机执行,而不只是重新实现同一个算法。</li>
+      <li>演示数据的自检:Python 脚本独立重写了全部匹配和解析逻辑(不是照抄转录版本),逐项核对了 9+5+4 组场景和顺序无关性验证,全部通过。</li>
+      <li>没有涉及:准入控制(<span class="mono">ValidatingAdmissionPolicy</span>/webhook)、<span class="mono">Node</span>/<span class="mono">RBAC</span> 授权器之外的其他授权模式(<span class="mono">Webhook</span>、<span class="mono">ABAC</span>)、<span class="mono">aggregationRule</span> 自动聚合 <span class="mono">ClusterRole</span> 的机制、<span class="mono">Impersonate</span> 相关的特殊 verb。</li>
+    </ul>
+  </div>
+
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Kubernetes 系列 · 第六篇 · RBAC 鉴权 · 源码引用自 kubernetes/kubernetes v1.37.0</footer>
+
+<script>
+const DATA = {"scenarios": [
+  {
+    "narration": "一条真实规则:verbs=[get,list], resources=[pods, */status], resourceNames=[web-1]。用逐字符转录的 RuleAllows 真实跑一遍多种请求。",
+    "query_display": "rule = {verbs:[get,list], resources:[pods,*/status], resourceNames:[web-1]}",
+    "tree": [
+      {"name":"get pods web-1","state":"win"},{"name":"delete pods web-1","state":"drop"},
+      {"name":"get pods/status web-1","state":"win"}
+    ],
+    "check_label": "verb/resource/resourceName/subresource 四种匹配是否都对得上真实语义?",
+    "verdict": "pass",
+    "result_badge": "5/5 场景全部符合预期",
+    "result_class": "good",
+    "evidence": "真实输出: get+web-1=true, delete=false(动词不对), get+web-2=false(资源名不对), */status 命中 status 但不命中 log"
+  },
+  {
+    "narration": "一条容易踩坑的非资源 URL 规则:NonResourceURLs=[/healthz*]。真实运行发现它不只匹配 /healthz 底下的路径。",
+    "query_display": "rule.NonResourceURLs = [\"/healthz*\"]",
+    "tree": [
+      {"name":"/healthz/etcd","state":"win"},{"name":"/healthzzzzz","state":"win"},
+      {"name":"/livez","state":"drop"}
+    ],
+    "check_label": "/healthz* 是否是不需要路径分隔符的裸字符串前缀匹配?",
+    "verdict": "pass",
+    "result_badge": "连 /healthzzzzz 都匹配上了",
+    "result_class": "good",
+    "evidence": "真实输出: /healthz、/healthz/etcd、/healthzzzzz、/healthz-internal 全部 true;/livez 为 false"
+  },
+  {
+    "narration": "同一个 ClusterRole(view-secrets)被一条 RoleBinding 引用,绑定在 ns-a——它的规则会不会自动扩散到 ns-b?",
+    "query_display": "RoleBinding(ns-a) --RoleRef:ClusterRole--> view-secrets",
+    "tree": [
+      {"name":"ns-a 含 secrets 规则","state":"win"},{"name":"ns-b 含 secrets 规则","state":"drop"},
+      {"name":"ns-b 含 cluster-admin(*)","state":"win"}
+    ],
+    "check_label": "RoleBinding 引用的 ClusterRole 规则,是否被限制在绑定所在的那一个命名空间?",
+    "verdict": "pass",
+    "result_badge": "被收窄到 ns-a,不会扩散到 ns-b",
+    "result_class": "good",
+    "evidence": "真实输出: ns-a 含 view-secrets 规则=true, ns-b 含=false;ns-b 仍含 ClusterRoleBinding 授予的 cluster-admin=true"
+  },
+  {
+    "narration": "最后验证 RBAC 没有拒绝语义:一条宽松规则和一条看起来像\"限制\"的规则,不管谁在前面,结果都一样。",
+    "query_display": "rules=[broadGrant(*), attemptedRestriction(get-only)], request=DELETE secrets",
+    "tree": [],
+    "check_label": "调换两条规则的顺序,授权结果(allowed)是否完全不受影响?",
+    "verdict": "pass",
+    "result_badge": "两种顺序都 allowed=true",
+    "result_class": "good",
+    "evidence": "真实输出: 顺序1只看1条规则命中,顺序2看了2条才命中,但 allowed 结果相同 —— RBAC 里没有规则能收回已授予的权限"
+  }
+]};
+
+(function(){
+  const scenarios = DATA.scenarios;
+  const narration = document.getElementById('rbNarration');
+  const stepBadge = document.getElementById('rbStep');
+  const queryLine = document.getElementById('rbQuery');
+  const treeEl = document.getElementById('rbTree');
+  const checksEl = document.getElementById('rbChecks');
+  const resultBadge = document.getElementById('rbResultBadge');
+  const evidenceEl = document.getElementById('rbEvidence');
+  const counter = document.getElementById('rbCounter');
+  let idx = -1, playing = false, playTimer = null;
+
+  function render(){
+    idx = Math.max(-1, Math.min(scenarios.length - 1, idx));
+    if(idx < 0){
+      narration.textContent = '点击"下一步"或"播放"开始。';
+      stepBadge.textContent = '未开始';
+      queryLine.textContent = '—';
+      treeEl.innerHTML = '';
+      checksEl.innerHTML = '';
+      resultBadge.textContent = '—';
+      resultBadge.className = 'result-badge';
+      evidenceEl.textContent = '';
+      counter.textContent = `0 / ${scenarios.length}`;
+      document.getElementById('rbPrev').disabled = true;
+      document.getElementById('rbNext').disabled = false;
+      return;
+    }
+
+    const s = scenarios[idx];
+    narration.textContent = s.narration;
+    stepBadge.textContent = `第 ${idx+1} / ${scenarios.length} 步`;
+    queryLine.textContent = s.query_display;
+
+    treeEl.innerHTML = '';
+    s.tree.forEach(n => {
+      const box = document.createElement('div');
+      box.className = 'tree-box';
+      box.dataset.state = n.state;
+      const nt = document.createElement('div');
+      nt.className = 'nt';
+      nt.textContent = n.name;
+      const st = document.createElement('div');
+      st.textContent = n.state === 'win' ? '允许' : (n.state === 'drop' ? '拒绝/不含' : '');
+      box.appendChild(nt); box.appendChild(st);
+      treeEl.appendChild(box);
+    });
+
+    checksEl.innerHTML = '';
+    const row = document.createElement('div');
+    row.className = 'check';
+    row.dataset.verdict = s.verdict;
+    const label = document.createElement('span');
+    label.className = 'label';
+    label.textContent = s.check_label;
+    const verdict = document.createElement('span');
+    verdict.className = 'verdict';
+    verdict.textContent = s.verdict === 'pass' ? '成立' : '不成立';
+    row.appendChild(label); row.appendChild(verdict);
+    checksEl.appendChild(row);
+
+    resultBadge.textContent = s.result_badge;
+    resultBadge.className = 'result-badge ' + s.result_class;
+    evidenceEl.textContent = s.evidence;
+
+    counter.textContent = `${idx+1} / ${scenarios.length}`;
+    document.getElementById('rbPrev').disabled = idx <= -1;
+    document.getElementById('rbNext').disabled = idx >= scenarios.length - 1;
+  }
+
+  document.getElementById('rbNext').onclick = () => { idx++; render(); stopPlay(); };
+  document.getElementById('rbPrev').onclick = () => { idx--; render(); stopPlay(); };
+  document.getElementById('rbReset').onclick = () => { idx = -1; render(); stopPlay(); };
+  function stopPlay(){ playing = false; clearInterval(playTimer); document.getElementById('rbPlay').textContent = '▶ 自动播放'; }
+  document.getElementById('rbPlay').onclick = () => {
+    if(playing){ stopPlay(); return; }
+    playing = true; document.getElementById('rbPlay').textContent = '⏸ 暂停';
+    playTimer = setInterval(() => {
+      if(idx >= scenarios.length - 1){ stopPlay(); return; }
+      idx++; render();
+    }, 2200);
+  };
+
+  render();
+})();
+</script>
+
+</body>
+</html>

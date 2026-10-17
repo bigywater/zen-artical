@@ -1,0 +1,35 @@
+import json
+from lib import *
+R = J('r80'); ph = R['ph']; ab = R['abort']; ct = R['counter']; bt = R['batches']
+KV = lambda items, hl=(): {'items': items, 'hl': list(hl)}
+def fl(nodes, cur=(), done=(), mark=()): return {'nodes': nodes, 'cur': list(cur), 'done': list(done), 'mark': list(mark)}
+def bars(items, mx, cur=(), mark=(), done=()): return {'items': items, 'max': mx, 'cur': list(cur), 'mark': list(mark), 'done': list(done)}
+tot_ms = sum(x[1] for x in bt)
+steps = [
+    step("一个槽里有 2001 个 key({t1}:0…{t1}:1999 和一个计数器 {t1}counter),要从主库 7501 搬到 7500。后台客户端同时在做:INCR 计数器 + 随机 GET 一个 key,共同操作这个槽。", n=fl([['源 7501', '槽内 2001 key'], ['目标 7500', '0']], cur=[0]), kv=KV([['流量', 'INCR + GET,持续']], ['流量'])),
+    step(f"步骤 1–2:目标 CLUSTER SETSLOT 槽 IMPORTING 源ID;源 CLUSTER SETSLOT 槽 MIGRATING 目标ID。两条命令之后槽仍归源,客户端 {ph['设置状态']['n']} 次操作 0 次 ASK——迁移还没开始搬 key,所有 key 都还在源上。", n=fl([['源', 'MIGRATING'], ['目标', 'IMPORTING']], cur=[0, 1]), kv=KV([['ASK', str(ph['设置状态']['ask'])], ['错误', str(ph['设置状态']['err'])]], ['ASK'])),
+    step(f"步骤 3:循环 CLUSTER GETKEYSINSLOT 槽 200 → MIGRATE 目标 \"\" 0 5000 KEYS k1…k200,每批 200 个 key 用时 {min(x[1] for x in bt):.1f}–{max(x[1] for x in bt):.1f} ms,共 {len(bt)} 批 {tot_ms:.0f} ms;源上槽内逐批减少 2001 → 0,目标逐批增加。我每批之间睡 0.3 s,让流量在迁移状态里停留。", n=fl([['源', '2001 → 0'], ['目标', '0 → 2001']], cur=[0, 1]), b=bars([[f'第 {i+1} 批', x[1], f'{x[1]:.1f} ms'] for i, x in enumerate(bt)], max(x[1] for x in bt), done=range(len(bt))), kv=KV([['每批', '200 个 key,约 2 ms']], ['每批'])),
+    step(f"这段时间客户端 {ph['搬 key 中']['n']} 次操作里遇到 {ph['搬 key 中']['ask']} 次 ASK(还没搬走的 key 由源直接服务,已搬走的 key 源回 ASK,客户端跟去目标 ASKING 后处理),{ph['搬 key 中']['err']} 次错误,p50 {ph['搬 key 中']['p50']:.0f} µs(迁移前是 {ph['前']['p50']:.0f} µs)——ASK 多一次往返。", n=fl([['已搬走的 key', '源回 ASK → 目标处理'], ['没搬的 key', '源直接处理']], cur=[0, 1]), b=bars([['迁移前 p50', ph['前']['p50'], f"{ph['前']['p50']:.0f} µs"], ['搬 key 中 p50', ph['搬 key 中']['p50'], f"{ph['搬 key 中']['p50']:.0f} µs"]], ph['搬 key 中']['p99'], mark=[1], done=[0]), kv=KV([['ASK', str(ph['搬 key 中']['ask'])]], ['ASK'])),
+    step(f"key 全搬完,但槽还没「易主」:此时槽里所有 key 都在目标上,源对每个请求都回 ASK({ph['收尾']['ask']} 次,只有 {ph['收尾']['n']} 次操作)。最大延迟 {ph['收尾']['mx']/1000:.1f} ms 出现在这个收尾阶段。", n=fl([['源', '空了,仍 MIGRATING → 全 ASK'], ['目标', '2001 key,IMPORTING']], mark=[0]), kv=KV([['收尾阶段 ASK', str(ph['收尾']['ask'])], ['最大延迟', f"{ph['收尾']['mx']/1000:.1f} ms"]], ['最大延迟'])),
+    step(f"步骤 4:在目标、源以及其它主库上都执行 CLUSTER SETSLOT 槽 NODE 目标ID:槽正式易主。之后源回 MOVED({ph['收尾']['moved']} 次),客户端刷新槽位表,不再 ASK({ph['后']['ask']} 次)。", n=fl([['源', '不再拥有'], ['目标', '槽的主人']], done=[1], mark=[0]), kv=KV([['收尾后 MOVED', str(ph['收尾']['moved'] + ph['后']['moved'])], ['后续 ASK', str(ph['后']['ask'])]], ['收尾后 MOVED'])),
+    step(f"对账:客户端确认的 INCR 次数 = {ct[0]},槽里最终的计数器 = {ct[1]}——一致,迁移过程中没有丢也没有重复。", n=fl([['确认次数', str(ct[0])], ['最终计数', str(ct[1])]], done=[0, 1]), kv=KV([['一致', f'{ct[0]} = {ct[1]}']], ['一致'])),
+    step(f"危险的一面:换一个槽,搬到一半(400/1000)用 CLUSTER SETSLOT STABLE 放弃。槽仍归源,通过集群读这 1000 个 key,{ab['missing']} 个读不到;而在目标节点上,DBSIZE = {ab['dbsize']},但 KEYS * 返回 {ab['keys_len']} 个、SCAN 返回 {ab['scan']} 个、CLUSTER COUNTKEYSINSLOT = {ab['cnt']}——这 400 个 key 还占着内存,却对所有命令不可见。", n=fl([['源(仍是主人)', '600 key'], ['目标(非主人)', 'DBSIZE 400,但不可见']], mark=[1]), kv=KV([['读不到', f"{ab['missing']} / 1000"], ['目标 DBSIZE / KEYS *', f"{ab['dbsize']} / {ab['keys_len']}"]], ['读不到'])),
+    step(f"redis-cli --cluster check 与 fix(含 --cluster-search-multiple-owners)都报 [OK],没有发现问题,fix 之后仍然读不到 {R['fix']['missing']} 个。恢复办法:再次把目标设成 IMPORTING——400 个 key 立刻重新可见(KEYS * = 400);再把源上剩下的 600 个 MIGRATE 过去,SETSLOT NODE 收尾,全部 1000 个 key 都能读到(读不到 {R['recover']['missing']} 个)。", n=fl([['check / fix', '都说 OK'], ['再次 IMPORTING', '400 个 key 重新可见'], ['做完迁移', '1000 / 1000 可读']], mark=[0], done=[1, 2]), kv=KV([['恢复后读不到', str(R['recover']['missing'])]], ['恢复后读不到'])),
+]
+A = dict(
+    n=80, series='redis', tags='Redis,Cluster,槽位迁移,ASK,真实验证,动画演示',
+    desc=f'手工执行一个槽的在线迁移(IMPORTING → MIGRATING → GETKEYSINSLOT/MIGRATE → SETSLOT NODE),客户端持续 INCR/GET:搬 key 期间 {ph["搬 key 中"]["ask"]} 次 ASK、0 错误,计数器 {ct[0]} 次全部保留;中途放弃(SETSLOT STABLE)会让已搬走的 400 个 key 在目标节点 DBSIZE 里却对 KEYS / SCAN 不可见,check 与 fix 都说 OK,需要重新 IMPORTING 才能找回。',
+    lead='第 79 篇里 redis-cli 一次搬 4096 个槽,把细节都藏起来了。这篇把一个槽的迁移拆成四步,亲手执行,同时让一个客户端持续读写这个槽,看每一阶段它遇到什么;然后做一件危险的事:搬到一半放弃,看看会留下什么,以及怎么找回。',
+    facts=[(f'{ph["搬 key 中"]["ask"]} 次 ASK / 0 错误', '搬 key 期间,持续读写该槽的客户端所遇到的'), (f'{ct[0]} = {ct[1]}', '客户端确认的 INCR 次数 = 迁移后槽里的计数器,没有丢'), (f'{ab["dbsize"]} 但看不见', '中途放弃后目标节点上那些 key:DBSIZE 有、KEYS/SCAN 没有')],
+    body=[
+        sec('四步迁移', '', term('', blk('r80', 1)), '<p>这是 <code>redis-cli --cluster reshard</code> 内部做的事:1) 目标 <code>SETSLOT 槽 IMPORTING 源ID</code>;2) 源 <code>SETSLOT 槽 MIGRATING 目标ID</code>;3) 循环 <code>GETKEYSINSLOT</code> 取一批 key,用 <code>MIGRATE … KEYS</code> 把它们搬到目标;4) 所有节点 <code>SETSLOT 槽 NODE 目标ID</code> 宣布易主。每批 200 个 key 只要 1–5 ms。</p>'),
+        sec('客户端在每个阶段看到什么', '后台线程:INCR 计数器 + 随机 GET 一个 key,共同操作这个槽', term('', blk('r80', 2)),
+            f'<p>「前」和「设置状态」阶段没有 ASK:key 都还在源上。「搬 key 中」阶段有 {ph["搬 key 中"]["ask"]} 次 ASK,p50 从 {ph["前"]["p50"]:.0f} µs 涨到 {ph["搬 key 中"]["p50"]:.0f} µs(ASK 多一次往返,且要多发一个 <code>ASKING</code>)。「收尾」阶段:key 全搬完但槽还没易主,源对每个请求都回 ASK({ph["收尾"]["ask"]} 次);最大延迟 {ph["收尾"]["mx"]/1000:.1f} ms 出现在这一阶段。<code>SETSLOT NODE</code> 之后,源改回 <code>MOVED</code>,客户端刷新槽位表,ASK 消失。整个过程 {ph["搬 key 中"]["err"] + ph["收尾"]["err"] + ph["后"]["err"]} 次错误。</p><p>对账:客户端确认过的 INCR 是 {ct[0]} 次,槽里的最终计数器是 {ct[1]}。(客户端用的是「收到 MOVED 就刷新整张槽位表」的策略,见第 71 篇。)</p>'),
+        sec('搬到一半放弃:key 变成「看不见」', '换一个槽:搬走 400 个,然后两端都 CLUSTER SETSLOT 槽 STABLE', term('', blk('r80', 3)),
+            f'<p>放弃迁移后,槽仍归源节点,已经搬到目标的 400 个 key 对集群路由来说「不存在」:通过集群读 1000 个 key,{ab["missing"]} 个读不到。更隐蔽的是目标节点自己的视角:<code>DBSIZE</code> 还是 {ab["dbsize"]}(它们占着内存),但 <code>KEYS *</code> 返回 {ab["keys_len"]} 个、<code>SCAN</code> 返回 {ab["scan"]} 个、<code>CLUSTER COUNTKEYSINSLOT</code> 是 {ab["cnt"]},对它们做 <code>EXISTS</code> 得到 <code>MOVED</code>。<b>这些 key 既不能被访问,也不能被枚举,只有 DBSIZE 能证明它们存在。</b>(这个「按槽组织 key」的内部原因我没有验证,只是这次观察到的现象。)</p>'),
+        sec('redis-cli check / fix 发现不了', '', term('', blk('r80', 4)), f'<p><code>--cluster check</code> 只报 <code>[OK] 3001 keys in 3 masters</code>、槽位一致、没有 open slots;<code>--cluster fix --cluster-search-multiple-owners</code> 也说没有 multiple owners。fix 之后仍然读不到这 {R["fix"]["missing"]} 个 key。工具检查的是「槽位配置是否一致」,不是「key 是不是放对了节点」。</p>'),
+        sec('手工恢复', '', term('', blk('r80', 5)), f'<p>办法是让目标节点重新进入 IMPORTING 状态:这 400 个 key 立刻重新可见(<code>KEYS *</code> 又是 400 个,<code>CLUSTER COUNTKEYSINSLOT</code> 也是 400)。这时就可以像正常迁移一样继续:源设 MIGRATING,把剩下的 600 个 key 搬过去,所有节点 <code>SETSLOT NODE</code> 收尾——最终 1000 个 key 都能读到({R["recover"]["missing"]} 个读不到),槽归目标。(理论上也可以反向把这 400 个搬回源,这一条我没有实测。)<b>放弃一个迁移之前,要么先把搬走的 key 搬回去,要么做完它,不要直接 STABLE。</b></p>'),
+        sec('分步演示:一个槽的迁移与放弃', '', demo('Redis 在线槽位迁移', [('n', 'flow', '源与目标'), ('b', 'bars', '数据'), ('kv', 'kv', '要点')], steps, '本步的对象')),
+    ],
+    refs=[ENV_R + '。3 主 3 从;迁移的槽里有 2001 个 key;客户端刷新策略为「MOVED 后整表刷新」;放弃实验换了另一个槽(1000 个 key)', '没有验证:Redis 8 之前版本放弃迁移后的表现、迁移中源节点崩溃或目标节点崩溃、有从库的主库迁移时从库上的数据、大 value 的 MIGRATE(第 81、82 篇)、CLUSTER SETSLOT 的 TIMEOUT 参数'],
+)

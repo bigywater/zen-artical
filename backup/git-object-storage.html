@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>Git 是怎么给内容去重的:两个路径不同、内容相同的文件,.git 里真的只存一份</title>
+<meta name="description" content="真实建两个路径不同、内容完全相同的文件提交进 git,真实数出 .git/objects 目录只多了一份 blob,不是两份;手动用 zlib 解压这个 blob 文件、重新计算一遍 SHA-1,现场验证文件名(哈希)就是内容本身算出来的,不是随便分配的编号;手动按字节解析 tree 对象的二进制格式,还原出 mode/文件名/20 字节原始哈希;真实只改 1 个字节,新哈希跟旧哈希完全不沾边,并且真实数出这个改动会牵连从这层文件到根目录一路上的几个 tree 对象跟着变,没改的兄弟文件全部复用旧对象。">
+<link rel="canonical" href="https://bigywater.tech/git-object-storage.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Git 是怎么给内容去重的:两个路径不同、内容相同的文件,.git 里真的只存一份">
+<meta property="og:description" content="真实建两个路径不同、内容完全相同的文件提交进 git,真实数出 .git/objects 目录只多了一份 blob,不是两份;手动用 zlib 解压这个 blob 文件、重新计算一遍 SHA-1,现场验证文件名(哈希)就是内容本身算出来的,不是随便分配的编号;手动按字节解析 tree 对象的二进制格式,还原出 mode/文件名/20 字节原始哈希;真实只改 1 个字节,新哈希跟旧哈希完全不沾边,并且真实数出这个改动会牵连从这层文件到根目录一路上的几个 tree 对象跟着变,没改的兄弟文件全部复用旧对象。">
+<meta property="og:url" content="https://bigywater.tech/git-object-storage.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Git 是怎么给内容去重的:两个路径不同、内容相同的文件,.git 里真的只存一份">
+<meta name="twitter:description" content="真实建两个路径不同、内容完全相同的文件提交进 git,真实数出 .git/objects 目录只多了一份 blob,不是两份;手动用 zlib 解压这个 blob 文件、重新计算一遍 SHA-1,现场验证文件名(哈希)就是内容本身算出来的,不是随便分配的编号;手动按字节解析 tree 对象的二进制格式,还原出 mode/文件名/20 字节原始哈希;真实只改 1 个字节,新哈希跟旧哈希完全不沾边,并且真实数出这个改动会牵连从这层文件到根目录一路上的几个 tree 对象跟着变,没改的兄弟文件全部复用旧对象。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F7F4F8; --paper:#FFFFFF; --ink:#221C25; --ink-dim:#6E6376; --line:#E6DFEA;
+  --git-c:#8B3FA0; --git-c-soft:#F1E4F5;
+  --mem-c:#C99A2E; --mem-c-soft:#FBF2DC;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#211A28; --code-ink:#EDE6F0;
+  --shadow: 0 1px 2px rgba(30,20,35,.06), 0 8px 24px -12px rgba(30,20,35,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#170F1B; --paper:#241A2B; --ink:#EDE6F0; --ink-dim:#AEA0B6; --line:#3A2C43;
+    --git-c:#C97FDC; --git-c-soft:#332039;
+    --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#170F1B; --code-ink:#E4D9E8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#170F1B; --paper:#241A2B; --ink:#EDE6F0; --ink-dim:#AEA0B6; --line:#3A2C43;
+  --git-c:#C97FDC; --git-c-soft:#332039;
+  --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#170F1B; --code-ink:#E4D9E8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--git-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--git-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--git-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--git-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#C9A8D9; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--git-c); background:var(--git-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--git-c-soft); color:var(--git-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#D6B3E6;}
+.term pre.code{margin:0 0 10px; color:#D6B3E6; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--git-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Git 内部原理 · 开篇</div>
+    <h1>Git 是怎么给内容去重的:两个路径不同、内容相同的文件,.git 里真的只存一份</h1>
+    <p>很多人知道 git 存的是"快照"不是"diff",但很少有人真的扒开 <span class="mono">.git/objects</span> 看过——那个 40 位哈希组成的文件名,到底是随便分配的编号,还是真的跟内容本身绑死?真实建了几个文件、真实解压对象文件、手动重算了一遍哈希,一步步验证。</p>
+    <div class="hero-fact">
+      <div><div class="num">3 个文件 → 2 份 blob</div><div class="lbl">两个路径不同、内容相同的文件真实提交后,.git/objects 里只多了一份内容对象</div></div>
+      <div><div class="num">改 1 个字节 → 全新哈希</div><div class="lbl">真实只多打一个感叹号,新旧两个哈希完全不沾边,牵连了 3 层父目录对象跟着变</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <h2>思路:git 存的是内容的哈希,不是文件的路径</h2>
+  <p class="h2-sub">.git/objects 下面那些看起来随机的文件名,其实是内容本身算出来的。</p>
+  <p>Git 的底层存储只有四种对象:<span class="mono">blob</span>(文件内容)、<span class="mono">tree</span>(目录结构)、<span class="mono">commit</span>(一次提交)、<span class="mono">tag</span>。每个对象都按同一个规则存放:先拼一个头部 <span class="mono">"&lt;类型&gt; &lt;字节长度&gt;\0"</span>,后面接上真正的内容,整个拼出来的字节串算一次 SHA-1,哈希值本身就是这个对象在 <span class="mono">.git/objects/</span> 下的存放路径(前 2 位做子目录名,剩下 38 位做文件名)。这意味着:<b>只要两段内容完全一样,不管它们出现在哪个文件名、哪个目录下,算出来的哈希必然一样</b>——git 天然就是内容寻址存储(content-addressable storage),不需要额外写一套去重逻辑。</p>
+</section>
+
+<section>
+  <h2>真实验证:两个内容相同、路径不同的文件,只存一份</h2>
+  <p class="h2-sub">建三个文件,其中两个内容完全一样但路径不同,看 git 到底存几份。</p>
+  <blockquote class="src">
+    <span class="path">造数据</span>
+mkdir -p src/a src/b
+echo "hello git internals" > src/a/one.txt      # 内容 A
+echo "hello git internals" > src/b/two.txt      # 内容跟 one.txt 完全一样,路径不同
+echo "this file is different" > src/a/three.txt # 内容不一样
+
+git add -A && git commit -m "first commit"
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ git ls-tree -r HEAD
+100644 blob b00f56f95b66e87d8d2f3baff7ee67f101c7bfc6	src/a/one.txt
+100644 blob f6eeccd6a3eb28bc383121454a0bb41cd59114ab	src/a/three.txt
+100644 blob b00f56f95b66e87d8d2f3baff7ee67f101c7bfc6	src/b/two.txt</pre>
+<span class="ok">one.txt 和 two.txt 是同一个 blob hash(b00f56f9...),尽管它们是两个完全独立的文件</span>
+  </div>
+  <p><span class="mono">git ls-tree</span> 已经能看出苗头,再数一下 <span class="mono">.git/objects</span> 目录里真实有几个对象文件坐实这件事:</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ find .git/objects -type f | wc -l
+7</pre>
+  </div>
+  <p>3 个文件,只对应 2 份 <span class="mono">blob</span>——剩下 7 个对象里,2 个是 blob(<span class="mono">one.txt</span>/<span class="mono">two.txt</span> 共用一份、<span class="mono">three.txt</span> 单独一份)、4 个是 tree(根目录、<span class="mono">src/</span>、<span class="mono">src/a/</span>、<span class="mono">src/b/</span> 各一个)、1 个是 commit,加起来正好 7。<span class="mono">two.txt</span> 完全没有产生新的对象,它在磁盘上"存在"这件事,只是 <span class="mono">src/b</span> 这个 tree 对象里的一行记录,指向跟 <span class="mono">one.txt</span> 一模一样的那份 blob。</p>
+</section>
+
+<section>
+  <h2>真实验证:文件名真的是内容算出来的,不是随便分配的</h2>
+  <p class="h2-sub">不信 git,自己动手解压 + 重新算一遍哈希,看跟文件名对不对得上。</p>
+  <p><span class="mono">.git/objects</span> 里的文件是 zlib 压缩过的,手动解压看看原始字节长什么样,再按 git 的规则重新算一遍 SHA-1:</p>
+  <div class="term"><span class="real-tag">真实实测(Python)</span>
+<pre class="code">import zlib, hashlib
+
+sha = "b00f56f95b66e87d8d2f3baff7ee67f101c7bfc6"
+path = f".git/objects/{sha[:2]}/{sha[2:]}"
+data = zlib.decompress(open(path, "rb").read())
+
+print(data)
+# b'blob 20\x00hello git internals\n'
+
+recomputed = hashlib.sha1(data).hexdigest()
+print(recomputed == sha)</pre>
+<span class="ok">原始字节: b'blob 20\x00hello git internals\n'</span>
+<span class="ok">手动重算的 sha1: b00f56f95b66e87d8d2f3baff7ee67f101c7bfc6 —— 跟文件名完全一致: True</span>
+  </div>
+  <p>解压出来的内容是 <span class="mono">"blob 20\0hello git internals\n"</span>——<span class="mono">blob</span> 是类型,<span class="mono">20</span> 是内容的字节长度(不含头部),<span class="mono">\0</span> 之后才是真正的文件内容。把这整段字节丢给 <span class="mono">hashlib.sha1</span>,算出来的值跟文件路径(<span class="mono">.git/objects/b0/0f56f9...</span>)一字不差——这不是巧合,git 存对象时用的就是这个规则,文件名不是分配出来的编号,是内容本身的指纹。</p>
+</section>
+
+<section>
+  <h2>真实验证:手动解析 tree 对象的二进制格式</h2>
+  <p class="h2-sub">tree 对象跟 blob 不太一样,是纯二进制,每条记录里嵌了 20 字节原始哈希,不是 40 位的十六进制字符串。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ git cat-file -p HEAD
+tree 3c04a9f3f85dc0776bbf877276b8d374b0ea4d37
+author demo &lt;demo@example.com&gt; 1790056070 +0800
+committer demo &lt;demo@example.com&gt; 1790056070 +0800
+
+first commit
+
+$ git cat-file -p 3c04a9f3
+040000 tree 4ff7ebc800c4dabb02bd189d1e032882f2ba139f	src</pre>
+  </div>
+  <p>用 <span class="mono">git cat-file -p</span> 看到的是格式化过的文本,真实按字节手动解析一遍根 tree 对象:</p>
+  <div class="term"><span class="real-tag">真实实测(Python)</span>
+<pre class="code">data = zlib.decompress(open(".git/objects/3c/04a9f3...", "rb").read())
+# header: b'tree 30'
+# body 里每条记录: "<mode> <文件名>\0<20字节原始哈希>",没有分隔符,
+# 靠固定的 20 字节长度切割,读完一条紧接着读下一条
+
+mode=40000 name='src' sha1(20原始字节转成hex)=4ff7ebc800c4dabb02bd189d1e032882f2ba139f</pre>
+<span class="ok">手动从二进制里抠出来的 20 字节,转成十六进制之后,跟 git cat-file -p 显示的哈希完全一致</span>
+  </div>
+  <p>这里能看出 tree 对象为什么是二进制格式而不是纯文本:如果每条记录都写成 40 位十六进制字符串,一个哈希就要占 40 字节;直接存 20 字节原始二进制,体积正好减半。一个仓库里 tree 对象的数量往往跟文件数量同一个量级,这个"省一半"在真实项目里不是小数目。</p>
+</section>
+
+<section>
+  <h2>真实验证:改 1 个字节,牵连了几层目录</h2>
+  <p class="h2-sub">内容寻址的另一面:哪怕只改一个字符,新对象跟旧对象在哈希上完全没有相似之处,而且改动会沿着目录树往上传导。</p>
+  <blockquote class="src">
+    <span class="path">只加一个感叹号</span>
+echo "hello git internals!" > src/a/one.txt   # 原来是 "hello git internals"(没有!)
+git add -A && git commit -m "second commit: tweak one.txt"
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">改之前 one.txt 的 blob: b00f56f95b66e87d8d2f3baff7ee67f101c7bfc6
+改之后 one.txt 的 blob: 8abfcf6b257b08b0ae5f7dfac5198818b0c390f3
+
+$ find .git/objects -type f | wc -l
+12   # 第一次提交后是 7,这次提交完变成 12,多了 5 个</pre>
+<span class="bad">只多了一个感叹号,新哈希(8abfcf6b...)跟旧哈希(b00f56f9...)在字面上毫无相似之处——SHA-1 的雪崩效应,输入差一点,输出面目全非</span>
+  </div>
+  <p>多出来的 5 个对象是:<span class="mono">one.txt</span> 新内容的 blob(1 个)+ 从 <span class="mono">src/a/</span> 到根目录一路上跟着变的 tree 对象(<span class="mono">src/a</span>、<span class="mono">src</span>、根目录,3 个)+ 这次的 commit 对象(1 个)。<span class="mono">src/b/two.txt</span> 完全没被改动,它对应的 blob 和 <span class="mono">src/b</span> 这个 tree 都原样复用第一次提交时的对象,没有产生任何新文件。改一个深层文件会连带产生几层新的父目录 tree 对象,但没改的兄弟文件/子目录不受任何影响,继续复用旧对象——这也是 git 历史存储的增量只跟"变了多少不同的内容"挂钩,而不是跟"改了多少次"或者"仓库里总共有多少文件"挂钩的原因。</p>
+  <div class="callout b">
+    <b>为什么不直接用文件名当 key?</b>如果按文件名存,<span class="mono">src/a/one.txt</span> 和 <span class="mono">src/b/two.txt</span> 就是两条独立记录,哪怕内容一模一样也得存两份;git 按内容的哈希存,内容相同天然共享同一份对象,这个去重效果是存储方式本身带来的副作用,不是额外写了什么去重算法。
+  </div>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文全部对象哈希、字节数、对象数量均在本机真实 <span class="mono">git init</span> 后用真实命令(<span class="mono">git ls-tree</span>/<span class="mono">git cat-file</span>)和 Python 标准库(<span class="mono">zlib</span>/<span class="mono">hashlib</span>)现场跑出,没有手写编造任何一个哈希值。</li>
+      <li>没有涉及:git 的 pack 文件(仓库跑 <span class="mono">git gc</span> 之后,松散对象会被打包压缩成 delta,存储结构会不一样)、以及 <span class="mono">commit</span>/<span class="mono">tag</span> 对象更完整的字段格式——这些留给系列后面的文章。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="git-branch-refs.html" target="_blank" rel="noopener" style="text-decoration:none; color:inherit;">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">Git 分支的本质:创建一个分支,.git/objects 里到底多了几个对象</div>
+    </div>
+    <div style="font-size:1.5rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Git 内部原理 · 对象存储 · 数据来自本机真实运行的 git 与真实字节解析</footer>
+
+</body>
+</html>

@@ -1,0 +1,24 @@
+from lib import *
+S = SS('s13')
+steps = [
+    step("三个管道 A=100、B=200、C=300,B 对 price < 0 的 item 抛 DropItem。三个 item(price 5、-1、7)都依次经过 A、B:price 5 和 7 继续到 C,被 A、B 加上 via_A、via_B;price -1 在 B 被丢弃,C 没有收到它。日志 WARNING “Dropped: price must be positive”,stats 里 item_dropped_count = 1、item_dropped_reasons_count/DropItem = 1、item_scraped_count = 2。", t=tl(S(1)), mark=lidx(S(1), "item={'price': -1}", 'Dropped', 'stats:'), done=lidx(S(1), "via_A': True, 'via_B': True"), kv=KV([['顺序', 'A(100) → B(200) → C(300)'], ['DropItem', '后面的管道不再调用,WARNING'], ['stats', 'item_dropped_count = 1,item_scraped_count = 2']], ['DropItem'])),
+    step("B 改成抛 RuntimeError('pipeline boom'):同样 price -1 的 item 没有到 C,但日志是 ERROR “Error processing {'price': -1}”(带回溯),stats 里只有 item_scraped_count = 2,没有 item_dropped_count——普通异常既不算丢弃,也不会让爬虫停下,其余 item 照常处理。", t=tl(S(2)), mark=lidx(S(2), 'Error processing', 'stats:'), done=lidx(S(2), "item={'price': 5}"), kv=KV([['非 DropItem 异常', 'ERROR 日志 + 回溯'], ['stats', '没有 item_dropped_count'], ['爬虫', '不停,其它 item 照常']], ['非 DropItem 异常'])),
+    step("open_spider / close_spider 是并行执行的,不是依次:A、B、C 的 open_spider 分别 await 0.3、0.2、0.1 s,三个同时在 167 ms 开始,C 268 ms、B 368 ms、A 468 ms 先后结束;关闭时 close_spider(A、B、C 分别 await 0.1、0.2、0.3 s)也同时开始(490 ms),按 C、B、A 的次序发起,各自结束在 591(A)、691(B)、791(C)ms。所以不要在 open_spider 里依赖别的管道已经初始化好。", t=tl(S(3)), mark=lidx(S(3), 'open_spider 开始', 'close_spider 开始'), done=lidx(S(3), 'open_spider 结束', 'close_spider 结束'), b=bars([['A 开启', 0.30, '0.30 s'], ['B 开启', 0.20, '0.20 s'], ['C 开启', 0.10, '0.10 s']], 0.30, done=[0, 1, 2]), kv=KV([['open_spider', '三个同时开始,各自结束'], ['close_spider', '同时开始(C、B、A 的次序发起)'], ['含义', '不能依赖别的管道已经就绪']], ['open_spider'])),
+    step("process_item 返回 None 不是“丢弃”:B 返回 None,C 收到的 item 就是 None(事件里 item=None),Scrapy 没有报错,stats 里 item_scraped_count = 3——三个 item 都被计为抓取成功(包括 price -1 那个)。要丢弃必须 raise DropItem。接了导出时,None 会被当成一个 item 写出去(这里没测)。", t=tl(S(4)), mark=lidx(S(4), 'item=None', 'stats:'), done=lidx(S(4), "item={'price': 5}"), kv=KV([['返回 None', '下一个管道收到 None'], ['item_scraped_count', '3(None 也算)'], ['丢弃', '只能 raise DropItem']], ['返回 None'])),
+    step("同一个回调产出的 50 个 item 在管道里并行处理,上限是 CONCURRENT_ITEMS(默认 100):process_item 里 await 0.1 s,CONCURRENT_ITEMS = 1 时总耗时 5.13 s(理想 5.00),= 10 时 0.52 s(0.50),= 100 时 0.11 s(50 个同时等 0.1 s)。管道里的 I/O 用 async def 才能并行;同步阻塞会把整个 reactor 卡住。", t=tl(S(5)), mark=lidx(S(5), '                   1 '), done=lidx(S(5), '                  10 ', '                 100 '), b=bars([['CONCURRENT_ITEMS=1', 5.13, '5.13 s'], ['=10', 0.52, '0.52 s'], ['=100', 0.11, '0.11 s']], 5.13, mark=[0], done=[1, 2]), kv=KV([['=1', '5.13 s'], ['=10', '0.52 s'], ['=100', '0.11 s'], ['条件', 'process_item 是 async 并 await']], ['=100'])),
+    step("旧写法 process_item(self, item, spider) 在 2.19 里仍然可用——spider 参数照样传入(spider.name = s),item_scraped_count = 1——但会警告 “Old.process_item() requires a spider argument, this is deprecated and the argument will not be passed in future Scrapy versions”。新写法是 process_item(self, item),需要 spider 时用 from_crawler 拿 crawler.spider。", t=tl(S(6)), mark=lidx(S(6), '警告'), done=lidx(S(6), '事件'), kv=KV([['旧签名 (item, spider)', '仍可用,有弃用警告'], ['新签名 (item)', '通过 from_crawler 拿 crawler / spider']], ['旧签名 (item, spider)'])),
+]
+A = mkarts('s13', 13, 'Scrapy,Item Pipeline,process_item,DropItem,open_spider,CONCURRENT_ITEMS,真实验证,动画演示',
+    '实测 Scrapy 2.19 的 item pipeline:按数字顺序调用,DropItem 丢弃并计入 item_dropped_count,其它异常只记 ERROR;open_spider / close_spider 并行执行;返回 None 不是丢弃(下一个管道收到 None,仍计入 item_scraped_count);CONCURRENT_ITEMS 1 → 100 让 50 个 await 0.1 s 的 item 从 5.13 s 降到 0.11 s。',
+    'item 从回调出来之后,管道按什么顺序处理?丢弃、报错、返回 None 各会发生什么?open_spider 是依次还是同时执行?这篇用三个带记录的管道实测。',
+    [('3', '管道 B 返回 None 后 item_scraped_count 的值(三个 item 都算抓取成功)'), ('同时', '三个管道的 open_spider / close_spider 的启动方式'), ('5.13 → 0.11 s', '50 个 await 0.1 s 的 item,CONCURRENT_ITEMS 1 → 100')],
+    [('顺序与改写', '<p><code>process_item</code> 按 <code>ITEM_PIPELINES</code> 的数字从小到大依次调用,每个管道的返回值就是下一个管道的输入。</p>'),
+     ('丢弃与异常', '<p>只有 <code>DropItem</code> 是正式的丢弃方式:后面的管道不再调用,WARNING 日志,统计 <code>item_dropped_count</code>。其它异常只记 ERROR,爬虫继续。</p>'),
+     ('open_spider / close_spider', '<p>所有管道的 <code>open_spider</code> 同时开始、各自结束(asyncio 下用 <code>gather</code>),<code>close_spider</code> 同理。</p>'),
+     ('返回 None', '<p>返回 <code>None</code> 并不会丢弃 item,下一个管道会收到 <code>None</code>,统计里仍算抓取成功。</p>'),
+     ('并发', '<p>同一个回调产出的多个 item 在管道里并行处理,上限 <code>CONCURRENT_ITEMS</code>。管道用 <code>async def</code> 才能真正并行。</p>'),
+     ('签名', '<p>新签名是 <code>process_item(self, item)</code>;旧的 <code>(item, spider)</code> 仍可用但会警告。</p>')],
+    steps,
+    [ENV_Y + '。用工厂函数生成带记录的 async 管道,通过 custom_settings 的 ITEM_PIPELINES 加入;事件的毫秒数是 spider 进程内的相对时间',
+     '没有验证:Feed 导出遇到 None item 的行为;ITEM_PROCESSOR 设置的自定义实现;process_item 返回 Deferred(旧写法)的兼容;管道里调用 crawler.engine.crawl 的行为;图片/文件管道(见后面的文章);item_error 信号的触发时机'],
+    'item pipeline')

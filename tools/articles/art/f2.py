@@ -1,0 +1,16 @@
+from lib import *
+S = SS('f2')
+R = J('f2'); th = R['thr']; t1 = sorted(th['1'])[1]; t0 = sorted(th['0'])[1]; rl_ = R['reload']
+steps = [
+    step("python app.py 里 app.run(port=…) 默认行为:往 stderr 打印「Serving Flask app 'app'」「Debug mode: off」,一行 WARNING「This is a development server. Do not use it in a production deployment」,「Running on http://127.0.0.1:端口」「Press CTRL+C to quit」,之后每个请求打一行访问日志。lsof 看到只监听 127.0.0.1:端口;相关进程只有 1 个。GET / 返回 pid 与 run_main=None(没有设置 WERKZEUG_RUN_MAIN)。", t=tl(S(1)), done=lidx(S(1), 'Serving Flask app', 'Debug mode: off', 'Running on'), mark=lidx(S(1), 'WARNING', '监听地址', '相关进程数 1'), kv=KV([['监听', '127.0.0.1:端口'], ['进程数', '1'], ['WERKZEUG_RUN_MAIN', '未设置']], ['进程数'])),
+    step(f"debug=True 之后日志变成「Debug mode: on」,多了「Restarting with stat」「Debugger is active!」「Debugger PIN」(文中已把 PIN 打码);进程变成 2 个,子进程的父进程是前一个进程;GET / 的响应里 run_main=true,说明处理请求的是被重载器拉起的子进程。改动 app.py 后约 {rl_[0]} 秒日志出现「Detected change in … reloading」,再请求时 pid 从 {rl_[1].split()[0]} 变成 {rl_[2].split()[0]}(进程被换掉了)。", t=tl(S(2)), done=lidx(S(2), 'run_main=true', 'Debugger is active'), mark=lidx(S(2), 'Detected change', 'Restarting with stat', '相关进程数 2'), kv=KV([['进程数', '2(重载器父进程 + 工作子进程)'], ['改文件后', f'约 {rl_[0]} 秒触发重载,pid 变化']], ['进程数'])),
+    step("host 默认是 127.0.0.1:用 lsof 看,默认只监听 127.0.0.1:端口,局域网里别的机器连不上;传 host=\"0.0.0.0\" 后监听变成「*:端口」,所有网卡都能连。开发服务器加上 debug 又对外暴露,是危险组合(见第 132 篇)。", t=tl(S(3)), done=lidx(S(3), 'host=127.0.0.1', 'host=0.0.0.0'), mark=lidx(S(3), '*:'), kv=KV([['host=127.0.0.1', '127.0.0.1:端口'], ['host=0.0.0.0', '*:端口']], ['host=0.0.0.0'])),
+    step(f"threaded 默认为 True:同时发 2 个各睡 0.5 秒的请求,总耗时中位数 {t1:.0f} ms(两个请求并行);设 threaded=False 后变成 {t0:.0f} ms(串行,一个接一个)。所以开发服务器默认每个请求一个线程。", t=tl(S(4)), b=bars([['threaded=True', t1, f'{t1:.0f} ms'], ['threaded=False', t0, f'{t0:.0f} ms']], t0, done=[0, 1]), kv=KV([['threaded=True', f'{t1:.0f} ms'], ['threaded=False', f'{t0:.0f} ms']], ['threaded=False'])),
+    step("flask --app app run --port N 同样能启动并响应:启动信息与 python app.py 一样(Serving Flask app 'app'、Debug mode: off、WARNING、Running on),但因为是用 flask 命令导入模块,if __name__ == \"__main__\" 里的 app.run(...) 不会执行(没有经过那段代码,端口来自命令行参数)。加 --debug 同样出现「Debug mode: on」「Debugger is active!」。", t=tl(S(5)), done=lidx(S(5), 'flask --app app run', 'Serving Flask app', 'Running on'), mark=lidx(S(5), '加 --debug', 'Debug mode: on'), kv=KV([['flask run', '不执行 __main__ 里的 app.run'], ['--debug', 'Debug mode: on']], ['flask run'])),
+]
+A = mkartf('f2', 2, 'Flask,app.run,开发服务器,真实验证,动画演示',
+    f'用真实进程验证 app.run():启动信息、只监听 127.0.0.1、debug=True 多出重载器子进程(改文件约 {rl_[0]} 秒重载)、threaded=True 时 2 个并发请求总耗时 {t1:.0f} ms 对 {t0:.0f} ms、flask run 不执行 __main__ 里的代码。',
+    '一行 app.run() 就能把应用跑起来,但它到底启动了什么?监听哪里?debug 多了哪些东西?这篇起真实进程,看日志、看进程、看监听端口。',
+    [('2', 'debug=True 时的进程数(重载器父进程 + 工作子进程)'), (f'{t1:.0f} → {t0:.0f} ms', '2 个并发慢请求的总耗时:threaded=True → False'), ('127.0.0.1', 'app.run 默认监听的地址')],
+    [('默认启动', '<p>上一篇:<a href="flask-app-init.html">Flask(__name__) 到底初始化了什么</a>。</p>'), ('debug=True 与自动重载', None), ('host', None), ('threaded', None), ('flask run', None)],
+    steps, [ENV_F + '。这里的开发服务器就是 Werkzeug 3.1.9 自带的服务器', '没有验证:Windows 与 Linux 上的重载行为、watchdog 库存在时重载器的差别(本机的日志是 stat 重载器)、ssl_context 参数、processes 参数、Debugger PIN 的计算方式(日志里已打码)'], 'app.run()')

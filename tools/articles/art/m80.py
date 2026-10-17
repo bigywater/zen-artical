@@ -1,0 +1,24 @@
+from lib import *
+S = SS('m80')
+steps = [
+    step("FTDC 默认就开着:diagnosticDataCollectionEnabled = True,采样间隔 diagnosticDataCollectionPeriodMillis = 1000,每块 diagnosticDataCollectionSamplesPerChunk = 300 个采样,每个文件上限 10 MB、目录上限 500 MB(FileSizeMB = 10、DirectorySizeMB = 500)。启动约 3 秒后 dbpath/diagnostic.data 里已有 metrics.2026-10-12T06-07-05Z-00000(69,922 字节);运行约 36 秒时多了 metrics.interim(32,159 字节,还没满的块);mongod 正常关闭后只剩一个 102,144 字节的 metrics 文件。", t=tl(S(1)), mark=lidx(S(1), '参数:', '刚启动约 3 秒后', '运行约 36 秒后', '正常关闭之后'), done=lidx(S(1), '参数:'), kv=KV([['采样间隔', '1000 ms'], ['每块采样数', '300'], ['文件 / 目录上限', '10 MB / 500 MB'], ['36 秒时', 'metrics.* + metrics.interim'], ['关闭后', '只剩 metrics.*(102,144 字节)']], ['采样间隔'])),
+    step("文件是顺序排列的 BSON 文档,共 4 个:type 0 一个(元数据:doc 里有 start、buildInfo、getCmdLineOpts、hostInfo、end)、type 2 一个(周期性元数据)、type 1 两个(压缩的指标块)。type 1 的 data 是 BinData:30,356 字节(解压后 177,308)和 32,183 字节(解压后 181,762),前 4 字节记着解压后的长度。", t=tl(S(2)), mark=lidx(S(2), 'type 的计数', 'type 0 文档的字段', 'type 1 文档'), done=lidx(S(2), 'type 的计数'), kv=KV([['type 0', '元数据(buildInfo、hostInfo 等)'], ['type 1', '压缩的指标块 × 2'], ['type 2', '周期性元数据 × 1'], ['块的前 4 字节', '解压后长度']], ['type 1'])),
+    step("解压 type 1 块(zlib):第一个块只有 1 个采样、5,033 个指标;第二个块 37 个采样、5,036 个指标(指标集变了就开新块),压缩后 32,183 字节 → 解压后 181,762 字节,压缩比 5.6×。参考文档(第一个采样的完整内容)的顶层字段:start、serverStatus、connPoolStats、networkInterfaceStats、transportLayerStats、end。", t=tl(S(3)), mark=lidx(S(3), '块 0', '块 1', '取采样最多的块', '参考文档的顶层字段'), done=lidx(S(3), '块 0'), b=bars([['压缩后', 32183, '32,183 字节'], ['解压后', 181762, '181,762 字节']], 181762, mark=[1], done=[0]), kv=KV([['块 1', '37 个采样,5,036 个指标'], ['压缩比', '5.6×'], ['参考文档', 'serverStatus + connPoolStats + …']], ['压缩比'])),
+    step("5,036 个指标按路径前缀分组:serverStatus.metrics 1,922、serverStatus.wiredTiger 1,460、serverStatus.queues 433、serverStatus.incrementalRollout 192、lockContentionMetrics 144、locks 132、opLatencies 84、searchTaskExecutorMetrics 82、network 68、connPoolStats 59——一个采样几乎是整份 serverStatus 加连接池统计。", t=tl(S(4)), mark=lidx(S(4), 'serverStatus.metrics'), done=lidx(S(4), 'serverStatus.metrics'), b=bars([['metrics', 1922, '1,922'], ['wiredTiger', 1460, '1,460'], ['queues', 433, '433'], ['其它各组', 192, '≤ 192']], 1922, mark=[0, 1, 2], done=[]), kv=KV([['serverStatus.metrics', '1,922'], ['serverStatus.wiredTiger', '1,460'], ['serverStatus.queues', '433']], ['serverStatus.wiredTiger'])),
+    step("自己写解码器(参考文档 → 指标数、增量数 → varint 流,零用“0 + 后续零的个数”编码)验证:运行期间我们先插入 2,000 个文档,再 5 次 insert_many(各 1,000 个),serverStatus 自己读到 opcounters.insert 2000 → 7000。解码出的 serverStatus.opcounters.insert 共 38 个采样,首尾 0 → 7000;有变化的采样及增量:(5, 2000)、(10, 2000)、(11, 2000)、(12, 1000),增量之和 7000;相邻采样的 start 时间戳间隔最常见是 1000 ms。", t=tl(S(5)), mark=lidx(S(5), 'opcounters.insert 序列首尾', 'insert 计数有变化', '增量之和', '共 38 个采样'), done=lidx(S(5), '所有块的指标名'), b=bars([['2,000 (采样 5)', 2000, '+2000'], ['(采样 10)', 2000, '+2000'], ['(采样 11)', 2000, '+2000'], ['(采样 12)', 1000, '+1000']], 2000, mark=[3], done=[0, 1, 2]), kv=KV([['解码出的 insert 总增量', '7000'], ['serverStatus 读到的', '2000 → 7000'], ['采样间隔', '1000 ms 最常见']], ['解码出的 insert 总增量'])),
+    step("保留多久:把 37 个采样的块拆开压缩——参考文档(177,418 字节)压缩后 30,562 字节,其余 36 个采样的差值流(4,344 字节)压缩后 1,536 字节,每个采样的差值约 43 字节。按每块 300 个采样估算,每块约 43 KB,每天 288 块约 12.5 MB,500 MB 的上限约够 40 天(这是空闲实例的外推)。", t=tl(S(6)), mark=lidx(S(6), '分开压缩', '按每块 300'), done=lidx(S(6), '分开压缩'), b=bars([['参考文档(每块一份)', 30562, '30,562 字节'], ['36 个采样的差值', 1536, '1,536 字节']], 30562, mark=[0, 1], done=[]), kv=KV([['参考文档压缩后', '30,562 字节'], ['每个采样的差值', '约 43 字节'], ['每天(估算)', '约 12.5 MB'], ['500 MB 能放', '约 40 天']], ['500 MB 能放'])),
+]
+A = mkartm('m80', 80, 'MongoDB,FTDC,diagnostic.data,诊断数据,serverStatus,真实验证,动画演示',
+    '实测 FTDC:默认每秒采样、每块 300 个采样、目录上限 500 MB;文件是 BSON 块序列(type 0/1/2),type 1 是 zlib 压缩的参考文档加 varint 差值流;一个采样 5,036 个指标;自己写解码器还原出 opcounters.insert 的增量(2000+2000+2000+1000 = 7000)与真实插入一致;估算空闲实例每天约 12.5 MB。',
+    'mongod 一直在往 diagnostic.data 里写什么?格式是什么?能不能自己读出来?这篇写了个解码器,拿已知的 5,000 次插入去验证。',
+    [('5,036', '一个采样里的指标个数'), ('7000', '解码出的 opcounters.insert 总增量,与真实插入一致'), ('5.6×', '一个块的 zlib 压缩比(32,183 → 181,762 字节)')],
+    [('默认配置', '<p>FTDC 默认开启,每秒一个采样,每块 300 个采样,单文件 10 MB、目录 500 MB。</p>'),
+     ('文件格式', '<p>顺序排列的 BSON 文档:type 0 元数据、type 1 压缩指标块、type 2 周期性元数据;未满的块先写在 <code>metrics.interim</code>,正常关闭时刷成正式块。</p>'),
+     ('解压一个块', '<p>zlib 解压后是参考文档、指标数、增量数,然后是 varint 编码的差值;指标集变化时开新块。</p>'),
+     ('指标', '<p>一个采样 5,036 个指标,主要是 serverStatus 的各个部分,另有连接池统计。</p>'),
+     ('验证解码', '<p>写了解码器还原序列:<code>opcounters.insert</code> 的增量之和 7000,与 serverStatus 读到的一致。</p>'),
+     ('占用空间', '<p>参考文档压缩后约 30 KB,每个采样的差值约 43 字节;空闲实例每天约 12.5 MB 的估算下,500 MB 约能保存 40 天。</p>')],
+    steps,
+    [ENV_M + '。单机 mongod,运行约 36 秒,关闭后读取 diagnostic.data;解码器是按 FTDC 格式自己写的 Python,用已知负载校验了 opcounters.insert',
+     '没有验证:Linux 上 systemMetrics(CPU、内存、磁盘)这一组指标(macOS 上参考文档里没有);副本集上的 replSetGetStatus 与 oplog 统计;繁忙实例的块大小和实际保留天数;文件满 10 MB 轮转与目录超过 500 MB 删除最旧文件的行为;metrics.interim 在崩溃后的可读性;type 2 元数据的内容;用 FTDC 做事后分析的具体流程'],
+    'FTDC 诊断数据')

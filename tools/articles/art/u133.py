@@ -1,0 +1,21 @@
+from lib import *
+import re
+S = SS('u133')
+R = J('u133')
+un = int(re.search(r'无缓冲 File:writeln! 10 万次 → 底层 write 调用 (\d+) 次', R['calls']).group(1)); bw = int(re.search(r'BufWriter\(默认容量 8192\):底层 write 调用 (\d+) 次', R['calls']).group(1)); lw = int(re.search(r'LineWriter.*?底层 write 调用 (\d+) 次', R['calls']).group(1))
+caps = re.findall(r'with_capacity\(\s*(\d+)\):底层 write 调用\s+(\d+) 次', R['calls'])
+bm = [float(x) for x in re.findall(r'([\d.]+) ms', R['bench'])]
+st = R['stdout']; lost = R['lost']
+steps = [
+    step(f"数底层 write 调用(给 File 套计数包装器),写 10 万行、每行 12 字节(共 1200000 字节):无缓冲 File 用 writeln! 竟然调用了 {un} 次 write —— 一行被拆成约 5 次(字面量、格式化的数字、换行分别写);BufWriter 默认容量 8192 只调用 {bw} 次;LineWriter 每遇到换行就刷新,{lw} 次(每行一次)。", t=tl(S(1)), done=lidx(S(1), '无缓冲 File', 'BufWriter(默认', 'LineWriter'), b=bars([['无缓冲', un, str(un)], ['LineWriter', lw, str(lw)], ['BufWriter 8 KiB', bw, str(bw)]], un, cur=[0], done=[1, 2]), kv=KV([['无缓冲 writeln!', f'{un} 次 write'], ['LineWriter', f'{lw} 次'], ['BufWriter', f'{bw} 次']], ['BufWriter'])),
+    step("BufWriter 的缓冲区容量决定调用次数:with_capacity(64) 是 " + caps[0][1] + " 次,1024 是 " + caps[1][1] + " 次,1 MiB 只要 " + caps[2][1] + " 次。", t=tl(S(1)), done=lidx(S(1), 'with_capacity'), kv=KV([[f'容量 {c_}', f'{n} 次 write'] for c_, n in caps], [f'容量 {caps[-1][0]}'])),
+    step(f"耗时(release,100 万行,取 3 次最小):无缓冲 File 约 {bm[0]:.0f} ms(由 10 万行实测折算),BufWriter 默认容量 {bm[1]:g} ms,1 MiB 容量 {bm[2]:g} ms,先拼成 String 再一次 fs::write {bm[3]:g} ms。无缓冲比 BufWriter 慢约 {bm[0] / bm[1]:.0f} 倍;BufWriter 已经接近「一次写完」,缓冲区放大收益很小。", t=tl(S(2)), done=lidx(S(2), '无缓冲 File', 'BufWriter 默认', '1 MiB', '先拼成 String'), b=bars([['BufWriter 8 KiB', bm[1], f'{bm[1]:g} ms'], ['BufWriter 1 MiB', bm[2], f'{bm[2]:g} ms'], ['拼 String + fs::write', bm[3], f'{bm[3]:g} ms']], max(bm[1:]) * 1.2, done=[0, 1, 2]), kv=KV([['无缓冲', f'约 {bm[0]:.0f} ms(折算)'], ['BufWriter', f'{bm[1]:g} ms'], ['一次 fs::write', f'{bm[3]:g} ms']], ['BufWriter'])),
+    step(f"stdout 也一样:20 万行写到 /dev/null,println! {st['println']} ms,手动锁住 stdout 再 writeln! {st['locked']} ms(几乎没变 —— stdout 本身是行缓冲,每行换行都会刷新),再套一层 BufWriter 只要 {st['bufwriter']} ms,约 {st['println'] / st['bufwriter']:.0f} 倍。大量输出时,给 stdout 套 BufWriter。", t=tl(S(3)), done=lidx(S(3), 'println', 'locked', 'bufwriter'), b=bars([['println!', st['println'], f"{st['println']} ms"], ['锁住 stdout', st['locked'], f"{st['locked']} ms"], ['BufWriter', st['bufwriter'], f"{st['bufwriter']} ms"]], st['println'], cur=[0, 1], done=[2]), kv=KV([['println!', f"{st['println']} ms"], ['BufWriter', f"{st['bufwriter']} ms"]], ['BufWriter'])),
+    step(f"丢数据:写 1000 行(共 12000 字节)后,drop(w) 让 BufWriter 刷新,文件 {lost['drop']} 字节;先 flush() 再 process::exit,{lost['flush_then_exit']} 字节;直接 process::exit(不运行析构)只剩 {lost['exit']} 字节(8192 字节的缓冲区已满刷出过一次,剩下的 3808 字节还在缓冲区里被丢掉);mem::forget 同样只有 {lost['forget']} 字节。要在退出前保证落盘,必须显式 flush。", t=tl(S(4)), mark=lidx(S(4), 'exit  ', 'forget'), done=lidx(S(4), 'drop  ', 'flush_then_exit'), kv=KV([['drop / flush 再 exit', '12000 字节,完整'], ['process::exit / forget', f"{lost['exit']} 字节,丢了 {12000 - lost['exit']} 字节"]], ['process::exit / forget'])),
+]
+A = mkart('u133', 133, 'Rust,BufWriter,缓冲IO,stdout,真实验证,动画演示',
+    f'用计数的 Write 包装器与真实文件验证 BufWriter:10 万行无缓冲 writeln! 触发 {un} 次底层 write(每行约 5 次),BufWriter {bw} 次,LineWriter {lw} 次;100 万行耗时无缓冲约 {bm[0]:.0f} ms 对 BufWriter {bm[1]:g} ms;stdout 套 BufWriter {st["println"]} → {st["bufwriter"]} ms;process::exit 不 flush 丢了 {12000 - lost["exit"]} 字节。',
+    '写文件为什么要 BufWriter?一个 writeln! 到底触发几次系统调用?stdout 默认是怎么缓冲的?丢数据的场景有哪些?这篇用写调用计数和 100 万行计时回答。',
+    [(f'{un} 对 {bw}', '写 10 万行:无缓冲与 BufWriter 的底层 write 调用次数'), (f'约 {bm[0] / bm[1]:.0f}×', '100 万行:无缓冲对 BufWriter 的耗时倍数(无缓冲为折算值)'), (f'丢 {12000 - lost["exit"]} 字节', 'process::exit 没有 flush 时丢失的数据量')],
+    [('底层 write 调用次数', '<p>读取侧见<a href="rust-bufreader.html">BufReader 与缓冲读取</a>;文件基础见<a href="rust-std-fs.html">std::fs 文件读写</a>。write 调用数是在 Rust 层统计的,不是内核系统调用计数。</p>'), ('耗时', '<p>文件在系统缓存里(没有 fsync),耗时是本机 release 实测的最小值;无缓冲项为 10 万行折算到 100 万行。</p>'), ('stdout', None), ('什么时候会丢数据', '<p>drop 的规则见<a href="rust-drop-trait.html">Drop Trait 与资源释放</a>;文件描述符的释放见<a href="rust-file-descriptor-release.html">文件描述符与资源释放</a>。</p>')],
+    steps, [ENV_U, '没有验证:fsync 后的真正落盘、BufWriter 在写入出错时 drop 的行为(错误被忽略)、into_inner 与 IntoInnerError、stdout 连接到终端时的行缓冲行为、异步写入、写入管道对端慢时的阻塞'], 'BufWriter')

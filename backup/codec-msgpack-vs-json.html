@@ -1,0 +1,489 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>MessagePack 比 JSON 小多少,哪些数据几乎没变小</title>
+<meta name="description" content="实测 MessagePack 对 JSON:未压缩小 11.9%–27.2%,但 products(字符串多)用 zstd 压缩后 MessagePack 反而大 6.2%,数值多的 timeseries 小 15.3%;速度比标准库 json 快、比 orjson 慢;整数键、bytes 能保留,tuple 变 list,2^64 溢出。">
+<link rel="canonical" href="https://bigywater.tech/codec-msgpack-vs-json.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="MessagePack 比 JSON 小多少,哪些数据几乎没变小">
+<meta property="og:description" content="实测 MessagePack 对 JSON:未压缩小 11.9%–27.2%,但 products(字符串多)用 zstd 压缩后 MessagePack 反而大 6.2%,数值多的 timeseries 小 15.3%;速度比标准库 json 快、比 orjson 慢;整数键、bytes 能保留,tuple 变 list,2^64 溢出。">
+<meta property="og:url" content="https://bigywater.tech/codec-msgpack-vs-json.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="MessagePack 比 JSON 小多少,哪些数据几乎没变小">
+<meta name="twitter:description" content="实测 MessagePack 对 JSON:未压缩小 11.9%–27.2%,但 products(字符串多)用 zstd 压缩后 MessagePack 反而大 6.2%,数值多的 timeseries 小 15.3%;速度比标准库 json 快、比 orjson 慢;整数键、bytes 能保留,tuple 变 list,2^64 溢出。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">2535</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">70</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">97</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">56</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">78</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">114</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">111</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">88</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#A8561A; --series-c-soft:#F6E3D2;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#E39A5E; --series-c-soft:#33200F;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#E39A5E; --series-c-soft:#33200F;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>数据编码与压缩 · 3</div>
+  <h1>MessagePack 比 JSON 小多少,哪些数据几乎没变小</h1>
+  <p>MessagePack 常被说成“更小更快的 JSON”。这篇用 4 个数据集量一量:未压缩和压缩之后各小多少,为什么有的数据几乎没变小,速度比谁快,类型保真和流式读取有什么不同。</p>
+  <div class="hero-fact">
+<div><div class="num">11.9% 对 27.1%</div><div class="lbl">未压缩时 MessagePack 比 JSON 小的比例:字符串多的 products 与数值多的 timeseries</div></div><div><div class="num">+6.2%</div><div class="lbl">products 用 zstd-3 压缩后,MessagePack 比 JSON 反而大的比例</div></div><div><div class="num">13.7 对 5.0 ms</div><div class="lbl">products 打包:msgpack 与 orjson 的耗时(标准库 json 是 40.8 ms)</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="codec-json-overhead.html">JSON 的真实开销:字段名、数字文本、转义与大整数</a></div>
+<section>
+  <h2>编码规则</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  整数 0                            1 字节  00
+  整数 127                          1 字节  7f
+  整数 128                          2 字节  cc 80
+  整数 255                          2 字节  cc ff
+  整数 256                          3 字节  cd 01 00
+  整数 65535                        3 字节  cd ff ff
+  整数 65536                        5 字节  ce 00 01 00 00
+  整数 -1                           1 字节  ff
+  整数 -32                          1 字节  e0
+  整数 -33                          2 字节  d0 df
+  整数 2**32                        9 字节  cf 00 00 00 01 00 00 00 00
+  浮点 1.5                          9 字节  cb 3f f8 00 00 00 00 00 00
+  浮点 0.1                          9 字节  cb 3f b9 99 99 99 99 99 9a
+  True / None                     3 字节  92 c3 c0
+  字符串 "a"                         2 字节  a1 61
+  字符串 31 字节                      32 字节  bf 78 78 78 78 78 78 78 78 78 78 78 …
+  字符串 32 字节                      34 字节  d9 20 78 78 78 78 78 78 78 78 78 78 …
+  字符串 255 字节                    257 字节  d9 ff 78 78 78 78 78 78 78 78 78 78 …
+  字符串 256 字节                    259 字节  da 01 00 78 78 78 78 78 78 78 78 78 …
+  bytes 3 字节                      5 字节  c4 03 61 62 63
+  {"a":1}                         4 字节  81 a1 61 01
+  [1,2,3]                         4 字节  93 01 02 03
+  JSON 对照:127 → 3 字节、65536 → 5 字节、"x"*31 → 33 字节、{"a":1} → 7 字节、0.1 → 3 字节</pre></div>
+  <p>小整数 1 字节,更大的整数 2、3、5、9 字节;字符串头 1 到 3 字节;浮点一律 9 字节;容器头 1 字节起。JSON 里短的浮点(0.1 只要 3 字节)和 {"a":1}(7 字节)对比 MessagePack 的 9 字节和 4 字节,小整数、短键名占优的是 MessagePack,短浮点占优的是 JSON。</p>
+</section>
+<section>
+  <h2>四个数据集</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  数据集               JSON   MsgPack     省下   压缩后 zstd-3:      JSON   MsgPack      差   gzip-6:      JSON   MsgPack   lz4:      JSON   MsgPack
+  products       7214163   6357308  11.9%                    1331144   1413136  -6.2%              1484671   1496373          2314042   2385707
+  timeseries     2744543   2000003  27.1%                     352531    298689  15.3%               313607    321012           649008    580243
+  nested         5582052   4062921  27.2%                     660737    606310   8.2%               553565    546978          1117578   1047168
+  blobby         2224945   1652673  25.7%                    1578156   1579529  -0.1%              1592993   1582706          2117830   1605618</pre></div>
+  <p>未压缩时 MessagePack 小 11.9%(products)到 27.2%(nested)。但 zstd 压缩之后差距变了:products 上 MessagePack 反而大 6.2%,timeseries 小 15.3%,nested 小 8.2%,含随机二进制的 blobby 基本相同。</p>
+</section>
+<section>
+  <h2>为什么差别这么大</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  products:MessagePack 逐值统计合计 6357305 字节(整批打包 6357308 字节,差在数组头);字符串 64.8%;键名 25.5%;浮点 5.7%;整数 3.1%;容器头 0.9%
+  timeseries:MessagePack 逐值统计合计 2000000 字节(整批打包 2000003 字节,差在数组头);键名 57.5%;浮点 22.5%;整数 17.5%;容器头 2.5%
+  products:JSON 7214163 → MsgPack 6357308,省下 11.9%;timeseries:2744543 → 2000003,省下 27.1%</pre></div>
+  <p>字符串多的数据(products 字符串占 64.8%),MessagePack 没什么可省;数值多的数据(timeseries 键名 57.5%、浮点和整数共 40%)省得多。数字越多,受益越大。</p>
+</section>
+<section>
+  <h2>速度</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  products:json.dumps 40.8 ms;orjson.dumps 5.0 ms;msgpack.packb 13.7 ms;json.loads 45.0 ms;orjson.loads 21.7 ms;msgpack.unpackb 32.9 ms
+  timeseries:json.dumps 25.2 ms;orjson.dumps 3.3 ms;msgpack.packb 8.7 ms;json.loads 25.4 ms;orjson.loads 10.5 ms;msgpack.unpackb 16.3 ms</pre></div>
+  <p>msgpack 比标准库 json 快(打包约 3 倍),但比 orjson 慢。“二进制就是快”不成立,要看对比的是哪个 JSON 实现。</p>
+</section>
+<section>
+  <h2>类型</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  tuple (1, 2)         3 字节 → [1, 2]
+  整数键 {1: "a"}         4 字节 → {1: 'a'}
+  bytes b"ab"          4 字节 → b'ab'
+  str "ab"             3 字节 → 'ab'
+  2**63                9 字节 → 9223372036854775808
+  2**64                打包抛出 OverflowError
+  float nan            9 字节 → nan
+  datetime             打包抛出 TypeError
+  set {1,2}            打包抛出 TypeError
+  use_bin_type=False(旧格式):bytes 和 str 打包成同一类型 → {'a': 'ab', 'b': 'ab'}
+  默认 strict_map_key=True 解包整数键:ValueError</pre></div>
+  <p>MessagePack 比 JSON 多了 bytes 和整数键(解包要 strict_map_key=False),tuple 会变成 list,2^64 溢出,datetime 和 set 要自己处理。bytes 和 str 的区分需要 use_bin_type=True。</p>
+</section>
+<section>
+  <h2>流式读取</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  MessagePack 流 637751 字节(没有分隔符),按 1000 字节切成 638 块喂 Unpacker:取出 2000/2000 条;JSON Lines 723399 字节(靠换行分隔)
+  把流截断在中间(多出半条):Unpacker 取出 1001 条完整记录,最后半条不会报错,只是留在缓冲里(再喂剩下的字节就能取出)
+  JSON Lines 截断在同样位置:按行解析,1001/1002 行可解析(最后一行是半行,json.loads 抛出 JSONDecodeError)</pre></div>
+  <p>每个 MessagePack 值自带长度,多条记录直接拼接,用 Unpacker 分块喂入就能取出(实验里 2000/2000)。JSON Lines 靠换行分隔。被截断的最后半条,Unpacker 不报错,只是还不能取出。</p>
+</section>
+<section>
+  <h2>为什么压缩后反而更大</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  版本                                      JSON   MsgPack  zstd JSON   zstd Msg    MsgPack 比 JSON(压缩后)
+  原样(price/rating 是浮点)                 7214163   6357308    1331144    1413136                  +6.2%
+  price→整数分、rating→整数                  7176128   6077249    1336116    1388457                  +3.9%
+  去掉 price 和 rating                    6675704   5737308    1208518    1280003                  +5.9%
+  参考:1000 个 price 的 8 字节 float64 二进制(拼接)zstd-3 后 3732 字节(原 8000 字节);同样 1000 个 price 的文本(逗号分隔)zstd-3 后 2619 字节(原 5921 字节)
+  只看字符串字段(把某个字段的 2 万个值单独拿出来):
+    title      JSON 数组  1223717 → zstd  413803;MsgPack 数组  1203160 → zstd  436587;换行分隔的纯文本  1183715 → zstd  409620
+    url        JSON 数组  1135001 → zstd   11989;MsgPack 数组  1115003 → zstd   12386;换行分隔的纯文本  1094999 → zstd   12331
+    updated_at JSON 数组   460001 → zstd  100143;MsgPack 数组   420003 → zstd   99373;换行分隔的纯文本   419999 → zstd   99436
+    category   JSON 数组   451749 → zstd   35091;MsgPack 数组   411751 → zstd   35938;换行分隔的纯文本   411747 → zstd   34720</pre></div>
+  <p>检验了两个猜想:浮点的 8 字节二进制压得差一些,但去掉浮点字段后 MessagePack 仍然大 5.9%,所以不是主因;长度不一的 title 字符串单独压缩时,MessagePack 数组比 JSON 数组大 5.5%,长度一致的 url 就没有差别。我的解释是字符串长度前缀是每条都要单独存的信息,而 JSON 的结束引号更好预测,这个解释没有拆到压缩器内部验证。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">MessagePack</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "b", "kind": "bars", "label": "数字对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "MessagePack 的编码规则:0–127 的整数 1 字节(00、7f),128–255 变成 2 字节(cc 80),256–65535 是 3 字节(cd 01 00),65536 起 5 字节,2^32 起 9 字节;-1 到 -32 也是 1 字节;浮点一律 9 字节(cb 加 8 字节);字符串 31 字节以内头 1 字节(bf),32–255 字节头 2 字节(d9 20),256 字节起头 3 字节(da 01 00);bytes 头 2 字节(c4 03);{\"a\":1} 4 字节(81 a1 61 01),[1,2,3] 4 字节。JSON 里 127 是 3 字节、65536 是 5 字节、{\"a\":1} 是 7 字节、0.1 是 3 字节——短的浮点在 JSON 里反而比 9 字节短。", "s": {"t": {"lines": ["  整数 0                            1 字节  00", "  整数 127                          1 字节  7f", "  整数 128                          2 字节  cc 80", "  整数 255                          2 字节  cc ff", "  整数 256                          3 字节  cd 01 00", "  整数 65535                        3 字节  cd ff ff", "  整数 65536                        5 字节  ce 00 01 00 00", "  整数 -1                           1 字节  ff", "  整数 -32                          1 字节  e0", "  整数 -33                          2 字节  d0 df", "  整数 2**32                        9 字节  cf 00 00 00 01 00 00 00 00", "  浮点 1.5                          9 字节  cb 3f f8 00 00 00 00 00 00", "  浮点 0.1                          9 字节  cb 3f b9 99 99 99 99 99 9a", "  True / None                     3 字节  92 c3 c0", "  字符串 \"a\"                         2 字节  a1 61", "  字符串 31 字节                      32 字节  bf 78 78 78 78 78 78 78 78 78 78 78 …", "  字符串 32 字节                      34 字节  d9 20 78 78 78 78 78 78 78 78 78 78 …", "  字符串 255 字节                    257 字节  d9 ff 78 78 78 78 78 78 78 78 78 78 …", "  字符串 256 字节                    259 字节  da 01 00 78 78 78 78 78 78 78 78 78 …", "  bytes 3 字节                      5 字节  c4 03 61 62 63", "  {\"a\":1}                         4 字节  81 a1 61 01", "  [1,2,3]                         4 字节  93 01 02 03", "  JSON 对照:127 → 3 字节、65536 → 5 字节、\"x\"*31 → 33 字节、{\"a\":1} → 7 字节、0.1 → 3 字节"], "cur": [], "mark": [], "done": []}, "done": [20, 22], "mark": [12], "b": {"items": [["整数 127", 1, "1"], ["整数 128", 2, "2"], ["整数 65536", 5, "5"], ["浮点 0.1", 9, "9"], ["{\"a\":1}", 4, "4"]], "max": 10, "cur": [], "mark": [3], "done": [0, 1, 2, 4]}, "kv": {"items": [["小整数", "1 字节;随数值变大 2/3/5/9 字节"], ["字符串头", "31 以内 1 字节,之后 2、3 字节"], ["浮点", "一律 9 字节(JSON 里 0.1 只要 3 字节)"]], "hl": ["浮点"]}}}, {"note": "四个数据集的体积(整批作为一个数组,紧凑 JSON 对 MessagePack):products 7214163 → 6357308 字节,省下 11.9%;timeseries 2744543 → 2000003,省下 27.1%;nested 5582052 → 4062921,省下 27.2%;blobby(JSON 里的二进制要 base64)2224945 → 1652673,省下 25.7%。zstd-3 压缩之后:products JSON 1331144、MessagePack 1413136(MessagePack 大 6.2%);timeseries 352531 对 298689(小 15.3%);nested 660737 对 606310(小 8.2%);blobby 1578156 对 1579529(基本相同,随机二进制压不动)。gzip-6、lz4 上 products 也是 MessagePack 略大。", "s": {"t": {"lines": ["  数据集               JSON   MsgPack     省下   压缩后 zstd-3:      JSON   MsgPack      差   gzip-6:      JSON   MsgPack   lz4:      JSON   MsgPack", "  products       7214163   6357308  11.9%                    1331144   1413136  -6.2%              1484671   1496373          2314042   2385707", "  timeseries     2744543   2000003  27.1%                     352531    298689  15.3%               313607    321012           649008    580243", "  nested         5582052   4062921  27.2%                     660737    606310   8.2%               553565    546978          1117578   1047168", "  blobby         2224945   1652673  25.7%                    1578156   1579529  -0.1%              1592993   1582706          2117830   1605618"], "cur": [], "mark": [], "done": []}, "done": [2], "mark": [1], "b": {"items": [["products 压缩后:JSON", 1331144, "1331144"], ["products 压缩后:MsgPack", 1413136, "1413136"], ["timeseries 压缩后:JSON", 352531, "352531"], ["timeseries 压缩后:MsgPack", 298689, "298689"]], "max": 1420000, "cur": [], "mark": [1], "done": [3]}, "kv": {"items": [["未压缩", "MessagePack 小 11.9%–27.2%"], ["zstd-3 压缩后 products", "MessagePack 反而大 6.2%"], ["zstd-3 压缩后 timeseries", "MessagePack 小 15.3%"]], "hl": ["zstd-3 压缩后 products"]}}}, {"note": "MessagePack 的字节按类型拆开。products:字符串 64.8%、键名 25.5%、浮点 5.7%、整数 3.1%、容器头 0.9%;timeseries:键名 57.5%、浮点 22.5%、整数 17.5%、容器头 2.5%。products 省的字节少(11.9%)是因为大头是字符串,而字符串在 MessagePack 里和 JSON 差不多大;timeseries 省得多(27.1%)是因为字段名短但每条重复、数值也有整数可以变短。数字多的数据受益大,字符串多的数据受益小。", "s": {"t": {"lines": ["  products:MessagePack 逐值统计合计 6357305 字节(整批打包 6357308 字节,差在数组头);字符串 64.8%;键名 25.5%;浮点 5.7%;整数 3.1%;容器头 0.9%", "  timeseries:MessagePack 逐值统计合计 2000000 字节(整批打包 2000003 字节,差在数组头);键名 57.5%;浮点 22.5%;整数 17.5%;容器头 2.5%", "  products:JSON 7214163 → MsgPack 6357308,省下 11.9%;timeseries:2744543 → 2000003,省下 27.1%"], "cur": [], "mark": [], "done": []}, "done": [1], "mark": [0], "b": {"items": [["products 字符串 %", 64.8, "64.8"], ["products 键名 %", 25.5, "25.5"], ["timeseries 键名 %", 57.5, "57.5"], ["timeseries 浮点 %", 22.5, "22.5"]], "max": 66, "cur": [], "mark": [0], "done": [2]}, "kv": {"items": [["products", "字符串 64.8%,省 11.9%"], ["timeseries", "键名 57.5%,省 27.1%"], ["结论", "数值多的数据受益大"]], "hl": ["结论"]}}}, {"note": "速度(各取 7 次中位数):products,json.dumps 40.8 ms、orjson.dumps 5.0 ms、msgpack.packb 13.7 ms;json.loads 45.0 ms、orjson.loads 21.7 ms、msgpack.unpackb 32.9 ms。timeseries,dumps 25.2/3.3/8.7 ms,loads 25.4/10.5/16.3 ms。msgpack 比标准库 json 快(打包约 3 倍、解包约 1.4–1.6 倍),但比 orjson 慢。“二进制格式一定比 JSON 快”不成立——要看对比的是哪个 JSON 实现。", "s": {"t": {"lines": ["  products:json.dumps 40.8 ms;orjson.dumps 5.0 ms;msgpack.packb 13.7 ms;json.loads 45.0 ms;orjson.loads 21.7 ms;msgpack.unpackb 32.9 ms", "  timeseries:json.dumps 25.2 ms;orjson.dumps 3.3 ms;msgpack.packb 8.7 ms;json.loads 25.4 ms;orjson.loads 10.5 ms;msgpack.unpackb 16.3 ms"], "cur": [], "mark": [], "done": []}, "done": [0], "mark": [1], "b": {"items": [["json.dumps ms", 40.8, "40.8"], ["orjson.dumps ms", 5.0, "5.0"], ["msgpack.packb ms", 13.7, "13.7"], ["msgpack.unpackb ms", 32.9, "32.9"], ["orjson.loads ms", 21.7, "21.7"]], "max": 46, "cur": [], "mark": [0], "done": [1]}, "kv": {"items": [["dumps(products)", "orjson 5.0 < msgpack 13.7 < json 40.8 ms"], ["loads(products)", "orjson 21.7 < msgpack 32.9 < json 45.0 ms"], ["结论", "要看对比的是哪个 JSON 实现"]], "hl": ["结论"]}}}, {"note": "类型保真:tuple (1,2) 打包再解出来是列表 [1, 2];整数键 {1:'a'} 能打包,但默认 strict_map_key=True 解包时抛 ValueError,要传 strict_map_key=False 才还原;bytes 和 str 用 use_bin_type=True 分得开,用旧格式(use_bin_type=False)bytes 和 str 解出来都是 str;2^63 能编码(9 字节),2^64 抛 OverflowError;nan 能往返;datetime 和 set 抛 TypeError。比 JSON 多出 bytes 和整数键,但仍然没有日期和集合。", "s": {"t": {"lines": ["  tuple (1, 2)         3 字节 → [1, 2]", "  整数键 {1: \"a\"}         4 字节 → {1: 'a'}", "  bytes b\"ab\"          4 字节 → b'ab'", "  str \"ab\"             3 字节 → 'ab'", "  2**63                9 字节 → 9223372036854775808", "  2**64                打包抛出 OverflowError", "  float nan            9 字节 → nan", "  datetime             打包抛出 TypeError", "  set {1,2}            打包抛出 TypeError", "  use_bin_type=False(旧格式):bytes 和 str 打包成同一类型 → {'a': 'ab', 'b': 'ab'}", "  默认 strict_map_key=True 解包整数键:ValueError"], "cur": [], "mark": [], "done": []}, "done": [1, 10], "mark": [9], "b": {"items": [["tuple 往返后变成 list", 1, "变了"], ["bytes/str 区分(use_bin_type=True)", 1, "保留"], ["2^64", 0, "OverflowError"]], "max": 1.2, "cur": [], "mark": [0, 2], "done": [1]}, "kv": {"items": [["tuple", "解出来是 list"], ["整数键", "解包要 strict_map_key=False"], ["2^64", "OverflowError"]], "hl": ["整数键"]}}}, {"note": "流式:2000 条记录拼成一个没有分隔符的 MessagePack 流(637751 字节),按 1000 字节切成 638 块喂给 Unpacker,取出 2000/2000 条;JSON Lines 是 723399 字节,靠换行分隔。流被截断在中间时,Unpacker 取出 1001 条完整记录,最后半条不报错、留在缓冲里;JSON Lines 同样位置截断,按行解析 1001/1002 行可解析,最后半行 json.loads 抛 JSONDecodeError。MessagePack 的每个值自带长度,不需要分隔符,但半条记录要靠 Unpacker 自己判断。", "s": {"t": {"lines": ["  MessagePack 流 637751 字节(没有分隔符),按 1000 字节切成 638 块喂 Unpacker:取出 2000/2000 条;JSON Lines 723399 字节(靠换行分隔)", "  把流截断在中间(多出半条):Unpacker 取出 1001 条完整记录,最后半条不会报错,只是留在缓冲里(再喂剩下的字节就能取出)", "  JSON Lines 截断在同样位置:按行解析,1001/1002 行可解析(最后一行是半行,json.loads 抛出 JSONDecodeError)"], "cur": [], "mark": [], "done": []}, "done": [0], "mark": [1], "b": {"items": [["MessagePack 流取出", 2000, "2000"], ["截断后取出完整记录", 1001, "1001"]], "max": 2100, "cur": [], "mark": [1], "done": [0]}, "kv": {"items": [["MessagePack 流", "637751 字节,2000 条全取出"], ["JSON Lines", "723399 字节,靠换行分隔"], ["被截断的最后半条", "Unpacker 不报错,留在缓冲里"]], "hl": ["被截断的最后半条"]}}}, {"note": "products 上 MessagePack 压缩后反而更大,检验两个猜想。猜想 1(浮点的 8 字节二进制接近随机):把 price、rating 改成整数后差距从 +6.2% 变成 +3.9%,去掉这两个字段后仍然 +5.9%,猜想 1 不是主因;1000 个 price 的 float64 二进制 zstd 后 3732 字节,同样的文本 2619 字节,浮点确实压得差些。猜想 2(长度前缀):只看 title 字段(2 万个长短不一的字符串)单独压缩,JSON 数组 413803、MessagePack 数组 436587(大 5.5%)、换行分隔的纯文本 409620;url 长度几乎一样,三者基本相同(11989、12386、12331)。长度前缀是一个每条都要单独存储的数字,而 JSON 的结束引号更容易被预测——这是我对这个差别的解释,没有拆到熵编码内部去验证。", "s": {"t": {"lines": ["  版本                                      JSON   MsgPack  zstd JSON   zstd Msg    MsgPack 比 JSON(压缩后)", "  原样(price/rating 是浮点)                 7214163   6357308    1331144    1413136                  +6.2%", "  price→整数分、rating→整数                  7176128   6077249    1336116    1388457                  +3.9%", "  去掉 price 和 rating                    6675704   5737308    1208518    1280003                  +5.9%", "  参考:1000 个 price 的 8 字节 float64 二进制(拼接)zstd-3 后 3732 字节(原 8000 字节);同样 1000 个 price 的文本(逗号分隔)zstd-3 后 2619 字节(原 5921 字节)", "  只看字符串字段(把某个字段的 2 万个值单独拿出来):", "    title      JSON 数组  1223717 → zstd  413803;MsgPack 数组  1203160 → zstd  436587;换行分隔的纯文本  1183715 → zstd  409620", "    url        JSON 数组  1135001 → zstd   11989;MsgPack 数组  1115003 → zstd   12386;换行分隔的纯文本  1094999 → zstd   12331", "    updated_at JSON 数组   460001 → zstd  100143;MsgPack 数组   420003 → zstd   99373;换行分隔的纯文本   419999 → zstd   99436", "    category   JSON 数组   451749 → zstd   35091;MsgPack 数组   411751 → zstd   35938;换行分隔的纯文本   411747 → zstd   34720"], "cur": [], "mark": [], "done": []}, "done": [6], "mark": [3], "b": {"items": [["title:JSON 数组 zstd", 413803, "413803"], ["title:MsgPack 数组 zstd", 436587, "436587"], ["title:纯文本 zstd", 409620, "409620"], ["url:MsgPack 数组 zstd", 12386, "12386"]], "max": 440000, "cur": [], "mark": [1], "done": [0, 2]}, "kv": {"items": [["去掉浮点字段后", "MessagePack 仍大 5.9%"], ["title(长度不一)", "MessagePack 大 5.5%"], ["url(长度一致)", "三者基本相同"]], "hl": ["title(长度不一)"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / Python 3.14.8(系统 Python,自带 compression.zstd)/ zstandard 0.25.0 / lz4 4.4.5 / zstd、lz4、brotli、protoc 命令行(Homebrew);msgpack、protobuf、snappy 等第三方库临时装在临时目录里,用完删除;所有数据都是本机脚本生成的合成数据(固定随机种子),没有使用任何真实网站或用户的数据;计时用 time.perf_counter,取多次中位数,数字每次运行会有小幅抖动。msgpack 1.2.3、orjson 3.13.0 临时安装;数据集见第 1 篇;体积和类型是确定性结果,速度是 7 次中位数;第七节的字段单独压缩用 zstd 级别 3</li><li>没有验证:CBOR、BSON 等其它二进制 JSON;MessagePack 的扩展类型(时间戳等);用 msgpack-numpy 之类处理数组;不同 zstd 级别下 products 的差距会不会变;为什么长度前缀更难压缩的压缩器内部原因(只在字段级别验证了现象);Python 以外的 MessagePack 实现</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="codec-varint-zigzag.html">
+    <div>
+      <div class="t1">下一篇 · 数据编码与压缩 4</div>
+      <div class="t2">整数怎么变成更少的字节:varint、ZigZag 与定长</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>数据编码与压缩 · MessagePack 比 JSON 小多少,哪些数据几乎没变小 · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

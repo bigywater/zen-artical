@@ -1,0 +1,79 @@
+import sys, os, time, json; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from dj import *
+tee('d45'); R = {}
+pg = PG(9421).start()
+models = "from django.db import models\nclass Acct(models.Model):\n    name = models.CharField(max_length=10)\n"
+d = proj('d45', files={'lab/models.py': models}, databases=pg.databases(), apps=['django.contrib.contenttypes', 'lab'])
+manage(d, 'migrate', '--run-syncdb')
+pre = "import logging, warnings, threading, time; warnings.simplefilter('ignore'); logging.disable(logging.CRITICAL)\nfrom django.db import connection, connections, transaction\nfrom django.test.utils import CaptureQueriesContext\nfrom lab.models import Acct\nEV = []\ndef ev(s): EV.append(s)\ndef visible_from_other_conn(name):\n    out = []\n    def w():\n        out.append(Acct.objects.filter(name=name).exists()); connections.close_all()\n    t = threading.Thread(target=w); t.start(); t.join(); return out[0]\ndef cb(label, name=None):\n    def f(): ev(f'回调 {label} 执行' + ('(另一个连接此刻能看到该行:%s)' % visible_from_other_conn(name) if name else ''))\n    return f\n"
+def run(code): rc, out = pyscript(d, pre + code); return out.rstrip()
+print('== 一:在 atomic 里注册 on_commit:什么时候执行')
+o = run("""
+Acct.objects.all().delete()
+with transaction.atomic():
+    Acct.objects.create(name='a'); ev('写入 a(还没提交)')
+    transaction.on_commit(cb('A', 'a')); ev('注册回调 A')
+    with transaction.atomic():
+        Acct.objects.create(name='b'); transaction.on_commit(cb('B(在内层 atomic 里注册)', 'b')); ev('注册回调 B(内层)')
+    ev('内层 atomic 退出(保存点释放,外层还没提交)')
+ev('外层 atomic 退出(已提交)')
+for e in EV: print('  ', e)
+""")
+print(o); R['basic'] = o
+print()
+print('== 二:事务回滚 → 回调永远不执行;没有 atomic(autocommit)→ 立即执行')
+o = run("""
+EV.clear(); Acct.objects.all().delete()
+try:
+    with transaction.atomic():
+        transaction.on_commit(cb('R')); ev('注册回调 R'); raise ValueError('boom')
+except ValueError: ev('事务因异常回滚')
+transaction.on_commit(cb('N(autocommit,没有 atomic)')); ev('autocommit 下注册 N 之后')
+for e in EV: print('  ', e)
+""")
+print(o); R['rollback'] = o
+print()
+print('== 三:内层保存点回滚:内层注册的回调被丢弃,外层的保留')
+o = run("""
+EV.clear()
+with transaction.atomic():
+    transaction.on_commit(cb('外层'))
+    try:
+        with transaction.atomic():
+            transaction.on_commit(cb('内层(将回滚)')); raise ValueError()
+    except ValueError: ev('内层回滚')
+    transaction.on_commit(cb('外层-2'))
+ev('已提交')
+for e in EV: print('  ', e)
+""")
+print(o); R['savepoint'] = o
+print()
+print('== 四:回调之间的关系:一个抛异常,后面的还执行吗?robust=True')
+o = run("""
+def boom(): ev('回调 X 抛出异常'); raise RuntimeError('cb fail')
+EV.clear()
+try:
+    with transaction.atomic():
+        transaction.on_commit(cb('1')); transaction.on_commit(boom); transaction.on_commit(cb('3'))
+except Exception as e: ev('atomic 退出时向外抛出 ' + type(e).__name__)
+for e in EV: print('  ', e)
+print('  --- robust=True:')
+EV.clear()
+with transaction.atomic():
+    transaction.on_commit(cb('1')); transaction.on_commit(boom, robust=True); transaction.on_commit(cb('3'))
+for e in EV: print('  ', e)
+print('  表里数据不受回调异常影响(事务已提交):', Acct.objects.count())
+""")
+print(o); R['exc'] = o
+print()
+print('== 五:回调里再做数据库写入:此时是 autocommit 状态')
+o = run("""
+EV.clear(); Acct.objects.all().delete()
+def writer():
+    with CaptureQueriesContext(connection) as c: Acct.objects.create(name='from-callback')
+    ev('回调里写库的 SQL:' + ' | '.join(q['sql'][:40] for q in c.captured_queries))
+with transaction.atomic(): transaction.on_commit(writer)
+for e in EV: print('  ', e)
+""")
+print(o); R['write'] = o
+pg.stop(); save('d45', R)

@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>ResourceBundle:国际化资源的查找与回退</title>
+<meta name="description" content="在 JDK 21 上验证 ResourceBundle:候选 Locale 列表(zh-CN 会先试 zh_CN_#Hans);默认 Locale 插进回退链(默认 fr 时请求 en 得到 français,NO_FALLBACK 才得到根);properties 读取默认 UTF-8 并在遇到非法字节时按 Latin-1 重读,但 0xE9 恰在文件末尾时抛 MissingResourceException;类 bundle 压过同名 properties;缓存默认永不过期,改文件不生效,需要 clearCache 或自定义 Control。">
+<link rel="canonical" href="https://bigywater.tech/java-resource-bundle.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="ResourceBundle:国际化资源的查找与回退">
+<meta property="og:description" content="在 JDK 21 上验证 ResourceBundle:候选 Locale 列表(zh-CN 会先试 zh_CN_#Hans);默认 Locale 插进回退链(默认 fr 时请求 en 得到 français,NO_FALLBACK 才得到根);properties 读取默认 UTF-8 并在遇到非法字节时按 Latin-1 重读,但 0xE9 恰在文件末尾时抛 MissingResourceException;类 bundle 压过同名 properties;缓存默认永不过期,改文件不生效,需要 clearCache 或自定义 Control。">
+<meta property="og:url" content="https://bigywater.tech/java-resource-bundle.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="ResourceBundle:国际化资源的查找与回退">
+<meta name="twitter:description" content="在 JDK 21 上验证 ResourceBundle:候选 Locale 列表(zh-CN 会先试 zh_CN_#Hans);默认 Locale 插进回退链(默认 fr 时请求 en 得到 français,NO_FALLBACK 才得到根);properties 读取默认 UTF-8 并在遇到非法字节时按 Latin-1 重读,但 0xE9 恰在文件末尾时抛 MissingResourceException;类 bundle 压过同名 properties;缓存默认永不过期,改文件不生效,需要 clearCache 或自定义 Control。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">1854</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">351</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#B85C00; --series-c-soft:#FBE7D1;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#F29A4A; --series-c-soft:#3B2208;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#F29A4A; --series-c-soft:#3B2208;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Java · 352</div>
+  <h1>ResourceBundle:国际化资源的查找与回退</h1>
+  <p>国际化消息文件的查找规则有一些反直觉的地方:默认 Locale 会混进回退链,编码有静默回退,缓存永不过期。这篇用临时目录里的真实文件逐项验证。</p>
+  <div class="hero-fact">
+<div><div class="num">fr 而不是 base</div><div class="lbl">默认 Locale = fr 时,请求没有对应文件的 en 或 ja 得到的 bundle</div></div><div><div class="num">0xE9 在末尾</div><div class="lbl">properties 文件最后一个字节是非法 UTF-8 时 getBundle 抛 MissingResourceException(其它位置的非法字节则静默回退 Latin-1)</div></div><div><div class="num">-2</div><div class="lbl">默认 Control.getTimeToLive,即 bundle 缓存永不过期</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="java-decimal-format.html">DecimalFormat:数字格式化的 Locale 与线程安全</a></div>
+<section>
+  <h2>候选 Locale 列表</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [candidates]
+        zh-CN        → [zh_CN_#Hans, zh__#Hans, zh_CN, zh, (root)]
+        zh-Hans-CN   → [zh_CN_#Hans, zh__#Hans, zh_CN, zh, (root)]
+        zh-Hant-TW   → [zh_TW_#Hant, zh__#Hant, zh_TW, zh, (root)]
+        fr-CA        → [fr_CA, fr, (root)]
+        en           → [en, (root)]
+        sr-Latn-RS   → [sr_RS_#Latn, sr__#Latn, sr_RS, sr, (root)]
+        und          → [(root)]
+    Control.getFallbackLocale(…, ja) 在默认 Locale = en_US 时 = en_US</pre></div>
+</section>
+<section>
+  <h2>回退与父级补缺</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [fallback]
+    默认 Locale = en_US
+        getBundle(Msg, ja    ) who → base  [bundle locale=(root)]
+        getBundle(Msg, fr-CA ) who → français  [bundle locale=fr]
+        getBundle(Msg, zh-CN ) who → 简体中文  [bundle locale=zh_CN]
+        getBundle(Msg, zh-TW ) who → 中文(zh)  [bundle locale=zh]
+        getBundle(Msg, de-AT ) who → Deutsch  [bundle locale=de]
+        getBundle(Msg, en    ) who → base  [bundle locale=(root)]
+    默认 Locale = fr
+        getBundle(Msg, ja    ) who → français  [bundle locale=fr]
+        getBundle(Msg, fr-CA ) who → français  [bundle locale=fr]
+        getBundle(Msg, zh-CN ) who → 简体中文  [bundle locale=zh_CN]
+        getBundle(Msg, zh-TW ) who → 中文(zh)  [bundle locale=zh]
+        getBundle(Msg, de-AT ) who → Deutsch  [bundle locale=de]
+        getBundle(Msg, en    ) who → français  [bundle locale=fr]
+    默认 Locale = de
+        getBundle(Msg, ja    ) who → Deutsch  [bundle locale=de]
+        getBundle(Msg, fr-CA ) who → français  [bundle locale=fr]
+        getBundle(Msg, zh-CN ) who → 简体中文  [bundle locale=zh_CN]
+        getBundle(Msg, zh-TW ) who → 中文(zh)  [bundle locale=zh]
+        getBundle(Msg, de-AT ) who → Deutsch  [bundle locale=de]
+        getBundle(Msg, en    ) who → Deutsch  [bundle locale=de]
+    Control.NO_FALLBACK,默认 Locale = fr,请求 ja → base
+    zh_CN 缺 onlyzh 时从父级 zh 取:只在 zh;缺 onlybase 时从根取:only in base
+    zh_CN.getKeys() = [onlybase, onlyzh, who];keySet() = [onlybase, onlyzh, who];containsKey(onlyfr) = false
+    缺失键:MissingResourceException: Can't find resource for bundle java.util.PropertyResourceBundle, key nope(className=java.util.PropertyResourceBundle,key=nope)
+    缺失 bundle:Can't find bundle for base name NoSuchBundle, locale en_US</pre></div>
+</section>
+<section>
+  <h2>properties 的编码</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [encoding]
+    UTF-8 文件:name = 中文 é ü 😀;escaped(\uXXXX)= 中文
+    ISO-8859-1 字节(含 0xE9、0xEF,不是合法 UTF-8):name = café naïve(读取没有报错,按 Latin-1 回退)
+    同一个文件里既有合法的 UTF-8 中文又有一个 0xE9(后面还有内容):b = ä¸­æ,c = café(整个文件按 ISO-8859-1 重读,中文变成乱码)
+    0xE9 恰好是文件的最后一个字节:MissingResourceException: Can't find bundle for base name N, locale ;cause = java.nio.charset.MalformedInputException: Input length = 1
+    file.encoding / native.encoding / stdout.encoding = UTF-8 / UTF-8 / UTF-8;PropertyResourceBundle 读取不依赖它们
+    手工用 Reader 构造 PropertyResourceBundle(ISO_8859_1):café naïve
+    对照:java.util.Properties.load(InputStream) 读同一个 UTF-8 文件:name = ä¸­æ Ã© Ã¼ ð(按 Latin-1 解码)</pre></div>
+</section>
+<section>
+  <h2>类 bundle 对 properties</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [class]
+    同时有 Pri_en.class 与 Pri_en.properties 时 getBundle 得到 Pri_en,greet = hello-from-CLASS,onlyprops 存在吗? false
+    非字符串值:getObject(num) = 42(Integer);getStringArray(arr) = [a, b]
+    getString(num) → ClassCastException: class java.lang.Integer cannot be cast to class java.lang.String (java.lang.Integer and java.lang.String are in module java.base of loader 'bootstrap')
+    clearCache 后 FORMAT_PROPERTIES 只找 properties:hello-from-PROPERTIES
+    clearCache 后 FORMAT_CLASS 只找 class:hello-from-CLASS</pre></div>
+</section>
+<section>
+  <h2>缓存</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [cache]
+    修改文件后再 getBundle:同一个对象? true;v = 1(缓存里仍是旧值)
+    clearCache(loader) 之后:同一个对象? false;v = 2
+    另一个类加载器(同一个目录)加载:同一个对象? false;v = 2
+    默认 Control.getTimeToLive = -2(TTL_NO_EXPIRATION_CONTROL = -2,TTL_DONT_CACHE = -1)
+    TTL=300 ms 的自定义 Control:立刻再取 v = 1
+    过了 400 ms(过期且 needsReload 为 true)再取 v = 2
+    缓存命中的 getBundle + getString:239 ns;只 getString:5 ns(重复一次 193 ns,自写计时,sink=true)</pre></div>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">ResourceBundle</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "getBundle 按候选 Locale 列表依次找:zh-CN → [zh_CN_#Hans, zh__#Hans, zh_CN, zh, (root)];zh-Hant-TW → [zh_TW_#Hant, zh__#Hant, zh_TW, zh, (root)];fr-CA → [fr_CA, fr, (root)];en → [en, (root)];sr-Latn-RS → [sr_RS_#Latn, sr__#Latn, sr_RS, sr, (root)];und → 只有 (root)。注意 zh-CN 会先尝试带 script 的 #Hans 形式的名字(文件名是 Base_zh_CN_#Hans),它们排在 zh_CN 之前。Control.getFallbackLocale 在默认 Locale = en_US 时对 ja 返回 en_US。", "s": {"t": {"lines": ["  [candidates]", "        zh-CN        → [zh_CN_#Hans, zh__#Hans, zh_CN, zh, (root)]", "        zh-Hans-CN   → [zh_CN_#Hans, zh__#Hans, zh_CN, zh, (root)]", "        zh-Hant-TW   → [zh_TW_#Hant, zh__#Hant, zh_TW, zh, (root)]", "        fr-CA        → [fr_CA, fr, (root)]", "        en           → [en, (root)]", "        sr-Latn-RS   → [sr_RS_#Latn, sr__#Latn, sr_RS, sr, (root)]", "        und          → [(root)]", "    Control.getFallbackLocale(…, ja) 在默认 Locale = en_US 时 = en_US"], "cur": [], "mark": [], "done": []}, "done": [1, 3, 4, 5, 7], "mark": [1, 2, 8], "kv": {"items": [["zh-CN", "zh_CN_#Hans → zh__#Hans → zh_CN → zh → root"], ["fr-CA", "fr_CA → fr → root"], ["und", "只有 root"]], "hl": ["zh-CN"]}}}, {"note": "默认 Locale 会插进回退链(base、fr、de、zh、zh_CN 五个文件):默认 en_US 时请求 ja 与 en 得到根 bundle(who = base);默认 fr 时请求 ja 得到 français、请求 en 也得到 français(fr 在默认 Locale 回退里排在根之前);默认 de 时请求 ja 与 en 得到 Deutsch。zh-TW 在三种默认下都是 zh 的 “中文(zh)”,de-AT 得 Deutsch,fr-CA 得 français。Control.NO_FALLBACK 在默认 fr 下请求 ja 得 base。父级补缺:zh_CN 没有 onlyzh 时取父级 zh 的 “只在 zh”,没有 onlybase 时取根的 “only in base”,getKeys() 与 keySet() 都含三个键、containsKey(onlyfr) = false。缺失键:MissingResourceException: Can't find resource for bundle java.util.PropertyResourceBundle, key nope;缺失 bundle:Can't find bundle for base name NoSuchBundle, locale en_US。", "s": {"t": {"lines": ["  [fallback]", "    默认 Locale = en_US", "        getBundle(Msg, ja    ) who → base  [bundle locale=(root)]", "        getBundle(Msg, fr-CA ) who → français  [bundle locale=fr]", "        getBundle(Msg, zh-CN ) who → 简体中文  [bundle locale=zh_CN]", "        getBundle(Msg, zh-TW ) who → 中文(zh)  [bundle locale=zh]", "        getBundle(Msg, de-AT ) who → Deutsch  [bundle locale=de]", "        getBundle(Msg, en    ) who → base  [bundle locale=(root)]", "    默认 Locale = fr", "        getBundle(Msg, ja    ) who → français  [bundle locale=fr]", "        getBundle(Msg, fr-CA ) who → français  [bundle locale=fr]", "        getBundle(Msg, zh-CN ) who → 简体中文  [bundle locale=zh_CN]", "        getBundle(Msg, zh-TW ) who → 中文(zh)  [bundle locale=zh]", "        getBundle(Msg, de-AT ) who → Deutsch  [bundle locale=de]", "        getBundle(Msg, en    ) who → français  [bundle locale=fr]", "    默认 Locale = de", "        getBundle(Msg, ja    ) who → Deutsch  [bundle locale=de]", "        getBundle(Msg, fr-CA ) who → français  [bundle locale=fr]", "        getBundle(Msg, zh-CN ) who → 简体中文  [bundle locale=zh_CN]", "        getBundle(Msg, zh-TW ) who → 中文(zh)  [bundle locale=zh]", "        getBundle(Msg, de-AT ) who → Deutsch  [bundle locale=de]", "        getBundle(Msg, en    ) who → Deutsch  [bundle locale=de]", "    Control.NO_FALLBACK,默认 Locale = fr,请求 ja → base", "    zh_CN 缺 onlyzh 时从父级 zh 取:只在 zh;缺 onlybase 时从根取:only in base", "    zh_CN.getKeys() = [onlybase, onlyzh, who];keySet() = [onlybase, onlyzh, who];containsKey(onlyfr) = false", "    缺失键:MissingResourceException: Can't find resource for bundle java.util.PropertyResourceBundle, key nope(className=java.util.PropertyResourceBundle,key=nope)", "    缺失 bundle:Can't find bundle for base name NoSuchBundle, locale en_US"], "cur": [], "mark": [], "done": []}, "done": [1, 8, 15, 22], "mark": [9, 22, 25, 26], "kv": {"items": [["默认 en_US,请求 ja", "根 bundle (base)"], ["默认 fr,请求 ja / en", "français"], ["NO_FALLBACK", "根 bundle (base)"]], "hl": ["默认 fr,请求 ja / en"]}}}, {"note": "properties 的编码(JDK 21):UTF-8 文件里的 “中文 é ü 😀” 直接可读,\\u4e2d\\u6587 转义也还能用(→ 中文);只含 ISO-8859-1 字节(0xE9、0xEF)的文件读取不报错,得到 “café naïve”(回退到 Latin-1)。同一个文件里既有合法 UTF-8 中文又有一个 0xE9(后面还有内容):整个文件按 Latin-1 重读,中文变成乱码 “ä¸­æ”,c = café;如果 0xE9 恰好是文件的最后一个字节:getBundle 抛 MissingResourceException: Can't find bundle for base name N,cause 是 MalformedInputException: Input length = 1。对照 java.util.Properties.load(InputStream) 读同一个 UTF-8 文件按 Latin-1 解码得到乱码。file.encoding / native.encoding / stdout.encoding 都是 UTF-8,但 PropertyResourceBundle 读取不依赖它们。", "s": {"t": {"lines": ["  [encoding]", "    UTF-8 文件:name = 中文 é ü 😀;escaped(\\uXXXX)= 中文", "    ISO-8859-1 字节(含 0xE9、0xEF,不是合法 UTF-8):name = café naïve(读取没有报错,按 Latin-1 回退)", "    同一个文件里既有合法的 UTF-8 中文又有一个 0xE9(后面还有内容):b = ä¸­æ,c = café(整个文件按 ISO-8859-1 重读,中文变成乱码)", "    0xE9 恰好是文件的最后一个字节:MissingResourceException: Can't find bundle for base name N, locale ;cause = java.nio.charset.MalformedInputException: Input length = 1", "    file.encoding / native.encoding / stdout.encoding = UTF-8 / UTF-8 / UTF-8;PropertyResourceBundle 读取不依赖它们", "    手工用 Reader 构造 PropertyResourceBundle(ISO_8859_1):café naïve", "    对照:java.util.Properties.load(InputStream) 读同一个 UTF-8 文件:name = ä¸­æ Ã© Ã¼ ð(按 Latin-1 解码)"], "cur": [], "mark": [], "done": []}, "done": [1, 2, 7], "mark": [3, 4, 7], "kv": {"items": [["UTF-8 文件", "可读"], ["只有 Latin-1 字节", "回退 Latin-1,可读"], ["合法中文 + 一个 0xE9", "整个文件按 Latin-1,中文乱码"], ["0xE9 在文件末尾", "MissingResourceException"]], "hl": ["0xE9 在文件末尾"]}}}, {"note": "类 bundle 与 properties 同名(Pri_en.class 与 Pri_en.properties):getBundle 得到类 Pri_en,greet = hello-from-CLASS,properties 里的 onlyprops 不存在(整个 properties 被忽略)。类 bundle 可以放非字符串:getObject(num) = 42(Integer),getStringArray(arr) = [a, b];getString(num) 抛 ClassCastException。clearCache 之后分别用 FORMAT_PROPERTIES 与 FORMAT_CLASS 的 Control:前者得 hello-from-PROPERTIES,后者得 hello-from-CLASS(不清缓存时二者都会拿到缓存里的那个)。", "s": {"t": {"lines": ["  [class]", "    同时有 Pri_en.class 与 Pri_en.properties 时 getBundle 得到 Pri_en,greet = hello-from-CLASS,onlyprops 存在吗? false", "    非字符串值:getObject(num) = 42(Integer);getStringArray(arr) = [a, b]", "    getString(num) → ClassCastException: class java.lang.Integer cannot be cast to class java.lang.String (java.lang.Integer and java.lang.String are in module java.base of loader 'bootstrap')", "    clearCache 后 FORMAT_PROPERTIES 只找 properties:hello-from-PROPERTIES", "    clearCache 后 FORMAT_CLASS 只找 class:hello-from-CLASS"], "cur": [], "mark": [], "done": []}, "done": [1], "mark": [3, 4, 5], "kv": {"items": [["class 与 properties 同名", "class 赢,properties 整个被忽略"], ["getString(Integer 值)", "ClassCastException"]], "hl": ["class 与 properties 同名"]}}}, {"note": "缓存:改写 C.properties 后再 getBundle,返回的是同一个对象,v 仍是 1;ResourceBundle.clearCache(loader) 之后得到新对象、v = 2;另一个类加载器(同一目录)加载的是另一个对象。默认 Control.getTimeToLive = -2(TTL_NO_EXPIRATION_CONTROL,永不过期;-1 是 TTL_DONT_CACHE)。自定义 Control(TTL 300 ms、needsReload 比较文件修改时间):立刻再取仍是 1,400 ms 之后取得 2。缓存命中的 getBundle + getString 约 239 ns,只 getString 约 5 ns(自写计时)。", "s": {"t": {"lines": ["  [cache]", "    修改文件后再 getBundle:同一个对象? true;v = 1(缓存里仍是旧值)", "    clearCache(loader) 之后:同一个对象? false;v = 2", "    另一个类加载器(同一个目录)加载:同一个对象? false;v = 2", "    默认 Control.getTimeToLive = -2(TTL_NO_EXPIRATION_CONTROL = -2,TTL_DONT_CACHE = -1)", "    TTL=300 ms 的自定义 Control:立刻再取 v = 1", "    过了 400 ms(过期且 needsReload 为 true)再取 v = 2", "    缓存命中的 getBundle + getString:239 ns;只 getString:5 ns(重复一次 193 ns,自写计时,sink=true)"], "cur": [], "mark": [], "done": []}, "done": [1, 2], "mark": [4, 5, 6, 7], "b": {"items": [["getBundle + getString(缓存命中)", 239, "≈239 ns"], ["只 getString", 5, "≈5 ns"]], "max": 240, "cur": [], "mark": [], "done": [0, 1]}, "kv": {"items": [["改文件后 getBundle", "同一对象,v 仍是 1"], ["clearCache", "新对象,v = 2"], ["TTL 300 ms + needsReload", "400 ms 后取到 v = 2"]], "hl": ["改文件后 getBundle"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / OpenJDK(Temurin 17.0.20、Homebrew 21.0.12 与 27,每篇注明实际用的版本);用 javac 编译、java 直接运行,需要第三方库时用 Maven 解析依赖;计时用 System.nanoTime,数字每次运行会有小幅抖动。JDK 21.0.12,未命名模块(类路径 + URLClassLoader),测试文件写在临时目录</li><li>没有验证:命名模块(module-info 与 ResourceBundleProvider)里的查找行为、JDK 17 / 27 的差异、非字符串 key 的 properties、Spring MessageSource 等框架的封装、0xE9 在文件末尾时抛异常的具体原因(只看到异常与 cause,没有读源码)</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="java-walk-file-tree.html">
+    <div>
+      <div class="t1">下一篇 · JAVA 353</div>
+      <div class="t2">Files.walkFileTree:递归遍历的访问者模型</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Java · ResourceBundle:国际化资源的查找与回退 · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

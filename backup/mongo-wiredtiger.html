@@ -1,0 +1,616 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>WiredTiger 存储引擎:谁在什么时候看到哪个版本</title>
+<meta name="description" content="本机把 mongod 改成单节点副本集,跑真实并发实验验证 MVCC 快照隔离,对照 WiredTiger 源码讲 B-tree 页结构和 mongod 自己的周期 checkpoint 线程。">
+<link rel="canonical" href="https://bigywater.tech/mongo-wiredtiger.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="WiredTiger 存储引擎:谁在什么时候看到哪个版本">
+<meta property="og:description" content="本机把 mongod 改成单节点副本集,跑真实并发实验验证 MVCC 快照隔离,对照 WiredTiger 源码讲 B-tree 页结构和 mongod 自己的周期 checkpoint 线程。">
+<meta property="og:url" content="https://bigywater.tech/mongo-wiredtiger.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="WiredTiger 存储引擎:谁在什么时候看到哪个版本">
+<meta name="twitter:description" content="本机把 mongod 改成单节点副本集,跑真实并发实验验证 MVCC 快照隔离,对照 WiredTiger 源码讲 B-tree 页结构和 mongod 自己的周期 checkpoint 线程。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F5F8F7; --paper:#FFFFFF; --ink:#1B2422; --ink-dim:#5C6B67; --line:#DCE7E4;
+  --mongo-c:#1C7C74; --mongo-c-soft:#DCEEEC;
+  --idx-c:#B8791E; --idx-c-soft:#F6ECD9;
+  --durable-c:#8A4FA0; --durable-c-soft:#EFE4F5;
+  --code-bg:#16211F; --code-ink:#E6F0EE;
+  --shadow: 0 1px 2px rgba(10,30,25,.06), 0 8px 24px -12px rgba(10,30,25,.16);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0F1614; --paper:#18211F; --ink:#E6F0EE; --ink-dim:#A2B5B0; --line:#2C3A37;
+    --mongo-c:#4FC9BE; --mongo-c-soft:#173330;
+    --idx-c:#E0AC5C; --idx-c-soft:#382C18;
+    --durable-c:#C79BDA; --durable-c-soft:#2E2038;
+    --code-bg:#0E1614; --code-ink:#E2EFED;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0F1614; --paper:#18211F; --ink:#E6F0EE; --ink-dim:#A2B5B0; --line:#2C3A37;
+  --mongo-c:#4FC9BE; --mongo-c-soft:#173330;
+  --idx-c:#E0AC5C; --idx-c-soft:#382C18;
+  --durable-c:#C79BDA; --durable-c-soft:#2E2038;
+  --code-bg:#0E1614; --code-ink:#E2EFED;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--mongo-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--mongo-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--mongo-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--mongo-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.a .tag{background:var(--mongo-c-soft); color:var(--mongo-c);}
+.card.b .tag{background:var(--idx-c-soft); color:var(--idx-c);}
+.card.c .tag{background:var(--durable-c-soft); color:var(--durable-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#A2B5B0; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#8FE0D4;}
+
+.callout{border-left:3px solid var(--mongo-c); background:var(--mongo-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--idx-c); background:var(--idx-c-soft);}
+.callout.c{border-color:var(--durable-c); background:var(--durable-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--mongo-c-soft); color:var(--mongo-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#8FE0D4;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+.term .cm{color:#7C8C88;}
+.term pre.code{margin:0 0 10px; color:#8FE0D4; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem; display:flex; justify-content:space-between; align-items:center;}
+.demo-head .step-badge{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; color:var(--mongo-c); background:var(--mongo-c-soft); padding:3px 9px; border-radius:6px; font-weight:600;}
+.demo-narration{min-height:52px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--mongo-c-soft); color:var(--mongo-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:20px;}
+
+.mvcc-layout{display:grid; grid-template-columns:1.1fr 1fr; gap:20px;}
+@media (max-width:700px){.mvcc-layout{grid-template-columns:1fr;}}
+.col-label{font-size:.78rem; letter-spacing:.04em; text-transform:uppercase; color:var(--ink-dim); margin-bottom:10px;}
+.chain{display:flex; flex-direction:column; gap:8px;}
+.chain-item{border:1.5px solid var(--line); border-radius:10px; padding:10px 14px; background:var(--bg); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; transition:background .2s,border-color .2s;}
+.chain-item .top{display:flex; justify-content:space-between; font-weight:600;}
+.chain-item .badge{font-size:.7rem; color:var(--ink-dim); margin-top:4px;}
+.chain-item[data-resolved="A"]{border-color:var(--mongo-c); background:var(--mongo-c-soft);}
+.chain-item[data-resolved="A"] .badge{color:var(--mongo-c);}
+.chain-item[data-resolved="other"]{border-color:var(--durable-c); background:var(--durable-c-soft);}
+.chain-item[data-resolved="other"] .badge{color:var(--durable-c);}
+.reader-panel{display:flex; flex-direction:column; gap:10px;}
+.reader{border:1.5px dashed var(--line); border-radius:10px; padding:12px 14px; font-size:.82rem; background:var(--bg); min-height:64px;}
+.reader.on{border-style:solid; border-color:var(--mongo-c); background:var(--mongo-c-soft);}
+.reader .rt{font-weight:600; margin-bottom:4px;}
+.reader .rv{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:var(--ink-dim); font-size:.78rem;}
+
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--mongo-c); color:var(--mongo-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--mongo-c); border-color:var(--mongo-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--mongo-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>MongoDB 系列 · 第二篇</div>
+    <h1>WiredTiger 存储引擎:谁在什么时候看到哪个版本</h1>
+    <p>上一篇确认了一件事:<span class="mono">mongod</span> 自己不管数据怎么存,真正落盘、管并发、管崩溃恢复的是 WiredTiger。这一篇往下钻一层,回答三个具体问题:两个人同时读写同一条文档,读者为什么不会被写者卡住(MVCC);一份文档在磁盘上到底是什么形状(B-tree 页);数据什么时候才算真正落盘、崩溃后能恢复到哪(checkpoint)。</p>
+    <p>三个问题都不是查文档得到的答案——本机把 mongod 临时改成单节点副本集,跑了一个真实的双会话并发实验;又直接读了正在跑的 WiredTiger 引擎的真实统计数据;再对照 MongoDB Server 真实源码(v8.3.7 标签)核实每一条结论。</p>
+    <div class="hero-fact">
+      <div><div class="num">1 个真实并发实验</div><div class="lbl">两个真实 mongosh 会话,一个开着快照事务,一个在旁边提交写入</div></div>
+      <div><div class="num">5 处真实源码</div><div class="lbl">MVCC 快照可见性规则、B-tree 页结构、mongod 自己的周期 checkpoint 线程</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <h2>先搭环境:本机需要一个能跑事务的 mongod</h2>
+  <p class="h2-sub">多文档事务(以及下面要用的 snapshot 读)在单机 standalone 模式下不可用,MongoDB 要求至少是副本集。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ mongosh --quiet --eval "rs.status().ok"</pre>
+<span class="bad">MongoServerError: not running with --replSet</span>
+<span class="cm"># 给 /opt/homebrew/etc/mongod.conf 加两行,重启,初始化一个单节点副本集:</span>
+<span class="cmd">$ echo -e "replication:\n  replSetName: rs0" &gt;&gt; /opt/homebrew/etc/mongod.conf
+$ brew services restart mongodb-community
+$ mongosh --quiet --eval "rs.initiate()"</span>
+<span class="ok">{ info2: 'no configuration specified. Using a default configuration for the set', ok: 1, ... }</span>
+  </div>
+  <p>单节点副本集在本地开发里很常见——它不提供真正的高可用,但让本机具备了跟生产集群一致的事务、readConcern、writeConcern 语义,后面几篇讲副本集选举、读写一致性也会继续用这个环境。</p>
+</section>
+
+<section>
+  <h2>真实实验:两个会话同时读写同一条文档</h2>
+  <p class="h2-sub">会话 A 开一个 snapshot 事务读一次;会话 B 在旁边直接改并提交同一条文档;A 在事务里再读一次——看它读到的是新值还是旧值。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ mongosh --quiet mvcc_demo.js</pre>
+<span class="ok">A: first read inside snapshot txn -> {"_id":1,"item":"stapler","qty":25}
+B: updated qty to 999 OUTSIDE the transaction, matched=1 modified=1
+B: immediate read outside any transaction -> {"_id":1,"item":"stapler","qty":999}
+A: second read, STILL inside the same open snapshot txn -> {"_id":1,"item":"stapler","qty":25}
+A: committed the (read-only) transaction
+A: read AFTER commit, new connection/no txn -> {"_id":1,"item":"stapler","qty":999}</span>
+  </div>
+  <p>B 已经把 <span class="mono">qty</span> 改成 999 并提交了,B 自己立刻读到的也是 999——数据本身没有任何问题。但 A 在事务里的第二次读,读到的还是 25。A 没有被锁住、没有报错、也不是读到了脏数据,它就是在一个"过去的时刻"里,而且这个时刻从事务开始那一刻起就被冻结了。这就是 MVCC:并发靠的不是互斥,是给每个读者发一份属于它自己的、固定不变的数据快照。</p>
+</section>
+
+<section>
+  <h2>真实源码:快照的可见性规则写死在一个结构体里</h2>
+  <p class="h2-sub">WiredTiger 给每个事务分配一个递增的 txn_id,再给每个读事务一对 (snap_min, snap_max),用来判断别人的写对自己可不可见。</p>
+  <blockquote class="src">
+    <span class="path">src/third_party/wiredtiger/src/include/txn.h · <a href="https://github.com/mongodb/mongo/blob/r8.3.7/src/third_party/wiredtiger/src/include/txn.h#L301" target="_blank" rel="noopener">mongodb/mongo @ r8.3.7, L301</a></span>
+/*
+ * WT_TXN_SNAPSHOT --
+ *	A structure to store the transactions snapshot details.
+ */
+struct __wt_txn_snapshot {
+    /*
+     * Snapshot data:
+     *	txn_ids >= snap_max are invisible,
+     *	txn_ids < snap_min are visible,
+     *	everything else is visible unless it is in the snapshot.
+     */
+    uint64_t snap_max, snap_min;
+    uint64_t *snapshot;
+    uint32_t snapshot_count;
+};
+  </blockquote>
+  <p>这三行注释就是上面那个实验的完整解释。A 的事务开始时被分配了 <span class="mono">snap_min=101, snap_max=102</span>(数值是示意,规则是真的)。B 提交时用的 txn_id 是 102,满足 <span class="mono">txn_id ≥ snap_max</span> → 对 A 不可见。A 事务里不管等多久、B 提交了多少次,这对 snap_min/snap_max 只在事务开始那一刻确定一次,不会跟着后面的提交变化——所以 A 前后两次读结果完全一样。事务提交之后,A 下一次读会重新申请一对新的 snap_min/snap_max,这时 102 已经小于新的 snap_min,变成可见。</p>
+</section>
+
+<section>
+  <h2>交互演示:一条版本链,两种读者视角</h2>
+  <p class="h2-sub">按上面真实实验 + 真实可见性规则,把整个过程拆成 8 步——文档在磁盘/内存里其实是一条按 txn_id 排列的版本链,"读到哪个值"只是在这条链上按规则找第一个可见版本。</p>
+  <div class="demo" id="mvccDemo">
+    <div class="demo-head"><span>MVCC 版本链与快照可见性</span><span class="step-badge" id="mvStep">未开始</span></div>
+    <div class="demo-narration" id="mvNarration">点击"下一步"或"播放"开始。</div>
+    <div class="demo-body">
+      <div class="mvcc-layout">
+        <div>
+          <div class="col-label">文档 _id:1 的版本链</div>
+          <div class="chain" id="mvChain"></div>
+        </div>
+        <div>
+          <div class="col-label">读者视角</div>
+          <div class="reader-panel">
+            <div class="reader" id="mvReaderA"><div class="rt">会话 A(事务）</div><div class="rv">尚未开始</div></div>
+            <div class="reader" id="mvReaderOther"><div class="rt">会话 B / 无事务读</div><div class="rv">—</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="mvReset">⏮ 重来</button>
+      <button class="btn" id="mvPrev">‹ 上一步</button>
+      <button class="btn primary" id="mvNext">下一步 ›</button>
+      <button class="btn" id="mvPlay">▶ 自动播放</button>
+      <span class="step-counter" id="mvCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">事件数据由 Python 脚本按上面的可见性规则生成:A 事务内两次读的结果断言必须相等;A 提交前后的两次不同快照结果必须不同;还有一套独立重写的 resolver 函数交叉核对过每一步。最关键的一步——脚本算出来的 4 个读结果,和上面真实 <span class="mono">mongosh</span> 会话捕获的 <span class="mono">SUMMARY_JSON</span> 逐字段断言相等,不是"看起来差不多"。</p>
+</section>
+
+<section>
+  <h2>真实源码 + 真实数据:一份文档在磁盘上是"页"的树</h2>
+  <p class="h2-sub">上一篇看到的 <span class="mono">.wt</span> 文件不是一整块连续数据,内部是 B-tree:internal page 存的是指向子页的指针,leaf page 才真正存文档。</p>
+  <blockquote class="src">
+    <span class="path">src/third_party/wiredtiger/src/include/btmem.h · <a href="https://github.com/mongodb/mongo/blob/r8.3.7/src/third_party/wiredtiger/src/include/btmem.h#L596" target="_blank" rel="noopener">mongodb/mongo @ r8.3.7, L596</a></span>
+/*
+ * WT_PAGE --
+ *	The WT_PAGE structure describes the in-memory page information.
+ */
+struct __wt_page {
+    /* Per page-type information. */
+    union {
+        /*
+         * Internal pages (both column- and row-store).
+         *
+         * In-memory internal pages have an array of pointers to child
+         * structures, maintained in collated order.
+  </blockquote>
+  <blockquote class="src">
+    <span class="path">src/third_party/wiredtiger/src/include/btmem.h · <a href="https://github.com/mongodb/mongo/blob/r8.3.7/src/third_party/wiredtiger/src/include/btmem.h#L722" target="_blank" rel="noopener">mongodb/mongo @ r8.3.7, L722</a></span>
+/*
+ * Page entry count, page-wide prefix information, type and flags are positioned at the end of
+ * the WT_PAGE union to reduce cache misses when searching row-store pages.
+ *
+ * The entries field only applies to leaf pages, internal pages use the page-index entries
+ * instead.
+ */
+uint32_t entries; /* Leaf page entries */
+  </blockquote>
+  <p>同一个 <span class="mono">WT_PAGE</span> 结构体,internal page 和 leaf page 存的是两种完全不同的东西:internal page 的 <span class="mono">union.intl</span> 里是一个指向子页的指针数组(<span class="mono">page-index</span>);leaf page 才有真正的 <span class="mono">entries</span> 字段存 key/value。查一条文档,就是从根页(internal page)按 key 比较一路选子指针往下,走到某个 leaf page 才真正碰到数据。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ mongosh --quiet articledemo --eval "db.orders.aggregate([{\$collStats:{storageStats:{}}}]).toArray()[0].storageStats.wiredTiger.btree"</pre>
+<span class="ok">{
+  'maximum internal page size': 4096,
+  'maximum leaf page size': 32768,
+  'maximum tree depth': 2,
+  'btree checkpoint generation': 140,
+  ...
+}</span>
+  </div>
+  <p>这就是上面结构体在真实运行实例里的具体数字:internal page 上限 4KB(只放指针和 key,要小,一次 I/O 能取更多、树能更"胖"、层数更少),leaf page 上限 32KB(要放真正的文档数据)。<span class="mono">maximum tree depth: 2</span> 是因为 <span class="mono">orders</span> 这个 collection 数据量太小——一个 leaf page 装得下,树还没有机会真正长高。</p>
+</section>
+
+<section>
+  <h2>checkpoint 该多久做一次:两难,不是无解</h2>
+  <p class="h2-sub">journal 让每次写都能崩溃后恢复,但 journal 会无限变长——checkpoint 就是定期把内存里的脏页真正刷到 B-tree 文件,让 journal 可以从这个点截断。</p>
+  <div class="cards">
+    <div class="card a">
+      <span class="tag">checkpoint 太频繁</span>
+      <h3>I/O 争抢、CPU 浪费</h3>
+      <p>每次 checkpoint 要遍历所有脏页并写盘,频率太高会跟正常的读写请求抢磁盘 I/O,大部分刷盘工作还是重复的(同一批页在两次 checkpoint 之间没怎么变)。</p>
+    </div>
+    <div class="card b">
+      <span class="tag">checkpoint 太少</span>
+      <h3>journal 越攒越大,恢复变慢</h3>
+      <p>journal 里未被 checkpoint 覆盖的部分不能删,攒得越久文件越大;一旦崩溃重启,要重放的 journal 越多,恢复时间越长。</p>
+    </div>
+    <div class="card c">
+      <span class="tag">mongod 的选择</span>
+      <h3>自己起一个周期线程,不用 WT 内置的</h3>
+      <p>默认每 60 秒触发一次(<span class="mono">storage.syncPeriodSecs</span>,即 <span class="mono">syncdelay</span>),而且这个周期线程是 mongod 自己实现的,特意没有用 WiredTiger 引擎自带的周期 checkpoint 机制。</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>真实源码:checkpoint 由谁、多久触发一次</h2>
+  <p class="h2-sub">mongod 里有一个专门的 <span class="mono">Checkpointer</span> 线程,睡 <span class="mono">syncdelay</span> 秒就醒来触发一次;而且源码里特意警告过不要同时开 WiredTiger 自己内置的 checkpoint 线程。</p>
+  <blockquote class="src">
+    <span class="path">src/mongo/db/storage/checkpointer.cpp · <a href="https://github.com/mongodb/mongo/blob/r8.3.7/src/mongo/db/storage/checkpointer.cpp#L98" target="_blank" rel="noopener">mongodb/mongo @ r8.3.7, L98</a></span>
+// Wait for 'storageGlobalParams.syncdelay' seconds; or until either shutdown is
+// signaled or a checkpoint is triggered.
+LOGV2_DEBUG(7702900, 1, "Checkpoint thread sleeping",
+            "duration"_attr = static_cast&lt;std::int64_t&gt;(storageGlobalParams.syncdelay.load()));
+_sleepCV.wait_for(lock,
+                  stdx::chrono::seconds(
+                      static_cast&lt;std::int64_t&gt;(storageGlobalParams.syncdelay.load())),
+                  [&amp;] { return _shuttingDown || _triggerCheckpoint; });
+  </blockquote>
+  <blockquote class="src">
+    <span class="path">src/mongo/db/storage/wiredtiger/wiredtiger_kv_engine.cpp · <a href="https://github.com/mongodb/mongo/blob/r8.3.7/src/mongo/db/storage/wiredtiger/wiredtiger_kv_engine.cpp#L3269" target="_blank" rel="noopener">mongodb/mongo @ r8.3.7, L3269</a></span>
+if (wtConfig.extraOpenOptions.find("checkpoint=") != std::string::npos) {
+    LOGV2_WARNING(
+        10781300,
+        "WiredTiger internal checkpointing is configured via the WiredTiger engine "
+        "configuration string. mongod runs its own periodic checkpointing thread, and "
+        "configuring `checkpoint=` in the WiredTiger config may result in two "
+        "independent checkpointing loops. Please remove `checkpoint=` from the "
+        "WiredTiger engine config string.");
+}
+  </blockquote>
+  <p>第一段是这个周期线程的核心循环:睡眠时长直接就是 <span class="mono">syncdelay</span>,醒来后(除非被提前唤醒)触发一次 checkpoint。第二段更直接地说明了为什么——WiredTiger 引擎本身也带一套内置的周期 checkpoint 机制(通过连接配置字符串里的 <span class="mono">checkpoint=</span> 开启),但 mongod 选择自己另起一个线程管这件事,如果两边同时开,会变成两条互相不知道对方存在的 checkpoint 循环,所以源码里直接对这种配置发警告。</p>
+</section>
+
+<section>
+  <h2>真实实验:确认 60 秒和真实发生过的 checkpoint 次数</h2>
+  <p class="h2-sub">直接问正在跑的这个 mongod 实例。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ mongosh --quiet --eval "db.adminCommand({getParameter:1, syncdelay:1})"</pre>
+<span class="ok">{ syncdelay: 60, ok: 1 }</span>
+<span class="cm"># 这个实例从启动到现在,WiredTiger 层面真实执行过的 checkpoint 次数:</span>
+<span class="cmd">$ mongosh --quiet --eval "db.serverStatus().wiredTiger.checkpoint['total succeed number of checkpoints']"</span>
+<span class="ok">138</span>
+  </div>
+  <p><span class="mono">syncdelay</span> 的默认值确实是 60 秒,跟上面 <span class="mono">Checkpointer::run()</span> 里睡眠的秒数是同一个变量;<span class="mono">138</span> 这个数字来自本机这个 mongod 实例真实跑了一段时间后积累下来的 checkpoint 计数,不是文档里抄来的数字。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文源码引用(<span class="mono">WT_TXN_SNAPSHOT</span> 可见性规则、<span class="mono">WT_PAGE</span> 结构体、<span class="mono">Checkpointer::run()</span>、<span class="mono">wiredtiger_kv_engine.cpp</span> 的周期线程警告)均取自 <span class="mono">mongodb/mongo</span> 仓库 <span class="mono">r8.3.7</span> 标签,与本机安装的 MongoDB Community 8.3.7 版本一致,直接从 GitHub 拉取源文件核对过函数签名、关键调用和行号。</li>
+      <li>MVCC 并发实验(<span class="mono">mvcc_demo.js</span>)、<span class="mono">btree</span>/<span class="mono">checkpoint</span> 统计输出均为本机真实 <span class="mono">mongosh</span> 会话产生,未做删改;本机 mongod 临时从 standalone 改成了单节点副本集(<span class="mono">rs0</span>)以支持多文档事务。</li>
+      <li>演示数据的自检:A 事务内两次读的结果必须相等;A 提交前后两次读的结果必须不同且分别匹配 B 提交前/后的值;一套独立重写的 resolver 函数重新按可见性规则算一遍,结果要和主计算路径一致;最终四个读结果逐字段核对过真实 <span class="mono">mongosh</span> 输出。</li>
+      <li>没有涉及:B-tree 页的具体编码格式(cell、overflow item 这些底层细节)、WiredTiger cache eviction 的具体策略、oplog 和 journal 的关系(留给后面副本集选举那一篇)、compaction 的触发时机。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="mongo-index.html">
+    <div>
+      <div class="t1">下一篇 · 即将发布</div>
+      <div class="t2">索引优化:为什么这个查询没走索引</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>MongoDB 系列 · 第二篇 · WiredTiger 存储引擎 · 源码引用自 mongodb/mongo r8.3.7,实验数据来自本机真实运行的 MongoDB Community 8.3.7</footer>
+
+<script>
+const DATA = {"events": [{"type": "initial-state", "txn_id": 50, "doc": {"_id": 1, "item": "stapler", "qty": 25}}, {"type": "txn-start", "who": "A", "txn_id": 101, "snap_min": 101, "snap_max": 102}, {"type": "read", "who": "A", "txn_id": 101, "doc": {"_id": 1, "item": "stapler", "qty": 25}}, {"type": "write-commit", "who": "B", "txn_id": 102, "doc": {"_id": 1, "item": "stapler", "qty": 999}}, {"type": "read", "who": "B", "txn_id": null, "doc": {"_id": 1, "item": "stapler", "qty": 999}}, {"type": "read", "who": "A", "txn_id": 101, "doc": {"_id": 1, "item": "stapler", "qty": 25}}, {"type": "txn-commit", "who": "A", "txn_id": 101}, {"type": "read", "who": "A", "txn_id": null, "doc": {"_id": 1, "item": "stapler", "qty": 999}}]};
+
+(function(){
+  const events = DATA.events;
+  const narration = document.getElementById('mvNarration');
+  const stepBadge = document.getElementById('mvStep');
+  const chainEl = document.getElementById('mvChain');
+  const readerA = document.getElementById('mvReaderA');
+  const readerOther = document.getElementById('mvReaderOther');
+  const counter = document.getElementById('mvCounter');
+  let idx = -1, playing = false, playTimer = null;
+
+  function describe(i){
+    const e = events[i];
+    if(e.type === 'initial-state') return `文档最初由更早的一次写入(<span class="k">txn_id=${e.txn_id}</span>)创建,<span class="k">qty=${e.doc.qty}</span>。这是版本链上的第一个版本。`;
+    if(e.type === 'txn-start') return `会话 A 开启一个 snapshot 事务,分配到 <span class="k">txn_id=${e.txn_id}</span>。WiredTiger 在这一刻把可见性范围定死:<span class="k">snap_min=${e.snap_min}, snap_max=${e.snap_max}</span> —— 之后无论等多久都不会再变。`;
+    if(e.type === 'read' && e.who === 'A' && e.txn_id != null){
+      const first = events.slice(0, i).filter(x => x.type==='read' && x.who==='A').length === 0;
+      return first
+        ? `A 在事务内第一次读:版本 <span class="k">txn_id=50</span> 满足 txn_id &lt; snap_min(101),可见 → 读到 <span class="k">qty=${e.doc.qty}</span>。`
+        : `A 还在同一个事务里再读一次。快照仍是 <span class="k">snap_min=101, snap_max=102</span>——刚才 B 提交的 <span class="k">txn_id=102</span> 满足 txn_id ≥ snap_max,判定不可见,A 只能看到旧版本 → 仍然是 <span class="k">qty=${e.doc.qty}</span>。`;
+    }
+    if(e.type === 'write-commit') return `会话 B 完全独立地修改并提交同一条文档,分配到 <span class="k">txn_id=${e.txn_id}</span>,新版本 <span class="k">qty=${e.doc.qty}</span>。这个提交跟 A 的事务毫无关系。`;
+    if(e.type === 'read' && e.who === 'B') return `B 用一个全新的、不带任何历史包袱的快照读,直接看到自己刚提交的值 → <span class="k">qty=${e.doc.qty}</span>。`;
+    if(e.type === 'txn-commit') return `A 提交事务(只读事务,提交只是释放快照,没有新数据要落盘)。`;
+    if(e.type === 'read' && e.who === 'A' && e.txn_id == null) return `A 用一次全新的读(不在任何事务里),重新申请快照——此时 <span class="k">txn_id=102</span> 已经满足 txn_id &lt; 新的 snap_min,变为可见 → 读到 <span class="k">qty=${e.doc.qty}</span>。`;
+    return '';
+  }
+
+  function buildChain(uptoIdx){
+    const versions = [];
+    for(let i=0;i<=uptoIdx;i++){
+      const e = events[i];
+      if(e.type === 'initial-state') versions.push({ txn_id: e.txn_id, doc: e.doc });
+      if(e.type === 'write-commit') versions.push({ txn_id: e.txn_id, doc: e.doc });
+    }
+    return versions;
+  }
+
+  function render(){
+    idx = Math.max(-1, Math.min(events.length - 1, idx));
+    chainEl.innerHTML = '';
+    readerA.className = 'reader';
+    readerOther.className = 'reader';
+    readerA.querySelector('.rv').textContent = '尚未开始';
+    readerOther.querySelector('.rv').textContent = '—';
+
+    if(idx < 0){
+      narration.textContent = '点击"下一步"或"播放"开始。';
+      stepBadge.textContent = '未开始';
+      counter.textContent = `0 / ${events.length}`;
+      document.getElementById('mvPrev').disabled = true;
+      document.getElementById('mvNext').disabled = false;
+      return;
+    }
+
+    const e = events[idx];
+    narration.innerHTML = describe(idx);
+    stepBadge.textContent = `第 ${idx+1} / ${events.length} 步`;
+
+    const versions = buildChain(idx);
+    // figure out which version (if any) the CURRENT event's read resolved to
+    let resolvedQty = null, resolvedWho = null;
+    if(e.type === 'read'){
+      resolvedQty = e.doc.qty;
+      resolvedWho = (e.who === 'A') ? 'A' : 'other';
+    }
+
+    versions.forEach(v => {
+      const item = document.createElement('div');
+      item.className = 'chain-item';
+      if(resolvedQty !== null && v.doc.qty === resolvedQty){
+        item.dataset.resolved = resolvedWho;
+      }
+      const top = document.createElement('div');
+      top.className = 'top';
+      top.innerHTML = `<span>txn_id=${v.txn_id}</span><span>qty=${v.doc.qty}</span>`;
+      const badge = document.createElement('div');
+      badge.className = 'badge';
+      badge.textContent = (resolvedQty !== null && v.doc.qty === resolvedQty)
+        ? (resolvedWho === 'A' ? '← A 当前读到这个版本' : '← 当前读到这个版本')
+        : '';
+      item.appendChild(top); item.appendChild(badge);
+      chainEl.appendChild(item);
+    });
+
+    // A's snapshot panel: shown from txn-start until (and including) txn-commit's own step
+    const startedIdx = events.findIndex(x => x.type === 'txn-start');
+    const commitIdx = events.findIndex(x => x.type === 'txn-commit');
+    if(startedIdx !== -1 && idx >= startedIdx && idx < commitIdx){
+      const startEv = events[startedIdx];
+      readerA.className = 'reader on';
+      readerA.querySelector('.rv').textContent = `快照冻结:snap_min=${startEv.snap_min}, snap_max=${startEv.snap_max}`;
+    } else if(idx >= commitIdx && commitIdx !== -1){
+      readerA.querySelector('.rv').textContent = '事务已提交,快照已释放';
+    }
+    if(resolvedWho === 'A'){
+      readerA.querySelector('.rv').textContent += ` · 本步读到 qty=${resolvedQty}`;
+    }
+    if(resolvedWho === 'other'){
+      readerOther.className = 'reader on';
+      readerOther.querySelector('.rv').textContent = `本步读到 qty=${resolvedQty}`;
+    }
+
+    counter.textContent = `${idx+1} / ${events.length}`;
+    document.getElementById('mvPrev').disabled = idx <= -1;
+    document.getElementById('mvNext').disabled = idx >= events.length - 1;
+  }
+
+  document.getElementById('mvNext').onclick = () => { idx++; render(); stopPlay(); };
+  document.getElementById('mvPrev').onclick = () => { idx--; render(); stopPlay(); };
+  document.getElementById('mvReset').onclick = () => { idx = -1; render(); stopPlay(); };
+  function stopPlay(){ playing = false; clearInterval(playTimer); document.getElementById('mvPlay').textContent = '▶ 自动播放'; }
+  document.getElementById('mvPlay').onclick = () => {
+    if(playing){ stopPlay(); return; }
+    playing = true; document.getElementById('mvPlay').textContent = '⏸ 暂停';
+    playTimer = setInterval(() => {
+      if(idx >= events.length - 1){ stopPlay(); return; }
+      idx++; render();
+    }, 1600);
+  };
+
+  render();
+})();
+</script>
+
+</body>
+</html>

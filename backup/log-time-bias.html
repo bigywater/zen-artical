@@ -1,0 +1,506 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>用日志写入时间代替事件时间,峰值统计会差多少</title>
+<meta name="description" content="真实验证并发写日志时,物理写入顺序和事件真正发生的顺序对不上(200 个并发写入,3503 对逆序);真实量化对称随机抖动几乎不影响峰值统计,但登录登出两条写入路径存在系统性延迟差(比如登出走异步清理)时,峰值会被稳定地系统性算高,真实登录潮场景下延迟 30 秒能把峰值算高 5.39%;真实构造一个从未发生过的&ldquo;幽灵峰值&rdquo;,证明这不是理论担忧。">
+<link rel="canonical" href="https://bigywater.tech/log-time-bias.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="用日志写入时间代替事件时间,峰值统计会差多少">
+<meta property="og:description" content="真实验证并发写日志时,物理写入顺序和事件真正发生的顺序对不上(200 个并发写入,3503 对逆序);真实量化对称随机抖动几乎不影响峰值统计,但登录登出两条写入路径存在系统性延迟差(比如登出走异步清理)时,峰值会被稳定地系统性算高,真实登录潮场景下延迟 30 秒能把峰值算高 5.39%;真实构造一个从未发生过的&ldquo;幽灵峰值&rdquo;,证明这不是理论担忧。">
+<meta property="og:url" content="https://bigywater.tech/log-time-bias.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="用日志写入时间代替事件时间,峰值统计会差多少">
+<meta name="twitter:description" content="真实验证并发写日志时,物理写入顺序和事件真正发生的顺序对不上(200 个并发写入,3503 对逆序);真实量化对称随机抖动几乎不影响峰值统计,但登录登出两条写入路径存在系统性延迟差(比如登出走异步清理)时,峰值会被稳定地系统性算高,真实登录潮场景下延迟 30 秒能把峰值算高 5.39%;真实构造一个从未发生过的&ldquo;幽灵峰值&rdquo;,证明这不是理论担忧。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F6F7FA; --surface:#FFFFFF; --surface-2:#ECEFF5;
+  --ink:#1B2030; --ink-soft:#4C536B; --ink-faint:#8A90A6;
+  --line:#DEE2ED; --line-soft:#E9ECF4;
+  --accent-left:#3355A6; --accent-left-soft:#DDE4F5;
+  --accent-top:#C24A1E; --accent-top-soft:#F7E0D3;
+  --accent-bad:#B23B3B; --accent-bad-soft:#F7E1E1;
+  --code-bg:#12181F; --code-ink:#E6EBF2;
+  --shadow:0 1px 2px rgba(15,20,35,.06),0 8px 24px -12px rgba(15,20,35,.14);
+  --radius:10px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#10131C; --surface:#171B27; --surface-2:#1E2330;
+    --ink:#E8EAF3; --ink-soft:#AAB0C4; --ink-faint:#686F84;
+    --line:#293042; --line-soft:#212736;
+    --accent-left:#7C9CE0; --accent-left-soft:#1C2740;
+    --accent-top:#E8865A; --accent-top-soft:#3A2416;
+    --accent-bad:#E08585; --accent-bad-soft:#3A1F1F;
+    --code-bg:#0A0F16; --code-ink:#DCE7EE;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 28px -14px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#10131C; --surface:#171B27; --surface-2:#1E2330;
+  --ink:#E8EAF3; --ink-soft:#AAB0C4; --ink-faint:#686F84;
+  --line:#293042; --line-soft:#212736;
+  --accent-left:#7C9CE0; --accent-left-soft:#1C2740;
+  --accent-top:#E8865A; --accent-top-soft:#3A2416;
+  --accent-bad:#E08585; --accent-bad-soft:#3A1F1F;
+  --code-bg:#0A0F16; --code-ink:#DCE7EE;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 28px -14px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.5;}
+.mono{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;font-variant-numeric:tabular-nums;}
+.wrap{max-width:1080px;margin:0 auto;padding:28px 20px 56px;}
+header{margin-bottom:18px;}
+h1{font-size:22px;margin:0 0 6px;letter-spacing:-.01em;}
+.sub{color:var(--ink-soft);font-size:14px;margin:0;}
+
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:16px 18px; margin:14px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-size:.66rem; letter-spacing:.05em; text-transform:uppercase; background:var(--accent-left-soft); color:var(--accent-left); padding:2px 7px; border-radius:5px; margin:0 0 8px;}
+.term .cmd{color:#9AB4E8;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+.term .warn{color:#E8A45A;}
+.verify-section{margin:20px 0 28px;}
+.verify-section h2{font-size:15px; margin:0 0 4px;}
+.verify-section p{font-size:13.5px; color:var(--ink-soft); margin:0 0 10px;}
+.callout{border-left:3px solid var(--accent-top); background:var(--accent-top-soft); border-radius:0 8px 8px 0; padding:12px 16px; margin:14px 0; font-size:13.5px;}
+
+.controls{display:flex;align-items:center;gap:8px;margin:14px 0;flex-wrap:wrap;}
+button.ctrl{appearance:none;border:1px solid var(--line);background:var(--surface);color:var(--ink);padding:8px 14px;border-radius:8px;font-size:14px;cursor:pointer;font-weight:600;transition:background .15s,border-color .15s;}
+button.ctrl:hover:not(:disabled){background:var(--surface-2);}
+button.ctrl:disabled{opacity:.4;cursor:not-allowed;}
+button.ctrl.primary{background:var(--ink);color:var(--bg);border-color:var(--ink);}
+.progress{font-size:13px;color:var(--ink-faint);margin-left:4px;}
+
+.grid{display:grid;grid-template-columns:1.5fr 1fr;gap:16px;align-items:start;}
+@media (max-width:860px){.grid{grid-template-columns:1fr;}}
+
+.gantt-panel{padding:16px;}
+.gantt-panel h2{font-size:13px;margin:0 0 10px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.06em;font-weight:700;}
+.gantt-row{display:flex;align-items:center;gap:10px;margin-bottom:10px;height:20px;position:relative;}
+.gantt-label{width:56px;flex-shrink:0;font-size:12px;color:var(--ink-faint);font-family:ui-monospace,monospace;}
+.gantt-track{position:relative;flex:1;height:16px;background:var(--surface-2);border-radius:4px;}
+.gantt-bar{position:absolute;top:0;height:16px;border-radius:4px;background:var(--accent-left);opacity:.35;transition:opacity .2s;}
+.gantt-bar[data-active="true"]{opacity:1;}
+.gantt-tail{position:absolute;top:0;height:16px;border-radius:0 4px 4px 0;background:repeating-linear-gradient(45deg,var(--accent-top),var(--accent-top) 4px,var(--accent-top-soft) 4px,var(--accent-top-soft) 8px);opacity:.35;transition:opacity .2s;}
+.gantt-tail[data-active="true"]{opacity:1;}
+.playhead{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--ink);}
+.gantt-scale{position:relative;height:14px;margin:6px 0 2px 66px;font-size:10px;color:var(--ink-faint);font-family:ui-monospace,monospace;}
+
+.side-panel{display:flex;flex-direction:column;gap:14px;}
+.stat-panel{padding:14px 16px;display:flex;gap:10px;}
+.stat-box{flex:1;text-align:center;border-radius:8px;padding:6px 4px;}
+.stat-box .num{font-size:24px;font-weight:700;color:var(--accent-left);font-family:ui-monospace,monospace;}
+.stat-box.logged{background:var(--accent-top-soft);}
+.stat-box.logged .num{color:var(--accent-top);}
+.stat-box .lbl{font-size:10.5px;color:var(--ink-faint);margin-top:2px;}
+
+.desc-panel{padding:14px 16px;}
+.desc-panel h2{font-size:13px;margin:0 0 8px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.06em;font-weight:700;}
+.formula{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;font-size:14px;background:var(--surface-2);border-radius:8px;padding:10px 12px;margin-bottom:10px;border:1px solid var(--line-soft);}
+#descText{font-size:14px;color:var(--ink-soft);margin:0;min-height:60px;}
+
+.log-panel{padding:10px;max-height:220px;overflow-y:auto;}
+.log-item{padding:6px 10px;border-radius:6px;font-size:12.5px;color:var(--ink-faint);cursor:pointer;display:flex;gap:8px;align-items:center;}
+.log-item:hover{background:var(--surface-2);}
+.log-item[data-active="true"]{background:var(--surface-2);color:var(--ink);font-weight:600;}
+.log-idx{color:var(--ink-faint);min-width:20px;font-family:ui-monospace,monospace;}
+.src-tag{font-size:10px;padding:1px 6px;border-radius:4px;flex-shrink:0;}
+.src-tag[data-src="both"]{background:var(--surface-2);color:var(--ink-faint);}
+.src-tag[data-src="real"]{background:var(--accent-left-soft);color:var(--accent-left);}
+.src-tag[data-src="logged"]{background:var(--accent-top-soft);color:var(--accent-top);}
+
+.legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:14px;font-size:12.5px;color:var(--ink-faint);}
+.legend span{display:inline-flex;align-items:center;gap:6px;}
+.dot{width:16px;height:11px;border-radius:3px;display:inline-block;}
+.dot.online{background:var(--accent-left);}
+.dot.tail{background:repeating-linear-gradient(45deg,var(--accent-top),var(--accent-top) 3px,var(--accent-top-soft) 3px,var(--accent-top-soft) 6px);}
+
+@media (prefers-reduced-motion:reduce){*{transition:none !important;}}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>用日志写入时间代替事件时间,峰值统计会差多少</h1>
+    <p class="sub">接着<a href="peak-online.html">高峰在线人数</a>那篇的一个后续问题:如果没有真实的事件时间字段,直接拿"日志写入时间"当成登录/登出时间来算,行不行?答案不是简单的行或不行——真实实验证明,关键在于登录和登出这两条日志的写入延迟是不是对称的。</p>
+  </header>
+
+  <div class="verify-section">
+    <h2>真实验证:并发写日志,物理顺序对不上事件发生顺序</h2>
+    <p>200 个用户"本该"按 0,1,2...199 的顺序登录,但每个登录请求的处理都会有一点点不确定的延迟(排队、加锁、调度)——用真实的 Python 多线程模拟:</p>
+    <div class="term"><span class="real-tag">真实实测</span>
+<pre class="cmd">def handle_login(uid, event_time):
+    time.sleep(random.uniform(0, 0.005))  # 模拟处理延迟抖动
+    with log_lock:
+        log_lines.append((uid, event_time))  # 真正写入日志的时刻
+
+# 200 个线程并发调用 handle_login(uid, uid)，uid 本身代表"事件本该发生的顺序"</pre>
+<span class="bad">物理写入顺序前20个: [13, 9, 20, 19, 26, 0, 8, 35, 56, 3, 16, 24, 42, 27, 30, 39, 31, 32, 71, 72]
+按事件时间排序后前20个: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+物理顺序 == 时间顺序: False
+逆序对数量: 3503 / 总记录数 200</span>
+    </div>
+    <p>200 条记录里有 3503 对是逆序的——只要"事件发生"和"写入日志"这两个动作之间隔着不确定的处理延迟,物理写入顺序就没法保证等于事件真正发生的顺序。这跟<a href="lock-ordering.html">并发转账死锁</a>是同一类问题:并发环境下,任何"先发生先记录"的假设都需要真实验证,不能凭直觉认为理所当然。</p>
+
+    <h2 style="margin-top:20px;">真实验证:对称抖动几乎无影响,系统性偏差不是</h2>
+    <p>30 万条真实模拟记录,分别测三种"用日志时间代替事件时间"的情形:</p>
+    <div class="term"><span class="real-tag">真实实测</span>
+<pre class="cmd">真实峰值(ground truth): 110460
+
+# 场景A: 登录登出的写入延迟都是 -0.5~+0.5 秒的对称随机抖动
+# 场景B: 登录几乎实时写入,登出走异步清理,统一晚 2.5~3.5 秒才写日志
+# 场景C: 每 500ms 批量 flush 一次日志</pre>
+<span class="ok">对称随机抖动后的峰值:      110463  (误差: 3)</span>
+<span class="warn">登出系统性延迟3秒后的峰值: 110475  (误差: 15)</span>
+<span class="ok">批量flush(500ms)后的峰值:  110460  (误差: 0)</span>
+    </div>
+    <p>对称抖动和批量 flush 的误差都小到可以忽略——抖动是随机的,登录早一点、登出也早一点,大体上互相抵消;批量 flush 只是把时间"取整"到固定刻度,不会引入方向性偏差。但登出系统性延迟 3 秒,峰值稳定地偏高了 15——这不是随机噪声,是一个固定方向的偏差,不会因为数据量大就被平均抵消。</p>
+
+    <h2 style="margin-top:20px;">真实验证:更贴近真实场景,系统性偏差被放大到 5%</h2>
+    <p>上面用的会话时长动辄几万秒,几秒钟的延迟自然显得微不足道。换成更真实的场景:一次登录潮里,8000 个用户在 5 分钟内集中登录,会话时长 1~10 分钟:</p>
+    <div class="term"><span class="real-tag">真实实测</span>
+<pre class="cmd">真实峰值(会话1~10分钟): 6603
+
+logged_records = [(uid, lo, hi + DELAY) for uid, lo, hi in real_records]  # 登出延迟 DELAY 秒才写日志</pre>
+<span class="warn">登出延迟3秒写日志后的峰值:  6645  (误差 +42, +0.64%)
+登出延迟30秒写日志后的峰值: 6959  (误差 +356, +5.39%)</span>
+    </div>
+    <p>延迟越大,误差越大,而且方向永远是正的——"登出写晚了"意味着系统会误以为这些用户还在线,多算一段时长,这是一个稳定的正向偏差,不是能被大数据量平均掉的随机噪声。会话越短(相对延迟占比越大)、延迟越大,失真越严重。</p>
+
+    <h2 style="margin-top:20px;">真实验证:一个从未真实发生过的"幽灵峰值"</h2>
+    <p>把上面的偏差落实成一个具体到"秒"的小例子:A、B、C 三个用户真实在线区间是 <span class="mono">A=[10,20) B=[15,30) C=[22,35)</span>——A 在 20 秒时就已经真实登出,跟 C(22秒才上线)根本没有同时在线过。真实峰值只有 2(发生在 A、B 重叠的 <span class="mono">[15,20)</span>)。但如果登出统一晚 5 秒才写日志(A 的登出被记成 25 而不是 20):</p>
+    <div class="term"><span class="real-tag">真实实测</span>
+<pre class="cmd">真实区间: A=[10,20)  B=[15,30)  C=[22,35)
+日志区间(登出+5秒): A=[10,25)  B=[15,35)  C=[22,40)</pre>
+<span class="ok">真实峰值(按真实时间算): 2</span>
+<span class="bad">日志峰值(按日志时间算): 3  ← A 明明已经走了,日志却以为 A、B、C 三人在 [22,25) 同时在线!</span>
+    </div>
+    <p>问题就出在 <span class="mono">t=22</span> C 登录的那一刻:真实世界里 A 早就走了(真实登出在 <span class="mono">t=20</span>),但日志记录里 A 的登出被拖到了 <span class="mono">t=25</span> 才写进去,所以从日志的视角看,<span class="mono">[22,25)</span> 这段时间"A、B、C 都在线"——一个真实世界里从没发生过的时刻,凭空被算成了峰值。这不是理论上的担忧,是可以真实构造出来的具体反例。</p>
+  </div>
+
+  <div class="callout">
+    <strong>一句话总结:</strong> 能不能拿日志写入时间代替真实事件时间,取决于登录和登出这两条写入路径的延迟是不是对称的。对称的随机抖动确实"统计意义上够用",可以不深究;但只要两边写入路径不一样(最常见的就是"登出走异步清理/批量任务,登录走同步写入"这种设计),就会引入一个方向固定、随延迟增大而增大的系统性偏差——而且偏差的方向永远是让峰值偏高,因为"该下线的还没被记下线"。这种偏差不会被大数据量平均掉,必须先搞清楚登录登出两条日志的写入延迟是否对称,再决定能不能这么简化。
+  </div>
+
+  <div class="controls">
+    <button class="ctrl" id="btnReset">重置</button>
+    <button class="ctrl" id="btnPrev">上一步</button>
+    <button class="ctrl primary" id="btnPlay">播放</button>
+    <button class="ctrl" id="btnNext">下一步</button>
+    <span class="progress mono" id="progress">0 / 0</span>
+  </div>
+
+  <div class="grid">
+    <div class="gantt-panel panel">
+      <h2>3 个用户:实线是真实在线区间,斜纹尾巴是"登出延迟5秒"多出来的幽灵区间</h2>
+      <div id="ganttRows"></div>
+      <div class="gantt-scale">
+        <span style="position:absolute;left:0%;">0</span>
+        <span style="position:absolute;left:50%;">20</span>
+        <span style="position:absolute;right:0;">40</span>
+      </div>
+      <div class="legend">
+        <span><span class="dot online"></span>真实在线(实线)</span>
+        <span><span class="dot tail"></span>日志误差尾巴(斜纹)</span>
+      </div>
+      <div class="panel log-panel" id="logPanel" style="margin-top:12px;border:none;box-shadow:none;"></div>
+    </div>
+
+    <div class="side-panel">
+      <div class="stat-panel panel">
+        <div class="stat-box">
+          <div class="num" id="realNum">0</div>
+          <div class="lbl">真实峰值</div>
+        </div>
+        <div class="stat-box logged">
+          <div class="num" id="loggedNum">0</div>
+          <div class="lbl">日志算出的峰值</div>
+        </div>
+      </div>
+      <div class="desc-panel panel">
+        <h2>当前事件</h2>
+        <div class="formula" id="formulaBox">&mdash;</div>
+        <p id="descText">点击"下一步"或"播放"开始。</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+var DELAY = 5;
+var USERS = {"A": {"login": 10, "logout": 20}, "B": {"login": 15, "logout": 30}, "C": {"login": 22, "logout": 35}};
+var TOTAL = 40;
+var EVENTS = [
+  {"t": 10, "uid": "A", "kind": "login", "source": "both", "curReal": 1, "curLogged": 1, "peakReal": 1, "peakLogged": 1},
+  {"t": 15, "uid": "B", "kind": "login", "source": "both", "curReal": 2, "curLogged": 2, "peakReal": 2, "peakLogged": 2},
+  {"t": 20, "uid": "A", "kind": "logout", "source": "real", "curReal": 1, "curLogged": 2, "peakReal": 2, "peakLogged": 2},
+  {"t": 22, "uid": "C", "kind": "login", "source": "both", "curReal": 2, "curLogged": 3, "peakReal": 2, "peakLogged": 3},
+  {"t": 25, "uid": "A", "kind": "logout", "source": "logged", "curReal": 2, "curLogged": 2, "peakReal": 2, "peakLogged": 3},
+  {"t": 30, "uid": "B", "kind": "logout", "source": "real", "curReal": 1, "curLogged": 2, "peakReal": 2, "peakLogged": 3},
+  {"t": 35, "uid": "C", "kind": "logout", "source": "real", "curReal": 0, "curLogged": 2, "peakReal": 2, "peakLogged": 3},
+  {"t": 35, "uid": "B", "kind": "logout", "source": "logged", "curReal": 0, "curLogged": 1, "peakReal": 2, "peakLogged": 3},
+  {"t": 40, "uid": "C", "kind": "logout", "source": "logged", "curReal": 0, "curLogged": 0, "peakReal": 2, "peakLogged": 3}
+];
+var idx = -1;
+var playTimer = null;
+
+var ganttRows = document.getElementById('ganttRows');
+function buildGantt(){
+  ganttRows.innerHTML = '';
+  Object.keys(USERS).forEach(function(uid){
+    var u = USERS[uid];
+    var left = (u.login / TOTAL * 100).toFixed(2);
+    var realWidth = ((u.logout - u.login) / TOTAL * 100).toFixed(2);
+    var tailLeft = (u.logout / TOTAL * 100).toFixed(2);
+    var tailWidth = (DELAY / TOTAL * 100).toFixed(2);
+    var row = document.createElement('div');
+    row.className = 'gantt-row';
+    row.innerHTML = '<span class="gantt-label mono">用户' + uid + '</span>' +
+      '<div class="gantt-track" id="track-' + uid + '">' +
+        '<div class="gantt-bar" id="bar-' + uid + '" data-active="false" style="left:' + left + '%;width:' + realWidth + '%;"></div>' +
+        '<div class="gantt-tail" id="tail-' + uid + '" data-active="false" style="left:' + tailLeft + '%;width:' + tailWidth + '%;"></div>' +
+        '<div class="playhead" id="playhead-' + uid + '" style="display:none;"></div>' +
+      '</div>';
+    ganttRows.appendChild(row);
+  });
+}
+
+function computeState(upto){
+  var curReal = 0, curLogged = 0, peakReal = 0, peakLogged = 0;
+  var barActive = {}, tailActive = {};
+  Object.keys(USERS).forEach(function(uid){ barActive[uid] = false; tailActive[uid] = false; });
+  for(var k=0;k<=upto && k<EVENTS.length;k++){
+    var e = EVENTS[k];
+    curReal = e.curReal; curLogged = e.curLogged; peakReal = e.peakReal; peakLogged = e.peakLogged;
+    if(e.kind === 'login'){ barActive[e.uid] = true; }
+    if(e.kind === 'logout' && e.source === 'real'){ barActive[e.uid] = false; tailActive[e.uid] = true; }
+    if(e.kind === 'logout' && e.source === 'logged'){ tailActive[e.uid] = false; }
+  }
+  return {curReal:curReal, curLogged:curLogged, peakReal:peakReal, peakLogged:peakLogged, barActive:barActive, tailActive:tailActive};
+}
+
+function render(){
+  var s = computeState(idx);
+  document.getElementById('realNum').textContent = s.peakReal;
+  document.getElementById('loggedNum').textContent = s.peakLogged;
+
+  Object.keys(USERS).forEach(function(uid){
+    document.getElementById('bar-' + uid).setAttribute('data-active', s.barActive[uid]);
+    document.getElementById('tail-' + uid).setAttribute('data-active', s.tailActive[uid]);
+    var ph = document.getElementById('playhead-' + uid);
+    if(idx >= 0 && idx < EVENTS.length){
+      var pct = (EVENTS[idx].t / TOTAL * 100).toFixed(2);
+      ph.style.display = 'block';
+      ph.style.left = pct + '%';
+    } else {
+      ph.style.display = 'none';
+    }
+  });
+
+  var formulaBox = document.getElementById('formulaBox');
+  var descText = document.getElementById('descText');
+  if(idx < 0){
+    formulaBox.innerHTML = '&mdash;';
+    descText.textContent = '还没开始。登录事件对"真实"和"日志"两条时间线都立即生效;登出事件会分成两条:真实登出时间(蓝色)和日志记录到的登出时间(晚5秒,橙色斜纹)。';
+  } else {
+    var e = EVENTS[idx];
+    var srcLabel = e.source === 'both' ? '真实+日志同时' : (e.source === 'real' ? '仅真实时间线' : '仅日志时间线(延迟后)');
+    formulaBox.innerHTML = '<span class="mono">t=' + e.t + '  用户' + e.uid + ' ' + (e.kind==='login'?'登录':'登出') + '</span><br><span class="mono">[' + srcLabel + ']</span>';
+    var note = '';
+    if(e.source === 'both'){
+      note = (e.kind==='login' ? '登录不延迟,真实人数和日志人数同时 +1。' : '') ;
+    } else if(e.source === 'real'){
+      note = '这一刻用户' + e.uid + '真实已经下线了,真实在线人数 -1;但日志还没记到这次登出(延迟中),日志人数暂时不变,继续维持"虚高"状态。';
+    } else if(e.source === 'logged'){
+      note = '日志这才姗姗来迟地记录到用户' + e.uid + '的登出,日志人数这时候才 -1——比真实情况晚了 ' + DELAY + ' 秒。';
+    }
+    if(e.peakLogged > e.peakReal && e.t === 22){
+      note += ' 注意:这一步日志峰值刷新到了 ' + e.peakLogged + ',但真实峰值仍然是 ' + e.peakReal + '——这就是那个"从未真实发生过"的幽灵峰值。';
+    }
+    descText.textContent = note;
+  }
+
+  document.getElementById('progress').textContent = (idx+1) + ' / ' + EVENTS.length;
+  document.getElementById('btnPrev').disabled = idx < 0;
+  document.getElementById('btnNext').disabled = idx >= EVENTS.length - 1;
+
+  var items = logPanel.children;
+  for(var i2=0;i2<items.length;i2++){
+    items[i2].setAttribute('data-active', i2 === idx ? 'true' : 'false');
+  }
+  if(idx >= 0 && items[idx]) items[idx].scrollIntoView({block:'nearest'});
+}
+
+var logPanel = document.getElementById('logPanel');
+function buildLog(){
+  logPanel.innerHTML = '';
+  EVENTS.forEach(function(e,i){
+    var item = document.createElement('div');
+    item.className = 'log-item';
+    item.setAttribute('data-active','false');
+    var idxSpan = document.createElement('span');
+    idxSpan.className = 'log-idx';
+    idxSpan.textContent = i+1;
+    var srcSpan = document.createElement('span');
+    srcSpan.className = 'src-tag';
+    srcSpan.setAttribute('data-src', e.source);
+    srcSpan.textContent = e.source === 'both' ? '真实+日志' : (e.source === 'real' ? '真实' : '日志');
+    var txt = document.createElement('span');
+    txt.textContent = 't=' + e.t + ' 用户' + e.uid + ' ' + (e.kind==='login'?'登录':'登出') + ' -> 真实峰值' + e.peakReal + ' / 日志峰值' + e.peakLogged;
+    item.appendChild(idxSpan); item.appendChild(srcSpan); item.appendChild(txt);
+    item.addEventListener('click', function(ii){ return function(){ stopPlay(); idx = ii; render(); }; }(i));
+    logPanel.appendChild(item);
+  });
+}
+
+function goTo(i){
+  idx = Math.max(-1, Math.min(EVENTS.length-1, i));
+  render();
+}
+function stopPlay(){
+  if(playTimer){ clearInterval(playTimer); playTimer = null; }
+  document.getElementById('btnPlay').textContent = '播放';
+}
+document.getElementById('btnNext').addEventListener('click', function(){ stopPlay(); goTo(idx+1); });
+document.getElementById('btnPrev').addEventListener('click', function(){ stopPlay(); goTo(idx-1); });
+document.getElementById('btnReset').addEventListener('click', function(){ stopPlay(); goTo(-1); });
+document.getElementById('btnPlay').addEventListener('click', function(){
+  if(playTimer){ stopPlay(); return; }
+  if(idx >= EVENTS.length - 1) goTo(-1);
+  document.getElementById('btnPlay').textContent = '暂停';
+  playTimer = setInterval(function(){
+    if(idx >= EVENTS.length - 1){ stopPlay(); return; }
+    goTo(idx+1);
+  }, 900);
+});
+
+buildGantt();
+buildLog();
+goTo(-1);
+</script>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:1080px;margin:0 auto 20px;padding:0 20px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+</body>
+</html>

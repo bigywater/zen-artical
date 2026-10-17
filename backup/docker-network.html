@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>容器网络:两个容器在默认 bridge 下,为什么互相 ping 不通名字,换个网络就通了</title>
+<meta name="description" content="真实构建 FROM scratch 容器镜像,本机真实实测默认 bridge 网络下容器间只能用 IP 通信、用容器名解析会真实失败(dial tcp: lookup ... no such host);自定义 bridge 网络下容器名解析真实成功;两种网络下 /etc/resolv.conf 的真实差异(有没有 Docker 内嵌 DNS 127.0.0.11)直接揭示原因;-p 端口映射真实验证宿主机能连进容器内部的 TCP 服务。">
+<link rel="canonical" href="https://bigywater.tech/docker-network.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="容器网络:两个容器在默认 bridge 下,为什么互相 ping 不通名字,换个网络就通了">
+<meta property="og:description" content="真实构建 FROM scratch 容器镜像,本机真实实测默认 bridge 网络下容器间只能用 IP 通信、用容器名解析会真实失败(dial tcp: lookup ... no such host);自定义 bridge 网络下容器名解析真实成功;两种网络下 /etc/resolv.conf 的真实差异(有没有 Docker 内嵌 DNS 127.0.0.11)直接揭示原因;-p 端口映射真实验证宿主机能连进容器内部的 TCP 服务。">
+<meta property="og:url" content="https://bigywater.tech/docker-network.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="容器网络:两个容器在默认 bridge 下,为什么互相 ping 不通名字,换个网络就通了">
+<meta name="twitter:description" content="真实构建 FROM scratch 容器镜像,本机真实实测默认 bridge 网络下容器间只能用 IP 通信、用容器名解析会真实失败(dial tcp: lookup ... no such host);自定义 bridge 网络下容器名解析真实成功;两种网络下 /etc/resolv.conf 的真实差异(有没有 Docker 内嵌 DNS 127.0.0.11)直接揭示原因;-p 端口映射真实验证宿主机能连进容器内部的 TCP 服务。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F2F6FA; --paper:#FFFFFF; --ink:#132029; --ink-dim:#5C6B75; --line:#DCE6EC;
+  --dk-c:#2496ED; --dk-c-soft:#DEEEFC;
+  --mem-c:#B8791E; --mem-c-soft:#F6ECD9;
+  --meta-c:#7B4FA8; --meta-c-soft:#EFE6F7;
+  --err-c:#B23B3B; --err-c-soft:#F7E3E1;
+  --code-bg:#0F1E2B; --code-ink:#E6EEF5;
+  --shadow: 0 1px 2px rgba(15,25,35,.06), 0 8px 24px -12px rgba(15,25,35,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0C1620; --paper:#16232F; --ink:#E6EEF5; --ink-dim:#96A8B5; --line:#2A3A46;
+    --dk-c:#5FB7F5; --dk-c-soft:#183246;
+    --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+    --meta-c:#B08AE0; --meta-c-soft:#332545;
+    --err-c:#E08585; --err-c-soft:#3A1F1F;
+    --code-bg:#09131B; --code-ink:#DCE7EE;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0C1620; --paper:#16232F; --ink:#E6EEF5; --ink-dim:#96A8B5; --line:#2A3A46;
+  --dk-c:#5FB7F5; --dk-c-soft:#183246;
+  --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+  --meta-c:#B08AE0; --meta-c-soft:#332545;
+  --err-c:#E08585; --err-c-soft:#3A1F1F;
+  --code-bg:#09131B; --code-ink:#DCE7EE;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--dk-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--dk-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--dk-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--dk-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#8FC4E8; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#9FD4F0;}
+
+.callout{border-left:3px solid var(--dk-c); background:var(--dk-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--dk-c-soft); color:var(--dk-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#8FD4F0;}
+.term pre.code{margin:0 0 10px; color:#8FD4F0; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+.term .cm{color:#7C93A0;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--mem-c-soft); color:var(--mem-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:22px 20px;}
+.net-table{width:100%; border-collapse:collapse; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem;}
+.net-table th{text-align:left; padding:6px 10px; color:var(--ink-dim); font-size:.7rem; text-transform:uppercase; letter-spacing:.04em; border-bottom:1px solid var(--line);}
+.net-table td{padding:6px 10px; border-bottom:1px solid var(--line);}
+.net-table tr.current td{background:var(--dk-c-soft);}
+.stage-tag{padding:2px 8px; border-radius:5px; font-size:.76rem;}
+.stage-tag.ok{background:var(--dk-c-soft); color:var(--dk-c);}
+.stage-tag.fail{background:var(--err-c-soft); color:var(--err-c);}
+.scenario-tag{display:inline-block; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.05em; text-transform:uppercase; padding:3px 10px; border-radius:6px; margin-bottom:16px;}
+.scenario-tag.defaultbr{background:var(--err-c-soft); color:var(--err-c);}
+.scenario-tag.userbr{background:var(--dk-c-soft); color:var(--dk-c);}
+.stat-row{display:flex; gap:16px; flex-wrap:wrap; margin:14px 0 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem;}
+.stat{border:1px solid var(--line); border-radius:8px; padding:8px 12px; background:var(--bg);}
+.stat b{color:var(--dk-c); display:block; font-size:1rem; font-variant-numeric:tabular-nums;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--dk-c); color:var(--dk-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--dk-c); border-color:var(--dk-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{display:flex; align-items:center; gap:10px; margin-bottom:24px; font-size:.88rem; color:var(--ink-dim); flex-wrap:wrap;}
+.prev-post a{font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--dk-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Docker 系列 · 第四篇</div>
+    <h1>两个容器在默认网络下,为什么用名字互相连不上,换个网络就通了?</h1>
+    <p>接着系列前几篇的 <span class="mono">FROM scratch</span> 套路,这次写一对真实的 TCP 服务端/客户端小程序,在默认 <span class="mono">bridge</span> 网络和自己建的 <span class="mono">bridge</span> 网络下分别测试容器间怎么通信——本机真实复现了一个几乎所有人都踩过的坑:同样的代码,换个网络,行为完全不同,而且原因直接写在容器自己的 <span class="mono">/etc/resolv.conf</span> 里,不用猜。</p>
+    <div class="hero-fact">
+      <div><div class="num">no such host</div><div class="lbl">本机真实实测:默认 bridge 网络下,用容器名连接真实失败——只能用 IP</div></div>
+      <div><div class="num">127.0.0.11</div><div class="lbl">本机真实实测:自定义网络下 /etc/resolv.conf 真实多出 Docker 内嵌 DNS,容器名解析立刻能用</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <div class="prev-post">← 接上篇 <a href="docker-layers.html" target="_blank" rel="noopener">镜像分层与构建缓存:一条 COPY 指令怎么变成一层,缓存在什么粒度失效</a></div>
+  <h2>真实实测:默认 bridge 网络,只能用 IP,不能用容器名</h2>
+  <p class="h2-sub">写一对真实的 TCP 程序——服务端监听 <span class="mono">:9000</span> 收到一行就回一句话,客户端连上去发一行、打印回复。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ docker run -d --name srv1 netserver:scratch
+$ docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' srv1</pre>
+<span class="ok">172.17.0.2</span>
+  </div>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ docker run --rm netclient:scratch 172.17.0.2   # 用 IP,成功
+$ docker run --rm netclient:scratch srv1         # 用容器名,失败</pre>
+<span class="ok">got reply: hello from 82c692f88326, you said: hi from client</span>
+<span class="bad">dial error: dial tcp: lookup srv1 on 192.168.65.7:53: no such host</span>
+  </div>
+  <p>同一个 <span class="mono">srv1</span>,用真实分配到的 IP <span class="mono">172.17.0.2</span> 连接完全没问题,换成容器名就直接解析失败——这不是这套代码写错了,是默认 <span class="mono">bridge</span> 网络本身的设计:它不提供容器名到 IP 的自动解析。</p>
+</section>
+
+<section>
+  <h2>真实实测:换成自定义网络,容器名立刻能用</h2>
+  <p class="h2-sub">同样的镜像、同样的代码,唯一的变量是网络。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ docker network create mynet
+$ docker network inspect mynet --format '{{json .IPAM.Config}}'</pre>
+<span class="ok">[{"Subnet":"172.18.0.0/16","Gateway":"172.18.0.1"}]</span>
+  </div>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ docker run -d --name srv2 --network mynet netserver:scratch
+$ docker run --rm --network mynet netclient:scratch srv2   # 直接用容器名</pre>
+<span class="ok">got reply: hello from c52e2400efe5, you said: hi from client</span>
+  </div>
+  <p>自定义网络先拿到了一个完全独立的子网(<span class="mono">172.18.0.0/16</span>,跟默认 bridge 的 <span class="mono">172.17.0.0/16</span> 是两个不相交的段),而且这次直接用容器名 <span class="mono">srv2</span> 就真实连通了——同一套代码,换个网络就从"必须硬编码 IP"变成"可以用名字互相找到对方"。</p>
+</section>
+
+<section>
+  <h2>真实实测:原因写在 /etc/resolv.conf 里,不用猜</h2>
+  <p class="h2-sub">直接对比两种网络下容器自己看到的 <span class="mono">/etc/resolv.conf</span>。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ docker run --rm resolvcheck:scratch                    # 默认 bridge</pre>
+<span class="ok">nameserver 192.168.65.7
+# Based on host file: '/etc/resolv.conf' (legacy)</span>
+  </div>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ docker network create mynet2
+$ docker run --rm --network mynet2 resolvcheck:scratch   # 自定义网络</pre>
+<span class="ok">nameserver 127.0.0.11
+options ndots:0
+# Based on host file: '/etc/resolv.conf' (internal resolver)
+# ExtServers: [host(192.168.65.7)]</span>
+  </div>
+  <p>默认 <span class="mono">bridge</span> 网络下,容器的 DNS 直接指向宿主机的真实 DNS(<span class="mono">192.168.65.7</span>),查询 <span class="mono">srv1</span> 这种名字自然只会当成一个不存在的域名去查外部 DNS,查不到；自定义网络下,<span class="mono">nameserver</span> 变成了 <span class="mono">127.0.0.11</span>——Docker 在每个自定义网络里都跑了一个内嵌 DNS 服务器,认识这个网络里所有容器的名字,查不到的名字才会转发给真实的外部 DNS(<span class="mono">ExtServers</span> 那一行就是转发目标)。这也是 Docker 官方文档里明确写的行为:</p>
+  <blockquote class="src">
+    <span class="path">Docker 官方文档 · Networking overview · <a href="https://docs.docker.com/engine/network/" target="_blank" rel="noopener">docs.docker.com/engine/network</a></span>
+With the default configuration, containers attached to the default bridge
+network have unrestricted network access to each other using container
+IP addresses. They cannot refer to each other by name.
+
+Once connected to a user-defined network, containers can communicate
+with each other using container IP addresses or container names.
+  </blockquote>
+</section>
+
+<section>
+  <h2>真实实测:-p 端口映射,从宿主机直接连进容器</h2>
+  <p class="h2-sub">前面几组实验都是容器之间互相访问,这次反过来——从运行 <span class="mono">docker</span> 命令的这台 Mac,直接连容器内部的服务。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ docker run -d --name srv3 -p 19000:9000 netserver:scratch
+$ printf 'hi from host\n' | nc 127.0.0.1 19000
+$ docker port srv3</pre>
+<span class="ok">hello from 10d1a7fe75cc, you said: hi from host
+
+9000/tcp -> 0.0.0.0:19000
+9000/tcp -> [::]:19000</span>
+  </div>
+  <p>容器内部这个进程自己完全不知道"19000"这个端口的存在——它只认识自己监听的 <span class="mono">:9000</span>。<span class="mono">-p 19000:9000</span> 在宿主机这一侧开了个监听,把发到 <span class="mono">19000</span> 的流量转发进容器网络命名空间里的 <span class="mono">9000</span> 端口,对容器里的程序完全透明。宿主机这边发起的 <span class="mono">nc</span> 请求,真实穿过这层转发拿到了容器里程序的真实回复。</p>
+</section>
+
+<section>
+  <h2>演示:同一次连接尝试,两种网络下的不同结局</h2>
+  <p class="h2-sub">对应上面的真实实验,切换"默认 bridge"和"自定义网络"两种场景,看同一次"用容器名连接"走到哪一步。</p>
+  <div class="demo" id="netDemo">
+    <div class="demo-head">容器名解析 · 两种网络对照</div>
+    <div class="demo-narration" id="netNarration"></div>
+    <div class="demo-body">
+      <span class="scenario-tag defaultbr" id="netTag">默认 bridge</span>
+      <table class="net-table" id="netTable">
+        <thead><tr><th>步骤</th><th>结果</th></tr></thead>
+        <tbody id="netTableBody"></tbody>
+      </table>
+      <div class="stat-row" id="netStats"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="netReset">⏮ 重来</button>
+      <button class="btn" id="netPrev">‹ 上一步</button>
+      <button class="btn primary" id="netNext">下一步 ›</button>
+      <button class="btn" id="netPlay">▶ 自动播放</button>
+      <span class="step-counter" id="netCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">数据直接取自上面真实实测的 <span class="mono">resolv.conf</span> 差异和真实的连接结果(默认 bridge 下 <span class="mono">no such host</span>,自定义网络下真实拿到回复),演示动画只是把"查 DNS → 有没有内嵌解析器 → 连不连得上"这条链路逐步呈现。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文全部真实实验(默认 bridge 下容器名解析真实失败、自定义网络下容器名解析真实成功、两种网络各自的子网段、两种网络下真实不同的 <span class="mono">/etc/resolv.conf</span> 内容、<span class="mono">-p</span> 端口映射从宿主机真实连进容器内部服务)均在本机真实运行的 Docker Desktop 上完成,用的是跟前几篇一样的 <span class="mono">FROM scratch</span> + 本机交叉编译静态二进制技巧(一对真实的 TCP 服务端/客户端程序),全程零网络镜像拉取,数据未做删改。</li>
+      <li>行为引用(默认 bridge 与用户自定义网络在容器名解析上的差异)取自 Docker 官方文档 <span class="mono">docs.docker.com/engine/network</span>——这段文档描述的行为已经用上面的真实实验逐条验证过,不是照抄文档就直接采信。</li>
+      <li>演示动画的两种场景数据直接取自真实实测的连接结果和真实的 <span class="mono">resolv.conf</span> 内容,没有额外模拟或编造的步骤。</li>
+      <li>没有涉及:Docker 内嵌 DNS 服务器(<span class="mono">127.0.0.11</span>)的具体实现细节(在 <span class="mono">moby/moby</span> 的 <span class="mono">libnetwork</span> 里)、<span class="mono">overlay</span> 网络驱动(跨宿主机的容器网络,需要多台真实机器,这台机器没法验证)、<span class="mono">--link</span> 这个已废弃的旧式容器互联方式、真实的 iptables NAT 规则细节(Docker Desktop 的 Linux VM 屏蔽了对这层的直接观察)。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="docker-multistage.html" target="_blank" rel="noopener">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">多阶段构建:编译产物怎么从一个阶段"抽"到另一个阶段,体积真实差了多少</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Docker 系列 · 第四篇 · 容器网络 · 数据来自本机真实运行的 Docker Desktop</footer>
+
+<script>
+const DATA = {"scenarios": {
+  "defaultbr": [
+    {"step": "容器发起对 'srv1' 的连接", "result": "ok"},
+    {"step": "查 /etc/resolv.conf,nameserver = 192.168.65.7(宿主机真实 DNS)", "result": "ok"},
+    {"step": "把 'srv1' 当成外部域名去查,查不到", "result": "fail"},
+    {"step": "连接失败:dial tcp: lookup srv1: no such host", "result": "fail"}
+  ],
+  "userbr": [
+    {"step": "容器发起对 'srv2' 的连接", "result": "ok"},
+    {"step": "查 /etc/resolv.conf,nameserver = 127.0.0.11(Docker 内嵌 DNS)", "result": "ok"},
+    {"step": "内嵌 DNS 认识 'srv2',返回它的真实容器 IP", "result": "ok"},
+    {"step": "连接成功:got reply: hello from ...", "result": "ok"}
+  ]
+}};
+
+(function(){
+  const scenarios = ["defaultbr", "userbr"];
+  const steps = [];
+  scenarios.forEach(s => { for (let i = 0; i < DATA.scenarios[s].length; i++) steps.push({scenario: s, upto: i}); });
+  const totalSteps = steps.length;
+  const tbody = document.getElementById('netTableBody');
+  const tagEl = document.getElementById('netTag');
+  const narration = document.getElementById('netNarration');
+  const statsBox = document.getElementById('netStats');
+  const counter = document.getElementById('netCounter');
+  let idx = 0, playing=false, playTimer=null;
+
+  function render(){
+    idx = Math.max(0, Math.min(totalSteps-1, idx));
+    const s = steps[idx];
+    const data = DATA.scenarios[s.scenario];
+    const cur = data[s.upto];
+    narration.innerHTML = `<span class="k">${s.scenario === 'defaultbr' ? '默认 bridge' : '自定义网络'}</span>:${cur.step}`;
+
+    tagEl.textContent = s.scenario === 'defaultbr' ? '默认 bridge' : '自定义网络';
+    tagEl.className = 'scenario-tag ' + s.scenario;
+
+    tbody.innerHTML = data.map((row, i) => {
+      if (i > s.upto) return `<tr><td>${row.step}</td><td></td></tr>`;
+      const label = row.result === 'ok' ? '✓' : '✗';
+      return `<tr class="${i === s.upto ? 'current' : ''}"><td>${row.step}</td><td><span class="stage-tag ${row.result}">${label}</span></td></tr>`;
+    }).join('');
+
+    statsBox.innerHTML = `<div class="stat">场景<b>${s.scenario === 'defaultbr' ? '默认 bridge' : '自定义网络'}</b></div><div class="stat">当前步骤<b>${s.upto+1} / ${data.length}</b></div>`;
+
+    counter.textContent = `${idx+1} / ${totalSteps}`;
+    document.getElementById('netPrev').disabled = idx===0;
+    document.getElementById('netNext').disabled = idx===totalSteps-1;
+  }
+  document.getElementById('netPrev').onclick=()=>{idx--;render();stopPlay();};
+  document.getElementById('netNext').onclick=()=>{idx++;render();stopPlay();};
+  document.getElementById('netReset').onclick=()=>{idx=0;render();stopPlay();};
+  function stopPlay(){ playing=false; clearInterval(playTimer); document.getElementById('netPlay').textContent='▶ 自动播放'; }
+  document.getElementById('netPlay').onclick=()=>{
+    if(playing){ stopPlay(); return; }
+    playing=true; document.getElementById('netPlay').textContent='⏸ 暂停';
+    playTimer = setInterval(()=>{
+      if(idx>=totalSteps-1){ stopPlay(); return; }
+      idx++; render();
+    }, 1100);
+  };
+  render();
+})();
+</script>
+
+</body>
+</html>

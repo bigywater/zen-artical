@@ -1,0 +1,495 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>解析器对比:lxml、html.parser、html5lib 如何处理残缺 HTML</title>
+<meta name="description" content="以真实 Chrome 154 解析出的 DOM 为标准答案,22 个残缺 HTML 片段:selectolax(Lexbor)和 bs4 + html5lib 22 / 22 一致,html5lib 21 / 22,lxml.html 与 bs4 + lxml 12 / 22,bs4 + html.parser 只有 6 / 22;差别包括是否补 tbody、是否拆开嵌套的 &lt;a&gt;、重复属性取第一个还是最后一个、&lt;/br&gt; 是否变成 &lt;br&gt;。">
+<link rel="canonical" href="https://bigywater.tech/crawler-parser-comparison.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="解析器对比:lxml、html.parser、html5lib 如何处理残缺 HTML">
+<meta property="og:description" content="以真实 Chrome 154 解析出的 DOM 为标准答案,22 个残缺 HTML 片段:selectolax(Lexbor)和 bs4 + html5lib 22 / 22 一致,html5lib 21 / 22,lxml.html 与 bs4 + lxml 12 / 22,bs4 + html.parser 只有 6 / 22;差别包括是否补 tbody、是否拆开嵌套的 &lt;a&gt;、重复属性取第一个还是最后一个、&lt;/br&gt; 是否变成 &lt;br&gt;。">
+<meta property="og:url" content="https://bigywater.tech/crawler-parser-comparison.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="解析器对比:lxml、html.parser、html5lib 如何处理残缺 HTML">
+<meta name="twitter:description" content="以真实 Chrome 154 解析出的 DOM 为标准答案,22 个残缺 HTML 片段:selectolax(Lexbor)和 bs4 + html5lib 22 / 22 一致,html5lib 21 / 22,lxml.html 与 bs4 + lxml 12 / 22,bs4 + html.parser 只有 6 / 22;差别包括是否补 tbody、是否拆开嵌套的 &lt;a&gt;、重复属性取第一个还是最后一个、&lt;/br&gt; 是否变成 &lt;br&gt;。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">2459</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">46</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">97</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">56</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">78</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">114</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">111</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">59</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#5F7F1E; --series-c-soft:#E6EFD2;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#A3C45A; --series-c-soft:#222C0E;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#A3C45A; --series-c-soft:#222C0E;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>爬虫工程 · 46</div>
+  <h1>解析器对比:lxml、html.parser、html5lib 如何处理残缺 HTML</h1>
+  <p>爬虫解析的是真实网页,真实网页里的 HTML 经常是残缺的。解析器怎么“修”这些残缺,决定了你的选择器选出什么。这篇用真实的 Chrome 当标准,逐个看 lxml、html5lib、标准库 html.parser、selectolax 和 BeautifulSoup 的几种后端各自对不对。</p>
+  <div class="hero-fact">
+<div><div class="num">22 对 6</div><div class="lbl">selectolax(Lexbor)与 bs4 + html.parser 在 22 个残缺片段上与 Chrome 一致的片段数</div></div><div><div class="num">12 / 22</div><div class="lbl">lxml.html 与 Chrome 一致的片段数——不补 tbody、不重建错位的格式标签、吞掉 </br></div></div><div><div class="num">x.html 对 y.html</div><div class="lbl">重复属性 href 时,Chrome 保留第一个、html.parser 保留最后一个</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="crawler-canonical-link.html">canonical 与重复 URL:同一内容多个地址怎么合并</a></div>
+<section>
+  <h2>谁和浏览器一致</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  解析器                            与 Chrome 一致的片段数
+  lxml.html 6.1.1                     12 / 22
+  html5lib 1.1                        21 / 22
+  bs4 + html.parser                    6 / 22
+  bs4 + lxml                          12 / 22
+  bs4 + html5lib                      22 / 22
+  selectolax 1.0.0                    22 / 22</pre></div>
+  <p>Chrome 154 按 HTML 规范解析。selectolax 的 Lexbor 后端和 bs4 + html5lib 22 个片段全部一致;html5lib 自身 21 个(不同的一个是序列化时没转义属性值里的 <code>&gt;</code>);libxml2 系的 lxml.html 只有 12 个;标准库 html.parser 经 BeautifulSoup 只有 6 个。这里比较的是 <code>body.innerHTML</code>,比较前统一了空白、大小写、<code>&lt;br/&gt;</code> 的写法和属性顺序。</p>
+</section>
+<section>
+  <h2>差在哪里</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  未闭合的 &lt;p&gt;:输入 '&lt;p&gt;one&lt;p&gt;two'
+      Chrome → '&lt;p&gt;one&lt;/p&gt;&lt;p&gt;two&lt;/p&gt;'
+      bs4 + html.parser → '&lt;p&gt;one&lt;p&gt;two&lt;/p&gt;&lt;/p&gt;'
+  错位嵌套的格式标签:输入 '&lt;b&gt;&lt;i&gt;x&lt;/b&gt;y&lt;/i&gt;'
+      Chrome → '&lt;b&gt;&lt;i&gt;x&lt;/i&gt;&lt;/b&gt;&lt;i&gt;y&lt;/i&gt;'
+      lxml.html 6.1.1 → '&lt;b&gt;&lt;i&gt;x&lt;/i&gt;&lt;/b&gt;y'
+      bs4 + html.parser → '&lt;b&gt;&lt;i&gt;x&lt;/i&gt;&lt;/b&gt;y'
+      bs4 + lxml → '&lt;b&gt;&lt;i&gt;x&lt;/i&gt;&lt;/b&gt;y'
+  表格没有 tbody:输入 '&lt;table&gt;&lt;tr&gt;&lt;td&gt;a&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;'
+      Chrome → '&lt;table&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td&gt;a&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;'
+      lxml.html 6.1.1 → '&lt;table&gt;&lt;tr&gt;&lt;td&gt;a&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;'
+      bs4 + html.parser → '&lt;table&gt;&lt;tr&gt;&lt;td&gt;a&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;'
+      bs4 + lxml → '&lt;table&gt;&lt;tr&gt;&lt;td&gt;a&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;'
+  表格里的游离文字:输入 '&lt;table&gt;text&lt;tr&gt;&lt;td&gt;a&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;'
+      Chrome → 'text&lt;table&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td&gt;a&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;'
+      lxml.html 6.1.1 → '&lt;table&gt;text&lt;tr&gt;&lt;td&gt;a&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;'
+      bs4 + html.parser → '&lt;table&gt;text&lt;tr&gt;&lt;td&gt;a&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;'
+      bs4 + lxml → '&lt;table&gt;text&lt;tr&gt;&lt;td&gt;a&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;'
+  嵌套的 &lt;a&gt;:输入 '&lt;a href=1&gt;x&lt;a href=2&gt;y&lt;/a&gt;&lt;/a&gt;'
+      Chrome → '&lt;a href="1"&gt;x&lt;/a&gt;&lt;a href="2"&gt;y&lt;/a&gt;'
+      bs4 + html.parser → '&lt;a href="1"&gt;x&lt;a href="2"&gt;y&lt;/a&gt;&lt;/a&gt;'
+  &lt;div&gt; 里的 &lt;p&gt; 被 &lt;/div&gt; 截断:输入 '&lt;div&gt;&lt;p&gt;x&lt;/div&gt;y&lt;/p&gt;'
+      Chrome → '&lt;div&gt;&lt;p&gt;x&lt;/p&gt;&lt;/div&gt;y&lt;p&gt;&lt;/p&gt;'
+      lxml.html 6.1.1 → '&lt;div&gt;&lt;p&gt;x&lt;/p&gt;&lt;/div&gt;y'
+      bs4 + html.parser → '&lt;div&gt;&lt;p&gt;x&lt;/p&gt;&lt;/div&gt;y'
+      bs4 + lxml → '&lt;div&gt;&lt;p&gt;x&lt;/p&gt;&lt;/div&gt;y'
+  重复的属性:输入 '&lt;a href=x.html href=y.html&gt;t&lt;/a&gt;'
+      Chrome → '&lt;a href="x.html"&gt;t&lt;/a&gt;'
+      bs4 + html.parser → '&lt;a href="y.html"&gt;t&lt;/a&gt;'
+  &lt;/br&gt; 结束标签:输入 'a&lt;/br&gt;b'
+      Chrome → 'a&lt;br&gt;b'
+      lxml.html 6.1.1 → 'ab'
+      bs4 + html.parser → 'ab'
+      bs4 + lxml → 'ab'
+  属性值缺少结尾引号:输入 '&lt;a href="x&gt;text&lt;/a&gt;&lt;a href="y"&gt;z&lt;/a&gt;'
+      Chrome → '&lt;a href="x&amp;gt;text&amp;lt;/a&amp;gt;&amp;lt;a href=" y"=""&gt;z&lt;/a&gt;'
+      lxml.html 6.1.1 → '&lt;a href="x&amp;gt;text&amp;lt;/a&amp;gt;&amp;lt;a%20href=" y"&gt;z&lt;/a&gt;'
+      html5lib 1.1 → '&lt;a href="x&gt;text&amp;lt;/a&gt;&amp;lt;a href=" y"=""&gt;z&lt;/a&gt;'
+  没有分号的实体:输入 '&amp;copy 2026 &amp;amp &amp;notit; &amp;lt'
+      Chrome → '© 2026 &amp;amp; ¬it; &amp;lt;'
+      bs4 + html.parser → '© 2026 &amp;amp; &amp;amp;notit &amp;lt;'
+  &lt;script&gt; 里有 &lt;/div&gt;:输入 '&lt;script&gt;var s = "&lt;/div&gt;";&lt;/script&gt;&lt;p&gt;after&lt;/p&gt;'
+      Chrome → '&lt;script&gt;var s = "&lt;/div&gt;";&lt;/script&gt;&lt;p&gt;after&lt;/p&gt;'
+      其它解析器全部一致
+  &lt;li&gt; 没有 &lt;ul&gt;:输入 '&lt;li&gt;a&lt;li&gt;b'
+      Chrome → '&lt;li&gt;a&lt;/li&gt;&lt;li&gt;b&lt;/li&gt;'
+      bs4 + html.parser → '&lt;li&gt;a&lt;li&gt;b&lt;/li&gt;&lt;/li&gt;'
+  &lt;select&gt; 里的未闭合 &lt;option&gt;:输入 '&lt;select&gt;&lt;option&gt;a&lt;option&gt;b&lt;/select&gt;'
+      Chrome → '&lt;select&gt;&lt;option&gt;a&lt;/option&gt;&lt;option&gt;b&lt;/option&gt;&lt;/select&gt;'
+      bs4 + html.parser → '&lt;select&gt;&lt;option&gt;a&lt;option&gt;b&lt;/option&gt;&lt;/option&gt;&lt;/select&gt;'
+  &lt;p&gt; 里放 &lt;table&gt;:输入 '&lt;p&gt;t&lt;table&gt;&lt;tr&gt;&lt;td&gt;x&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;'
+      Chrome → '&lt;p&gt;t&lt;/p&gt;&lt;table&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td&gt;x&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;'
+      lxml.html 6.1.1 → '&lt;p&gt;t&lt;/p&gt;&lt;table&gt;&lt;tr&gt;&lt;td&gt;x&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;'
+      bs4 + html.parser → '&lt;p&gt;t&lt;table&gt;&lt;tr&gt;&lt;td&gt;x&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;&lt;/p&gt;'
+      bs4 + lxml → '&lt;p&gt;t&lt;/p&gt;&lt;table&gt;&lt;tr&gt;&lt;td&gt;x&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;'
+  自闭合的非空元素 &lt;div/&gt;:输入 '&lt;div/&gt;x&lt;span/&gt;y'
+      Chrome → '&lt;div&gt;x&lt;span&gt;y&lt;/span&gt;&lt;/div&gt;'
+      lxml.html 6.1.1 → '&lt;div&gt;&lt;/div&gt;x&lt;span&gt;&lt;/span&gt;y'
+      bs4 + html.parser → '&lt;div&gt;&lt;/div&gt;x&lt;span&gt;&lt;/span&gt;y'
+      bs4 + lxml → '&lt;div&gt;&lt;/div&gt;x&lt;span&gt;&lt;/span&gt;y'
+  嵌套的 &lt;form&gt;:输入 '&lt;form id=a&gt;&lt;form id=b&gt;&lt;input&gt;&lt;/form&gt;&lt;/form&gt;'
+      Chrome → '&lt;form id="a"&gt;&lt;input&gt;&lt;/form&gt;'
+      lxml.html 6.1.1 → '&lt;form id="a"&gt;&lt;/form&gt;&lt;form id="b"&gt;&lt;input&gt;&lt;/form&gt;'
+      bs4 + html.parser → '&lt;form id="a"&gt;&lt;form id="b"&gt;&lt;input/&gt;&lt;/form&gt;&lt;/form&gt;'
+      bs4 + lxml → '&lt;form id="a"&gt;&lt;/form&gt;&lt;form id="b"&gt;&lt;input/&gt;&lt;/form&gt;'
+  &lt;textarea&gt; 里的标签:输入 '&lt;textarea&gt;&lt;b&gt;bold&lt;/b&gt;&lt;/textarea&gt;'
+      Chrome → '&lt;textarea&gt;&amp;lt;b&amp;gt;bold&amp;lt;/b&amp;gt;&lt;/textarea&gt;'
+      其它解析器全部一致
+  大小写混用与奇怪属性:输入 '&lt;DIV CLASS=A Id="b" data-X=1&gt;&lt;P&gt;x&lt;/P&gt;&lt;/DIV&gt;'
+      Chrome → '&lt;div class="A" id="b" data-x="1"&gt;&lt;p&gt;x&lt;/p&gt;&lt;/div&gt;'
+      其它解析器全部一致
+  &lt;td&gt; 在 &lt;table&gt; 之外:输入 '&lt;td&gt;a&lt;/td&gt;&lt;td&gt;b&lt;/td&gt;'
+      Chrome → 'ab'
+      lxml.html 6.1.1 → '&lt;td&gt;a&lt;/td&gt;&lt;td&gt;b&lt;/td&gt;'
+      bs4 + html.parser → '&lt;td&gt;a&lt;/td&gt;&lt;td&gt;b&lt;/td&gt;'
+      bs4 + lxml → '&lt;td&gt;a&lt;/td&gt;&lt;td&gt;b&lt;/td&gt;'
+  &lt;title&gt; 里的标签:输入 '&lt;title&gt;&lt;b&gt;t&lt;/b&gt;&lt;/title&gt;&lt;p&gt;x&lt;/p&gt;'
+      Chrome → '&lt;title&gt;&amp;lt;b&amp;gt;t&amp;lt;/b&amp;gt;&lt;/title&gt;&lt;p&gt;x&lt;/p&gt;'
+      其它解析器全部一致
+  注释 &lt;!-- a -- b --&gt;:输入 'x&lt;!-- a -- b --&gt;y'
+      Chrome → 'x&lt;!-- a -- b --&gt;y'
+      其它解析器全部一致
+  &lt;!--&gt;:输入 'x&lt;!--&gt;y'
+      Chrome → 'x&lt;!----&gt;y'
+      bs4 + html.parser → 'x&lt;!-- --&gt;y'
+      bs4 + lxml → 'x&lt;!-- --&gt;y'</pre></div>
+  <p>规范规定的“修复”行为包括:遇到新的 <code>&lt;p&gt;</code> 就隐式关闭上一个、表格自动补 <code>&lt;tbody&gt;</code>、格式标签错位嵌套时重新打开(<code>&lt;b&gt;&lt;i&gt;x&lt;/b&gt;y&lt;/i&gt;</code> 里 y 仍是斜体)、嵌套的 <code>&lt;a&gt;</code> 拆开、重复属性保留第一个、<code>&lt;/br&gt;</code> 当作 <code>&lt;br&gt;</code>、表格外的 <code>&lt;td&gt;</code> 被忽略。libxml2 和 html.parser 有不少不做(libxml2 会隐式关闭 <p>、会拆开嵌套的 <a>,但不补 tbody、不重建格式标签;html.parser 几乎都不做),于是树的形状不同,选择器的结果也不同。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">解析器对比</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "b", "kind": "bars", "label": "数字对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "22 个残缺 HTML 片段放进 <body>,以真实 Chrome 154(headless)解析出的 body.innerHTML 为标准答案,比较前统一了空白、标签名大小写、<br/> 与 <br>、属性顺序:selectolax 1.0.0(Lexbor 后端)22 / 22 一致;bs4 + html5lib 22 / 22;html5lib 本身 21 / 22(唯一的不同是属性值里的 > 没被转义,是序列化的写法差异,不是解析差异);lxml.html 12 / 22;bs4 + lxml 12 / 22;bs4 + html.parser 只有 6 / 22。按 HTML 规范实现的解析器(html5lib、Lexbor)与浏览器一致,lxml 的 libxml2 和标准库 html.parser 不是。", "s": {"t": {"lines": ["  解析器                            与 Chrome 一致的片段数", "  lxml.html 6.1.1                     12 / 22", "  html5lib 1.1                        21 / 22", "  bs4 + html.parser                    6 / 22", "  bs4 + lxml                          12 / 22", "  bs4 + html5lib                      22 / 22", "  selectolax 1.0.0                    22 / 22"], "cur": [], "mark": [], "done": []}, "done": [2, 5, 6], "mark": [1, 3, 4], "b": {"items": [["selectolax(Lexbor)", 22, "22"], ["bs4 + html5lib", 22, "22"], ["html5lib", 21, "21"], ["lxml.html", 12, "12"], ["bs4 + html.parser", 6, "6"]], "max": 22, "cur": [], "mark": [3, 4], "done": [0, 1, 2]}, "kv": {"items": [["selectolax / bs4+html5lib", "22 / 22"], ["lxml.html / bs4+lxml", "12 / 22"], ["bs4 + html.parser", "6 / 22"]], "hl": ["bs4 + html.parser"]}}}, {"note": "差异的具体样子(Chrome 的结果 → 不一致的解析器):<p>one<p>two → Chrome 是两个并列的 <p>,html.parser 嵌套成 <p>one<p>two<\/p><\/p>;<b><i>x<\/b>y<\/i> → Chrome 是 <b><i>x<\/i><\/b><i>y<\/i>(y 仍然是斜体),lxml 和 html.parser 的 y 不在 <i> 里;<table> 里没有 tbody → Chrome 自动补上 <tbody>,lxml 和 html.parser 不补;<a> 嵌套 → Chrome 拆成两个并列的 <a>,html.parser 保持嵌套;重复属性 href=x.html href=y.html → Chrome 保留第一个 x.html,html.parser 保留最后一个 y.html;a<\/br>b → Chrome 变成 <br>,其它解析器直接吞掉;<div/>x → Chrome 当作未闭合的 <div> 把后面都包进去,lxml、html.parser 当作空元素;<td> 在 <table> 外 → Chrome 丢掉标签留下文字 ab,lxml 保留 <td>;嵌套 <form> → Chrome 忽略内层 <form>。所有这些差别,会让同一个 CSS 选择器或 XPath 在不同解析器里选中不同的元素。", "s": {"t": {"lines": ["  未闭合的 <p>:输入 '<p>one<p>two'", "      Chrome → '<p>one<\/p><p>two<\/p>'", "      bs4 + html.parser → '<p>one<p>two<\/p><\/p>'", "  错位嵌套的格式标签:输入 '<b><i>x<\/b>y<\/i>'", "      Chrome → '<b><i>x<\/i><\/b><i>y<\/i>'", "      lxml.html 6.1.1 → '<b><i>x<\/i><\/b>y'", "      bs4 + html.parser → '<b><i>x<\/i><\/b>y'", "      bs4 + lxml → '<b><i>x<\/i><\/b>y'", "  表格没有 tbody:输入 '<table><tr><td>a<\/td><\/tr><\/table>'", "      Chrome → '<table><tbody><tr><td>a<\/td><\/tr><\/tbody><\/table>'", "      lxml.html 6.1.1 → '<table><tr><td>a<\/td><\/tr><\/table>'", "      bs4 + html.parser → '<table><tr><td>a<\/td><\/tr><\/table>'", "      bs4 + lxml → '<table><tr><td>a<\/td><\/tr><\/table>'", "  表格里的游离文字:输入 '<table>text<tr><td>a<\/td><\/tr><\/table>'", "      Chrome → 'text<table><tbody><tr><td>a<\/td><\/tr><\/tbody><\/table>'", "      lxml.html 6.1.1 → '<table>text<tr><td>a<\/td><\/tr><\/table>'", "      bs4 + html.parser → '<table>text<tr><td>a<\/td><\/tr><\/table>'", "      bs4 + lxml → '<table>text<tr><td>a<\/td><\/tr><\/table>'", "  嵌套的 <a>:输入 '<a href=1>x<a href=2>y<\/a><\/a>'", "      Chrome → '<a href=\"1\">x<\/a><a href=\"2\">y<\/a>'", "      bs4 + html.parser → '<a href=\"1\">x<a href=\"2\">y<\/a><\/a>'", "  <div> 里的 <p> 被 <\/div> 截断:输入 '<div><p>x<\/div>y<\/p>'", "      Chrome → '<div><p>x<\/p><\/div>y<p><\/p>'", "      lxml.html 6.1.1 → '<div><p>x<\/p><\/div>y'", "      bs4 + html.parser → '<div><p>x<\/p><\/div>y'", "      bs4 + lxml → '<div><p>x<\/p><\/div>y'", "  重复的属性:输入 '<a href=x.html href=y.html>t<\/a>'", "      Chrome → '<a href=\"x.html\">t<\/a>'", "      bs4 + html.parser → '<a href=\"y.html\">t<\/a>'", "  <\/br> 结束标签:输入 'a<\/br>b'", "      Chrome → 'a<br>b'", "      lxml.html 6.1.1 → 'ab'", "      bs4 + html.parser → 'ab'", "      bs4 + lxml → 'ab'", "  属性值缺少结尾引号:输入 '<a href=\"x>text<\/a><a href=\"y\">z<\/a>'", "      Chrome → '<a href=\"x&gt;text&lt;/a&gt;&lt;a href=\" y\"=\"\">z<\/a>'", "      lxml.html 6.1.1 → '<a href=\"x&gt;text&lt;/a&gt;&lt;a%20href=\" y\">z<\/a>'", "      html5lib 1.1 → '<a href=\"x>text&lt;/a>&lt;a href=\" y\"=\"\">z<\/a>'", "  没有分号的实体:输入 '&copy 2026 &amp &notit; &lt'", "      Chrome → '© 2026 &amp; ¬it; &lt;'", "      bs4 + html.parser → '© 2026 &amp; &amp;notit &lt;'", "  <script> 里有 <\/div>:输入 '<script>var s = \"<\/div>\";<\/script><p>after<\/p>'", "      Chrome → '<script>var s = \"<\/div>\";<\/script><p>after<\/p>'", "      其它解析器全部一致", "  <li> 没有 <ul>:输入 '<li>a<li>b'", "      Chrome → '<li>a<\/li><li>b<\/li>'", "      bs4 + html.parser → '<li>a<li>b<\/li><\/li>'", "  <select> 里的未闭合 <option>:输入 '<select><option>a<option>b<\/select>'", "      Chrome → '<select><option>a<\/option><option>b<\/option><\/select>'", "      bs4 + html.parser → '<select><option>a<option>b<\/option><\/option><\/select>'", "  <p> 里放 <table>:输入 '<p>t<table><tr><td>x<\/td><\/tr><\/table>'", "      Chrome → '<p>t<\/p><table><tbody><tr><td>x<\/td><\/tr><\/tbody><\/table>'", "      lxml.html 6.1.1 → '<p>t<\/p><table><tr><td>x<\/td><\/tr><\/table>'", "      bs4 + html.parser → '<p>t<table><tr><td>x<\/td><\/tr><\/table><\/p>'", "      bs4 + lxml → '<p>t<\/p><table><tr><td>x<\/td><\/tr><\/table>'", "  自闭合的非空元素 <div/>:输入 '<div/>x<span/>y'", "      Chrome → '<div>x<span>y<\/span><\/div>'", "      lxml.html 6.1.1 → '<div><\/div>x<span><\/span>y'", "      bs4 + html.parser → '<div><\/div>x<span><\/span>y'", "      bs4 + lxml → '<div><\/div>x<span><\/span>y'", "  嵌套的 <form>:输入 '<form id=a><form id=b><input><\/form><\/form>'", "      Chrome → '<form id=\"a\"><input><\/form>'", "      lxml.html 6.1.1 → '<form id=\"a\"><\/form><form id=\"b\"><input><\/form>'", "      bs4 + html.parser → '<form id=\"a\"><form id=\"b\"><input/><\/form><\/form>'", "      bs4 + lxml → '<form id=\"a\"><\/form><form id=\"b\"><input/><\/form>'", "  <textarea> 里的标签:输入 '<textarea><b>bold<\/b><\/textarea>'", "      Chrome → '<textarea>&lt;b&gt;bold&lt;/b&gt;<\/textarea>'", "      其它解析器全部一致", "  大小写混用与奇怪属性:输入 '<DIV CLASS=A Id=\"b\" data-X=1><P>x<\/P><\/DIV>'", "      Chrome → '<div class=\"A\" id=\"b\" data-x=\"1\"><p>x<\/p><\/div>'", "      其它解析器全部一致", "  <td> 在 <table> 之外:输入 '<td>a<\/td><td>b<\/td>'", "      Chrome → 'ab'", "      lxml.html 6.1.1 → '<td>a<\/td><td>b<\/td>'", "      bs4 + html.parser → '<td>a<\/td><td>b<\/td>'", "      bs4 + lxml → '<td>a<\/td><td>b<\/td>'", "  <title> 里的标签:输入 '<title><b>t<\/b><\/title><p>x<\/p>'", "      Chrome → '<title>&lt;b&gt;t&lt;/b&gt;<\/title><p>x<\/p>'", "      其它解析器全部一致", "  注释 <!-- a -- b -->:输入 'x<!-- a -- b -->y'", "      Chrome → 'x<!-- a -- b -->y'", "      其它解析器全部一致", "  <!-->:输入 'x<!-->y'", "      Chrome → 'x<!---->y'", "      bs4 + html.parser → 'x<!-- -->y'", "      bs4 + lxml → 'x<!-- -->y'"], "cur": [], "mark": [], "done": []}, "done": [43, 67, 70, 78, 81], "mark": [0, 8, 18, 26, 29, 55, 60], "kv": {"items": [["Chrome(规范)", "补 tbody、拆嵌套 <a>、<\/br> 当 <br>"], ["lxml / html.parser", "多数不补不拆,<\/br> 吞掉"], ["影响", "同一个选择器选出不同的元素"]], "hl": ["影响"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / Python 3.14.8 / requests 2.34.2 / aiohttp 3.14.3 / lxml 6.1.1(系统 Python);所有请求只发给本机自己起的测试服务器(127.0.0.1,端口 9960 以上,不访问任何真实网站);服务器可以按实验需要制造延迟、断连、压缩、重定向等行为,并记录收到的原始请求;计时用 time.perf_counter,数字每次运行会有小幅抖动。标准答案:Chrome 154.0.8037.98(headless,通过 CDP 导航到本机服务器的页面,读 document.body.innerHTML);对照:lxml 6.1.1(lxml.html.document_fromstring)、html5lib 1.1(用它自己的序列化器)、beautifulsoup4 4.15.0 搭配 html.parser / lxml / html5lib、selectolax 1.0.0(Lexbor);后三个第三方库用 pip 装进实验专用目录,实验后删除;比较时统一空白、标签名大小写、<br/>、属性顺序;片段是 22 个手写的残缺 HTML</li><li>没有验证:真实网页(大量脚本、内联样式、嵌套更深)上的一致率;lxml.html 以外的 libxml2 配置(如 recover 选项);Firefox、Safari 是否与 Chrome 一致;解析速度(下一批会单独看);片段放在 <body> 以外的上下文(如 <head>、<svg>、<math>)时的行为;selectolax 的旧 Modest 后端(已弃用,没有测)</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="crawler-xpath-vs-css.html">
+    <div>
+      <div class="t1">下一篇 · 爬虫工程 47</div>
+      <div class="t2">XPath 与 CSS 选择器:表达能力与耗时</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>爬虫工程 · 解析器对比:lxml、html.parser、html5lib 如何处理残缺 HTML · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

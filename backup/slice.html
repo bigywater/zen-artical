@@ -1,0 +1,771 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>Go slice 内部原理</title>
+<meta name="description" content="底层数组共享、扩容策略与切片别名陷阱的真实验证。">
+<link rel="canonical" href="https://bigywater.tech/slice.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Go slice 内部原理">
+<meta property="og:description" content="底层数组共享、扩容策略与切片别名陷阱的真实验证。">
+<meta property="og:url" content="https://bigywater.tech/slice.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Go slice 内部原理">
+<meta name="twitter:description" content="底层数组共享、扩容策略与切片别名陷阱的真实验证。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#FAF8F5; --surface:#FFFFFF; --surface-2:#F1EEE8; --surface-3:#E9E4D8;
+  --ink:#201C2B; --ink-soft:#55506A; --ink-faint:#8B85A0;
+  --line:#E4DFD5; --line-soft:#EDE9DF;
+  --mem-c:#1B8A76; --mem-soft:#D7F0E9;
+  --header-c:#4C5FD6; --header-soft:#E4E7FC;
+  --grow-c:#B33B78; --grow-soft:#F7E0EC;
+  --warn:#B8791A; --warn-soft:#FBEBD3;
+  --code-bg:#211D30; --code-ink:#E7E2F5; --code-comment:#8D84AE; --code-kw:#7FD4C7; --code-str:#E3B368;
+  --shadow:0 1px 2px rgba(32,28,43,.06),0 10px 28px -14px rgba(32,28,43,.16);
+  --radius:12px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#15121F; --surface:#1D1930; --surface-2:#241F3B; --surface-3:#2C2647;
+    --ink:#EDE9F7; --ink-soft:#B5AECB; --ink-faint:#756D91;
+    --line:#332C4D; --line-soft:#2A2440;
+    --mem-c:#4FD1B3; --mem-soft:#163B34;
+    --header-c:#8B97F0; --header-soft:#23274A;
+    --grow-c:#E88AB8; --grow-soft:#3B2030;
+    --warn:#E3A94C; --warn-soft:#3A2A16;
+    --code-bg:#0F0D1A; --code-ink:#E7E2F5; --code-comment:#786F9C; --code-kw:#7FD4C7; --code-str:#E3B368;
+    --shadow:0 1px 2px rgba(0,0,0,.35),0 14px 32px -16px rgba(0,0,0,.55);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#15121F; --surface:#1D1930; --surface-2:#241F3B; --surface-3:#2C2647;
+  --ink:#EDE9F7; --ink-soft:#B5AECB; --ink-faint:#756D91;
+  --line:#332C4D; --line-soft:#2A2440;
+  --mem-c:#4FD1B3; --mem-soft:#163B34;
+  --header-c:#8B97F0; --header-soft:#23274A;
+  --grow-c:#E88AB8; --grow-soft:#3B2030;
+  --warn:#E3A94C; --warn-soft:#3A2A16;
+  --code-bg:#0F0D1A; --code-ink:#E7E2F5; --code-comment:#786F9C; --code-kw:#7FD4C7; --code-str:#E3B368;
+  --shadow:0 1px 2px rgba(0,0,0,.35),0 14px 32px -16px rgba(0,0,0,.55);
+}
+*{box-sizing:border-box;}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;}
+.wide{max-width:1080px;margin:0 auto;padding:0 22px;}
+.prose{max-width:1080px;margin:0 auto;padding:0 22px;}
+h1,h2,h3{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;letter-spacing:-.01em;text-wrap:balance;}
+
+header.hero{padding:64px 0 30px;}
+.eyebrow{font-size:12.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-faint);margin:0 0 14px;}
+h1{font-size:clamp(30px,5vw,44px);margin:0 0 16px;line-height:1.12;}
+.hero-sub{font-size:17px;color:var(--ink-soft);margin:0 0 22px;}
+.meta-row{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--ink-faint);}
+.meta-row span{display:inline-flex;align-items:center;gap:6px;}
+
+.legend-row{display:flex;gap:10px;flex-wrap:wrap;margin:28px 0 4px;}
+.legend-chip{display:inline-flex;align-items:center;gap:8px;padding:7px 13px;border-radius:999px;border:1px solid var(--line);background:var(--surface);font-size:13px;font-weight:600;}
+.legend-dot{width:11px;height:11px;border-radius:50%;flex:none;}
+.legend-chip .mem-dot{background:var(--mem-c);} .legend-chip .header-dot{background:var(--header-c);} .legend-chip .grow-dot{background:var(--grow-c);}
+
+section{padding:40px 0;}
+section.divider-top{border-top:1px solid var(--line);}
+h2{font-size:22px;margin:0 0 4px;}
+.section-kicker{font-size:12.5px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.08em;font-weight:700;margin:0 0 8px;}
+p{font-size:15.5px;color:var(--ink-soft);margin:0 0 16px;}
+.prose p b, .prose li b{color:var(--ink);font-weight:700;}
+.prose ul{padding-left:22px;font-size:15.5px;color:var(--ink-soft);}
+.prose li{margin-bottom:8px;}
+.mem-tag{color:var(--mem-c);font-weight:700;}
+.header-tag{color:var(--header-c);font-weight:700;}
+.grow-tag{color:var(--grow-c);font-weight:700;}
+
+.entity-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:22px 0;}
+@media (max-width:760px){.entity-cards{grid-template-columns:1fr;}}
+.ecard{border:1px solid var(--line);border-radius:var(--radius);padding:18px;background:var(--surface);box-shadow:var(--shadow);}
+.ecard .etitle{font-family:ui-monospace,monospace;font-size:18px;font-weight:700;display:flex;align-items:center;gap:9px;margin-bottom:8px;}
+.ecard.mem .etitle{color:var(--mem-c);} .ecard.header .etitle{color:var(--header-c);} .ecard.grow .etitle{color:var(--grow-c);}
+.ecard p{font-size:14px;margin:0;}
+.edot{width:13px;height:13px;border-radius:50%;flex:none;}
+.ecard.mem .edot{background:var(--mem-c);} .ecard.header .edot{background:var(--header-c);} .ecard.grow .edot{background:var(--grow-c);}
+
+.code-quote{background:var(--code-bg);border-radius:var(--radius);overflow:hidden;margin:20px 0;box-shadow:var(--shadow);}
+.code-head{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;background:rgba(255,255,255,.04);border-bottom:1px solid rgba(255,255,255,.08);}
+.code-path{font-family:ui-monospace,monospace;font-size:12.5px;color:var(--code-comment);}
+.code-link{font-family:ui-monospace,monospace;font-size:12px;color:var(--code-kw);text-decoration:none;white-space:nowrap;}
+.code-link:hover{text-decoration:underline;}
+.code-quote pre{margin:0;padding:16px;overflow-x:auto;}
+.code-quote code{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;font-size:12.8px;line-height:1.6;color:var(--code-ink);white-space:pre;}
+
+.callout{border-left:3px solid var(--warn);background:var(--warn-soft);border-radius:0 8px 8px 0;padding:12px 16px;font-size:14px;color:var(--ink);margin:18px 0;}
+.callout b{color:var(--warn);}
+.callout.bad{border-left-color:var(--grow-c);background:var(--grow-soft);}
+.callout.bad b{color:var(--grow-c);}
+
+/* ---- simulator ---- */
+.sim-panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px;margin:22px 0;}
+.sim-controls{display:flex;align-items:center;gap:8px;margin-bottom:18px;flex-wrap:wrap;}
+button.ctrl{appearance:none;border:1px solid var(--line);background:var(--surface-2);color:var(--ink);padding:8px 14px;border-radius:8px;font-size:14px;cursor:pointer;font-weight:600;transition:background .15s,border-color .15s;font-family:ui-monospace,monospace;}
+button.ctrl:hover:not(:disabled){background:var(--surface-3);}
+button.ctrl:disabled{opacity:.4;cursor:not-allowed;}
+button.ctrl.primary{background:var(--ink);color:var(--bg);border-color:var(--ink);}
+button.ctrl:focus-visible{outline:2px solid var(--header-c);outline-offset:2px;}
+.sim-progress{font-size:12.5px;color:var(--ink-faint);margin-left:2px;font-family:ui-monospace,monospace;}
+.spacer{flex:1;}
+select.ctrl{padding:6px 10px;font-family:ui-monospace,monospace;}
+
+.headers-row{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;}
+.header-card{border:2px solid var(--line);border-radius:10px;padding:10px 14px;background:var(--surface-2);min-width:220px;flex:1;transition:border-color .25s;}
+.header-card.s1{border-color:var(--header-c);}
+.header-card.s2{border-color:var(--grow-c);}
+.header-card-title{font-family:ui-monospace,monospace;font-weight:700;font-size:14px;margin-bottom:6px;}
+.header-card.s1 .header-card-title{color:var(--header-c);}
+.header-card.s2 .header-card-title{color:var(--grow-c);}
+.header-fields{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--ink-faint);}
+.header-fields b{color:var(--ink);}
+.header-fields span.flash{animation:flashfield .8s ease;}
+@keyframes flashfield{0%{color:var(--grow-c);}100%{color:var(--ink);}}
+
+.array-block{margin-bottom:14px;}
+.array-block-label{font-size:11.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-faint);font-weight:700;margin-bottom:6px;font-family:ui-monospace,monospace;}
+.cells-row{display:flex;gap:5px;flex-wrap:wrap;}
+.cell{width:60px;border-radius:8px;border:2px solid var(--line);background:var(--surface);overflow:hidden;transition:border-color .25s,background .25s;}
+.cell-idx{font-size:9.5px;color:var(--ink-faint);text-align:center;padding-top:3px;font-family:ui-monospace,monospace;}
+.cell-val{font-size:14px;font-weight:700;text-align:center;padding:6px 0 8px;font-family:ui-monospace,monospace;color:var(--ink);}
+.cell-range{height:4px;display:flex;}
+.cell-range span{flex:1;}
+.cell-range .r-s1{background:var(--header-c);}
+.cell-range .r-s2{background:var(--grow-c);}
+.cell-range .r-none{background:transparent;}
+.cell[data-flash="true"]{border-color:var(--grow-c);background:var(--grow-soft);}
+.cell[data-empty="true"] .cell-val{color:var(--ink-faint);}
+
+.sim-desc{background:var(--surface-2);border-radius:8px;padding:12px 14px;font-size:13.5px;color:var(--ink-soft);margin-bottom:14px;min-height:44px;border:1px solid var(--line-soft);}
+.sim-desc b{color:var(--ink);}
+.sim-formula{font-family:ui-monospace,monospace;font-size:13px;color:var(--ink-faint);margin-bottom:8px;}
+
+.sim-log{max-height:190px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:8px;}
+.log-item{padding:6px 9px;border-radius:6px;font-size:12.5px;color:var(--ink-faint);cursor:pointer;font-family:ui-monospace,monospace;display:flex;gap:8px;}
+.log-item:hover{background:var(--surface-2);}
+.log-item[data-active="true"]{background:var(--header-soft);color:var(--ink);font-weight:600;}
+.log-idx{min-width:22px;color:var(--ink-faint);}
+
+.refs{font-size:14px;color:var(--ink-soft);}
+.refs li{margin-bottom:10px;}
+.refs a{color:var(--header-c);}
+footer.endnote{border-top:1px solid var(--line);padding:26px 0 60px;font-size:13px;color:var(--ink-faint);}
+
+.legend2{display:flex;gap:16px;flex-wrap:wrap;margin-top:14px;font-size:12.5px;color:var(--ink-faint);}
+.legend2 span{display:inline-flex;align-items:center;gap:6px;}
+.lg-bar{width:16px;height:4px;border-radius:2px;display:inline-block;}
+.lg-bar.s1{background:var(--header-c);}
+.lg-bar.s2{background:var(--grow-c);}
+.lg-cell{width:14px;height:14px;border-radius:4px;border:2px solid var(--grow-c);background:var(--grow-soft);display:inline-block;}
+
+@media (prefers-reduced-motion:reduce){*{transition:none !important;}}
+</style>
+
+<article>
+<header class="hero prose">
+  <p class="eyebrow">GO 运行时内部原理</p>
+  <h1>Go slice 内部原理</h1>
+  <p class="hero-sub">slice 不是数组,是一个只有 24 字节的小结构体:指针 + 长度 + 容量。append 有时候是"原地写、大家共享同一块内存",有时候是"另起炉灶、彻底分家"——区别只在于容量还够不够。这篇文章配了一个<b>和真实 <code class="mono">go run</code> 输出逐项比对过</b>的内存模拟场景,演示一次真实存在的"隐形覆盖"事故是怎么发生的。</p>
+  <div class="meta-row">
+    <span>· 引用 Go 源码 commit <code class="mono">72aa6db7</code>,文件 <code class="mono">src/runtime/slice.go</code></span>
+    <span>· 源码遵循 BSD-3-Clause 协议,版权归 The Go Authors 所有,下文均为简短引用并附原文链接</span>
+  </div>
+  <div class="legend-row">
+    <span class="legend-chip"><span class="legend-dot header-dot"></span>切片头 · 24 字节的 ptr/len/cap,复制切片只复制这个头</span>
+    <span class="legend-chip"><span class="legend-dot mem-dot"></span>底层数组 · 真正存数据的地方,可能被多个切片同时指着</span>
+    <span class="legend-chip"><span class="legend-dot grow-dot"></span>growslice · cap 不够时另起炉灶,从此和别人分家</span>
+  </div>
+</header>
+
+<section class="prose">
+  <p class="section-kicker">01 · slice 到底是什么</p>
+  <h2>三个字段,仅此而已</h2>
+  <p>Go 里的 <code class="mono">[]T</code> 在运行时就是这样一个结构体:</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">slice.go · L16-L20</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/runtime/slice.go#L16-L20" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>type slice struct {
+	array unsafe.Pointer
+	len   int
+	cap   int
+}</code></pre>
+  </div>
+  <p>把一个 slice 赋值给另一个变量、当参数传给函数,复制的都只是这 <b>24 个字节</b>(64 位系统上,一个指针 + 两个 int),底层数组不会被复制。这意味着两个 slice 变量完全可能<b>指向同一块内存</b>——通过下标改其中一个,另一个也会跟着变。而 <code class="mono">append</code> 会不会打破这种共享,完全取决于容量还够不够:够,就在原地写;不够,就分配一块新内存、拷贝过去、旧的不再共享。这个"够不够"的边界,正是本文要讲清楚的地方。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">02 · 三个核心概念</p>
+  <h2>切片头 / 底层数组 / growslice</h2>
+  <div class="entity-cards">
+    <div class="ecard header"><div class="etitle"><span class="edot"></span>切片头</div><p>指针 + len + cap 三个字段。len 是"当前能看到多少个元素",cap 是"不重新分配内存的前提下,最多能长到多少"。两个 slice 的头可以指向同一块底层数组的不同(或重叠的)区间。</p></div>
+    <div class="ecard mem"><div class="etitle"><span class="edot"></span>底层数组</div><p>真正连续存放元素的内存。用 <code class="mono">make</code>、字面量或者一次扩容创建,创建之后大小固定——它自己不知道有几个 slice 头正指着它。</p></div>
+    <div class="ecard grow"><div class="etitle"><span class="edot"></span>growslice</div><p>只有 <code class="mono">len+num > cap</code> 时才会被调用:申请一块新的、通常更大的内存,把旧数据搬过去,再把新元素写进去。搬完之后,这个 slice 的头指向新数组,和原来共享旧数组的其它 slice 彻底没关系了。</p></div>
+  </div>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">slice.go · L102-L118(makeslice)</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/runtime/slice.go#L102-L118" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>func makeslice(et *_type, len, cap int) unsafe.Pointer {
+	mem, overflow := math.MulUintptr(et.Size_, uintptr(cap))
+	if overflow || mem &gt; maxAlloc || len &lt; 0 || len &gt; cap {
+		// NOTE: Produce a 'len out of range' error instead of a
+		// 'cap out of range' error when someone does make([]T, bignumber).
+		// 'cap out of range' is true too, but since the cap is only being
+		// supplied implicitly, saying len is clearer.
+		// See golang.org/issue/4085.
+		mem, overflow := math.MulUintptr(et.Size_, uintptr(len))
+		if overflow || mem &gt; maxAlloc || len &lt; 0 {
+			panicmakeslicelen()
+		}
+		panicmakeslicecap()
+	}
+
+	return mallocgc(mem, et, true)
+}</code></pre>
+  </div>
+</section>
+
+<section class="prose divider-top" id="sim-section">
+  <p class="section-kicker">03 · 现场直播</p>
+  <h2>一次真实存在的"隐形覆盖"事故</h2>
+  <p>下面这段场景<b>先用 <code class="mono">go run</code> 跑出真实结果,再逐项比对生成的轨迹</b>:两个 slice 共享同一个底层数组,其中一个的 append 会在你完全没有碰它的情况下,悄悄改变另一个的内容。</p>
+</section>
+
+<section class="wide">
+  <div class="sim-panel">
+    <div class="headers-row" id="headersRow"></div>
+
+    <div id="arraysWrap"></div>
+
+    <div class="sim-desc">
+      <div class="sim-formula" id="simFormula">&mdash;</div>
+      <div id="simDesc">点击"下一步"或"播放"开始。</div>
+    </div>
+
+    <div class="sim-controls">
+      <button class="ctrl" id="btnReset">重置</button>
+      <button class="ctrl" id="btnPrev">上一步</button>
+      <button class="ctrl primary" id="btnPlay">播放</button>
+      <button class="ctrl" id="btnNext">下一步</button>
+      <span class="sim-progress" id="simProgress">0 / 0</span>
+      <div class="spacer"></div>
+      <label class="sim-progress" for="simSpeed">速度</label>
+      <select class="ctrl" id="simSpeed">
+        <option value="2200">慢</option>
+        <option value="1300" selected>中</option>
+        <option value="600">快</option>
+      </select>
+    </div>
+
+    <div class="sim-log" id="simLog"></div>
+
+    <div class="legend2">
+      <span><span class="lg-bar s1"></span>s1 当前覆盖的区间(len 以内)</span>
+      <span><span class="lg-bar s2"></span>s2 当前覆盖的区间(len 以内)</span>
+      <span><span class="lg-cell"></span>这一步刚被写入/搬迁的格子</span>
+    </div>
+  </div>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">04 · 扩容公式</p>
+  <h2>2 倍,还是 1.25 倍</h2>
+  <p>要不要扩容、扩多大,由 <code class="mono">nextslicecap</code> 决定——这也是整篇文章里最常被问到的一段源码:</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">slice.go · L326-L358</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/runtime/slice.go#L326-L358" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>func nextslicecap(newLen, oldCap int) int {
+	newcap := oldCap
+	doublecap := newcap + newcap
+	if newLen &gt; doublecap {
+		return newLen
+	}
+
+	const threshold = 256
+	if oldCap &lt; threshold {
+		return doublecap
+	}
+	for {
+		// Transition from growing 2x for small slices
+		// to growing 1.25x for large slices. This formula
+		// gives a smooth-ish transition between the two.
+		newcap += (newcap + 3*threshold) &gt;&gt; 2
+
+		// We need to check `newcap &gt;= newLen` and whether `newcap` overflowed.
+		// newLen is guaranteed to be larger than zero, hence
+		// when newcap overflows then `uint(newcap) &gt; uint(newLen)`.
+		// This allows to check for both with the same comparison.
+		if uint(newcap) &gt;= uint(newLen) {
+			break
+		}
+	}
+
+	// Set newcap to the requested cap when
+	// the newcap calculation overflowed.
+	if newcap &lt;= 0 {
+		return newLen
+	}
+	return newcap
+}</code></pre>
+  </div>
+  <p>规则很直白:原容量小于 256 时直接<b>翻倍</b>;超过 256 之后,翻倍的代价开始变得明显,改成每次增长约 <b>1.25 倍</b>,用一个连续的公式在两种增长率之间做平滑过渡,而不是在 256 这个点上有个突兀的转折。用一个 <code class="mono">[]byte</code> 实测(<code class="mono">go run</code>,Go 1.26)增长轨迹长这样:</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">go run 真实输出(逐次触发扩容时打印)</span><span class="code-path">已验证</span></div>
+    <pre><code>len=  1 cap= 32  (grew from 0)
+len= 33 cap= 64  (grew from 32)
+len= 65 cap=128  (grew from 64)
+len=129 cap=256  (grew from 128)
+len=257 cap=512  (grew from 256)
+len=513 cap=896  (grew from 512)</code></pre>
+  </div>
+  <p>32→64→128→256→512 都还是干净的翻倍,直到 512→896——涨幅只有 1.75 倍而不是精确的 2 倍或 1.25 倍。这就引出下一节的内容:实际拿到的 cap,还要再被内存分配器修正一轮。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">05 · 为什么 cap 有时候"不是整数倍"</p>
+  <h2>size class 取整</h2>
+  <p><code class="mono">nextslicecap</code> 算出来的只是一个"期望容量"。真正申请内存时,<code class="mono">growslice</code> 还会调用 <code class="mono">roundupsize</code>,把字节数向上取整到内存分配器预先划分好的一个"规格"(size class)——这是 Go 内存分配器为了减少碎片、加速分配统一做的事,不只是切片在用。</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">slice.go · L237-L244(growslice 节选)</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/runtime/slice.go#L237-L244" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>	default:
+		lenmem = uintptr(oldLen) * et.Size_
+		newlenmem = uintptr(newLen) * et.Size_
+		capmem, overflow = math.MulUintptr(et.Size_, uintptr(newcap))
+		capmem = roundupsize(capmem, noscan)
+		newcap = int(capmem / et.Size_)
+		capmem = uintptr(newcap) * et.Size_
+	}</code></pre>
+  </div>
+  <p>所以上一节 512→896 这一跳,其实是 <code class="mono">nextslicecap</code> 先算出约 832,再被 <code class="mono">roundupsize</code> 向上修正到分配器里最接近的规格 896。也正因为这样,<b>永远不要假设 <code class="mono">append</code> 之后的 <code class="mono">cap</code> 一定等于你手算出来的那个数</b>——它可能因为取整而更大。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">06 · growslice 做了什么</p>
+  <h2>分配、搬迁、脱钩</h2>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">slice.go · L134-L165(growslice 文档注释)</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/runtime/slice.go#L134-L165" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>// growslice allocates new backing store for a slice.
+//
+// arguments:
+//
+//	oldPtr = pointer to the slice's backing array
+//	newLen = new length (= oldLen + num)
+//	oldCap = original slice's capacity.
+//	   num = number of elements being added
+//	    et = element type
+//
+// return values:
+//
+//	newPtr = pointer to the new backing store
+//	newLen = same value as the argument
+//	newCap = capacity of the new backing store
+//
+// Requires that uint(newLen) &gt; uint(oldCap).
+// Assumes the original slice length is newLen - num
+//
+// A new backing store is allocated with space for at least newLen elements.
+// Existing entries [0, oldLen) are copied over to the new backing store.
+// Added entries [oldLen, newLen) are not initialized by growslice
+// (although for pointer-containing element types, they are zeroed). They
+// must be initialized by the caller.
+// Trailing entries [newLen, newCap) are zeroed.
+//
+// growslice's odd calling convention makes the generated code that calls
+// this function simpler. In particular, it accepts and returns the
+// new length so that the old length is not live (does not need to be
+// spilled/restored) and the new length is returned (also does not need
+// to be spilled/restored).
+//</code></pre>
+  </div>
+  <p>对应模拟器里的那次扩容:<code class="mono">s2</code> 的 len 已经追上 cap(4),再 append 一个元素就必须先申请新数组,把 <code class="mono">s2</code> 当前能看到的那几个元素原样搬过去,新元素写在后面,剩下的容量留空(置零)。搬完之后 <code class="mono">s2</code> 的切片头整体换成指向新数组——它和 <code class="mono">s1</code> 之间那种"改一个影响另一个"的关系,到这一步彻底结束。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">07 · copy 呢</p>
+  <h2>内置函数 copy 只是老实地搬数据</h2>
+  <p>和 <code class="mono">append</code> 不一样,<code class="mono">copy(dst, src)</code> 从不扩容、也从不分配内存——它只是把 <code class="mono">min(len(dst), len(src))</code> 个元素从 <code class="mono">src</code> 搬到 <code class="mono">dst</code> 已有的空间里,搬不下的部分直接被忽略:</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">slice.go · L391-L406, L422-L429(节选)</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/runtime/slice.go#L391-L429" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>// slicecopy is used to copy from a string or slice of pointerless elements into a slice.
+func slicecopy(toPtr unsafe.Pointer, toLen int, fromPtr unsafe.Pointer, fromLen int, width uintptr) int {
+	if fromLen == 0 || toLen == 0 {
+		return 0
+	}
+
+	n := fromLen
+	if toLen &lt; n {
+		n = toLen
+	}
+
+	if width == 0 {
+		return n
+	}
+
+	size := uintptr(n) * width
+	...
+	if size == 1 { // common case worth about 2x to do here
+		// TODO: is this still worth it with new memmove impl?
+		*(*byte)(toPtr) = *(*byte)(fromPtr) // known to be a byte pointer
+	} else {
+		memmove(toPtr, fromPtr, size)
+	}
+	return n
+}</code></pre>
+  </div>
+  <p>这也是为什么"深拷贝一个 slice、和原来彻底脱离关系"的标准写法是 <code class="mono">dst := make([]T, len(src)); copy(dst, src)</code>——先用 <code class="mono">make</code> 要一块全新的内存,再用 <code class="mono">copy</code> 把值搬过去,两步都不涉及共享。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">08 · 两个经典的坑</p>
+  <h2>顺手提两个常见错误</h2>
+  <ul>
+    <li><b>往函数里传 slice,函数内部的 append 到底会不会影响调用者?</b> 答案是"看运气"——如果函数内 append 没有触发扩容(cap 还够),写的是共享的底层数组,调用者能看到;一旦触发了扩容,函数内部的 slice 头指向了新数组,调用者手里的旧头完全不知情,函数返回后什么都不会变。这正是模拟器场景里 <code class="mono">s1</code>/<code class="mono">s2</code> 那种"一会儿共享一会儿分家"的行为,只是换成了函数调用的形式——不确定性是内建的,不是写法问题。</li>
+    <li><b>三索引切片表达式 <code class="mono">s[low:high:max]</code> 可以把 cap 精确限制成 <code class="mono">max-low</code>。</b> 想切一段出去给别人用、又不希望对方 append 的时候不小心污染你自己后面的数据,就把 <code class="mono">max</code> 设成 <code class="mono">high</code>:这样对方的 slice 一旦 append 就会立刻触发扩容(cap 已经等于 len,没有多余空间),从源头上杜绝共享。</li>
+  </ul>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">三索引切片:主动斩断共享</span></div>
+    <pre><code>full := make([]int, 10)
+danger := full[2:5]       // cap = 8,别人 append 时可能悄悄写到 full[5] 往后
+safe := full[2:5:5]       // cap = 3(= 5-2),len 已经等于 cap
+                           // 别人一 append 就必然扩容,不会碰到 full 的其它部分</code></pre>
+  </div>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">09 · 参考与说明</p>
+  <h2>引用与这个模拟器做了哪些简化</h2>
+  <ul class="refs">
+    <li>本文所有源码引用均来自 <a href="https://github.com/golang/go" target="_blank" rel="noopener">golang/go</a>,commit <code class="mono">72aa6db7943024b48c4d41c1fbc32b57b9fa036e</code>,文件 <code class="mono">src/runtime/slice.go</code>,遵循 Go 项目的 BSD-3-Clause 协议(© The Go Authors)。每段引用都标了具体文件、行号,并附了指向该 commit 的永久链接。</li>
+    <li>模拟器场景和第 04 节的字节切片增长轨迹都是真实跑过的(<code class="mono">go run</code>,Go 1.26),不是手算的猜测值——尤其是 cap 的具体数字,手算 <code class="mono">nextslicecap</code> 拿到的和实际测得的经常对不上,差的那部分就是 <code class="mono">roundupsize</code> 的取整。</li>
+    <li>模拟器省略了 <code class="mono">race</code>/<code class="mono">msan</code>/<code class="mono">asan</code> 检测这些和内存安全工具相关的分支,以及 GC 写屏障相关的处理——它们不影响"共享 vs 分家"这条主线逻辑。</li>
+    <li><code class="mono">roundupsize</code> 具体怎么划分 size class,属于 Go 内存分配器(<code class="mono">mallocgc</code>)自己的话题,这篇没有展开——用一句话概括就是"分配器预先准备了一批固定大小的内存块规格,申请多少字节就找刚好够用的最小规格"。</li>
+  </ul>
+</section>
+
+<footer class="endnote prose">
+  Go 运行时系列 · append 什么时候共享、什么时候分家,本质上永远是同一个问题:这次操作会不会让 len 超过 cap。记住这一条,比记住任何一个具体的扩容倍数都管用。
+</footer>
+</article>
+
+<script>
+var EVENTS = [{"slice": "s1", "array": "A", "len": 3, "cap": 5, "type": "make", "snapshot": {"arrays": {"A": [{"value": null}, {"value": null}, {"value": null}, {"value": null}, {"value": null}]}, "slices": {"s1": {"array": "A", "offset": 0, "len": 3, "cap": 5}}}}, {"slice": "s1", "values": [1, 2, 3], "type": "set-values", "snapshot": {"arrays": {"A": [{"value": 1}, {"value": 2}, {"value": 3}, {"value": null}, {"value": null}]}, "slices": {"s1": {"array": "A", "offset": 0, "len": 3, "cap": 5}}}}, {"slice": "s2", "from_": "s1", "lo": 1, "hi": 3, "type": "reslice", "snapshot": {"arrays": {"A": [{"value": 1}, {"value": 2}, {"value": 3}, {"value": null}, {"value": null}]}, "slices": {"s1": {"array": "A", "offset": 0, "len": 3, "cap": 5}, "s2": {"array": "A", "offset": 1, "len": 2, "cap": 4}}}}, {"slice": "s2", "value": 99, "array": "A", "absIndex": 3, "overwrote": null, "aliasedBy": [], "type": "append-inplace", "snapshot": {"arrays": {"A": [{"value": 1}, {"value": 2}, {"value": 3}, {"value": 99}, {"value": null}]}, "slices": {"s1": {"array": "A", "offset": 0, "len": 3, "cap": 5}, "s2": {"array": "A", "offset": 1, "len": 3, "cap": 4}}}}, {"slice": "s1", "value": 77, "array": "A", "absIndex": 3, "overwrote": 99, "aliasedBy": ["s2"], "type": "append-inplace", "snapshot": {"arrays": {"A": [{"value": 1}, {"value": 2}, {"value": 3}, {"value": 77}, {"value": null}]}, "slices": {"s1": {"array": "A", "offset": 0, "len": 4, "cap": 5}, "s2": {"array": "A", "offset": 1, "len": 3, "cap": 4}}}}, {"slice": "s2", "value": 1000, "array": "A", "absIndex": 4, "overwrote": null, "aliasedBy": [], "type": "append-inplace", "snapshot": {"arrays": {"A": [{"value": 1}, {"value": 2}, {"value": 3}, {"value": 77}, {"value": 1000}]}, "slices": {"s1": {"array": "A", "offset": 0, "len": 4, "cap": 5}, "s2": {"array": "A", "offset": 1, "len": 4, "cap": 4}}}}, {"slice": "s2", "value": 1001, "oldArray": "A", "newArray": "B", "oldCap": null, "newCap": 8, "type": "append-grow", "snapshot": {"arrays": {"A": [{"value": 1}, {"value": 2}, {"value": 3}, {"value": 77}, {"value": 1000}], "B": [{"value": 2}, {"value": 3}, {"value": 77}, {"value": 1000}, {"value": 1001}, {"value": null}, {"value": null}, {"value": null}]}, "slices": {"s1": {"array": "A", "offset": 0, "len": 4, "cap": 5}, "s2": {"array": "B", "offset": 0, "len": 5, "cap": 8}}}}, {"slice": "s2", "value": 1002, "array": "B", "absIndex": 5, "overwrote": null, "aliasedBy": [], "type": "append-inplace", "snapshot": {"arrays": {"A": [{"value": 1}, {"value": 2}, {"value": 3}, {"value": 77}, {"value": 1000}], "B": [{"value": 2}, {"value": 3}, {"value": 77}, {"value": 1000}, {"value": 1001}, {"value": 1002}, {"value": null}, {"value": null}]}, "slices": {"s1": {"array": "A", "offset": 0, "len": 4, "cap": 5}, "s2": {"array": "B", "offset": 0, "len": 6, "cap": 8}}}}, {"slice": "s2", "value": 1003, "array": "B", "absIndex": 6, "overwrote": null, "aliasedBy": [], "type": "append-inplace", "snapshot": {"arrays": {"A": [{"value": 1}, {"value": 2}, {"value": 3}, {"value": 77}, {"value": 1000}], "B": [{"value": 2}, {"value": 3}, {"value": 77}, {"value": 1000}, {"value": 1001}, {"value": 1002}, {"value": 1003}, {"value": null}]}, "slices": {"s1": {"array": "A", "offset": 0, "len": 4, "cap": 5}, "s2": {"array": "B", "offset": 0, "len": 7, "cap": 8}}}}, {"type": "done", "snapshot": {"arrays": {"A": [{"value": 1}, {"value": 2}, {"value": 3}, {"value": 77}, {"value": 1000}], "B": [{"value": 2}, {"value": 3}, {"value": 77}, {"value": 1000}, {"value": 1001}, {"value": 1002}, {"value": 1003}, {"value": null}]}, "slices": {"s1": {"array": "A", "offset": 0, "len": 4, "cap": 5}, "s2": {"array": "B", "offset": 0, "len": 7, "cap": 8}}}}];
+var idx = -1;
+var playTimer = null;
+
+var headersRow = document.getElementById('headersRow');
+var arraysWrap = document.getElementById('arraysWrap');
+var simLog = document.getElementById('simLog');
+
+function coverage(slices){
+  // returns { arrayName: { absIndex: ['s1','s2'] } }
+  var cov = {};
+  Object.keys(slices).forEach(function(name){
+    var s = slices[name];
+    cov[s.array] = cov[s.array] || {};
+    for(var i=0;i<s.len;i++){
+      var idx2 = s.offset + i;
+      cov[s.array][idx2] = cov[s.array][idx2] || [];
+      cov[s.array][idx2].push(name);
+    }
+  });
+  return cov;
+}
+
+function render(){
+  var snap = idx >= 0 ? EVENTS[idx].snapshot : {arrays: {}, slices: {}};
+  var e = idx >= 0 ? EVENTS[idx] : null;
+  var cov = coverage(snap.slices);
+
+  headersRow.innerHTML = '';
+  ['s1','s2'].forEach(function(name){
+    var s = snap.slices[name];
+    if(!s) return;
+    var card = document.createElement('div');
+    card.className = 'header-card ' + name;
+    var title = document.createElement('div');
+    title.className = 'header-card-title';
+    title.textContent = name;
+    var fields = document.createElement('div');
+    fields.className = 'header-fields';
+    var justChanged = e && e.slice === name && (e.type === 'append-grow');
+    fields.innerHTML =
+      '<span>array=<b>' + s.array + '</b></span>' +
+      '<span>offset=<b>' + s.offset + '</b></span>' +
+      '<span' + (justChanged ? ' class="flash"' : '') + '>len=<b>' + s.len + '</b></span>' +
+      '<span' + (justChanged ? ' class="flash"' : '') + '>cap=<b>' + s.cap + '</b></span>';
+    card.appendChild(title); card.appendChild(fields);
+    headersRow.appendChild(card);
+  });
+
+  arraysWrap.innerHTML = '';
+  Object.keys(snap.arrays).sort().forEach(function(arrName){
+    var cells = snap.arrays[arrName];
+    var block = document.createElement('div');
+    block.className = 'array-block';
+    var label = document.createElement('div');
+    label.className = 'array-block-label';
+    label.textContent = 'Array ' + arrName + '  (cap ' + cells.length + ')';
+    var row = document.createElement('div');
+    row.className = 'cells-row';
+    cells.forEach(function(cellData, i){
+      var cell = document.createElement('div');
+      cell.className = 'cell';
+      var isEmpty = cellData.value === null || cellData.value === undefined;
+      cell.dataset.empty = isEmpty ? 'true' : 'false';
+      var flash = e && (
+        (e.type === 'append-inplace' && e.array === arrName && e.absIndex === i) ||
+        (e.type === 'append-grow' && e.newArray === arrName && i === (snap.slices[e.slice].len - 1)) ||
+        (e.type === 'set-values' && arrName === snap.slices[e.slice].array && i < e.values.length)
+      );
+      cell.dataset.flash = flash ? 'true' : 'false';
+      var idxEl = document.createElement('div');
+      idxEl.className = 'cell-idx';
+      idxEl.textContent = '[' + i + ']';
+      var valEl = document.createElement('div');
+      valEl.className = 'cell-val';
+      valEl.textContent = isEmpty ? '·' : cellData.value;
+      var rangeEl = document.createElement('div');
+      rangeEl.className = 'cell-range';
+      var coveredBy = (cov[arrName] && cov[arrName][i]) || [];
+      var half1 = document.createElement('span');
+      half1.className = coveredBy.indexOf('s1') !== -1 ? 'r-s1' : 'r-none';
+      var half2 = document.createElement('span');
+      half2.className = coveredBy.indexOf('s2') !== -1 ? 'r-s2' : 'r-none';
+      rangeEl.appendChild(half1); rangeEl.appendChild(half2);
+      cell.appendChild(idxEl); cell.appendChild(valEl); cell.appendChild(rangeEl);
+      row.appendChild(cell);
+    });
+    block.appendChild(label); block.appendChild(row);
+    arraysWrap.appendChild(block);
+  });
+
+  var formulaEl = document.getElementById('simFormula');
+  var descEl = document.getElementById('simDesc');
+  if(idx < 0){
+    formulaEl.textContent = '—';
+    descEl.innerHTML = '点击"下一步"或"播放"开始。';
+  } else {
+    formulaEl.textContent = formulaFor(e);
+    descEl.innerHTML = descFor(e);
+  }
+
+  document.getElementById('simProgress').textContent = (idx+1) + ' / ' + EVENTS.length;
+  document.getElementById('btnPrev').disabled = idx < 0;
+  document.getElementById('btnNext').disabled = idx >= EVENTS.length - 1;
+
+  var items = simLog.children;
+  for(var i2=0;i2<items.length;i2++){
+    items[i2].setAttribute('data-active', i2 === idx ? 'true' : 'false');
+  }
+  if(idx >= 0 && items[idx]) items[idx].scrollIntoView({block:'nearest'});
+}
+
+function formulaFor(e){
+  if(e.type === 'make') return 's1 := make([]int, ' + e.len + ', ' + e.cap + ')';
+  if(e.type === 'set-values') return 's1[0], s1[1], s1[2] = ' + e.values.join(', ');
+  if(e.type === 'reslice') return 's2 := s1[' + e.lo + ':' + e.hi + ']';
+  if(e.type === 'append-inplace') return e.slice + ' = append(' + e.slice + ', ' + e.value + ')  // 原地写入 ' + e.array + '[' + e.absIndex + ']';
+  if(e.type === 'append-grow') return e.slice + ' = append(' + e.slice + ', ' + e.value + ')  // cap 不够,growslice: ' + e.oldArray + ' → ' + e.newArray;
+  if(e.type === 'done') return '// 演示结束';
+  return '—';
+}
+
+function descFor(e){
+  if(e.type === 'make') return '<code class="mono">make([]int, 3, 5)</code> 分配数组 <b>' + e.array + '</b>(5 个格子),<b>s1</b> 的切片头是 {array: ' + e.array + ', offset: 0, len: 3, cap: 5}。';
+  if(e.type === 'set-values') return '把 s1[0..2] 写成 ' + e.values.join(', ') + '。数组后两格(下标 3、4)还没被任何 slice 覆盖,是预留的容量。';
+  if(e.type === 'reslice') return '<code class="mono">s2 := s1[1:3]</code> 不分配任何新内存,只是新建一个切片头:{array: ' + snapSlice(e) + '} —— <b>s2 和 s1 指向同一块底层数组</b>,只是起点和长度不同。';
+  if(e.type === 'append-inplace') {
+    var extra = '';
+    if(e.aliasedBy && e.aliasedBy.length){
+      extra = '<br><b>⚠️ ' + e.array + '[' + e.absIndex + ']</b> 这个格子同时也在 <b>' + e.aliasedBy.join(', ') + '</b> 的可见范围内——原来的值 <b>' + e.overwrote + '</b> 被悄悄改成了 <b>' + e.value + '</b>,但没有任何代码直接操作过 ' + e.aliasedBy.join(', ') + '!';
+    }
+    return e.slice + ' 的 len(' + '当前' + ')还小于 cap,append 直接把 ' + e.value + ' 写进底层数组 ' + e.array + ' 的下标 ' + e.absIndex + ',len 加 1。' + extra;
+  }
+  if(e.type === 'append-grow') return e.slice + ' 的 len 已经追上 cap,这次 append 必须先分配新数组 <b>' + e.newArray + '</b>(容量 ' + e.newCap + '),把 ' + e.slice + ' 当前能看到的元素原样搬过去,再写入新值 ' + e.value + '。搬完之后 <b>' + e.slice + ' 的切片头整体切换到 ' + e.newArray + '</b>,和 ' + e.oldArray + ' 上的其它 slice(比如 s1)彻底没关系了。';
+  if(e.type === 'done') return '最终 s1 停留在原数组,s2 已经搬到了新数组——从那次扩容开始,它们的命运彻底分开。';
+  return '';
+}
+
+function snapSlice(e){
+  return 's1.array, offset: ' + e.lo + ', len: ' + (e.hi - e.lo);
+}
+
+function labelForEvent(e){
+  if(e.type === 'make') return 'make s1 (len=' + e.len + ' cap=' + e.cap + ')';
+  if(e.type === 'set-values') return 's1 赋初值 ' + e.values.join(',');
+  if(e.type === 'reslice') return 's2 := s1[' + e.lo + ':' + e.hi + ']';
+  if(e.type === 'append-inplace') return 'append(' + e.slice + ', ' + e.value + ') 原地写入' + (e.aliasedBy && e.aliasedBy.length ? ' ⚠️覆盖' : '');
+  if(e.type === 'append-grow') return 'append(' + e.slice + ', ' + e.value + ') 触发扩容';
+  if(e.type === 'done') return '结束';
+  return '';
+}
+
+function buildLog(){
+  simLog.innerHTML = '';
+  EVENTS.forEach(function(e,i){
+    var item = document.createElement('div');
+    item.className = 'log-item';
+    item.setAttribute('data-active','false');
+    var idxSpan = document.createElement('span');
+    idxSpan.className = 'log-idx';
+    idxSpan.textContent = i+1;
+    var txt = document.createElement('span');
+    txt.textContent = labelForEvent(e);
+    item.appendChild(idxSpan); item.appendChild(txt);
+    item.addEventListener('click', function(ii){ return function(){ stopPlay(); idx = ii; render(); }; }(i));
+    simLog.appendChild(item);
+  });
+}
+
+function goTo(i){
+  idx = Math.max(-1, Math.min(EVENTS.length-1, i));
+  render();
+}
+function stopPlay(){
+  if(playTimer){ clearInterval(playTimer); playTimer = null; }
+  document.getElementById('btnPlay').textContent = '播放';
+}
+document.getElementById('btnNext').addEventListener('click', function(){ stopPlay(); goTo(idx+1); });
+document.getElementById('btnPrev').addEventListener('click', function(){ stopPlay(); goTo(idx-1); });
+document.getElementById('btnReset').addEventListener('click', function(){ stopPlay(); goTo(-1); });
+document.getElementById('btnPlay').addEventListener('click', function(){
+  if(playTimer){ stopPlay(); return; }
+  if(idx >= EVENTS.length - 1) goTo(-1);
+  document.getElementById('btnPlay').textContent = '暂停';
+  var speed = parseInt(document.getElementById('simSpeed').value, 10);
+  playTimer = setInterval(function(){
+    if(idx >= EVENTS.length - 1){ stopPlay(); return; }
+    goTo(idx+1);
+  }, speed);
+});
+document.getElementById('simSpeed').addEventListener('change', function(){
+  if(playTimer){ stopPlay(); document.getElementById('btnPlay').click(); }
+});
+
+buildLog();
+goTo(-1);
+</script>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+</body>
+</html>

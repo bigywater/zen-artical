@@ -1,0 +1,20 @@
+from lib import *
+S = SS('h21')
+steps = [
+    step("reflection.Register 之后,v1 的 ListServices 返回四个服务:demo.Demo、grpc.health.v1.Health、grpc.reflection.v1.ServerReflection、grpc.reflection.v1alpha.ServerReflection——反射服务自己也在列表里,并且 Register 同时注册了 v1 和 v1alpha(用 v1alpha 的客户端也得到同样的列表;因为很多老工具只会说 v1alpha)。用 reflection.NewServerV1 + ServerOptions.Services 自定义“公开哪些服务”:只暴露 demo.Demo 时,列表里只有 demo.Demo。反射会把整个服务器的接口告诉任何能连上的人,生产环境要确认是否应该开,或者只公开必要的服务。", t=tl(S(1)), done=lidx(S(1), '自定义 Services'), mark=lidx(S(1), 'v1 ListServices'), b=bars([['Register 后列出的服务数', 4, '4'], ['自定义 Services 后', 1, '1']], 5, mark=[0], done=[1]), kv=KV([['Register', 'v1 + v1alpha 都注册,反射服务自己也在列表里'], ['v1alpha 客户端', '得到同样的 4 个服务'], ['自定义 Services', '只公开 demo.Demo']], ['自定义 Services'])),
+    step("FileContainingSymbol(“demo.Demo”):服务端返回 1 个文件描述符 pb/demo.proto(package demo,没有依赖),客户端把它解析成 FileDescriptorProto,就能列出服务的全部方法:Demo.Unary(.demo.Req) returns (.demo.Resp)、ServerStream(…) returns (stream …)、ClientStream(stream …) returns (…)、Bidi(stream … ) returns (stream …),以及消息字段 Req { msg=1(STRING), n=2(INT32), payload=3(BYTES) }。这些信息是生成代码里内嵌的 .proto 描述,在进程启动时注册到全局注册表,反射服务从那里取出来。", t=tl(S(2)), done=lidx(S(2), 'message Resp'), mark=lidx(S(2), '文件 pb/demo.proto'), b=bars([['返回的文件描述符个数', 1, '1'], ['服务的方法个数', 4, '4'], ['消息个数', 2, '2']], 5, mark=[0], done=[1, 2]), kv=KV([['返回', '1 个 FileDescriptorProto'], ['方法', '4 个,含 stream 标记'], ['字段', '名字、编号、类型都在']], ['返回'])),
+    step("只靠反射得到的描述符,不用生成的代码,动态调用 /demo.Demo/Unary(这就是 grpcurl 一类工具的做法):用 protodesc.NewFiles 把描述符建成注册表,找到方法的输入输出类型,用 dynamicpb 构造请求 {\"msg\":\"hello\",\"n\":7},conn.Invoke 之后响应是 {\"msg\":\"echo:hello\",\"n\":7}(protojson 输出的空格每次可能不同,是 protojson 故意随机化的)。请求和响应的 Go 类型都是 *dynamicpb.Message,不是生成的 pb.Req / pb.Resp。", t=tl(S(3)), done=lidx(S(3), '请求的 Go 类型'), mark=lidx(S(3), 'err=<nil>;响应'), b=bars([['请求使用 dynamicpb.Message(1=是)', 1, '是'], ['响应使用 dynamicpb.Message(1=是)', 1, '是']], 1.2, done=[0, 1]), kv=KV([['描述符', '反射返回'], ['消息', 'dynamicpb 构造和解码'], ['调用', 'conn.Invoke("/demo.Demo/Unary")']], ['消息'])),
+    step("找不到的符号:FileContainingSymbol(“nope.Foo”) 的 RPC 本身是成功的(err=<nil>),错误在响应的 ErrorResponse 里:error_code = 5(NOT_FOUND),message 是“proto: not found”(冒号后面是不换行空格)。另外,同一个反射流里连续问 3 次,客户端只发出 1 个 HEADERS(反射是双向流,可以复用);开 3 个流各问 1 次则是 3 个 HEADERS。所以反射的“找不到”要看响应而不是 RPC 状态;并且一个流里可以连问多次。", t=tl(S(4)), done=lidx(S(4), '同一个流里问 3 次'), mark=lidx(S(4), 'ErrorResponse code=5'), b=bars([['一个流里问 3 次:HEADERS', 1, '1'], ['3 个流各问 1 次:HEADERS', 3, '3']], 3.5, mark=[0], done=[1]), kv=KV([['找不到符号', 'RPC 成功,ErrorResponse.error_code = 5'], ['一个流问 3 次', '1 个 HEADERS'], ['3 个流', '3 个 HEADERS']], ['找不到符号'])),
+]
+A = mkarth('h21', 21, 'gRPC,反射,reflection,grpcurl,动态调用,dynamicpb,Go,真实验证,动画演示',
+    '实测 gRPC 服务端反射:Register 同时注册 v1 和 v1alpha 且列出自己;客户端通过 FileContainingSymbol 拿到 .proto 的描述符并列出方法和字段;只靠描述符用 dynamicpb 动态调用;找不到符号是响应里的错误而不是 RPC 失败。',
+    '没有 .proto 文件时,grpcurl 之类的工具怎么知道服务有哪些方法、请求长什么样?这篇用 grpc-go 的反射服务,自己写了一个迷你版:列服务、查描述符、动态调用。',
+    [('4 个服务', 'reflection.Register 之后 ListServices 返回的服务数(含反射服务自己的 v1 与 v1alpha)'), ('1 个 FileDescriptorProto', '查询 demo.Demo 得到的描述符个数,足以列出 4 个方法与 2 个消息'), ('NOT_FOUND = 5', '查不存在的符号时 ErrorResponse 里的错误码(RPC 本身成功)')],
+    [('反射是什么', '<p>服务端再注册一个 grpc.reflection 服务,把自己编译进二进制的 .proto 描述告诉客户端。客户端因此不需要 .proto 文件就能列出服务、方法和消息结构。</p>'),
+     ('怎么拿到描述符', '<p>用 FileContainingSymbol 按符号名(如 demo.Demo)请求,返回序列化的 FileDescriptorProto。客户端解析后就能知道方法的输入输出类型、是否是流、字段的名字和编号。</p>'),
+     ('动态调用', '<p>有了描述符就能用 dynamicpb 构造消息,再用 conn.Invoke 按方法全名调用,不需要任何生成的代码。grpcurl 就是这么工作的。</p>'),
+     ('错误与流', '<p>找不到符号时,RPC 是成功的,错误在响应的 ErrorResponse 里;反射是双向流,一个流里可以连续问多次。</p>')],
+    steps,
+    [ENV_H + '。反射服务用 google.golang.org/grpc/reflection;客户端用 reflection v1 的客户端接口自己发请求,descriptor 用 protobuf-go 的 protodesc / dynamicpb 解析,没有用 grpcurl;HEADERS 个数来自抓包代理;“Register 同时注册 v1 与 v1alpha”读自 reflection/serverreflection.go',
+     '没有验证:grpcurl / grpcui 等真实工具;依赖多个 .proto 文件时按依赖顺序取文件(FileByFilename);扩展(extension)相关的查询(AllExtensionNumbersOfType 等);反射的安全暴露面(只演示了可以限制公开的服务,没有测权限);反射对服务端启动时间或内存的影响'],
+    '反射')

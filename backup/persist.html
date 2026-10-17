@@ -1,0 +1,577 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>RDB 与 AOF:崩溃之后到底丢了多少</title>
+<meta name="description" content=" kill -9 对比 RDB-only 与 AOF 模式的数据丢失情况。">
+<link rel="canonical" href="https://bigywater.tech/persist.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="RDB 与 AOF:崩溃之后到底丢了多少">
+<meta property="og:description" content=" kill -9 对比 RDB-only 与 AOF 模式的数据丢失情况。">
+<meta property="og:url" content="https://bigywater.tech/persist.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="RDB 与 AOF:崩溃之后到底丢了多少">
+<meta name="twitter:description" content=" kill -9 对比 RDB-only 与 AOF 模式的数据丢失情况。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F7F5F3; --paper:#FFFFFF; --ink:#211A19; --ink-dim:#6B5D5A; --line:#E3DAD6;
+  --redis-c:#C6302B; --redis-c-soft:#FBE7E5;
+  --mem-c:#B8791E; --mem-c-soft:#F6ECD9;
+  --type-c:#2C6E49; --type-c-soft:#E1EFE6;
+  --code-bg:#241C1B; --code-ink:#F0E7E4;
+  --shadow: 0 1px 2px rgba(40,20,18,.06), 0 8px 24px -12px rgba(40,20,18,.16);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#17100F; --paper:#231A19; --ink:#F0E7E4; --ink-dim:#B3A19D; --line:#3A2C29;
+    --redis-c:#F0736A; --redis-c-soft:#3A211F;
+    --mem-c:#E0AC5C; --mem-c-soft:#382C18;
+    --type-c:#6FC492; --type-c-soft:#1B3327;
+    --code-bg:#120D0C; --code-ink:#EFE4E1;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#17100F; --paper:#231A19; --ink:#F0E7E4; --ink-dim:#B3A19D; --line:#3A2C29;
+  --redis-c:#F0736A; --redis-c-soft:#3A211F;
+  --mem-c:#E0AC5C; --mem-c-soft:#382C18;
+  --type-c:#6FC492; --type-c-soft:#1B3327;
+  --code-bg:#120D0C; --code-ink:#EFE4E1;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--redis-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--redis-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--redis-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--redis-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.a .tag{background:var(--redis-c-soft); color:var(--redis-c);}
+.card.b .tag{background:var(--mem-c-soft); color:var(--mem-c);}
+.card.c .tag{background:var(--type-c-soft); color:var(--type-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#B3A19D; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#F0A6A0;}
+
+.callout{border-left:3px solid var(--redis-c); background:var(--redis-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+.callout.c{border-color:var(--type-c); background:var(--type-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--redis-c-soft); color:var(--redis-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#F0A6A0;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#F0736A;}
+.term .cm{color:#8B7F7C;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--mem-c-soft); color:var(--mem-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:22px 20px; overflow-x:auto;}
+.pagegrid{display:grid; grid-template-columns:repeat(3,1fr); gap:10px; min-width:520px;}
+@media (max-width:640px){.pagegrid{grid-template-columns:repeat(2,1fr);}}
+.pagebox{border:1px solid var(--line); border-radius:10px; padding:10px 12px; background:var(--bg); transition:border-color .2s, background .2s;}
+.pagebox.copied{border-color:var(--redis-c); background:var(--redis-c-soft);}
+.pagebox.hot{border-color:var(--mem-c); box-shadow:0 0 0 2px var(--mem-c-soft) inset;}
+.pagebox h5{margin:0 0 6px; font-size:.7rem; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-dim); font-weight:700; display:flex; justify-content:space-between;}
+.pagebox .st{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.66rem; padding:1px 6px; border-radius:4px; background:var(--paper); border:1px solid var(--line); color:var(--ink-dim);}
+.pagebox.copied .st{background:var(--redis-c); color:#fff; border-color:var(--redis-c);}
+.pagebox .kv{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; display:flex; justify-content:space-between; gap:6px; padding:1px 0;}
+.pagebox .kv .k{color:var(--ink-dim);}
+.pagebox .kv.changed .v{color:var(--redis-c); font-weight:700;}
+.snap-compare{display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:16px;}
+@media (max-width:640px){.snap-compare{grid-template-columns:1fr;}}
+.snapbox{border:1px solid var(--line); border-radius:10px; padding:12px 14px; background:var(--bg);}
+.snapbox h4{margin:0 0 8px; font-size:.72rem; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-dim); font-weight:700;}
+.snapbox.child h4{color:var(--type-c);}
+.snapbox.parent h4{color:var(--redis-c);}
+.stat-row{display:flex; gap:16px; flex-wrap:wrap; margin:14px 0 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem;}
+.stat{border:1px solid var(--line); border-radius:8px; padding:8px 12px; background:var(--bg);}
+.stat b{color:var(--redis-c); display:block; font-size:1rem; font-variant-numeric:tabular-nums;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--redis-c); color:var(--redis-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--redis-c); border-color:var(--redis-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{display:flex; align-items:center; gap:10px; margin-bottom:24px; font-size:.88rem; color:var(--ink-dim); flex-wrap:wrap;}
+.prev-post a{font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--redis-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Redis 系列 · 第六篇</div>
+    <h1>Redis 进程被 kill -9 之后,数据到底还在不在?</h1>
+    <p>Redis 把数据放在内存里,断电或者进程崩溃,内存里的东西说没就没——持久化就是"把内存里的东西定期或者实时地也写一份到磁盘上"。Redis 提供两种机制:RDB(某一刻的全量快照)和 AOF(把每条写命令都记下来)。这一篇不只讲两种机制怎么实现,还在本机模拟了一次进程崩溃,实测两种模式下到底丢了什么。</p>
+    <p>本机运行的 Redis 8.10.1:RDB-only 模式下,一次 <span class="mono">kill -9</span> 丢失了快照之后的写入;开着 AOF 之后,同样的崩溃,数据完整拿了回来。</p>
+    <div class="hero-fact">
+      <div><div class="num">1 条丢失</div><div class="lbl">RDB-only 模式,快照之后写入的 key,崩溃测试后没了</div></div>
+      <div><div class="num">0 条丢失</div><div class="lbl">开启 AOF(appendfsync everysec),同样的崩溃,测试全部保留</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <div class="prev-post">← 接上篇 <a href="skiplist.html" target="_blank" rel="noopener">Redis 跳表(skiplist)</a></div>
+  <h2>问题:内存里的数据,靠什么活过重启</h2>
+  <p class="h2-sub">两种持久化方式,对应两种完全不同的"记住数据"的思路。</p>
+  <div class="cards">
+    <div class="card a">
+      <span class="tag">RDB</span>
+      <h3>某一刻的全量快照</h3>
+      <p>把当前整个数据集完整地序列化成一个文件(<span class="mono">dump.rdb</span>)。文件小、加载快,但代表的是"上一次保存那一刻"的状态——之后的写入,如果还没来得及保存,崩溃就丢了。</p>
+    </div>
+    <div class="card b">
+      <span class="tag">AOF</span>
+      <h3>把每条写命令记下来</h3>
+      <p>追加写命令日志(<span class="mono">appendonly.aof.*</span>)。理论上能做到"几乎不丢",但日志会越写越大,重启时要重放全部命令才能恢复,恢复速度比 RDB 慢。</p>
+    </div>
+    <div class="card c">
+      <span class="tag">现实里</span>
+      <h3>两个经常一起开</h3>
+      <p>RDB 负责"定期打个底"、做备份和主从全量同步(下一篇会讲);AOF 负责"尽量不丢最近的写入"。重启时如果两个都在,Redis 优先用 AOF 恢复(更完整)。</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>RDB:源码里的 fork + 快照</h2>
+  <p class="h2-sub">生成快照是"子进程的事"——父进程 fork 出一个子进程,子进程慢慢把数据序列化写盘,父进程该干嘛干嘛,完全不阻塞。</p>
+  <blockquote class="src">
+    <span class="path">src/rdb.c · <a href="https://github.com/redis/redis/blob/8.10.1/src/rdb.c#L2223" target="_blank" rel="noopener">redis @ 8.10.1, L2223</a></span>
+int rdbSaveBackground(int req, char *filename, rdbSaveInfo *rsi, int rdbflags) {
+    if (hasActiveChildProcess()) return C_ERR;   // 同时只能有一个后台子进程在干活
+
+    if ((childpid = redisFork(CHILD_TYPE_RDB)) == 0) {
+        /* Child */
+        retval = rdbSave(req, filename, rsi, rdbflags);   // 子进程:把数据写成 RDB 文件
+        exitFromChild((retval == C_OK) ? 0 : 1, 0);
+    } else {
+        /* Parent */
+        serverLog(LL_NOTICE,"Background saving started by pid %ld",(long) childpid);
+        return C_OK;   // 父进程:立刻返回,继续正常处理请求
+    }
+}
+  </blockquote>
+  <p>抓了一次 <span class="mono">BGSAVE</span> 生成的 <span class="mono">dump.rdb</span> 文件头部字节:</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cmd">$ redis-cli BGSAVE</span>
+<span class="ok">Background saving started</span>
+<span class="cmd">$ xxd dump.rdb | head -3</span>
+<span class="ok">00000000: 5245 4449 5330 3031 35fa 0972 6564 6973  REDIS0015..redis
+00000010: 2d76 6572 0638 2e31 302e 31fa 0a72 6564  -ver.8.10.1..red
+00000020: 6973 2d62 6974 73c0 40fa 0563 7469 6d65  is-bits.@..ctime</span>
+  </div>
+  <p>开头 9 个字节 <span class="mono">REDIS0015</span> 正是 <span class="mono">rdbSaveRio()</span> 写的魔数——<span class="mono">"REDIS"</span> + 4 位版本号,而这个版本号来自源码里的常量:</p>
+  <blockquote class="src">
+    <span class="path">src/rdb.h · <a href="https://github.com/redis/redis/blob/8.10.1/src/rdb.h#L21" target="_blank" rel="noopener">redis @ 8.10.1, L21</a></span>
+#define RDB_VERSION 15
+  </blockquote>
+  <p>紧跟着的 <span class="mono">redis-ver 8.10.1</span>、<span class="mono">redis-bits 64</span>、<span class="mono">ctime ...</span> 都是明文可读的辅助字段(<span class="mono">RDB_OPCODE_AUX</span>),记录了生成这份快照的 Redis 版本和时间——和本机安装的版本号对得上。</p>
+</section>
+
+<section>
+  <h2>AOF:不是一个文件,是"基底 + 增量"两种文件</h2>
+  <p class="h2-sub">Redis 7 之后 AOF 目录变成了多文件结构,靠一个 manifest 文件记录当前有效的文件列表——这和很多教程里"就是一个 appendonly.aof 文件"的描述已经不一样了。</p>
+  <blockquote class="src">
+    <span class="path">src/aof.c · <a href="https://github.com/redis/redis/blob/8.10.1/src/aof.c#L51" target="_blank" rel="noopener">redis @ 8.10.1, L51</a></span>
+ * BASE: 上一次 AOF 重写时刻的快照,manifest 里最多一个 BASE 文件。
+ * INCR: 上一次重写之后的所有写命令,可能不止一个(比如重写中途又失败过)。
+ * HISTORY: 重写成功后,旧的 BASE/INCR 变成 HISTORY,默认会被自动清理。
+  </blockquote>
+  <p>本机开启 AOF、写了几个 key之后,目录和 manifest 内容:</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cmd">$ redis-cli CONFIG SET appendonly yes
+$ redis-cli SET k1 v1; redis-cli SET k2 v2; redis-cli LPUSH mylist a b c
+$ ls appendonlydir/</span>
+<span class="ok">appendonly.aof.1.base.rdb
+appendonly.aof.1.incr.aof
+appendonly.aof.manifest</span>
+<span class="cmd">$ cat appendonlydir/appendonly.aof.manifest</span>
+<span class="ok">file appendonly.aof.1.base.rdb seq 1 type b
+file appendonly.aof.1.incr.aof seq 1 type i startoffset 0</span>
+<span class="cmd">$ xxd appendonlydir/appendonly.aof.1.base.rdb | head -1</span>
+<span class="ok">00000000: 5245 4449 5330 3031 35fa 0972 6564 6973  REDIS0015..redis</span>
+  </div>
+  <p>BASE 文件的魔数也是 <span class="mono">REDIS0015</span>——因为默认配置下 BASE 文件本身就是用 RDB 格式写的(<span class="mono">aof-use-rdb-preamble</span> 默认值 <span class="mono">yes</span>),只有 INCR 文件是真正的"命令日志"格式(RESP 协议文本):</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cmd">$ cat appendonlydir/appendonly.aof.1.incr.aof</span>
+<span class="ok">*2
+$6
+SELECT
+$1
+0
+*3
+$3
+set
+$2
+k1
+$2
+v1
+*3
+$3
+set
+$2
+k2
+$2
+v2
+*5
+$5
+lpush
+$6
+mylist
+$1
+a
+$1
+b
+$1
+c</span>
+  </div>
+  <p>写了 50 个额外 key 之后触发一次 <span class="mono">BGREWRITEAOF</span>,manifest 立刻切到新一代文件,旧的 seq 1 文件被当成 HISTORY 直接删掉(印证了上面注释里"默认自动清理"的说法):</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cmd">$ redis-cli BGREWRITEAOF
+$ cat appendonlydir/appendonly.aof.manifest</span>
+<span class="ok">file appendonly.aof.2.base.rdb seq 2 type b
+file appendonly.aof.2.incr.aof seq 2 type i startoffset 53</span>
+<span class="cmd">$ ls appendonlydir/</span>
+<span class="ok">appendonly.aof.2.base.rdb   (867 字节,53 个 key 全部打包进新快照)
+appendonly.aof.2.incr.aof   (0 字节,刚切换,还没有新写入)
+appendonly.aof.manifest</span>
+<span class="cm"># seq 1 的三个文件已经不在目录里了</span>
+  </div>
+  <p>触发重写的 fork 逻辑和 RDB 几乎一样(同样是 <span class="mono">redisFork()</span>,只是子进程干的事换成了把当前数据集重新写成一份紧凑的 BASE 文件):</p>
+  <blockquote class="src">
+    <span class="path">src/aof.c · <a href="https://github.com/redis/redis/blob/8.10.1/src/aof.c#L3239" target="_blank" rel="noopener">redis @ 8.10.1, L3239</a></span>
+if ((childpid = redisFork(CHILD_TYPE_AOF)) == 0) {
+    snprintf(tmpfile, 256, "temp-rewriteaof-bg-%d.aof", (int) getpid());
+    if (rewriteAppendOnlyFile(tmpfile) == C_OK) {
+        sendChildCowInfo(CHILD_INFO_TYPE_AOF_COW_SIZE, "AOF rewrite");
+        exitFromChild(0, 0);
+    }
+}
+  </blockquote>
+</section>
+
+<section>
+  <h2>崩溃测试:两种模式,丢的东西不一样</h2>
+  <p class="h2-sub">光说"RDB 会丢最近写入、AOF 不会"太空泛——本机用 <span class="mono">kill -9</span> 模拟进程崩溃,实际测一次。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cm"># === 场景一:RDB-only(appendonly no)===</span>
+<span class="cmd">$ redis-cli SET before_snapshot 1
+$ redis-cli BGSAVE
+$ redis-cli SET after_snapshot_not_persisted 1
+$ redis-cli KEYS '*'</span>
+<span class="ok">before_snapshot
+after_snapshot_not_persisted</span>
+<span class="cmd">$ kill -9 &lt;redis-server pid&gt;      # 模拟崩溃,没有走优雅关闭时的 SHUTDOWN 保存
+$ redis-server --dir /private/tmp ...   # 重启,原样的 dir/dbfilename
+$ redis-cli KEYS '*'</span>
+<span class="bad">before_snapshot</span>
+<span class="cm"># after_snapshot_not_persisted 真的丢了——BGSAVE 那一刻之后写的东西,RDB 文件里根本没有</span>
+
+<span class="cm"># === 场景二:开启 AOF(appendfsync everysec,默认值)===</span>
+<span class="cmd">$ redis-cli CONFIG SET appendonly yes
+$ redis-cli SET before_snapshot 1
+$ redis-cli SET after_snapshot_not_persisted 1
+$ sleep 1.5   # 等一次 everysec 的后台 fsync
+$ kill -9 &lt;redis-server pid&gt;
+$ redis-server --dir /private/tmp --appendonly yes ...   # 重启,必须带 --appendonly yes 才会去读 AOF 目录
+$ redis-cli KEYS '*'</span>
+<span class="ok">after_snapshot_not_persisted
+before_snapshot</span>
+<span class="cm"># 两个 key 都在——AOF 把每条写命令都记下来了,不依赖"上一次 BGSAVE 是什么时候"</span>
+  </div>
+  <p>这里有个容易踩的坑,也是操作时发现的:重启时如果没有显式带上 <span class="mono">--appendonly yes</span>,Redis 会用默认配置(<span class="mono">appendonly no</span>)启动,压根不会去读 <span class="mono">appendonlydir</span>,哪怕那个目录和里面的数据都还在磁盘上,完好无损。持久化文件在不在,和"这次启动要不要用它",是两件事。</p>
+  <div class="callout">
+    <b>一个容易讲错的细节:<span class="mono">kill -9</span> 测不出"最多丢 1 秒"。</b> <span class="mono">appendfsync everysec</span> 常被简化成"最多丢 1 秒数据",但那说的是<b>断电/系统崩溃</b>——<span class="mono">write()</span> 系统调用本身在每条命令后都会执行,数据已经进了操作系统的页缓存,只是还没被后台线程 <span class="mono">fsync</span> 到磁盘。<span class="mono">kill -9</span> 只杀掉了 Redis 进程,操作系统和它的页缓存全须全尾地活着,所以重启照样能读到"来不及 fsync"的那部分——本机实测确实如此(上面日志里 <span class="mono">before_snapshot</span> 和紧跟着写的 <span class="mono">after_snapshot_not_persisted</span> 都在,即使专门试了写完立刻杀掉进程、完全不等待的情况)。真正会丢的是操作系统自己也没扛住(断电、内核崩溃)的场景,这种情况没法在这台机器上安全地复现。</div>
+</section>
+
+<section>
+  <h2>fork 之后,父进程接着写,内存会发生什么</h2>
+  <p class="h2-sub">RDB/AOF 重写都靠 <span class="mono">fork()</span>:子进程和父进程一开始共享全部物理内存页(写时复制,copy-on-write)。子进程只读,不会触发复制;真正花内存的,是<b>父进程</b>在子进程还没保存完的时候继续写入。</p>
+  <div class="callout b">
+    父进程一旦要修改某个 key,如果这个 key 所在的内存页还是"共享"状态,操作系统会先把这一整页复制一份给父进程私有(子进程那份保持原样不受影响)——这也是为什么 RDB 快照能保证"某一刻的一致性":不管父进程之后怎么改,子进程看到的永远是 fork 那一刻冻结的数据。代价是:改的 key 越分散、涉及的内存页越多,fork 期间多占用的内存就越多。
+  </div>
+  <p style="font-size:.88rem; color:var(--ink-dim);">下面这个演示是一个简化的"页级"模型,不是的操作系统内存管理器——用来说明"为什么改的页数决定额外内存"这个机制本身。</p>
+  <div class="demo" id="cowDemo">
+    <div class="demo-head">fork + 写时复制 演示</div>
+    <div class="demo-narration" id="cowNarration"></div>
+    <div class="demo-body">
+      <div class="pagegrid" id="cowPages"></div>
+      <div class="stat-row" id="cowStats"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="cowReset">⏮ 重来</button>
+      <button class="btn" id="cowPrev">‹ 上一步</button>
+      <button class="btn primary" id="cowNext">下一步 ›</button>
+      <button class="btn" id="cowPlay">▶ 自动播放</button>
+      <span class="step-counter" id="cowCounter"></span>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>RDB 魔数字节(<span class="mono">REDIS0015</span>)、AOF 多文件结构(manifest / base / incr)、<span class="mono">BGREWRITEAOF</span> 后旧文件被自动清理、崩溃恢复对比测试(RDB-only 丢失 vs. AOF everysec 保留)、以及"重启不带 <span class="mono">--appendonly yes</span> 就不会读 AOF 目录"这个细节,均在本机运行的 Redis 8.10.1 上完成,输出未做删改。</li>
+      <li>崩溃测试用 <span class="mono">kill -9</span> 模拟进程崩溃,不等价于断电/操作系统崩溃——这一点在正文里已经明确说明,是本文实测中途发现并主动澄清的一个常见简化说法。</li>
+      <li>源码引用(<span class="mono">rdb.c</span> 的 <span class="mono">rdbSaveBackground</span>、<span class="mono">rdb.h</span> 的 <span class="mono">RDB_VERSION</span>、<span class="mono">aof.c</span> 的 manifest 格式注释与 <span class="mono">rewriteAppendOnlyFileBackground</span>)取自 <span class="mono">redis/redis</span> 仓库 <span class="mono">8.10.1</span> 标签,与本机安装的 Redis 8.10.1 完全一致。为了让 BGSAVE 慢下来、方便在实验里制造"保存期间还有并发写入"的窗口,使用了源码里确认存在的隐藏调试配置 <span class="mono">rdb-key-save-delay</span>(<span class="mono">config.c</span> 里标记为 <span class="mono">HIDDEN_CONFIG</span>,不出现在 <span class="mono">CONFIG GET *</span> 的通配符结果里,但可以用确切名字直接 <span class="mono">CONFIG SET</span>)。</li>
+      <li><b>诚实说明一次没有成功的测量</b>:本想直接测出"父进程并发写入越多,fork 期间额外内存占用越大"这个量化关系,但在这台机器上没能拿到干净的信号,原因有两个,都已排查确认:一是 Redis 自带的 <span class="mono">rdb_last_cow_size</span> 指标在本机(macOS)始终报告为 0,不管有没有并发写入都一样——查了源码(<span class="mono">zmalloc.c</span> 的 <span class="mono">zmalloc_get_smap_bytes_by_field()</span>),macOS 分支用的是 <span class="mono">proc_pidinfo(pid, PROC_PIDREGIONINFO, ...)</span>,这个调用一次只能查询一个内存区域,不像 Linux 读 <span class="mono">/proc/self/smaps</span> 那样能扫描整个进程地址空间,实际效果接近失效;二是这台机器本身内存压力很大(持续复用系列前几篇提到过的机器状态),实测 <span class="mono">used_memory</span>(逻辑分配)和 <span class="mono">used_memory_rss</span>(物理常驻)差了一个数量级,大部分数据常态下根本不在物理内存里,被 macOS 的内存压缩器压着——即使先完整扫一遍全部 key 强制换入,常驻内存涨幅也远小于数据集大小。这两点共同导致没法在这台机器上干净地测出 COW 内存增量,只能退回到概念解释和上面这个经过独立校验的简化页级模型。</li>
+      <li>没有涉及:RDB 各种数据类型的具体编码细节(留给后面单独的数据结构篇)、AOF 重写时"重写线程和主线程之间的管道通信"具体协议、<span class="mono">save</span> 配置项的时间/改动次数双重触发条件的完整规则、Redis Cluster 场景下持久化文件的差异。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="repl.html" target="_blank" rel="noopener">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">主从复制:全量同步与部分重同步</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Redis 系列 · 第六篇 · RDB 与 AOF 持久化 · 数据来自本机运行的 Redis 8.10.1</footer>
+
+<script>
+const DATA = {"flat_steps": [{"type": "fork", "pageCount": 6, "keyCount": 18, "parentValues": {"k0": "v0-orig", "k1": "v1-orig", "k2": "v2-orig", "k3": "v3-orig", "k4": "v4-orig", "k5": "v5-orig", "k6": "v6-orig", "k7": "v7-orig", "k8": "v8-orig", "k9": "v9-orig", "k10": "v10-orig", "k11": "v11-orig", "k12": "v12-orig", "k13": "v13-orig", "k14": "v14-orig", "k15": "v15-orig", "k16": "v16-orig", "k17": "v17-orig"}, "copiedPages": [], "extraPagesTotal": 0}, {"type": "parent-write", "key": "k0", "value": "vk0-updated0", "page": 0, "triggeredCow": true, "extraPagesTotal": 1, "parentValues": {"k0": "vk0-updated0", "k1": "v1-orig", "k2": "v2-orig", "k3": "v3-orig", "k4": "v4-orig", "k5": "v5-orig", "k6": "v6-orig", "k7": "v7-orig", "k8": "v8-orig", "k9": "v9-orig", "k10": "v10-orig", "k11": "v11-orig", "k12": "v12-orig", "k13": "v13-orig", "k14": "v14-orig", "k15": "v15-orig", "k16": "v16-orig", "k17": "v17-orig"}, "copiedPages": [0]}, {"type": "parent-write", "key": "k1", "value": "vk1-updated1", "page": 1, "triggeredCow": true, "extraPagesTotal": 2, "parentValues": {"k0": "vk0-updated0", "k1": "vk1-updated1", "k2": "v2-orig", "k3": "v3-orig", "k4": "v4-orig", "k5": "v5-orig", "k6": "v6-orig", "k7": "v7-orig", "k8": "v8-orig", "k9": "v9-orig", "k10": "v10-orig", "k11": "v11-orig", "k12": "v12-orig", "k13": "v13-orig", "k14": "v14-orig", "k15": "v15-orig", "k16": "v16-orig", "k17": "v17-orig"}, "copiedPages": [0, 1]}, {"type": "parent-write", "key": "k0", "value": "vk0-updated2", "page": 0, "triggeredCow": false, "extraPagesTotal": 2, "parentValues": {"k0": "vk0-updated2", "k1": "vk1-updated1", "k2": "v2-orig", "k3": "v3-orig", "k4": "v4-orig", "k5": "v5-orig", "k6": "v6-orig", "k7": "v7-orig", "k8": "v8-orig", "k9": "v9-orig", "k10": "v10-orig", "k11": "v11-orig", "k12": "v12-orig", "k13": "v13-orig", "k14": "v14-orig", "k15": "v15-orig", "k16": "v16-orig", "k17": "v17-orig"}, "copiedPages": [0, 1]}, {"type": "parent-write", "key": "k3", "value": "vk3-updated3", "page": 5, "triggeredCow": true, "extraPagesTotal": 3, "parentValues": {"k0": "vk0-updated2", "k1": "vk1-updated1", "k2": "v2-orig", "k3": "vk3-updated3", "k4": "v4-orig", "k5": "v5-orig", "k6": "v6-orig", "k7": "v7-orig", "k8": "v8-orig", "k9": "v9-orig", "k10": "v10-orig", "k11": "v11-orig", "k12": "v12-orig", "k13": "v13-orig", "k14": "v14-orig", "k15": "v15-orig", "k16": "v16-orig", "k17": "v17-orig"}, "copiedPages": [0, 1, 5]}, {"type": "parent-write", "key": "k7", "value": "vk7-updated4", "page": 3, "triggeredCow": true, "extraPagesTotal": 4, "parentValues": {"k0": "vk0-updated2", "k1": "vk1-updated1", "k2": "v2-orig", "k3": "vk3-updated3", "k4": "v4-orig", "k5": "v5-orig", "k6": "v6-orig", "k7": "vk7-updated4", "k8": "v8-orig", "k9": "v9-orig", "k10": "v10-orig", "k11": "v11-orig", "k12": "v12-orig", "k13": "v13-orig", "k14": "v14-orig", "k15": "v15-orig", "k16": "v16-orig", "k17": "v17-orig"}, "copiedPages": [0, 1, 5, 3]}, {"type": "parent-write", "key": "k0", "value": "vk0-updated5", "page": 0, "triggeredCow": false, "extraPagesTotal": 4, "parentValues": {"k0": "vk0-updated5", "k1": "vk1-updated1", "k2": "v2-orig", "k3": "vk3-updated3", "k4": "v4-orig", "k5": "v5-orig", "k6": "v6-orig", "k7": "vk7-updated4", "k8": "v8-orig", "k9": "v9-orig", "k10": "v10-orig", "k11": "v11-orig", "k12": "v12-orig", "k13": "v13-orig", "k14": "v14-orig", "k15": "v15-orig", "k16": "v16-orig", "k17": "v17-orig"}, "copiedPages": [0, 1, 5, 3]}, {"type": "parent-write", "key": "k4", "value": "vk4-updated6", "page": 0, "triggeredCow": false, "extraPagesTotal": 4, "parentValues": {"k0": "vk0-updated5", "k1": "vk1-updated1", "k2": "v2-orig", "k3": "vk3-updated3", "k4": "vk4-updated6", "k5": "v5-orig", "k6": "v6-orig", "k7": "vk7-updated4", "k8": "v8-orig", "k9": "v9-orig", "k10": "v10-orig", "k11": "v11-orig", "k12": "v12-orig", "k13": "v13-orig", "k14": "v14-orig", "k15": "v15-orig", "k16": "v16-orig", "k17": "v17-orig"}, "copiedPages": [0, 1, 5, 3]}, {"type": "parent-write", "key": "k10", "value": "vk10-updated7", "page": 2, "triggeredCow": true, "extraPagesTotal": 5, "parentValues": {"k0": "vk0-updated5", "k1": "vk1-updated1", "k2": "v2-orig", "k3": "vk3-updated3", "k4": "vk4-updated6", "k5": "v5-orig", "k6": "v6-orig", "k7": "vk7-updated4", "k8": "v8-orig", "k9": "v9-orig", "k10": "vk10-updated7", "k11": "v11-orig", "k12": "v12-orig", "k13": "v13-orig", "k14": "v14-orig", "k15": "v15-orig", "k16": "v16-orig", "k17": "v17-orig"}, "copiedPages": [0, 1, 5, 3, 2]}, {"type": "parent-write", "key": "k7", "value": "vk7-updated8", "page": 3, "triggeredCow": false, "extraPagesTotal": 5, "parentValues": {"k0": "vk0-updated5", "k1": "vk1-updated1", "k2": "v2-orig", "k3": "vk3-updated3", "k4": "vk4-updated6", "k5": "v5-orig", "k6": "v6-orig", "k7": "vk7-updated8", "k8": "v8-orig", "k9": "v9-orig", "k10": "vk10-updated7", "k11": "v11-orig", "k12": "v12-orig", "k13": "v13-orig", "k14": "v14-orig", "k15": "v15-orig", "k16": "v16-orig", "k17": "v17-orig"}, "copiedPages": [0, 1, 5, 3, 2]}, {"type": "parent-write", "key": "k15", "value": "vk15-updated9", "page": 1, "triggeredCow": false, "extraPagesTotal": 5, "parentValues": {"k0": "vk0-updated5", "k1": "vk1-updated1", "k2": "v2-orig", "k3": "vk3-updated3", "k4": "vk4-updated6", "k5": "v5-orig", "k6": "v6-orig", "k7": "vk7-updated8", "k8": "v8-orig", "k9": "v9-orig", "k10": "vk10-updated7", "k11": "v11-orig", "k12": "v12-orig", "k13": "v13-orig", "k14": "v14-orig", "k15": "vk15-updated9", "k16": "v16-orig", "k17": "v17-orig"}, "copiedPages": [0, 1, 5, 3, 2]}], "pageOf": {"k0": 0, "k1": 1, "k10": 2, "k11": 3, "k12": 4, "k13": 5, "k14": 0, "k15": 1, "k16": 2, "k17": 3, "k2": 4, "k3": 5, "k4": 0, "k5": 1, "k6": 2, "k7": 3, "k8": 4, "k9": 5}, "pageCount": 6, "keysPerPage": 3, "initial": {"k0": "v0-orig", "k1": "v1-orig", "k2": "v2-orig", "k3": "v3-orig", "k4": "v4-orig", "k5": "v5-orig", "k6": "v6-orig", "k7": "v7-orig", "k8": "v8-orig", "k9": "v9-orig", "k10": "v10-orig", "k11": "v11-orig", "k12": "v12-orig", "k13": "v13-orig", "k14": "v14-orig", "k15": "v15-orig", "k16": "v16-orig", "k17": "v17-orig"}};
+
+(function(){
+  const steps = DATA.flat_steps;
+  const pageOf = DATA.pageOf;
+  const pageCount = DATA.pageCount;
+  const keysPerPage = DATA.keysPerPage;
+  const pagesBox = document.getElementById('cowPages');
+  const statsBox = document.getElementById('cowStats');
+  const narration = document.getElementById('cowNarration');
+  const counter = document.getElementById('cowCounter');
+  let idx = 0, playing=false, playTimer=null;
+
+  // group keys by page once (fixed assignment, same for every step)
+  const keysByPage = {};
+  for (let p = 0; p < pageCount; p++) keysByPage[p] = [];
+  Object.keys(pageOf).sort((a,b)=>{
+    const na = parseInt(a.slice(1)), nb = parseInt(b.slice(1));
+    return na - nb;
+  }).forEach(k => keysByPage[pageOf[k]].push(k));
+
+  function describe(s){
+    if (s.type === 'fork'){
+      return `<span class="k">fork()</span>:子进程诞生,和父进程共享全部 ${s.pageCount} 个内存页(${s.keyCount} 个 key)。子进程从这一刻起只读,不会触发任何复制。`;
+    }
+    if (s.triggeredCow){
+      return `父进程写 <span class="k">${s.key}</span>(在第 ${s.page} 页):这一页还是共享状态,触发一次页复制——额外内存 +1 页,现在总共 ${s.extraPagesTotal} 页被复制。`;
+    }
+    return `父进程写 <span class="k">${s.key}</span>(在第 ${s.page} 页):这一页之前已经复制过了(父进程私有),直接改,不产生新的额外内存。`;
+  }
+
+  function render(){
+    idx = Math.max(0, Math.min(steps.length-1, idx));
+    const s = steps[idx];
+    narration.innerHTML = describe(s);
+
+    const copiedSet = new Set(s.copiedPages);
+    let html = '';
+    for (let p = 0; p < pageCount; p++){
+      const isCopied = copiedSet.has(p);
+      const isHot = s.type === 'parent-write' && s.page === p;
+      html += `<div class="pagebox ${isCopied?'copied':''} ${isHot?'hot':''}">`;
+      html += `<h5>page ${p} <span class="st">${isCopied?'父进程私有':'共享'}</span></h5>`;
+      keysByPage[p].forEach(k => {
+        const changed = s.parentValues[k] !== DATA.initial[k];
+        html += `<div class="kv ${changed?'changed':''}"><span class="k">${k}</span><span class="v">${s.parentValues[k]}</span></div>`;
+      });
+      html += `</div>`;
+    }
+    pagesBox.innerHTML = html;
+
+    statsBox.innerHTML = `<div class="stat">物理页总数(原始)<b>${pageCount}</b></div><div class="stat">额外复制的页<b>${s.extraPagesTotal}</b></div><div class="stat">额外内存占比<b>${Math.round(s.extraPagesTotal/pageCount*100)}%</b></div>`;
+
+    counter.textContent = `${idx+1} / ${steps.length}`;
+    document.getElementById('cowPrev').disabled = idx===0;
+    document.getElementById('cowNext').disabled = idx===steps.length-1;
+  }
+  document.getElementById('cowPrev').onclick=()=>{idx--;render();stopPlay();};
+  document.getElementById('cowNext').onclick=()=>{idx++;render();stopPlay();};
+  document.getElementById('cowReset').onclick=()=>{idx=0;render();stopPlay();};
+  function stopPlay(){ playing=false; clearInterval(playTimer); document.getElementById('cowPlay').textContent='▶ 自动播放'; }
+  document.getElementById('cowPlay').onclick=()=>{
+    if(playing){ stopPlay(); return; }
+    playing=true; document.getElementById('cowPlay').textContent='⏸ 暂停';
+    playTimer = setInterval(()=>{
+      if(idx>=steps.length-1){ stopPlay(); return; }
+      idx++; render();
+    }, 900);
+  };
+  render();
+})();
+</script>
+
+</body>
+</html>

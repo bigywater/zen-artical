@@ -1,0 +1,15 @@
+from lib import *
+S = SS('f162')
+R = J('f162'); co = R['cost']; k = list(co); pl, cp = co[k[0]], co[k[1]]; pi = R['pyinstr_cost']
+steps = [
+    step("Werkzeug 自带的 ProfilerMiddleware(基于 cProfile,不需要装别的包):app.wsgi_app = ProfilerMiddleware(app.wsgi_app, restrictions=(8,)) 之后,每个请求结束时打印一张按内部耗时(tottime)排序的表。对一个混合了计算、JSON、模板、等待的视图:总共 74998 次函数调用、0.044 秒;最大头是 time.sleep(0.030 秒,等待)、builtins.sum(0.004 秒,60001 次生成器求值的计算)、json 的 iterencode、模板渲染里 markupsafe.escape 的 802 次调用。一眼就能看出时间花在等待、计算还是序列化上。", t=tl(S(1)), done=lidx(S(1), 'time.sleep', 'sum', 'json', 'escape'), kv=KV([['ProfilerMiddleware', '包住 wsgi_app 即可'], ['tottime', '函数自身耗时']], ['ProfilerMiddleware'])),
+    step(f"剖析的开销:同一个视图,没有剖析时 /mixed 中位数 {pl[0]:.1f} ms,/fast(几乎空的视图){pl[1]:.0f} µs;加了 cProfile 之后 /mixed {cp[0]:.1f} ms,/fast {cp[1]:.0f} µs(约 {cp[1] / pl[1]:.1f} 倍)。确定性剖析对「函数调用很多、每次很短」的代码拖慢最明显,所以只在排查时临时打开,不要常驻生产。", b=bars([['/fast 无剖析', pl[1], f'{pl[1]:.0f} µs'], ['/fast cProfile', cp[1], f'{cp[1]:.0f} µs']], cp[1], mark=[1], done=[0]), t=tl(S(2)), done=lidx(S(2), '没有剖析'), mark=lidx(S(2), 'ProfilerMiddleware(cProfile)'), kv=KV([['/mixed', f'{pl[0]:.1f} → {cp[0]:.1f} ms'], ['/fast', f'{pl[1]:.0f} → {cp[1]:.0f} µs']], ['/fast'])),
+    step("profile_dir:给 ProfilerMiddleware 传 profile_dir 后,每个请求写一个 .prof 文件(文件名形如 GET.mixed.42ms.<时间戳>.prof,带方法、路径、耗时),事后用 pstats.Stats(文件).sort_stats('tottime').print_stats(6) 排序查看,也可以看调用者与被调用者。线上复现问题后离线分析,比实时打印更方便。", t=tl(S(3)), done=lidx(S(3), '生成的文件', 'tottime'), kv=KV([['profile_dir', '每个请求一个 .prof 文件'], ['pstats', '事后排序与看调用关系']], ['profile_dir'])),
+    step(f"采样式剖析 pyinstrument(1 ms 采样间隔):输出的是调用树而不是平铺的表:mixed 总共 0.037 秒,其中 sleep 0.025 秒、slow_helper 0.007 秒、json_work 0.003 秒(往下展开到 json 的 dumps);Flask 与 Werkzeug 的内部帧被折叠(「7 frames hidden」)。开销:剖析时 /mixed 中位数 {pi:.1f} ms(无剖析 {pl[0]:.1f} ms),比 cProfile 的 {cp[0]:.1f} ms 小。调用树更适合回答「时间花在哪条调用路径上」,tottime 表更适合找「哪个函数自身最费」。", t=tl(S(4)), done=lidx(S(4), 'Duration', 'mixed', 'sleep', 'slow_helper', 'json_work', 'pyinstrument'), kv=KV([['cProfile', '确定性,按函数,开销大'], ['pyinstrument', '采样,调用树,开销小']], ['pyinstrument'])),
+]
+A = mkartf('f162', 162, 'Flask,性能剖析,cProfile,ProfilerMiddleware,pyinstrument,真实验证,动画演示',
+    f'实测 Flask 的性能剖析:Werkzeug 的 ProfilerMiddleware(cProfile)对一个混合视图给出 tottime 表、空视图被拖慢 {cp[1] / pl[1]:.1f} 倍、profile_dir 写 .prof 文件事后用 pstats 分析、采样式 pyinstrument 输出调用树且开销更小({pi:.1f} ms 对 cProfile 的 {cp[0]:.1f} ms)。',
+    '怎么知道一个 Flask 视图的时间花在哪?Werkzeug 自带的剖析中间件怎么用?它会拖慢多少?采样式剖析器有什么不同?这篇对同一个混合视图用两种剖析器各跑一遍。',
+    [(f'{cp[1] / pl[1]:.1f} 倍', 'ProfilerMiddleware 对一个几乎空的视图增加的耗时倍数'), ('profile_dir', '把每个请求的剖析结果写成 .prof 文件的参数'), ('调用树', 'pyinstrument 输出的形式,按调用路径展示耗时')],
+    [('ProfilerMiddleware', '<p>上一篇:<a href="flask-slow-sql.html">慢 SQL 统计</a>;下一篇:<a href="flask-template-render-time.html">模板渲染耗时</a>。</p>'), ('剖析的开销', None), ('保存 .prof 文件', None), ('采样式剖析', '<p>pyinstrument 是我额外装进环境的,不是 Flask 或 Werkzeug 自带的。</p>')],
+    steps, [ENV_F + '。Werkzeug ProfilerMiddleware、pyinstrument 5.1.3', '没有验证:在真实的 gunicorn 多进程下使用 ProfilerMiddleware(.prof 文件按进程分开)、py-spy 等外部采样器附着到运行中的进程、内存剖析(tracemalloc 在第 117 篇用过)、火焰图可视化'], 'Flask Profiler', panels=[('t', 'term', '实验输出'), ('b', 'bars', '耗时'), ('kv', 'kv', '要点')])

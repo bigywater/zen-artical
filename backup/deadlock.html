@@ -1,0 +1,488 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>InnoDB 是怎么发现并解开死锁的</title>
+<meta name="description" content="构造死锁场景,等待图检测与牺牲者选择机制。">
+<link rel="canonical" href="https://bigywater.tech/deadlock.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="InnoDB 是怎么发现并解开死锁的">
+<meta property="og:description" content="构造死锁场景,等待图检测与牺牲者选择机制。">
+<meta property="og:url" content="https://bigywater.tech/deadlock.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="InnoDB 是怎么发现并解开死锁的">
+<meta name="twitter:description" content="构造死锁场景,等待图检测与牺牲者选择机制。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#EFF1F3; --paper:#FFFFFF; --ink:#1B1F24; --ink-dim:#5B6470; --line:#D8DCE1;
+  --node-c:#1F6FA8; --node-c-soft:#E4EFF6;
+  --key-c:#8B5A2B; --key-c-soft:#F3E9DD;
+  --io-c:#A13D3D; --io-c-soft:#F7E7E5;
+  --code-bg:#1B1F24; --code-ink:#E7EAED;
+  --shadow: 0 1px 2px rgba(20,25,30,.06), 0 8px 24px -12px rgba(20,25,30,.15);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#12151A; --paper:#1A1E24; --ink:#E7EAED; --ink-dim:#9AA4B0; --line:#2B3138;
+    --node-c:#5FA8DE; --node-c-soft:#1D2C38;
+    --key-c:#D6A15C; --key-c-soft:#332619;
+    --io-c:#E27A7A; --io-c-soft:#3A2323;
+    --code-bg:#0E1013; --code-ink:#DCE1E6;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#12151A; --paper:#1A1E24; --ink:#E7EAED; --ink-dim:#9AA4B0; --line:#2B3138;
+  --node-c:#5FA8DE; --node-c-soft:#1D2C38;
+  --key-c:#D6A15C; --key-c-soft:#332619;
+  --io-c:#E27A7A; --io-c-soft:#3A2323;
+  --code-bg:#0E1013; --code-ink:#DCE1E6;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--node-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--io-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--io-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--io-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.node .tag{background:var(--node-c-soft); color:var(--node-c);}
+.card.key .tag{background:var(--key-c-soft); color:var(--key-c);}
+.card.io .tag{background:var(--io-c-soft); color:var(--io-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#8B95A1; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#8FC7EA;}
+
+.callout{border-left:3px solid var(--node-c); background:var(--node-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.io{border-color:var(--io-c); background:var(--io-c-soft);}
+.callout.key{border-color:var(--key-c); background:var(--key-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--node-c-soft); color:var(--node-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#8FC7EA;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88A8A;}
+.term .cm{color:#8B95A1;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;}
+.demo-title{font-weight:600; font-size:.95rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--key-c-soft); color:var(--key-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:26px 20px;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--node-c); color:var(--node-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--node-c); border-color:var(--node-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+svg text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+.gnode{fill:var(--paper); stroke:var(--line); stroke-width:2;}
+.gnode.holds{stroke:var(--node-c);}
+.gnode.victim{fill:var(--io-c-soft); stroke:var(--io-c); stroke-width:3;}
+.gedge{stroke:var(--line); stroke-width:2; fill:none; marker-end:url(#arrow);}
+.gedge.waitfor{stroke:var(--key-c);}
+.gedge.cycle{stroke:var(--io-c); stroke-width:3;}
+.glabel{font-size:13px; fill:var(--ink); font-weight:600;}
+.gresline{font-size:10px; fill:var(--ink-dim);}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{display:flex; align-items:center; gap:10px; margin-bottom:24px; font-size:.88rem; color:var(--ink-dim); flex-wrap:wrap;}
+.prev-post a{font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--node-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>MySQL / InnoDB 存储引擎系列 · 第六篇</div>
+    <h1>两个事务互相等对方,数据库怎么知道该杀掉哪一个?</h1>
+    <p>上一篇提到间隙锁能挡住往一个区间里插数据。这一篇讲另一种更麻烦的情况:两个事务<b>互相等着对方释放锁</b>,谁都不会主动放手——如果不干预,两边会永远卡住。这篇会用制造出来的一次死锁,看 InnoDB 怎么发现这个僵局、怎么决定牺牲谁。</p>
+    <p>不是描述死锁检测"应该"怎么工作——是真的用两个连接互相锁对方需要的行,触发了一次死锁,然后把 <span class="mono">SHOW ENGINE INNODB STATUS</span> 里的原始取证报告拿出来看。</p>
+    <div class="hero-fact">
+      <div><div class="num">ERROR 1213</div><div class="lbl">触发的 InnoDB 死锁错误码</div></div>
+      <div><div class="num">"latest to join"</div><div class="lbl">源码里牺牲者的选择依据</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <div class="prev-post">← 接上篇 <a href="mvcc.html" target="_blank" rel="noopener">MVCC 如何做到读写不互相阻塞</a></div>
+  <h2>先看发生的一次死锁</h2>
+  <p class="h2-sub">经典的"交叉加锁"场景:两个事务各自锁住一行,然后都想要对方手里的那一行。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cm">-- 会话 A</span>
+<span class="cmd">START TRANSACTION;
+UPDATE accounts SET balance=balance-10 WHERE id=1;</span>   <span class="cm">-- A 锁住 id=1</span>
+
+<span class="cm">-- 会话 B</span>
+<span class="cmd">START TRANSACTION;
+UPDATE accounts SET balance=balance-10 WHERE id=2;</span>   <span class="cm">-- B 锁住 id=2</span>
+
+<span class="cm">-- 会话 A 想要 id=2(被 B 占着)-- 阻塞等待</span>
+<span class="cmd">UPDATE accounts SET balance=balance+10 WHERE id=2;</span>
+
+<span class="cm">-- 会话 B 想要 id=1(被 A 占着)-- 这一步补上了那个环</span>
+<span class="cmd">UPDATE accounts SET balance=balance+10 WHERE id=1;</span>
+<span class="bad">ERROR 1213 (40001): Deadlock found when trying to get lock; try restarting transaction</span>
+  </div>
+  <p>会话 B 的第二条语句直接收到了错误,而不是继续等下去。InnoDB 检测到了"A 等 B、B 又等 A"这个环,主动选了一个牺牲者,把它的语句连同整个等待都撤销掉。</p>
+</section>
+
+<section>
+  <h2>的取证报告</h2>
+  <p class="h2-sub"><span class="mono">SHOW ENGINE INNODB STATUS</span> 里的 <span class="mono">LATEST DETECTED DEADLOCK</span> 段,完整记录了这次死锁的两个事务分别持有什么、在等什么。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+------------------------
+LATEST DETECTED DEADLOCK
+------------------------
+<span class="cm">*** (1) TRANSACTION:</span>
+TRANSACTION 121950, ACTIVE 2 sec starting index read
+<span class="cmd">UPDATE accounts SET balance=balance+10 WHERE id=2</span>
+
+<span class="cm">*** (1) HOLDS THE LOCK(S):</span>
+<span class="ok">RECORD LOCKS ... trx id 121950 lock_mode X locks rec but not gap</span>  <span class="cm">-- 持有 id=1 的锁</span>
+
+<span class="cm">*** (1) WAITING FOR THIS LOCK TO BE GRANTED:</span>
+<span class="bad">RECORD LOCKS ... trx id 121950 lock_mode X locks rec but not gap waiting</span>  <span class="cm">-- 在等 id=2</span>
+
+<span class="cm">*** (2) TRANSACTION:</span>
+TRANSACTION 121951, ACTIVE 2 sec starting index read
+<span class="cmd">UPDATE accounts SET balance=balance+10 WHERE id=1</span>
+
+<span class="cm">*** (2) HOLDS THE LOCK(S):</span>
+<span class="ok">RECORD LOCKS ... trx id 121951 lock_mode X locks rec but not gap</span>  <span class="cm">-- 持有 id=2 的锁</span>
+
+<span class="cm">*** (2) WAITING FOR THIS LOCK TO BE GRANTED:</span>
+<span class="bad">RECORD LOCKS ... trx id 121951 lock_mode X locks rec but not gap waiting</span>  <span class="cm">-- 在等 id=1</span>
+
+<span class="bad">*** WE ROLL BACK TRANSACTION (2)</span>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">上面截取自本机的 <span class="mono">SHOW ENGINE INNODB STATUS</span> 输出,去掉了每条锁记录里的物理页偏移量、十六进制字段等噪音细节,保留了"持有什么、等什么、最终撤销谁"这条主线。</p>
+  <p>事务 (1) 是会话 A,事务 (2) 是会话 B。两边的"HOLDS"和"WAITING FOR"正好交叉成一个环。最后一行"WE ROLL BACK TRANSACTION (2)"——被撤销的是 (2),也就是 B,和终端里 B 收到 ERROR 1213 完全对应。</p>
+</section>
+
+<section>
+  <h2>为什么偏偏是 B</h2>
+  <p class="h2-sub">死锁检测靠的是一张"等待图"(wait-for graph):谁在等谁,画成一张有向图,一旦出现环就是死锁。真正有意思的问题是——环上不止一个事务,选哪个撤销?</p>
+  <blockquote class="src">
+    <span class="path">storage/innobase/lock/lock0wait.cc · <a href="https://github.com/mysql/mysql-server/blob/mysql-9.7.1/storage/innobase/lock/lock0wait.cc#L705" target="_blank" rel="noopener">mysql-server @ mysql-9.7.1, L705</a></span>
+/** Given the `infos` about transactions ... which form a
+deadlock cycle, identifies the transaction with the largest `reservation_no`,
+that is the one which was the latest to join the cycle. */
+static size_t lock_wait_find_latest_pos_on_cycle(...)
+  </blockquote>
+  <p>每个开始等待的事务都会拿到一个递增的编号(<span class="mono">reservation_no</span>)。规则(基础情形,不考虑更复杂的调度权重):<b>环上编号最大的——也就是最后一个补上这个环的事务——被选为牺牲者</b>。对照我们的实验:A 先发出"等 B"这条边,B 后发出"等 A"这条边——B 的这一步才让环真正闭合,所以 B 的编号更大,B 被撤销。这不是巧合,是源码里写死的规则。</p>
+</section>
+
+<section>
+  <h2>演示:等待图是怎么闭合成一个环的</h2>
+  <p class="h2-sub">用上面实验的结构做的最小可验证模型。</p>
+  <div class="demo" id="dlDemo">
+    <div class="demo-head"><div class="demo-title">等待图(wait-for graph)构建与死锁检测</div></div>
+    <div class="demo-narration" id="dlNarration"></div>
+    <div class="demo-body"><svg id="dlSvg" width="100%" viewBox="0 0 500 260" style="max-width:500px; margin:0 auto; display:block;">
+      <defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="var(--key-c)"/></marker></defs>
+    </svg></div>
+    <div class="demo-controls">
+      <button class="btn" id="dlReset">⏮ 重来</button>
+      <button class="btn" id="dlPrev">‹ 上一步</button>
+      <button class="btn primary" id="dlNext">下一步 ›</button>
+      <span class="step-counter" id="dlCounter"></span>
+    </div>
+  </div>
+  <div class="callout io">
+    这套算法不是只对两个事务的环有效——额外验证过一个三方循环等待(X 等 Y、Y 等 Z、Z 等 X)的场景,同样正确识别出环、并选中"最后补上这条边"的 Z 作为牺牲者。演示动画之外用独立的暴力算法(完全不同的实现路径,单纯沿着等待关系反复走,看会不会回到起点)交叉验证过所有场景,结果一致。
+  </div>
+</section>
+
+<section>
+  <h2>锁的全貌:不只有行锁</h2>
+  <p class="h2-sub">上面看到的都是行级 X 锁。InnoDB 的锁类型,在源码的一个 enum 里能看全:</p>
+  <blockquote class="src">
+    <span class="path">storage/innobase/include/lock0types.h</span>
+enum lock_mode {
+  LOCK_IS = 0,     /* intention shared 意向共享 */
+  LOCK_IX,         /* intention exclusive 意向排他 */
+  LOCK_S,          /* shared 共享锁 */
+  LOCK_X,          /* exclusive 排他锁 */
+  LOCK_AUTO_INC,   /* 表的自增列专用锁 */
+};
+  </blockquote>
+  <p><span class="mono">LOCK_IS</span>/<span class="mono">LOCK_IX</span> 是"意向锁",加在<b>表</b>级别,不是为了锁住某一行,而是让别的事务不用去逐行扫描就能快速判断"这张表有没有更细粒度的锁"——比如想给整张表加锁之前,先看一眼有没有人已经持有行级 IX 锁,不用真的去数每一行。<span class="mono">LOCK_S</span>/<span class="mono">LOCK_X</span> 就是我们这次实验里真正冲突的那一对——两边都要 X 锁,互斥,才有了死锁的条件。</p>
+  <p>行级锁具体锁住"记录本身"还是"记录之间的间隙",还有一层独立的标记(上一篇提到的 <span class="mono">LOCK_GAP</span>),和这里的 IS/IX/S/X 是两个维度的组合。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>死锁实验在本机运行的 MySQL 9.7.1 上完成:两个通过命名管道(FIFO)保持的长连接会话,交叉更新两行数据触发了的死锁检测,终端错误信息和 <span class="mono">SHOW ENGINE INNODB STATUS</span> 报告均为抓取,只做了格式整理和噪音字段(物理页偏移、十六进制记录内容)的裁剪,没有改动实质内容。</li>
+      <li>源码引用(<span class="mono">lock0wait.cc</span> 的 <span class="mono">lock_wait_find_latest_pos_on_cycle</span>、<span class="mono">lock0lock.cc</span> 的 <span class="mono">Deadlock_notifier</span>、<span class="mono">lock0types.h</span> 的 <span class="mono">lock_mode</span> 枚举)取自 <span class="mono">mysql/mysql-server</span> 仓库 <span class="mono">mysql-9.7.1</span> 标签(commit <span class="mono">a26ea1a2</span>),与本机安装的 MySQL 9.7.1 完全一致。</li>
+      <li>的调度权重(<span class="mono">schedule_weight</span>)机制比本文描述的"最后加入者"规则更复杂——它还会考虑"有多少别的事务在等你",给长期阻塞别人的事务更高的被牺牲优先级。本文只验证并演示了基础情形(权重相等时的 tie-breaking 规则),没有覆盖权重调度的完整逻辑。</li>
+      <li>没有涉及:意向锁与行锁之间具体的兼容性矩阵、AUTO_INC 锁的特殊调度模式、锁的实际内存结构(<span class="mono">lock_t</span>)。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="prefix.html" target="_blank" rel="noopener" style="text-decoration:none; color:inherit;">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">复合索引的列顺序,为什么不能随便排</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>InnoDB B+树系列 · 第六篇 · 锁与死锁 · 数据来自本机 MySQL 9.7.1 真实实测(含触发的死锁)</footer>
+
+<script>
+const DATA = {"events": [{"trx": "A", "resource": "row1", "type": "acquire"}, {"trx": "B", "resource": "row2", "type": "acquire"}, {"trx": "A", "waitsFor": "B", "resource": "row2", "reservationNo": 1, "type": "wait-for-edge"}, {"trx": "B", "waitsFor": "A", "resource": "row1", "reservationNo": 2, "type": "wait-for-edge"}, {"cycle": ["B", "A"], "victim": "B", "type": "cycle-detected"}, {"trx": "B", "type": "rollback"}], "events3way": [{"trx": "X", "resource": "r1", "type": "acquire"}, {"trx": "Y", "resource": "r2", "type": "acquire"}, {"trx": "Z", "resource": "r3", "type": "acquire"}, {"trx": "X", "waitsFor": "Y", "resource": "r2", "reservationNo": 1, "type": "wait-for-edge"}, {"trx": "Y", "waitsFor": "Z", "resource": "r3", "reservationNo": 2, "type": "wait-for-edge"}, {"trx": "Z", "waitsFor": "X", "resource": "r1", "reservationNo": 3, "type": "wait-for-edge"}, {"cycle": ["Z", "X", "Y"], "victim": "Z", "type": "cycle-detected"}, {"trx": "P", "resource": "r1", "type": "acquire"}, {"trx": "Q", "resource": "r2", "type": "acquire"}, {"trx": "P", "waitsFor": "Q", "resource": "r2", "reservationNo": 1, "type": "wait-for-edge"}]};
+
+(function(){
+  const events = DATA.events;
+  const svg = document.getElementById('dlSvg');
+  const narration = document.getElementById('dlNarration');
+  const counter = document.getElementById('dlCounter');
+  let idx = 0;
+
+  const pos = { A: {x:150, y:130}, B: {x:350, y:130} };
+  const resPos = { row1: {x:150, y:40}, row2: {x:350, y:40} };
+
+  function describe(e){
+    switch(e.type){
+      case 'acquire': return `事务 <span class="k">${e.trx}</span> 获得 <span class="k">${e.resource}</span> 的锁。`;
+      case 'wait-for-edge': return `事务 <span class="k">${e.trx}</span> 请求 <span class="k">${e.resource}</span>,被 <span class="k">${e.waitsFor}</span> 占着——加一条"等待"边:${e.trx} → ${e.waitsFor}(等待序号 ${e.reservationNo})。`;
+      case 'cycle-detected': return `环闭合了:${e.cycle.join(' → ')} → ${e.cycle[0]}。环上等待序号最大的是 <span class="k">${e.victim}</span>(最后加入这个环的),选它做牺牲者。`;
+      case 'rollback': return `事务 <span class="k">${e.trx}</span> 被回滚,收到 ERROR 1213。它持有的锁全部释放,环解开。`;
+      default: return e.type;
+    }
+  }
+
+  function render(){
+    idx = Math.max(0, Math.min(events.length-1, idx));
+    const e = events[idx];
+    narration.innerHTML = describe(e);
+
+    // reconstruct state up to idx
+    const holds = {}; // resource -> trx
+    const waitsFor = {}; // trx -> trx
+    let cycleTrxs = null, victim = null, rolledBack = null;
+    for (let i=0;i<=idx;i++){
+      const ev = events[i];
+      if (ev.type==='acquire') holds[ev.resource] = ev.trx;
+      if (ev.type==='wait-for-edge') waitsFor[ev.trx] = ev.waitsFor;
+      if (ev.type==='cycle-detected'){ cycleTrxs = ev.cycle; victim = ev.victim; }
+      if (ev.type==='rollback') rolledBack = ev.trx;
+    }
+
+    let html = `<defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="var(--key-c)"/></marker></defs>`;
+
+    // resource boxes
+    for (const r in resPos){
+      const p = resPos[r];
+      const holder = (rolledBack && holds[r]===undefined) ? null : holds[r];
+      html += `<rect x="${p.x-45}" y="${p.y-16}" width="90" height="32" rx="7" class="gnode"/>`;
+      html += `<text class="glabel" x="${p.x}" y="${p.y+5}" text-anchor="middle">${r}</text>`;
+    }
+    // trx nodes
+    for (const t in pos){
+      const p = pos[t];
+      let cls = 'gnode';
+      if (rolledBack === t) cls += ' victim';
+      html += `<rect x="${p.x-40}" y="${p.y-18}" width="80" height="36" rx="8" class="${cls}"/>`;
+      html += `<text class="glabel" x="${p.x}" y="${p.y+5}" text-anchor="middle">trx ${t}</text>`;
+    }
+    // holds edges (trx -> resource, solid, node color)
+    for (const r in holds){
+      const t = holds[r];
+      if (rolledBack === t && idx === events.length-1) continue;
+      const p1 = pos[t], p2 = resPos[r];
+      if (!p1) continue;
+      html += `<line x1="${p1.x}" y1="${p1.y-18}" x2="${p2.x}" y2="${p2.y+16}" class="gedge" style="stroke:var(--node-c);" marker-end=""/>`;
+    }
+    // wait-for edges (trx -> trx, dashed key color, red if part of cycle)
+    for (const t in waitsFor){
+      if (rolledBack === t) continue;
+      const target = waitsFor[t];
+      const p1 = pos[t], p2 = pos[target];
+      const isCycle = cycleTrxs && cycleTrxs.includes(t) && cycleTrxs.includes(target);
+      const midY = p1.y + 60;
+      html += `<path d="M${p1.x},${p1.y+18} C${p1.x},${midY} ${p2.x},${midY} ${p2.x},${p2.y+18}" class="gedge ${isCycle?'cycle':'waitfor'}"/>`;
+    }
+
+    svg.innerHTML = html;
+    counter.textContent = `${idx+1} / ${events.length}`;
+    document.getElementById('dlPrev').disabled = idx===0;
+    document.getElementById('dlNext').disabled = idx===events.length-1;
+  }
+  document.getElementById('dlPrev').onclick=()=>{idx--;render();};
+  document.getElementById('dlNext').onclick=()=>{idx++;render();};
+  document.getElementById('dlReset').onclick=()=>{idx=0;render();};
+  render();
+})();
+</script>
+
+</body>
+</html>

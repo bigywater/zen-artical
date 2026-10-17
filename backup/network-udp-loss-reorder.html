@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>UDP 的丢包、乱序与重复:本机能不能复现</title>
+<meta name="description" content="netlab 造的随机丢包(5% 实测 4.7%,独立随机、不乱序);限速管道让突发 1000 个只收到 100 个、延迟 881 ms;用户态中继造乱序重复并用序号算法检测与真实记录一致;真实互联网上公共 DNS A 丢 13.3%;停等协议在 40% 丢包下重发 332 次。">
+<link rel="canonical" href="https://bigywater.tech/network-udp-loss-reorder.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="UDP 的丢包、乱序与重复:本机能不能复现">
+<meta property="og:description" content="netlab 造的随机丢包(5% 实测 4.7%,独立随机、不乱序);限速管道让突发 1000 个只收到 100 个、延迟 881 ms;用户态中继造乱序重复并用序号算法检测与真实记录一致;真实互联网上公共 DNS A 丢 13.3%;停等协议在 40% 丢包下重发 332 次。">
+<meta property="og:url" content="https://bigywater.tech/network-udp-loss-reorder.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="UDP 的丢包、乱序与重复:本机能不能复现">
+<meta name="twitter:description" content="netlab 造的随机丢包(5% 实测 4.7%,独立随机、不乱序);限速管道让突发 1000 个只收到 100 个、延迟 881 ms;用户态中继造乱序重复并用序号算法检测与真实记录一致;真实互联网上公共 DNS A 丢 13.3%;停等协议在 40% 丢包下重发 332 次。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">2690</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">70</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">97</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">56</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">78</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">114</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">111</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">88</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#40678F; --series-c-soft:#DDE7F2;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#86B1DC; --series-c-soft:#16263A;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#86B1DC; --series-c-soft:#16263A;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>网络协议 · 29</div>
+  <h1>UDP 的丢包、乱序与重复:本机能不能复现</h1>
+  <p>UDP 丢了包、乱了序、收到两份,应用怎么知道?本机能不能复现这些现象?这篇用 netlab 造丢包和限速,用自己写的中继造乱序和重复,再对真实的公共 DNS 服务器连发 UDP,最后用一个最小的停等协议看“自己做可靠”要花多少代价。</p>
+  <div class="hero-fact">
+<div><div class="num">900 / 1000</div><div class="lbl">一口气发 1000 个 1000 字节的数据报进 500 Kbit/s 的管道,被丢掉的个数;收到的延迟中位 881 ms</div></div><div><div class="num">13.3%</div><div class="lbl">对公共 DNS A 每 20 ms 发一个 UDP 查询时应答的丢失率;公共 DNS B 是 0%</div></div><div><div class="num">332 次</div><div class="lbl">每个方向丢 40% 时,停等协议传 200 个数据报需要的重发次数,用了 10.32 s</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="network-udp-header.html">UDP:8 字节头、校验和与“无连接”的真正含义</a></div>
+<section>
+  <h2>丢包</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  设置丢包 5%:发 2000 个,收到 1906 个(1906 个不同序号),丢失 94 个 = 4.7%;连续丢失的段 89 段,最长 2;长度分布 1个连丢×84,2个连丢×5;收到的序号是否严格递增:True
+  设置丢包 20%:发 2000 个,收到 1620 个(1620 个不同序号),丢失 380 个 = 19.0%;连续丢失的段 305 段,最长 7;长度分布 1个连丢×246,2个连丢×48,3个连丢×9,4个连丢×1,7个连丢×1;收到的序号是否严格递增:True
+  netlab 的丢包是独立随机丢的(没有突发),所以连续丢失的段大多长度为 1;真实的无线 / 拥塞丢包往往是成串的</pre></div>
+  <p>netlab 能造随机丢包,实测与设置值接近;丢包不会改变收到的包的顺序,而且是各自独立的,单个丢失居多。</p>
+</section>
+<section>
+  <h2>超过带宽</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  突发:8 ms 内发完 1000 个(约 971 Mbit/s 的速度),收到 100 个,丢失 900 个;收到的延迟 最小 67 / 中位 881 / 最大 1695 ms;收到的序号范围 0~99
+  慢发(每 20 ms 一个 1000 字节 = 400 Kbit/s,低于 500 Kbit/s 的管道):2.0 s 发完 100 个,收到 100 个,丢失 0 个;延迟 最小 66 / 中位 79 / 最大 80 ms(50 ms 延迟 + 1000 字节在 500 Kbit/s 上的发送时间 16 ms)
+  超过管道带宽的突发会在队列里排队,队满以后后面的包直接丢弃(尾部丢弃),队里的包延迟也大幅增加;UDP 自己不会降速</pre></div>
+  <p>UDP 不会因为管道窄就降速:突发 1000 个包进 500 Kbit/s 的管道,只通过前 100 个,延迟涨到几百毫秒;慢发则没有丢失。</p>
+</section>
+<section>
+  <h2>乱序与重复(模拟)</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  发 2000 个;中继复制了 40 份;接收端收到 2040 个(不同序号 2000 个,丢失 0 个)
+  接收端检测:乱序(比已见到的最大序号小的新序号)1467 个,重复 40 个,最大“落后”距离 23;中继发出顺序里的真实值:乱序 1467、重复 40、最大落后 23;两者一致
+  乱序占 73.4%——随机延迟 0~30 ms、每 1 ms 一个包,所以相邻的包经常互换位置</pre></div>
+  <p>回环上不会自己出现,用中继人为制造后,按序号的检测算法与真实记录一致。</p>
+</section>
+<section>
+  <h2>真实互联网</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  公共 DNS A,慢发 每 20 ms 一个:发 300 个,收到 260 个不同的应答,丢失 40 个(13.3%),重复 0 个,乱序 0 个
+  公共 DNS A,突发 不留间隔:发 300 个,收到 285 个不同的应答,丢失 15 个(5.0%),重复 0 个,乱序 22 个(最大落后 46)
+  公共 DNS B,慢发 每 20 ms 一个:发 300 个,收到 300 个不同的应答,丢失 0 个(0.0%),重复 0 个,乱序 1 个(最大落后 1)
+  公共 DNS B,突发 不留间隔:发 300 个,收到 300 个不同的应答,丢失 0 个(0.0%),重复 0 个,乱序 5 个(最大落后 12)</pre></div>
+  <p>向两个公共 DNS 连发 UDP:一个丢 13.3%,一个不丢;突发时能看到几个到几十个的乱序,没有重复。</p>
+</section>
+<section>
+  <h2>可靠性要自己做</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  每个方向丢 0%:发了 200 次(200 个数据报,重发 0 次),服务端收到 200 个不同序号,总用时 0.02 s;理论平均发送次数 200/(1−0.0)² = 200 次(计算值)
+  每个方向丢 5%:发了 225 次(200 个数据报,重发 25 次),服务端收到 200 个不同序号,总用时 0.80 s;理论平均发送次数 200/(1−0.05)² = 222 次(计算值)
+  每个方向丢 20%:发了 287 次(200 个数据报,重发 87 次),服务端收到 200 个不同序号,总用时 2.72 s;理论平均发送次数 200/(1−0.2)² = 312 次(计算值)
+  每个方向丢 40%:发了 532 次(200 个数据报,重发 332 次),服务端收到 200 个不同序号,总用时 10.32 s;理论平均发送次数 200/(1−0.4)² = 556 次(计算值)</pre></div>
+  <p>停等协议把丢包变成重发,丢得越多越慢;真实的实现(滑动窗口、快速重传、拥塞控制)在 TCP 与 QUIC 的部分展开。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">UDP 丢包乱序重复</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "b", "kind": "bars", "label": "数字对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "用 netlab 在 lo0 上造随机丢包,发 2000 个带序号的 UDP 数据报(每 0.5 ms 一个)。设置丢 5%:收到 1906 个,丢失 94 个 = 4.7%,连续丢失的段 89 段,最长 2,其中长度 1 的 84 段、长度 2 的 5 段。设置丢 20%:收到 1620 个,丢失 380 个 = 19.0%,连续丢失 305 段,最长 7,长度 1 的 246 段、2 的 48 段、3 的 9 段。收到的序号始终严格递增——丢包不会造成乱序。netlab 的丢包是相互独立的随机丢,所以绝大多数丢失是单个的;真实无线或拥塞造成的丢包往往成串,这里造不出来。", "s": {"t": {"lines": ["  设置丢包 5%:发 2000 个,收到 1906 个(1906 个不同序号),丢失 94 个 = 4.7%;连续丢失的段 89 段,最长 2;长度分布 1个连丢×84,2个连丢×5;收到的序号是否严格递增:True", "  设置丢包 20%:发 2000 个,收到 1620 个(1620 个不同序号),丢失 380 个 = 19.0%;连续丢失的段 305 段,最长 7;长度分布 1个连丢×246,2个连丢×48,3个连丢×9,4个连丢×1,7个连丢×1;收到的序号是否严格递增:True", "  netlab 的丢包是独立随机丢的(没有突发),所以连续丢失的段大多长度为 1;真实的无线 / 拥塞丢包往往是成串的"], "cur": [], "mark": [], "done": []}, "mark": [0, 1], "done": [0, 1], "b": {"items": [["设置 5% · 实测丢失", 4.7, "4.7%"], ["设置 20% · 实测丢失", 19.0, "19.0%"]], "max": 20, "cur": [], "mark": [1], "done": [0]}, "kv": {"items": [["5%", "丢 94 / 2000,最长连丢 2"], ["20%", "丢 380 / 2000,最长连丢 7"], ["序号", "收到的始终严格递增(丢包不乱序)"]], "hl": ["序号"]}}}, {"note": "限速的管道:netlab 给 lo0 加 50 ms 单向延迟 + 500 Kbit/s 带宽(队列最多 100 个包)。一次性突发 1000 个 1000 字节的数据报(8 ms 内发完,约 971 Mbit/s 的速度):只收到 100 个,丢失 900 个,收到的是序号 0~99,延迟最小 67、中位 881、最大 1695 ms——队里的包排了很久,队满之后的包直接被丢掉(尾部丢弃)。改成每 20 ms 发一个(1000 字节 = 400 Kbit/s,低于 500 Kbit/s 的管道),100 个全部收到,延迟 66~80 ms(50 ms 延迟加上 1000 字节在 500 Kbit/s 上的发送时间约 16 ms)。UDP 自己不会降速,超过管道带宽的部分要么排队增加延迟,要么丢掉。", "s": {"t": {"lines": ["  突发:8 ms 内发完 1000 个(约 971 Mbit/s 的速度),收到 100 个,丢失 900 个;收到的延迟 最小 67 / 中位 881 / 最大 1695 ms;收到的序号范围 0~99", "  慢发(每 20 ms 一个 1000 字节 = 400 Kbit/s,低于 500 Kbit/s 的管道):2.0 s 发完 100 个,收到 100 个,丢失 0 个;延迟 最小 66 / 中位 79 / 最大 80 ms(50 ms 延迟 + 1000 字节在 500 Kbit/s 上的发送时间 16 ms)", "  超过管道带宽的突发会在队列里排队,队满以后后面的包直接丢弃(尾部丢弃),队里的包延迟也大幅增加;UDP 自己不会降速"], "cur": [], "mark": [], "done": []}, "mark": [0, 1], "done": [2], "b": {"items": [["突发 · 收到", 100, "100 / 1000"], ["慢发 · 收到", 100, "100 / 100"], ["突发 · 中位延迟", 881, "881 ms"], ["慢发 · 中位延迟", 79, "79 ms"]], "max": 1000, "cur": [], "mark": [0, 2], "done": [1, 3]}, "kv": {"items": [["突发(971 Mbit/s)", "只收到前 100 个,丢 900 个"], ["突发的延迟", "中位 881 ms,最大 1695 ms"], ["慢发(400 Kbit/s)", "全部收到,延迟 66~80 ms"]], "hl": ["突发的延迟"]}}}, {"note": "乱序与重复:回环上不会自己乱序也不会重复,所以写了一个用户态 UDP 中继人为制造——每个包随机多等 0~30 ms,2% 概率复制一份。发 2000 个,中继复制了 40 份,接收端收到 2040 个(2000 个不同序号,没有丢)。接收端用“序号比已见到的最大序号小且没见过 → 乱序;见过 → 重复”的算法检测:乱序 1467 个、重复 40 个、最大落后距离 23;中继自己发出顺序里的真实值:乱序 1467、重复 40、最大落后 23,完全一致。乱序占 73.4%——每 1 ms 一个包而随机延迟有 0~30 ms,相邻的包经常互换位置。这一节是模拟,不是网络上的真实现象。", "s": {"t": {"lines": ["  发 2000 个;中继复制了 40 份;接收端收到 2040 个(不同序号 2000 个,丢失 0 个)", "  接收端检测:乱序(比已见到的最大序号小的新序号)1467 个,重复 40 个,最大“落后”距离 23;中继发出顺序里的真实值:乱序 1467、重复 40、最大落后 23;两者一致", "  乱序占 73.4%——随机延迟 0~30 ms、每 1 ms 一个包,所以相邻的包经常互换位置"], "cur": [], "mark": [], "done": []}, "mark": [1, 2], "done": [0], "b": {"items": [["乱序(检测值)", 1467, "1467"], ["重复(检测值)", 40, "40"], ["最大落后距离", 23, "23"]], "max": 1467, "cur": [], "mark": [0], "done": [1, 2]}, "kv": {"items": [["中继", "随机多等 0~30 ms,2% 复制"], ["检测算法", "序号 < 已见最大 → 乱序;已见过 → 重复"], ["结果", "与中继真实记录完全一致"]], "hl": ["结果"]}}}, {"note": "真实互联网上的 UDP:向两个公共 DNS 服务器各连发 300 个查询(example.com 的 A 记录,事务编号各不相同),分慢发(每 20 ms 一个)和突发(一口气发完)。公共 DNS A:慢发时 300 个只收到 260 个应答,丢失 40 个(13.3%),乱序 0 个;突发时收到 285 个,丢失 15 个(5.0%),乱序 22 个(最大落后 46)。公共 DNS B:慢发和突发都是 300 个全部收到,慢发乱序 1 个,突发乱序 5 个(最大落后 12)。没有重复。同一台机器、同样的网络,对两个服务器的结果相差这么大,A 的丢包是在哪一段产生的(链路、路径中的限速、服务器端)这里没有定位;突发时乱序明显增多,可能是紧挨着的包走了不同的路径,这一点没有验证。", "s": {"t": {"lines": ["  公共 DNS A,慢发 每 20 ms 一个:发 300 个,收到 260 个不同的应答,丢失 40 个(13.3%),重复 0 个,乱序 0 个", "  公共 DNS A,突发 不留间隔:发 300 个,收到 285 个不同的应答,丢失 15 个(5.0%),重复 0 个,乱序 22 个(最大落后 46)", "  公共 DNS B,慢发 每 20 ms 一个:发 300 个,收到 300 个不同的应答,丢失 0 个(0.0%),重复 0 个,乱序 1 个(最大落后 1)", "  公共 DNS B,突发 不留间隔:发 300 个,收到 300 个不同的应答,丢失 0 个(0.0%),重复 0 个,乱序 5 个(最大落后 12)"], "cur": [], "mark": [], "done": []}, "mark": [0, 1], "done": [2, 3], "b": {"items": [["A · 慢发 · 丢失", 13.3, "13.3%"], ["A · 突发 · 丢失", 5.0, "5.0%"], ["B · 慢发 · 丢失", 0, "0%"], ["B · 突发 · 丢失", 0, "0%"]], "max": 15, "cur": [], "mark": [0, 1], "done": [2, 3]}, "kv": {"items": [["公共 DNS A", "慢发丢 13.3%,突发丢 5.0%,突发乱序 22 个"], ["公共 DNS B", "全部收到,突发乱序 5 个"], ["重复", "0 个"], ["丢包位置", "没有定位"]], "hl": ["公共 DNS A"]}}}, {"note": "想靠 UDP 可靠传输就要自己做。最简单的“停等”协议:发一个等 ACK,30 ms 没回就重发。在 netlab 丢包(每个方向各丢 p%)下传 200 个数据报:丢 0% 时发了 200 次,用时 0.02 s;丢 5% 发了 225 次(重发 25 次),0.80 s;丢 20% 发了 287 次(重发 87 次),2.72 s;丢 40% 发了 532 次(重发 332 次),10.32 s。每种情况服务端都收到全部 200 个序号。按 1/(1−p)² 的理论平均发送次数是 200、222、312、556 次(计算值),实测与它同量级,单次运行有随机波动。停等每次只有一个包在飞,丢包越多总时间越长:从 0.02 s 到 10.32 s。", "s": {"t": {"lines": ["  每个方向丢 0%:发了 200 次(200 个数据报,重发 0 次),服务端收到 200 个不同序号,总用时 0.02 s;理论平均发送次数 200/(1−0.0)² = 200 次(计算值)", "  每个方向丢 5%:发了 225 次(200 个数据报,重发 25 次),服务端收到 200 个不同序号,总用时 0.80 s;理论平均发送次数 200/(1−0.05)² = 222 次(计算值)", "  每个方向丢 20%:发了 287 次(200 个数据报,重发 87 次),服务端收到 200 个不同序号,总用时 2.72 s;理论平均发送次数 200/(1−0.2)² = 312 次(计算值)", "  每个方向丢 40%:发了 532 次(200 个数据报,重发 332 次),服务端收到 200 个不同序号,总用时 10.32 s;理论平均发送次数 200/(1−0.4)² = 556 次(计算值)"], "cur": [], "mark": [], "done": []}, "mark": [2, 3], "done": [0, 1], "b": {"items": [["丢 0% · 用时", 0.02, "0.02 s"], ["丢 5% · 用时", 0.8, "0.80 s"], ["丢 20% · 用时", 2.72, "2.72 s"], ["丢 40% · 用时", 10.32, "10.32 s"]], "max": 10.32, "cur": [], "mark": [3], "done": [0, 1, 2]}, "kv": {"items": [["停等", "发一个等 ACK,30 ms 重发"], ["丢 20%", "重发 87 次,2.72 s"], ["丢 40%", "重发 332 次,10.32 s"], ["全部送达", "每种丢包率下都是 200 / 200"]], "hl": ["全部送达"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64(Apple 芯片)/ Python 3.14.8 / tcpdump(libpcap)/ scapy 2.8 / dpkt / dnspython / h2 / aioquic / OpenSSL / curl 8.7.1;抓包在 lo0(环回)上做,少数实验用真实网卡 en0(这台机器上 en0 是 Wi-Fi,tcpdump 看到的是系统转成以太网格式的帧,所以文中的“以太网头”都指这个 14 字节的头)或访问公网(会在文章里注明);需要丢包 / 延迟 / 限速时,用一个只作用于 lo0 端口 9400-9499 的 dummynet 辅助脚本(netlab);所有服务端都是本机自己起的进程;时间戳取自 tcpdump 的 -tt,数字每次运行会有小幅抖动。第一、二、五节由 netlab 在 lo0 的 9400~9499 端口注入丢包与限速;第三节是用户态中继的模拟;第四节对公共 DNS A(1.1.1.1)和 B(8.8.8.8)各发 600 个查询(只发 example.com 的 A 记录),结果会随当时的无线与路径环境变化</li><li>没有验证:公共 DNS A 丢包的原因(Wi-Fi、路径、服务器限速);更多样本下的乱序概率;真实网络上成串(突发)丢包的统计;重复数据报在真实网络中出现的条件;滑动窗口或前向纠错对 UDP 可靠性的改进</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="network-udp-buffer.html">
+    <div>
+      <div class="t1">下一篇 · 网络协议 30</div>
+      <div class="t2">UDP 接收缓冲区溢出:丢包发生在哪一层</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>网络协议 · UDP 的丢包、乱序与重复:本机能不能复现 · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

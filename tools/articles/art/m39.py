@@ -1,0 +1,24 @@
+from lib import *
+S = SS('m39')
+steps = [
+    step("100 万个文档(a = i % 100 有索引,b 没有索引)。耗时(5 次中位数):estimatedDocumentCount() 0.2 ms;count_documents({}) 97 ms;count_documents({a: 5})(a 有索引)1.4 ms,= 10,000;count_documents({b: 5})(b 无索引)110 ms,= 1,000;旧的 count 命令不带条件 0.5 ms,带 {a: 5} 1.7 ms。", t=tl(S(1)), mark=lidx(S(1), 'count_documents({})', 'count_documents({b: 5})'), done=lidx(S(1), 'estimatedDocumentCount()', 'count_documents({a: 5})'), b=bars([['estimatedDocumentCount()', 0.2, '0.2 ms'], ['countDocuments({a: 5}) 有索引', 1.4, '1.4 ms'], ['countDocuments({}) ', 97, '97 ms'], ['countDocuments({b: 5}) 无索引', 110, '110 ms']], 110, mark=[2, 3], done=[0, 1]), kv=KV([['estimatedDocumentCount', '读元数据,0.2 ms'], ['countDocuments({})', '要数 100 万个,97 ms'], ['带索引的过滤', '1.4 ms,只数索引键']], ['estimatedDocumentCount'])),
+    step("它们执行的东西:count({a: 5}) 的计划是 COUNT 阶段加 COUNT_SCAN;count({}) 是 RECORD_STORE_FAST_COUNT(读元数据);countDocuments({a: 5}) 内部的 aggregate 是 GROUP > COUNT_SCAN(a_1),检查 10,000 个键、0 个文档;countDocuments({b: 5}) 的 aggregate 是 GROUP > COLLSCAN,检查 1,000,000 个文档;$collStats {count: {}} 返回 count: 1000000。", t=tl(S(2)), mark=lidx(S(2), 'COLLSCAN', 'docsExamined: 1000000', 'RECORD_STORE_FAST_COUNT'), done=lidx(S(2), 'COUNT_SCAN', 'count: 1000000'), kv=KV([['count({})', 'RECORD_STORE_FAST_COUNT,读元数据'], ['countDocuments + 索引', 'GROUP > COUNT_SCAN'], ['countDocuments 无索引', 'GROUP > COLLSCAN']], ['count({})'])),
+    step("estimatedDocumentCount 读的是元数据计数,kill -9 之后会不准:新起一个 mongod,写入 30 万个文档后立即 SIGKILL。kill 之前 estimatedDocumentCount 和 countDocuments 都是 300,000;重启之后 estimatedDocumentCount 是 0,countDocuments 是 298,500(没落盘的写入丢了,见 journal 一篇);对集合做一次 validate 后 estimatedDocumentCount 才被修正为 298,500。", t=tl(S(3)), mark=lidx(S(3), '重启之后', 'validate 之后'), done=lidx(S(3), 'SIGKILL 之前'), b=bars([['kill 前 estimated', 300000, '300,000'], ['重启后 estimated', 0, '0'], ['重启后 countDocuments', 298500, '298,500'], ['validate 后 estimated', 298500, '298,500']], 300000, mark=[1], done=[0, 2, 3]), kv=KV([['重启后', 'estimated 为 0(元数据未落盘)'], ['countDocuments', '真实数 298,500'], ['validate', '重新计算元数据']], ['重启后'])),
+    step("删除大量文档后元数据计数立即更新:delete_many({a: {$lt: 50}}) 之后 estimatedDocumentCount 和 countDocuments 都是 500,000。", t=tl(S(4)), mark=lidx(S(4), '500,000'), done=lidx(S(4), 'delete_many'), kv=KV([['正常运行时', 'estimatedDocumentCount 随删除即时更新']], ['正常运行时'])),
+    step("count 带 limit 可以提前停止:countDocuments({}, limit=1000) 0.4 ms,不带 limit 51 ms;countDocuments({a: 60}, limit=1000) 0.5 ms,不带 limit 1.6 ms;distinct(\"a\") 在有索引的字段上 0.6 ms(返回 50 个值),distinct(\"b\") 无索引 120 ms。", t=tl(S(5)), mark=lidx(S(5), 'limit=1000', 'distinct'), done=lidx(S(5), 'a").length', '  50'), kv=KV([['limit', '数到上限就停,0.4 ms 对 51 ms'], ['distinct + 索引', '0.6 ms'], ['distinct 无索引', '120 ms']], ['limit'])),
+    step("mongosh 里旧的 db.t.count() 返回 500000,db.t.count({a: 60}) 返回 10000,都带 DeprecationWarning:Collection.count() is deprecated. Use countDocuments or estimatedDocumentCount.——总数用 estimatedDocumentCount,带条件的精确值用 countDocuments。", t=tl(S(6)), mark=lidx(S(6), 'DeprecationWarning'), done=lidx(S(6), '500000', '10000'), kv=KV([['总数', 'estimatedDocumentCount'], ['带条件', 'countDocuments'], ['count()', '已弃用']], ['总数'])),
+]
+A = mkartm('m39', 39, 'MongoDB,count,countDocuments,estimatedDocumentCount,元数据,真实验证,动画演示',
+    '实测 count 的三种写法:estimatedDocumentCount 读元数据只要 0.2 ms,countDocuments({}) 要数 100 万个文档 97 ms,带索引的条件走 COUNT_SCAN(1.4 ms)、无索引则 COLLSCAN(110 ms);kill -9 重启后 estimatedDocumentCount 是 0,要 validate 才修正;带 limit 的 count 提前停止。',
+    'count、countDocuments、estimatedDocumentCount 到底差在哪?各自执行什么?哪个会不准?这篇在 100 万个文档上量耗时、看 explain,还试了 kill -9 之后的计数。',
+    [('0.2 对 97 ms', 'estimatedDocumentCount() 与 countDocuments({}) 在 100 万个文档上的耗时'), ('0', 'kill -9 重启后 estimatedDocumentCount 的值(countDocuments 是 298,500)'), ('1.4 对 110 ms', '带过滤条件的 countDocuments:条件字段有索引与没有索引')],
+    [('三种写法的耗时', '<p>estimatedDocumentCount 读集合元数据,0.2 ms;countDocuments({}) 要数全部文档,97 ms;带条件的 countDocuments 取决于有没有索引(1.4 ms 对 110 ms)。</p>'),
+     ('各自执行什么', '<p>旧 count 命令不带条件是 <code>RECORD_STORE_FAST_COUNT</code>;countDocuments 内部是 aggregate,有索引时 <code>GROUP > COUNT_SCAN</code>,没有就 <code>GROUP > COLLSCAN</code>。</p>'),
+     ('什么时候会不准', '<p>元数据计数在 kill -9 后重启时是 0,对集合做 <code>validate</code> 才修正;countDocuments 不受影响。(本实验里是新建集合、没有经历过 checkpoint 的情形。)</p>'),
+     ('删除之后', '<p>正常运行时,删除大量文档后元数据计数立即更新。</p>'),
+     ('limit 与 distinct', '<p>countDocuments 带 limit 数到上限就停;distinct 在有索引的字段上也很快(0.6 ms)。</p>'),
+     ('用法', '<p>总数用 estimatedDocumentCount,带条件的精确值用 countDocuments;旧的 count() 已弃用。</p>')],
+    steps,
+    [ENV_M + '。100 万个文档;耗时是 pymongo 的 5 次中位数;kill -9 部分每次运行丢失的文档数不同(这次 1,500 个)',
+     '没有验证:副本集上 estimatedDocumentCount 在 secondary 上的准确性;事务里 estimatedDocumentCount 的限制(需要副本集);分片集群上孤儿文档对 count 的影响;已经历过 checkpoint 的集合在 kill -9 后元数据计数的表现;validate 的耗时与锁'],
+    'count 的三种写法')

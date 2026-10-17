@@ -1,0 +1,446 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>WiredTiger 的读写 ticket 与并发</title>
+<meta name="description" content="实测 9.0.2 的读写 ticket:初始 10 个、由 throughputProbing 缓慢调整(64 线程持续 30 秒只涨到 13);40 个并发慢读最快 822 ms、最慢 3052 ms 且排队 29 个;改成固定并发后 ticket 下限为 5(设 4 返回 BadValue),16 并发总耗时 2737 ms,放大到 128 后 1198 ms 且不排队。">
+<link rel="canonical" href="https://bigywater.tech/mongo-wt-tickets.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="WiredTiger 的读写 ticket 与并发">
+<meta property="og:description" content="实测 9.0.2 的读写 ticket:初始 10 个、由 throughputProbing 缓慢调整(64 线程持续 30 秒只涨到 13);40 个并发慢读最快 822 ms、最慢 3052 ms 且排队 29 个;改成固定并发后 ticket 下限为 5(设 4 返回 BadValue),16 并发总耗时 2737 ms,放大到 128 后 1198 ms 且不排队。">
+<meta property="og:url" content="https://bigywater.tech/mongo-wt-tickets.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="WiredTiger 的读写 ticket 与并发">
+<meta name="twitter:description" content="实测 9.0.2 的读写 ticket:初始 10 个、由 throughputProbing 缓慢调整(64 线程持续 30 秒只涨到 13);40 个并发慢读最快 822 ms、最慢 3052 ms 且排队 29 个;改成固定并发后 ticket 下限为 5(设 4 返回 BadValue),16 并发总耗时 2737 ms,放大到 128 后 1198 ms 且不排队。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">2627</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">70</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">97</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">56</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">78</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">114</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">111</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">88</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#1C7C74; --series-c-soft:#D9F0ED;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#4DB8AE; --series-c-soft:#10302D;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#4DB8AE; --series-c-soft:#10302D;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>MongoDB · 87</div>
+  <h1>WiredTiger 的读写 ticket 与并发</h1>
+  <p>WiredTiger 的读写 ticket 是什么?9.0 里还是 128 吗?并发超过 ticket 数时排队有多严重?这篇用 serverStatus 的 queues 对着真实排队验证。</p>
+  <div class="hero-fact">
+<div><div class="num">10</div><div class="lbl">空闲时 read / write 的 totalTickets(上限参数 128)</div></div><div><div class="num">29</div><div class="lbl">40 个并发慢读时 queueLength 的最大值</div></div><div><div class="num">2737 → 1198 ms</div><div class="lbl">16 个并发慢读,ticket 5 与 128 的总耗时</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="mongo-connections-threads.html">连接数与线程模型</a></div>
+<section>
+  <h2>初始 ticket</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  read.normalPriority  = {'out': 0, 'available': 10, 'totalTickets': 10, 'queueLength': 0, 'addedToQueue': 0, 'removedFromQueue': 0, 'totalTimeQueuedMicros': 0, 'finishedProcessing': 2}
+  write.normalPriority = {'out': 0, 'available': 10, 'totalTickets': 10, 'queueLength': 0, 'addedToQueue': 0, 'removedFromQueue': 0, 'totalTimeQueuedMicros': 0, 'finishedProcessing': 5}
+  参数: {'executionControlConcurrencyAdjustmentAlgorithm': 'throughputProbing', 'executionControlConcurrentReadTransactions': 128, 'executionControlConcurrentWriteTransactions': 128}</pre></div>
+  <p>9.0.2 的 <code>queues.execution.read/write.normalPriority</code> 初始 <code>totalTickets</code> 是 10,<code>executionControlConcurrentReadTransactions</code> 等参数是上限 128。</p>
+</section>
+<section>
+  <h2>排队</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  单个慢读的耗时:1003 ms, 712 ms, 683 ms
+  40 个并发:最快 822 ms,中位数 1808 ms,最慢 3052 ms;全部做完共 3057 ms;期间采样到 out 最大 = 11,queueLength 最大 = 29
+  耗时分布(按 300 ms 一档的计数): {600: 3, 900: 7, 1200: 1, 1500: 9, 1800: 2, 2100: 8, 2400: 3, 2700: 6, 3000: 1}
+  之后 read.normalPriority = {'out': 0, 'available': 9, 'totalTickets': 9, 'queueLength': 0, 'addedToQueue': 32, 'removedFromQueue': 32, 'totalTimeQueuedMicros': 45486758, 'finishedProcessing': 89}</pre></div>
+  <p>40 个并发慢读时只有约 10 个同时在跑,<code>queueLength</code> 最大 29,最慢的操作比最快的多等了两秒多。</p>
+</section>
+<section>
+  <h2>throughputProbing</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  (秒, totalTickets, out, queueLength): [(3, 11, 11, 53), (6, 11, 11, 53), (9, 11, 11, 53), (12, 12, 12, 52), (15, 12, 12, 52), (18, 12, 12, 52), (21, 13, 13, 51), (24, 13, 13, 51), (27, 13, 13, 51), (30, 13, 13, 51)]</pre></div>
+  <p>持续高负载下 ticket 数自己调整,但很慢:30 秒内只从 11 涨到 13。</p>
+</section>
+<section>
+  <h2>固定并发</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  setParameter: {'was': 'throughputProbing', 'ok': 1.0}
+  setParameter executionControlConcurrentReadTransactions=4 → code 2 BadValue: Concurrent read transactions limit must be greater than or equal to 5.
+  setParameter executionControlConcurrentReadTransactions=5: {'was': 128, 'ok': 1.0}
+  参数: {'executionControlConcurrencyAdjustmentAlgorithm': 'fixedConcurrentTransactions', 'executionControlConcurrentReadTransactions': 5, 'executionControlConcurrentWriteTransactions': 128};read.normalPriority = {'out': 0, 'available': 5, 'totalTickets': 5, 'queueLength': 0, 'addedToQueue': 647, 'removedFromQueue': 647, 'totalTimeQueuedMicros': 1673589774, 'finishedProcessing': 1230}
+  16 个并发:最快 686 ms,中位数 2044 ms,最慢 2736 ms;全部做完共 2737 ms;out 最大 = 5,queueLength 最大 = 11
+  耗时分布(按 300 ms 一档的计数): {600: 4, 1200: 4, 1800: 5, 2100: 2, 2700: 1}</pre></div>
+  <p>改成 <code>fixedConcurrentTransactions</code> 后读 ticket 不能低于 5;设成 5 时 16 个并发慢读排队、总耗时 2737 ms。</p>
+</section>
+<section>
+  <h2>放大 ticket</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  setParameter: {'was': 5, 'ok': 1.0}
+  read.normalPriority = {'out': 0, 'available': 128, 'totalTickets': 128, 'queueLength': 0, 'addedToQueue': 660, 'removedFromQueue': 660, 'totalTimeQueuedMicros': 1688069294, 'finishedProcessing': 1262}
+  16 个并发:最快 679 ms,中位数 982 ms,最慢 1197 ms;全部做完共 1198 ms;out 最大 = 16,queueLength 最大 = 0
+  耗时分布(按 300 ms 一档的计数): {600: 6, 900: 10}</pre></div>
+  <p>ticket 放大到 128,同样的负载没有排队,总耗时 1198 ms。</p>
+</section>
+<section>
+  <h2>排队统计</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  ticket = 5(16 个并发):addedToQueue +13,removedFromQueue +13,totalTimeQueuedMicros +14,479,520,finishedProcessing +32 → 排队的操作平均排队 1114 ms
+  ticket = 128(16 个并发):addedToQueue +0,removedFromQueue +0,totalTimeQueuedMicros +0,finishedProcessing +32 → 没有排队</pre></div>
+  <p>ticket = 5 时 <code>addedToQueue +13</code>,平均排队约 1114 ms;ticket = 128 时全是 0。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">WiredTiger ticket</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "b", "kind": "bars", "label": "数字对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "空闲的 mongod:serverStatus.queues.execution.read.normalPriority 是 out 0、available 10、totalTickets 10,write.normalPriority 同样是 10 个;相关参数 executionControlConcurrencyAdjustmentAlgorithm = throughputProbing,executionControlConcurrentReadTransactions / WriteTransactions = 128(上限)。9.0.2 里 ticket 数从 10 开始,由吞吐探测自己调。", "s": {"t": {"lines": ["  read.normalPriority  = {'out': 0, 'available': 10, 'totalTickets': 10, 'queueLength': 0, 'addedToQueue': 0, 'removedFromQueue': 0, 'totalTimeQueuedMicros': 0, 'finishedProcessing': 2}", "  write.normalPriority = {'out': 0, 'available': 10, 'totalTickets': 10, 'queueLength': 0, 'addedToQueue': 0, 'removedFromQueue': 0, 'totalTimeQueuedMicros': 0, 'finishedProcessing': 5}", "  参数: {'executionControlConcurrencyAdjustmentAlgorithm': 'throughputProbing', 'executionControlConcurrentReadTransactions': 128, 'executionControlConcurrentWriteTransactions': 128}"], "cur": [], "mark": [], "done": []}, "mark": [0, 1, 2], "done": [0], "kv": {"items": [["read ticket", "out 0 / available 10 / total 10"], ["write ticket", "total 10"], ["算法", "throughputProbing"], ["参数上限", "128"]], "hl": ["算法"]}}}, {"note": "一个 sleep(300) 的慢读单独跑要 683~1003 ms(基线,第一次含预热)。40 个并发同时开始:最快 822 ms、中位数 1808 ms、最慢 3052 ms,全部做完共 3057 ms;采样到 out 最大 = 11、queueLength 最大 = 29——同时只有约 10 个在跑,其余排队,耗时呈一波一波的台阶(600~3000 ms 各档都有)。结束后 totalTickets 变成 9,addedToQueue +32。", "s": {"t": {"lines": ["  单个慢读的耗时:1003 ms, 712 ms, 683 ms", "  40 个并发:最快 822 ms,中位数 1808 ms,最慢 3052 ms;全部做完共 3057 ms;期间采样到 out 最大 = 11,queueLength 最大 = 29", "  耗时分布(按 300 ms 一档的计数): {600: 3, 900: 7, 1200: 1, 1500: 9, 1800: 2, 2100: 8, 2400: 3, 2700: 6, 3000: 1}", "  之后 read.normalPriority = {'out': 0, 'available': 9, 'totalTickets': 9, 'queueLength': 0, 'addedToQueue': 32, 'removedFromQueue': 32, 'totalTimeQueuedMicros': 45486758, 'finishedProcessing': 89}"], "cur": [], "mark": [], "done": []}, "mark": [1, 2], "done": [0], "b": {"items": [["单个", 700, "~700 ms"], ["40 并发 最快", 822, "822 ms"], ["40 并发 中位数", 1808, "1808 ms"], ["40 并发 最慢", 3052, "3052 ms"]], "max": 3052, "cur": [], "mark": [3], "done": [0, 1, 2]}, "kv": {"items": [["out 最大", "11"], ["queueLength 最大", "29"], ["最慢 / 最快", "3052 / 822 ms"], ["结束后 totalTickets", "9"]], "hl": ["queueLength 最大"]}}}, {"note": "throughputProbing 会自己调:64 个线程持续发慢读 30 秒,每 3 秒取一次——totalTickets 是 11、11、11、12、12、12、13、13、13、13(out 与之相同,queueLength 51~53)。涨得很慢,30 秒后也只有 13,远没到 128。", "s": {"t": {"lines": ["  (秒, totalTickets, out, queueLength): [(3, 11, 11, 53), (6, 11, 11, 53), (9, 11, 11, 53), (12, 12, 12, 52), (15, 12, 12, 52), (18, 12, 12, 52), (21, 13, 13, 51), (24, 13, 13, 51), (27, 13, 13, 51), (30, 13, 13, 51)]"], "cur": [], "mark": [], "done": []}, "mark": [0], "done": [0], "b": {"items": [["3 秒", 11, "11"], ["15 秒", 12, "12"], ["30 秒", 13, "13"]], "max": 13, "cur": [], "mark": [2], "done": [0, 1]}, "kv": {"items": [["3 秒", "totalTickets 11"], ["15 秒", "12"], ["30 秒", "13,queueLength 51"]], "hl": ["30 秒"]}}}, {"note": "固定并发:executionControlConcurrencyAdjustmentAlgorithm 改成 fixedConcurrentTransactions。读 ticket 设成 4 被拒:code 2 BadValue: Concurrent read transactions limit must be greater than or equal to 5.;设成 5 通过(was: 128),totalTickets = 5。16 个并发慢读:out 最大 = 5、queueLength 最大 = 11,最快 686 ms、中位数 2044 ms、最慢 2736 ms,分布成约 4 档台阶。", "s": {"t": {"lines": ["  setParameter: {'was': 'throughputProbing', 'ok': 1.0}", "  setParameter executionControlConcurrentReadTransactions=4 → code 2 BadValue: Concurrent read transactions limit must be greater than or equal to 5.", "  setParameter executionControlConcurrentReadTransactions=5: {'was': 128, 'ok': 1.0}", "  参数: {'executionControlConcurrencyAdjustmentAlgorithm': 'fixedConcurrentTransactions', 'executionControlConcurrentReadTransactions': 5, 'executionControlConcurrentWriteTransactions': 128};read.normalPriority = {'out': 0, 'available': 5, 'totalTickets': 5, 'queueLength': 0, 'addedToQueue': 647, 'removedFromQueue': 647, 'totalTimeQueuedMicros': 1673589774, 'finishedProcessing': 1230}", "  16 个并发:最快 686 ms,中位数 2044 ms,最慢 2736 ms;全部做完共 2737 ms;out 最大 = 5,queueLength 最大 = 11", "  耗时分布(按 300 ms 一档的计数): {600: 4, 1200: 4, 1800: 5, 2100: 2, 2700: 1}"], "cur": [], "mark": [], "done": []}, "mark": [1, 2, 4, 5], "done": [3], "kv": {"items": [["设成 4", "BadValue,必须 ≥ 5"], ["设成 5", "totalTickets = 5"], ["16 并发 out 最大", "5"], ["最慢", "2736 ms"]], "hl": ["设成 4"]}}}, {"note": "同样的 16 个并发,ticket 放大到 128:out 最大 = 16、queueLength 最大 = 0,最快 679 ms、中位数 982 ms、最慢 1197 ms,全部做完共 1198 ms(ticket = 5 时是 2737 ms)——没有排队,耗时只剩操作本身。", "s": {"t": {"lines": ["  setParameter: {'was': 5, 'ok': 1.0}", "  read.normalPriority = {'out': 0, 'available': 128, 'totalTickets': 128, 'queueLength': 0, 'addedToQueue': 660, 'removedFromQueue': 660, 'totalTimeQueuedMicros': 1688069294, 'finishedProcessing': 1262}", "  16 个并发:最快 679 ms,中位数 982 ms,最慢 1197 ms;全部做完共 1198 ms;out 最大 = 16,queueLength 最大 = 0", "  耗时分布(按 300 ms 一档的计数): {600: 6, 900: 10}"], "cur": [], "mark": [], "done": []}, "mark": [2, 3], "done": [0], "b": {"items": [["ticket = 5 总耗时", 2737, "2737 ms"], ["ticket = 128 总耗时", 1198, "1198 ms"]], "max": 2737, "cur": [], "mark": [1], "done": [0]}, "kv": {"items": [["out 最大 / queueLength 最大", "16 / 0"], ["最慢", "1197 ms(ticket=5 时 2736 ms)"], ["总耗时", "1198 ms"]], "hl": ["总耗时"]}}}, {"note": "serverStatus 的排队统计(两次 burst 前后的增量):ticket = 5 时 addedToQueue +13、removedFromQueue +13、totalTimeQueuedMicros +14,479,520、finishedProcessing +32,排队的操作平均排队约 1114 ms;ticket = 128 时全是 +0,没有排队。", "s": {"t": {"lines": ["  ticket = 5(16 个并发):addedToQueue +13,removedFromQueue +13,totalTimeQueuedMicros +14,479,520,finishedProcessing +32 → 排队的操作平均排队 1114 ms", "  ticket = 128(16 个并发):addedToQueue +0,removedFromQueue +0,totalTimeQueuedMicros +0,finishedProcessing +32 → 没有排队"], "cur": [], "mark": [], "done": []}, "mark": [0, 1], "done": [0], "kv": {"items": [["ticket = 5", "addedToQueue +13,平均排队 1114 ms"], ["ticket = 128", "+0,没有排队"]], "hl": ["ticket = 5"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / MongoDB 9.0.2(Homebrew 的 mongod、mongos)/ mongosh 2.12.0 / pymongo 4.18.3;每个实验在临时目录里起全新的 mongod(独立 dbpath,端口 9900 以上,只监听 127.0.0.1,WiredTiger 缓存 0.25 GB),需要副本集或分片集群时在本机起多个进程;命令输出来自真实的 mongosh,批量写入、计时与多线程用 pymongo;计时用 time.perf_counter,数字每次运行会有小幅抖动,ObjectId、时间戳等每次运行都不同。单机 mongod;用 $where 里 sleep(300) 的 find 占住 ticket,不是真实的磁盘/CPU 负载</li><li>没有验证:真实 CPU 或磁盘密集负载下 throughputProbing 如何调整(sleep 的操作吞吐随并发线性增长,可能与真实负载不同);写 ticket 的行为;低优先级 ticket(lowPriority)与 deprioritization;同一个 find 为什么单独跑要 700 ms 以上(sleep(300) 的 JS 谓词被多次评估,没有进一步确认);旧版本 wiredTigerConcurrentReadTransactions 参数与 128 的默认值;在 Linux 多核机器上的结果</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="mongo-ftdc.html">
+    <div>
+      <div class="t1">下一篇 · MONGODB 88</div>
+      <div class="t2">FTDC:诊断数据里记了什么</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>MongoDB · WiredTiger 的读写 ticket 与并发 · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

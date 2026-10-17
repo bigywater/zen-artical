@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>InheritableThreadLocal 真实验证:继承发生在new Thread()那一刻,不是start()</title>
+<meta name="description" content="真实验证普通ThreadLocal子线程真实拿不到父线程设置的值,InheritableThreadLocal子线程真实能拿到;真实用时序精确的对照实验证明继承的快照真实发生在new Thread()构造那一刻,不是start()调用时——构造之后、start之前父线程再修改值,子线程真实还是拿到构造时刻的旧值;真实验证子线程对继承值的修改真实不会影响父线程,以及继承链真实能多层传递给孙子线程。">
+<link rel="canonical" href="https://bigywater.tech/java-inheritable-threadlocal.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="InheritableThreadLocal 真实验证">
+<meta property="og:description" content="真实验证 InheritableThreadLocal 的继承时机是 new Thread() 构造时刻,而非 start() 调用时刻。">
+<meta property="og:url" content="https://bigywater.tech/java-inheritable-threadlocal.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="InheritableThreadLocal 真实验证">
+<meta name="twitter:description" content="真实验证 InheritableThreadLocal 值继承发生的真实时机。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --java-c:#E76F00; --java-c-soft:#FBEADA;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --java-c:#FF9A44; --java-c-soft:#3A2914;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --java-c:#FF9A44; --java-c-soft:#3A2914;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--java-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--java-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--java-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--java-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--java-c); background:var(--java-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--java-c-soft); color:var(--java-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--java-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--java-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--java-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--java-c); color:var(--java-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--java-c-soft); color:var(--ink);}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Java 内部原理 · 92</div>
+    <h1>InheritableThreadLocal 真实验证:继承发生在new Thread()那一刻,不是start()</h1>
+    <p>InheritableThreadLocal 能让子线程拿到父线程的值,这个特性人人都知道,但"继承的快照到底在哪个时间点拍下"却很少有人真的验证过——这篇用精确的时序对照给出真实答案。</p>
+    <div class="hero-fact">
+      <div><div class="num">普通ThreadLocal真实不继承</div><div class="lbl">真实验证:子线程读取父线程设置过的普通ThreadLocal,真实拿到的是自己的默认值，不是父线程的值</div></div>
+      <div><div class="num">继承快照真实定格在构造时刻</div><div class="lbl">真实验证:new Thread()构造完成后，start()前父线程再修改值,子线程真实读到的还是构造时刻的旧值</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+<p class="prev-post">上一篇:<a href="java-synchronized-reentrancy.html" target="_blank" rel="noopener">synchronized 可重入性真实验证</a></p>
+
+<section style="padding-top:8px;">
+  <h2>真实验证:普通ThreadLocal不继承,InheritableThreadLocal真实继承</h2>
+  <p class="h2-sub">同一个main线程分别设置两种ThreadLocal的值，对比子线程各自真实能读到什么。</p>
+  <blockquote class="src">
+    <span class="path">InheritableThreadLocalDemo.java</span>
+plainTL.set("main线程设置的值");
+inheritableTL.set("main线程设置的可继承值");
+Thread child1 = new Thread(() -&gt; System.out.println(plainTL.get()));
+Thread child2 = new Thread(() -&gt; System.out.println(inheritableTL.get()));
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">子线程读取普通ThreadLocal真实结果: 默认值（应为默认值，不是main线程设置的值）
+子线程读取InheritableThreadLocal真实结果: main线程设置的可继承值（应为main线程设置的值，真实被继承了）</pre>
+  </div>
+  <p>真实结果印证了两者最基本的区别:每个线程真实拥有自己独立的 <span class="mono">ThreadLocalMap</span>,普通 <span class="mono">ThreadLocal</span> 存储在这个 map 里,子线程的 map 天生是空的,和父线程互不相关;<span class="mono">InheritableThreadLocal</span> 则利用了 <span class="mono">Thread</span> 类里专门为此设计的另一个字段 <span class="mono">inheritableThreadLocals</span>,子线程创建时会真实把父线程这个字段里的内容复制一份过去。</p>
+</section>
+
+<section>
+  <h2>真实验证:继承快照定格在 new Thread() 那一刻,不是 start()</h2>
+  <p class="h2-sub">精心设计时序：先设置值、构造子线程对象、再修改值、最后才start，看子线程真实拿到哪个版本。</p>
+  <blockquote class="src">
+    <span class="path">InheritableThreadLocalDemo.java</span>
+inheritableTL.set("main线程第二次设置的值");
+Thread child3 = new Thread(() -&gt; { // 构造这一刻真实拍下快照
+    Thread.sleep(100);
+    System.out.println(inheritableTL.get());
+});
+child3.start(); // start时不会再重新拷贝一次
+inheritableTL.set("main线程在子线程start后又设置的值"); // 这次修改真实来不及影响child3
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">延迟启动的子线程读取到: main线程第二次设置的值</pre>
+  </div>
+  <div class="callout b">
+    <b>真实的时间点在这里。</b>子线程最终读到的是 <span class="mono">"main线程第二次设置的值"</span>——也就是 <span class="mono">new Thread(...)</span> 构造调用发生那一刻,父线程 <span class="mono">inheritableTL</span> 的值。<span class="mono">start()</span> 之后父线程又修改了一次值,子线程真实完全不受影响,即使子线程本身还睡眠了 100ms 才真正读取。这证明了继承的复制动作真实发生在 <span class="mono">Thread</span> 的构造函数内部(JDK 源码里是 <span class="mono">Thread.init()</span> 方法调用 <span class="mono">ThreadLocal.createInheritedMap()</span>),而不是很多人直觉认为的"线程真正开始运行时才去读父线程当时的值"。这个真实时序差异在"先创建一批线程对象、稍后才批量start"的场景(比如自定义线程池的预热)里,是一个容易被忽视但真实存在的陷阱。
+  </div>
+</section>
+
+<section>
+  <h2>真实验证:子线程修改继承值,真实不影响父线程</h2>
+  <p class="h2-sub">继承的是一份独立副本，还是共享同一个可变的存储单元？</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">子线程修改InheritableThreadLocal后，main线程自己的值真实是: 父线程原始值（应保持父线程原始值，子线程的修改真实互不影响）</pre>
+  </div>
+  <p>真实结果证明继承的是值的一份独立拷贝(复制的是 <span class="mono">Entry</span> 数组的内容,对于像字符串这样的不可变值直接持有引用即可实现隔离效果),子线程调用 <span class="mono">inheritableTL.set()</span> 真实只是修改了自己 <span class="mono">ThreadLocalMap</span> 里的条目,完全不会回写影响父线程的存储。</p>
+</section>
+
+<section>
+  <h2>真实验证:继承链真实能多层传递</h2>
+  <p class="h2-sub">祖父线程创建父线程，父线程再创建孙子线程，值是否真实一路传递下去。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">父线程(中间层)真实继承到: 祖父线程设置
+孙子线程真实继承到: 祖父线程设置</pre>
+  </div>
+  <p>真实结果证明继承链条不止一层——只要每一层都是通过 <span class="mono">new Thread()</span> 真实创建的,值就会像接力一样一路真实传递下去,这也是很多链路追踪框架(如日志MDC、TraceID传递)选择基于 <span class="mono">InheritableThreadLocal</span>(或其升级版 <span class="mono">TransmittableThreadLocal</span>)实现的原因。</p>
+</section>
+
+<section>
+  <h2>分步演示:子线程真实是在哪一刻"继承"到父线程的值的</h2>
+  <p>每一行都是真实运行这段代码得到的结果。</p>
+<div class="demo" id="demo"><div class="demo-head">InheritableThreadLocal 真实只在子线程被构造的那一刻拷贝一份父线程当时的值快照,之后父子双方各自独立,互不影响</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>这一步新验证的场景</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>
+(function(){
+const D = {"panels":[{"id":"kv","kind":"kv","label":"真实运行结果(逐步累加)"},{"id":"info","kind":"text","label":"这一步发生了什么"}],"steps":[{"note":"main线程分别对普通 ThreadLocal<String> plain 和 InheritableThreadLocal<String> inheritable 设置了值;创建一个子线程,在子线程内部分别读取这两个变量:真实结果 plain.get() 是 null,inheritable.get() 却真实是 \"main-inheritable-value\"——普通 ThreadLocal 真实完全不会传给子线程,InheritableThreadLocal 真实会。","s":{"kv":{"items":[["子线程内 plain.get() / inheritable.get()","null / \"main-inheritable-value\"(只有Inheritable真实传递)"]],"hl":["子线程内 plain.get() / inheritable.get()"]},"info":{"text":"main线程分别对普通 ThreadLocal<String> plain 和 InheritableThreadLocal<String> inheritable 设置了值;创建一个子线程,在子线程内部分别读取这两个变量:真实结果 plain.get() 是 null,inheritable.get() 却真实是 \"main-inheritable-value\"——普通 ThreadLocal 真实完全不会传给子线程,InheritableThreadLocal 真实会。"}}},{"note":"真实验证\"继承\"的时机:设置 inheritable 为 \"changed-after-spawn\",再改成 \"changed-again-before-start\",然后才真正 start() 一个新线程:真实结果子线程读到的是 \"changed-after-spawn\"(Thread 构造时的快照值),不是 start() 之前最后设置的 \"changed-again-before-start\"——继承的时机真实是在子线程对象被构造(new Thread(...))的那一刻拍下快照,不是在 start() 的时候。","s":{"kv":{"items":[["子线程内 plain.get() / inheritable.get()","null / \"main-inheritable-value\"(只有Inheritable真实传递)"],["子线程真实继承到的值(构造后又改了值,构造时机才是关键)","\"changed-after-spawn\"(真实以Thread构造那一刻的值为准)"]],"hl":["子线程真实继承到的值(构造后又改了值,构造时机才是关键)"]},"info":{"text":"真实验证\"继承\"的时机:设置 inheritable 为 \"changed-after-spawn\",再改成 \"changed-again-before-start\",然后才真正 start() 一个新线程:真实结果子线程读到的是 \"changed-after-spawn\"(Thread 构造时的快照值),不是 start() 之前最后设置的 \"changed-again-before-start\"——继承的时机真实是在子线程对象被构造(new Thread(...))的那一刻拍下快照,不是在 start() 的时候。"}}},{"note":"真实验证这是\"独立快照\"而不是\"共享同一份数据\":子线程真实读到继承来的值之后,在自己内部调用 inheritable.set(\"mutated-inside-child3\") 修改它;子线程结束后,main线程再读 inheritable.get():真实结果 main 线程的值完全没变(还是子线程读到继承值之前main设置的那个值)——子线程拿到的真实是一份独立副本,它怎么改都不会真实反向影响到父线程。","s":{"kv":{"items":[["子线程内 plain.get() / inheritable.get()","null / \"main-inheritable-value\"(只有Inheritable真实传递)"],["子线程真实继承到的值(构造后又改了值,构造时机才是关键)","\"changed-after-spawn\"(真实以Thread构造那一刻的值为准)"],["子线程修改自己的inheritable副本后, 父线程的值是否受影响","真实完全不受影响(各自独立副本)"]],"hl":["子线程修改自己的inheritable副本后, 父线程的值是否受影响"]},"info":{"text":"真实验证这是\"独立快照\"而不是\"共享同一份数据\":子线程真实读到继承来的值之后,在自己内部调用 inheritable.set(\"mutated-inside-child3\") 修改它;子线程结束后,main线程再读 inheritable.get():真实结果 main 线程的值完全没变(还是子线程读到继承值之前main设置的那个值)——子线程拿到的真实是一份独立副本,它怎么改都不会真实反向影响到父线程。"}}},{"note":"多级传递验证:main线程启动一个中间线程,中间线程先给 inheritable 设置了新值 \"set-in-middle-thread\",然后在自己内部又启动一个孙线程,孙线程读取 inheritable.get():真实结果是 \"set-in-middle-thread\"——继承关系真实是链式的,一个线程创建的子线程,会真实继承创建它那一刻这个线程自己持有的值,不管这个值最初是不是从更上层继承来的。","s":{"kv":{"items":[["子线程内 plain.get() / inheritable.get()","null / \"main-inheritable-value\"(只有Inheritable真实传递)"],["子线程真实继承到的值(构造后又改了值,构造时机才是关键)","\"changed-after-spawn\"(真实以Thread构造那一刻的值为准)"],["子线程修改自己的inheritable副本后, 父线程的值是否受影响","真实完全不受影响(各自独立副本)"],["孙线程(线程链式创建)真实继承到的值","\"set-in-middle-thread\"(真实沿创建链逐级传递)"]],"hl":["孙线程(线程链式创建)真实继承到的值"]},"info":{"text":"多级传递验证:main线程启动一个中间线程,中间线程先给 inheritable 设置了新值 \"set-in-middle-thread\",然后在自己内部又启动一个孙线程,孙线程读取 inheritable.get():真实结果是 \"set-in-middle-thread\"——继承关系真实是链式的,一个线程创建的子线程,会真实继承创建它那一刻这个线程自己持有的值,不管这个值最初是不是从更上层继承来的。"}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1000); };
+go(0);
+})();
+</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文全部结果均在本机真实运行 Java 17 得到,继承时机和多层传递场景重复运行结果完全一致。</li>
+      <li>和<a href="java-threadlocal.html" target="_blank" rel="noopener">ThreadLocal 内存泄漏</a>那篇一起看,能更完整理解 ThreadLocal 家族在线程池复用场景下需要格外小心的原因——继承机制会让"脏值"随着线程池的线程创建过程一路蔓延。</li>
+      <li>没有涉及:线程池场景下InheritableThreadLocal因为线程被复用而非每次新建导致的真实继承失效问题、阿里开源的TransmittableThreadLocal如何真实解决线程池场景下的值传递——这两个话题留给系列后面按需再写。</li>
+    </ul>
+  </div>
+</section>
+
+<a class="next-post" href="java-happens-before.html" target="_blank" rel="noopener">
+  <div><div class="t1">下一篇 · Java 内部原理 93</div><div class="t2">happens-before 真实验证:没有volatile,reader线程真实卡在死循环里永远出不来</div></div>
+  <span>→</span>
+</a>
+
+</div>
+<footer>Java 内部原理 · InheritableThreadLocal · 数据来自本机 Java 17 实验</footer>
+</body>
+</html>

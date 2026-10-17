@@ -1,0 +1,22 @@
+from lib import *
+S = SS('c11')
+steps = [
+    step("用 FROM scratch 的镜像演示(Go 静态二进制交叉编译出 arm64 和 amd64 两份,Dockerfile 里 COPY app-${TARGETARCH} /app)。docker buildx build --platform linux/arm64 --load:退出码 0,用时 650 ms;--platform linux/amd64,linux/arm64 --load:退出码 0,用时 419 ms(两次都命中了构建缓存,所以用时不能比较),在这个 Docker 的 containerd 镜像存储里,多平台镜像可以直接 --load 进本地。", t=tl(S(1)), mark=lidx(S(1), '--platform linux/amd64,linux/arm64'), done=lidx(S(1), '--platform linux/arm64:'), kv=KV([['单平台', '--platform linux/arm64'], ['多平台', 'linux/amd64,linux/arm64'], ['--load', 'containerd 镜像存储下可以加载多平台镜像']], ['--load'])),
+    step("镜像的索引里放了什么(docker save 后读 index.json 与各 manifest):index.json 只有 1 个条目,mediaType = application/vnd.oci.image.index.v1+json;它指向的顶层索引里有 4 个 manifest——linux/amd64(digest d4d001400e4d…,size 480)、linux/arm64(b29f7d7637cd…,size 480),以及两个 unknown/unknown(size 835),注解 vnd.docker.reference.type = attestation-manifest、vnd.docker.reference.digest 指向前面两个平台的 manifest——那是 BuildKit 默认附带的构建证明(attestation)。", t=tl(S(2)), done=lidx(S(2), 'linux/amd64 digest', 'linux/arm64 digest'), mark=lidx(S(2), 'unknown/unknown'), b=bars([['平台 manifest 个数', 2, '2'], ['attestation manifest 个数', 2, '2']], 2, done=[0], mark=[1]), kv=KV([['linux/amd64、linux/arm64', '各一个 manifest(480 字节)'], ['unknown/unknown', '两个 attestation manifest(835 字节),指向对应平台'], ['索引', 'OCI index,mediaType application/vnd.oci.image.index.v1+json']], ['unknown/unknown'])),
+    step("在 arm64 的 Docker Desktop 上运行两个架构的镜像:docker run --platform linux/arm64 → “我是 linux/arm64 的二进制”;--platform linux/amd64 → “我是 linux/amd64 的二进制”——amd64 的也能跑(靠模拟/转译)。", t=tl(S(3)), done=lidx(S(3), 'linux/arm64:', 'linux/amd64:'), kv=KV([['arm64 镜像', '原生运行'], ['amd64 镜像', '也能运行,靠模拟']], ['amd64 镜像'])),
+    step("模拟的代价:同一个 3 亿次整数运算的循环,3 次取最快——linux/arm64 366 ms,linux/amd64 496 ms,约慢 1.36 倍。这是一个纯整数的紧循环,系统调用多或内存访问多的程序差别可能不同。", t=tl(S(4)), mark=lidx(S(4), 'linux/amd64'), b=bars([['linux/arm64 (ms)', 366, '366'], ['linux/amd64(模拟)', 496, '496']], 496, done=[0], mark=[1]), kv=KV([['arm64 原生', '366 ms'], ['amd64 模拟', '496 ms,约 1.36 倍'], ['限制', '只测了一种负载']], ['限制'])),
+    step("镜像检查里的 Architecture 与 Os:bwlab-c11-single 与 bwlab-c11-multi 都显示 Os=linux Architecture=arm64 Size=3702660——docker image inspect 只给出当前平台(arm64)的那一份;多平台索引的结构要像上面那样去读 index。", t=tl(S(5)), mark=lidx(S(5), 'bwlab-c11'), kv=KV([['inspect 显示', '宿主机平台那一份'], ['完整索引', '要读 manifest list / index']], ['inspect 显示'])),
+]
+A = mkartc('c11', 11, 'Docker,buildx,多平台镜像,manifest list,OCI index,真实验证,动画演示',
+    '在 Docker Engine 29.8.2(containerd 镜像存储)里实测 buildx 多平台镜像:--platform linux/amd64,linux/arm64 可以 --load;镜像索引(OCI index)里有 4 个 manifest——amd64 和 arm64 各一个(480 字节),外加两个 unknown/unknown 的 attestation manifest(835 字节);arm64 的 Docker Desktop 上 amd64 镜像也能跑,3 亿次整数循环 496 ms 对原生 366 ms。',
+    '多平台镜像的“一个 tag 多个平台”是怎么实现的?这篇构建一个 amd64 + arm64 的镜像,拆开 docker save 出来的索引,看里面到底放了哪些 manifest,哪些是构建附带的证明,并实测跨架构运行要慢多少。',
+    [('4 个 manifest', '两平台镜像的索引里:2 个平台 manifest + 2 个 attestation manifest'), ('unknown/unknown', 'attestation manifest 在索引里的平台标记,注解 vnd.docker.reference.type = attestation-manifest'), ('496 vs 366 ms', 'amd64(模拟)与 arm64(原生)跑同一个 3 亿次整数运算循环')],
+    [('怎么构建', '<p>用 <code>FROM scratch</code> 加两份交叉编译好的静态二进制,Dockerfile 里用 <code>${TARGETARCH}</code> 选文件,<code>docker buildx build --platform linux/amd64,linux/arm64 --load</code> 就把两个平台一次构建出来并加载到本地。这个 Docker 用的是 containerd 镜像存储,所以多平台镜像可以直接加载;经典的存储驱动下不行(本文没有测)。</p>'),
+     ('索引里有什么', '<p>读 <code>docker save</code> 出来的 <code>index.json</code>,它指向一个 OCI index,里面有 4 个条目:两个真正的平台 manifest(linux/amd64、linux/arm64,各 480 字节),和两个平台标成 <code>unknown/unknown</code> 的条目——它们的注解 <code>vnd.docker.reference.type</code> 是 <code>attestation-manifest</code>,指向对应平台的 manifest,是 BuildKit 默认附带的构建证明。看到 <code>unknown/unknown</code> 别当成多余的平台。</p>'),
+     ('跨架构运行', '<p>在 arm64 的 Docker Desktop 上 <code>--platform linux/amd64</code> 也能运行同一个 tag,输出确认是 amd64 的二进制。纯整数的紧循环,模拟只慢了约 1.36 倍(496 ms 对 366 ms);这只是一种负载,具体是哪种翻译技术在起作用,我没有查。</p>'),
+     ('inspect 只显示当前平台', '<p><code>docker image inspect</code> 对多平台镜像只显示宿主机平台那一份(arm64),不代表镜像只有这一个平台。</p>'),
+     ('没测的', '<p>推送到仓库后的 <code>manifest list</code> 形态、<code>--provenance=false</code> 去掉证明、构建 amd64 版本时的模拟构建速度,都没有在本文实验。</p>')],
+    steps,
+    [ENV_C + '。镜像用 FROM scratch + Go 静态二进制(CGO_ENABLED=0 交叉编译两份),所以不需要从 Docker Hub 拉基础镜像;索引内容用 docker save 导出后用 Python 读取;两次构建都命中了缓存,构建用时不具可比性;跨架构性能只测了一种整数循环,每个平台 3 次取最快;实验后已删除所有镜像',
+     '没有验证:真实基础镜像(如 alpine)的多平台构建、构建时 RUN 在模拟平台上的速度、推送到 registry 后的索引、provenance / SBOM 的内容、Rosetta 与 QEMU 的选择与影响、Windows 平台镜像'],
+    '多平台镜像')

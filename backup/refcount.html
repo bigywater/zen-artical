@@ -1,0 +1,572 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>引用计数:对象什么时候真的被释放</title>
+<meta name="description" content="不朽对象、循环引用与分代GC的源码与实测。">
+<link rel="canonical" href="https://bigywater.tech/refcount.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="引用计数:对象什么时候真的被释放">
+<meta property="og:description" content="不朽对象、循环引用与分代GC的源码与实测。">
+<meta property="og:url" content="https://bigywater.tech/refcount.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="引用计数:对象什么时候真的被释放">
+<meta name="twitter:description" content="不朽对象、循环引用与分代GC的源码与实测。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F3F6FA; --paper:#FFFFFF; --ink:#1A2233; --ink-dim:#5A6B80; --line:#DCE4EE;
+  --py-c:#2F6FB0; --py-c-soft:#E4EEF9;
+  --mem-c:#C99A2E; --mem-c-soft:#FBF2DC;
+  --gil-c:#7B4FA8; --gil-c-soft:#EFE6F7;
+  --code-bg:#1B2233; --code-ink:#E7ECF5;
+  --shadow: 0 1px 2px rgba(20,30,50,.06), 0 8px 24px -12px rgba(20,30,50,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#10151F; --paper:#1A2233; --ink:#E7ECF5; --ink-dim:#9AAAC0; --line:#2C3850;
+    --py-c:#6FA8E0; --py-c-soft:#1E3350;
+    --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+    --gil-c:#B08AE0; --gil-c-soft:#332545;
+    --code-bg:#0D1119; --code-ink:#E2E8F5;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#10151F; --paper:#1A2233; --ink:#E7ECF5; --ink-dim:#9AAAC0; --line:#2C3850;
+  --py-c:#6FA8E0; --py-c-soft:#1E3350;
+  --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+  --gil-c:#B08AE0; --gil-c-soft:#332545;
+  --code-bg:#0D1119; --code-ink:#E2E8F5;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--py-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--py-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--py-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--py-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.a .tag{background:var(--py-c-soft); color:var(--py-c);}
+.card.b .tag{background:var(--mem-c-soft); color:var(--mem-c);}
+.card.c .tag{background:var(--gil-c-soft); color:var(--gil-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#8FA0BC; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#9FC3EE;}
+
+.callout{border-left:3px solid var(--py-c); background:var(--py-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+.callout.c{border-color:var(--gil-c); background:var(--gil-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--py-c-soft); color:var(--py-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#9FC3EE;}
+.term pre.code{margin:0 0 10px; color:#9FC3EE; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+.term .ok{color:#7DD0A0;}
+.term .cm{color:#7C8CA8;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--mem-c-soft); color:var(--mem-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:22px 20px;}
+.obj-grid{display:grid; grid-template-columns:repeat(3,1fr); gap:14px;}
+@media (max-width:640px){.obj-grid{grid-template-columns:1fr;}}
+.obj-box{border:1px solid var(--line); border-radius:10px; padding:14px 16px; background:var(--bg); text-align:center; transition:border-color .2s, background .2s;}
+.obj-box.active{border-color:var(--py-c); box-shadow:0 0 0 2px var(--py-c-soft) inset;}
+.obj-box.freed{opacity:.4;}
+.obj-box.unreachable{border-color:var(--gil-c); background:var(--gil-c-soft);}
+.obj-box h5{margin:0 0 8px; font-size:.85rem; font-weight:700; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+.obj-box .rc{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.6rem; font-weight:700; color:var(--py-c);}
+.obj-box .rc-label{font-size:.68rem; color:var(--ink-dim); text-transform:uppercase; letter-spacing:.04em;}
+.obj-box .status{margin-top:6px; font-size:.72rem; color:var(--ink-dim); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+.stat-row{display:flex; gap:16px; flex-wrap:wrap; margin:14px 0 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem;}
+.stat{border:1px solid var(--line); border-radius:8px; padding:8px 12px; background:var(--bg);}
+.stat b{color:var(--py-c); display:block; font-size:1rem; font-variant-numeric:tabular-nums;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--py-c); color:var(--py-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--py-c); border-color:var(--py-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{display:flex; align-items:center; gap:10px; margin-bottom:24px; font-size:.88rem; color:var(--ink-dim); flex-wrap:wrap;}
+.prev-post a{font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--py-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Python 系列 · 第三篇</div>
+    <h1>Python 对象没了引用之后,是马上消失,还是要等垃圾回收?</h1>
+    <p>CPython 的内存管理主力是引用计数——每个对象头里有个计数器,记着"现在有多少个地方在指着我",减到 0 立刻释放,不用等任何后台线程。这一篇本机验证了这个"立刻"到底有多快,顺手挖到一个的、大多数教程不会讲的细节——某些对象的引用计数会被故意设成一个天文数字,永远不会归零;还复现了引用计数机制天生的一个漏洞:循环引用,以及 Python 怎么用另一套机制兜底。</p>
+    <div class="hero-fact">
+      <div><div class="num">3,221,225,472</div><div class="lbl">本机测得:<span class="mono">None</span>/<span class="mono">True</span>/小整数的引用计数——不是笔误,是故意设的</div></div>
+      <div><div class="num">114</div><div class="lbl">本机真实实测:关掉自动回收后手动 <span class="mono">gc.collect()</span>,一次收掉的对象数</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <div class="prev-post">← 接上篇 <a href="lock.html" target="_blank" rel="noopener">有了 GIL,为什么还要手动加锁</a></div>
+  <h2>问题:对象怎么知道自己该被回收</h2>
+  <p class="h2-sub">不同语言给了完全不同的答案。</p>
+  <div class="cards">
+    <div class="card a">
+      <span class="tag">引用计数</span>
+      <h3>每个对象自己记账</h3>
+      <p>CPython 给每个对象头里塞了一个计数器,创建一个新引用 +1,引用消失 -1,减到 0 的瞬间立刻释放——不需要暂停程序去扫描整个堆,内存回收的时机是完全确定的。</p>
+    </div>
+    <div class="card b">
+      <span class="tag">代价</span>
+      <h3>循环引用是天生的漏洞</h3>
+      <p>如果 A 引用 B、B 又引用 A,就算外部谁都不再引用它俩,它们互相的引用还在,计数永远到不了 0——纯引用计数拿这种情况没办法。</p>
+    </div>
+    <div class="card c">
+      <span class="tag">兜底</span>
+      <h3>另开一套分代垃圾回收</h3>
+      <p>Python 额外维护了一套专门找循环引用的收集器,定期扫描"从根节点出发够不着"的对象,不管它们的引用计数是不是大于 0,照样回收——引用计数管日常,循环检测管漏网之鱼。</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>源码:引用计数字段长什么样</h2>
+  <p class="h2-sub">每个 Python 对象的 C 结构体第一个字段就是引用计数。3.14.7 这个版本,标准版(带 GIL)和自由线程版的字段布局完全不一样。</p>
+  <blockquote class="src">
+    <span class="path">Include/object.h · <a href="https://github.com/python/cpython/blob/v3.14.7/Include/object.h#L110" target="_blank" rel="noopener">cpython @ v3.14.7, L110</a></span>
+#ifndef Py_GIL_DISABLED
+struct _object {
+    union {
+        PY_INT64_T ob_refcnt_full;
+        struct {
+            uint32_t ob_refcnt;   // 引用计数,32 位
+            uint16_t ob_overflow;
+            uint16_t ob_flags;
+        };
+    };
+    PyTypeObject *ob_type;
+};
+#else
+// 自由线程版:本地计数 + 共享(原子)计数分开存,减少多线程下的原子操作竞争
+struct _object {
+    uintptr_t ob_tid;
+    uint32_t ob_ref_local;      // 只属于当前线程的本地引用计数
+    Py_ssize_t ob_ref_shared;   // 跨线程共享的原子引用计数
+    PyTypeObject *ob_type;
+};
+#endif
+  </blockquote>
+  <p>本机装的是标准版(上一篇验证过 <span class="mono">sys._is_gil_enabled() == True</span>),用的是上半段那个结构。<span class="mono">Py_INCREF</span>/<span class="mono">Py_DECREF</span> 最终都是对 <span class="mono">ob_refcnt</span> 这个字段做加减:</p>
+  <blockquote class="src">
+    <span class="path">Include/refcount.h · <a href="https://github.com/python/cpython/blob/v3.14.7/Include/refcount.h#L252" target="_blank" rel="noopener">cpython @ v3.14.7, L252</a></span>
+static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
+{
+    ...
+    PY_UINT32_T cur_refcnt = op->ob_refcnt;
+    if (cur_refcnt >= _Py_IMMORTAL_INITIAL_REFCNT) {
+        // the object is immortal
+        return;                    // 不朽对象,直接跳过,连加法都不做
+    }
+    op->ob_refcnt = cur_refcnt + 1;
+    ...
+}
+  </blockquote>
+  <p>这里出现了一个此前没提过的概念:<span class="mono">_Py_IMMORTAL_INITIAL_REFCNT</span>——"不朽对象"。</p>
+</section>
+
+<section>
+  <h2>发现:有些对象的引用计数是故意设成天文数字的</h2>
+  <p class="h2-sub"><span class="mono">None</span>、<span class="mono">True</span>/<span class="mono">False</span>、-5~256 的小整数、空元组这些高频用到的单例对象,引用计数测出来是这样的:</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">import sys
+print('None:', sys.getrefcount(None))
+print('True:', sys.getrefcount(True))
+print('小整数 5:', sys.getrefcount(5))
+print('大整数 99999999999:', sys.getrefcount(99999999999))
+print('空元组:', sys.getrefcount(()))</pre>
+<span class="ok">None: 3221225472
+True: 3221225472
+小整数 5: 3221225472
+大整数 99999999999: 3
+空元组: 3221225472</span>
+  </div>
+  <p>不是溢出、不是 bug——3221225472 正是 <span class="mono">3ULL &lt;&lt; 30</span>,精确对上源码里的常量:</p>
+  <blockquote class="src">
+    <span class="path">Include/refcount.h · <a href="https://github.com/python/cpython/blob/v3.14.7/Include/refcount.h#L49" target="_blank" rel="noopener">cpython @ v3.14.7, L49</a></span>
+/* In order to offer sufficient resilience to C extensions using the stable
+ * ABI compiled against 3.11 or earlier, we set the initial value near the
+ * middle of the range (2**31, 2**32). That way the refcount can be
+ * off by ~1 billion without affecting immortality. */
+#define _Py_IMMORTAL_INITIAL_REFCNT (3ULL &lt;&lt; 30)
+  </blockquote>
+  <p>这是 Python 3.12 引入的"不朽对象"(PEP 683)优化:<span class="mono">None</span>/<span class="mono">True</span>/小整数这类对象在程序里会被疯狂引用又释放(几乎每次条件判断、每次小整数运算都会摸一下),给它们做的加减法是纯粹的浪费——干脆把初始引用计数设成一个大到几乎不可能自然到达、又留了足够安全余量的数,<span class="mono">Py_INCREF</span> 检测到这个值直接跳过不做加法,<span class="mono">Py_DECREF</span> 同理跳过减法。源码注释里那句"离中间值有意留了 10 亿的余量",是专门为了兼容 3.11 之前编译、还不知道"不朽"这回事的 C 扩展——就算它们对这类对象错误地做了几亿次减法,也不会把计数真的减到 0。<span class="mono">99999999999</span> 这种不在小整数缓存范围(-5~256)里的大整数,是的普通对象,引用计数就是正常的个位数。</p>
+</section>
+
+<section>
+  <h2>实验:引用计数归零,释放快到不用等</h2>
+  <p class="h2-sub">用 <span class="mono">__del__</span> 当探针,验证"计数到 0 就立刻释放"这件事,不是"最终会被释放"那种模糊承诺。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cmd">$ python3 exp_immediate_dealloc.py</span>
+<span class="ok">creating object:
+  created A
+refcount right after creation: 1
+deleting the only reference:
+  __del__ called for A (freed IMMEDIATELY when refcount hit 0)
+(notice __del__ already printed above -- no waiting for a GC cycle)</span>
+  </div>
+  <p><span class="mono">__del__</span> 的打印紧跟在 <span class="mono">del t</span> 后面同步出现,中间没有任何延迟——这和 Java、Go 那种"对象啥时候真的被回收不确定,<span class="mono">finalize</span> 可能很久之后才跑,甚至可能不跑"的模型完全不同。</p>
+</section>
+
+<section>
+  <h2>实验:循环引用,引用计数拿它没办法</h2>
+  <p class="h2-sub">关掉自动垃圾回收(<span class="mono">gc.disable()</span>),纯靠引用计数,构造一个的循环引用。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cmd">$ python3 exp_cycle.py</span>
+<span class="ok">refcount of A right after linking: 2 (1 from the local var 'a', 1 from b.other)
+refcount of B right after linking: 2
+deleting the local names 'a' and 'b' (the only EXTERNAL references)...
+(no __del__ printed above -- refcounts are 1, not 0: each node still holds the other)
+real memory: are A/B still alive? checking gc.garbage / gc.get_objects()...
+Node objects still alive (found by scanning the live heap): ['A', 'B']
+
+now manually running gc.collect() (the cycle-detecting collector)...
+gc.collect() reports 114 objects collected
+  __del__ called for B
+  __del__ called for A</span>
+  </div>
+  <p><span class="mono">del a; del b</span> 之后,两个对象的 <span class="mono">__del__</span> 都没有触发——用 <span class="mono">gc.get_objects()</span> 扫描堆,两个节点确实还活着。只有手动跑一次 <span class="mono">gc.collect()</span>(收了 114 个对象,包括之前运行过程中积累的其他垃圾),<span class="mono">__del__</span> 才终于打印出来,而且是先 B 后 A——收集器不看引用计数,看的是"从根节点还能不能走到"。</p>
+</section>
+
+<section>
+  <h2>源码:分代收集器怎么决定什么时候扫、扫多深</h2>
+  <p class="h2-sub">本机配置(默认值):</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cmd">$ python3 -c "import gc; print(gc.get_threshold())"</span>
+<span class="ok">(2000, 10, 10)</span>
+  </div>
+  <p>三代对象分别记数:新创建的对象先进 0 代,0 代积累的对象数超过阈值(本机是 2000)就触发一次 0 代扫描,活下来的对象晋升到 1 代;1 代超过阈值(10 次 0 代扫描没被晋升掉)触发一次 1/0 代联合扫描,以此类推。这个策略基于一个很朴素的假设——大多数对象活得很短,老对象很少变成垃圾,没必要每次都把所有对象重新扫一遍。</p>
+  <blockquote class="src">
+    <span class="path">Python/gc.c · <a href="https://github.com/python/cpython/blob/v3.14.7/Python/gc.c#L1254" target="_blank" rel="noopener">cpython @ v3.14.7, L1254</a></span>
+/* Find the oldest generation (highest numbered) where the count
+ * exceeds the threshold. Objects in the that generation and
+ * generations younger than it will be collected. */
+static int
+gc_select_generation(GCState *gcstate) {
+    for (int i = NUM_GENERATIONS-1; i >= 0; i--) {
+        if (gcstate->generations[i].count > gcstate->generations[i].threshold) {
+            // 额外还有一条启发式规则:只有"长期存活的待处理对象"占
+            // "长期存活总对象"的比例超过 25%,才会真的触发最老一代
+            // (最贵)的全量扫描——避免对象数一多,全量扫描的开销跟着
+            // 平方增长。
+            ...
+        }
+    }
+}
+  </blockquote>
+  <p>这条 25% 的启发式规则是 2008 年从 python-dev 邮件列表里的一次讨论定下来的(源码注释里直接留了当时的分析链接)——目的是避免"每积累固定数量的新对象就做一次全量扫描"这种朴素策略在长期存活对象很多的场景下,扫描开销随对象总数平方级增长。</p>
+</section>
+
+<section>
+  <h2>演示:引用计数 + 循环检测,一步步看</h2>
+  <p class="h2-sub">复现上面两个实验:先是普通的引用计数增减(<span class="mono">X</span> 计数归零立刻释放),然后是一个的循环(<span class="mono">A</span>/<span class="mono">B</span> 互相引用),最后一次 GC 扫描把它们找出来。</p>
+  <div class="demo" id="refDemo">
+    <div class="demo-head">引用计数演示</div>
+    <div class="demo-narration" id="refNarration"></div>
+    <div class="demo-body">
+      <div class="obj-grid" id="refGrid"></div>
+      <div class="stat-row" id="refStats"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="refReset">⏮ 重来</button>
+      <button class="btn" id="refPrev">‹ 上一步</button>
+      <button class="btn primary" id="refNext">下一步 ›</button>
+      <button class="btn" id="refPlay">▶ 自动播放</button>
+      <span class="step-counter" id="refCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">数据来自独立验证过的 Python 模拟:每一次 dealloc 都核对过触发时刻的引用计数确实是 0;GC 扫描阶段找出的"不可达对象"用一套独立的可达性分析重新算过一遍,确认和演示里标记的完全一致。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文全部实验(<span class="mono">sys.getrefcount</span>、<span class="mono">__del__</span> 立即释放、<span class="mono">gc.disable()</span> 下的循环引用、<span class="mono">gc.collect()</span> 手动回收、不朽对象引用计数测量)均在本机运行的 Python 3.14.7 上完成,数据未做删改。</li>
+      <li>源码引用(<span class="mono">Include/object.h</span> 的 <span class="mono">PyObject</span> 结构体、<span class="mono">Include/refcount.h</span> 的 <span class="mono">Py_INCREF</span>/<span class="mono">_Py_IMMORTAL_INITIAL_REFCNT</span>、<span class="mono">Python/gc.c</span> 的 <span class="mono">gc_select_generation</span>)取自 <span class="mono">python/cpython</span> 仓库 <span class="mono">v3.14.7</span> 标签,与本机安装的 Python 3.14.7 完全一致。默认分代阈值 <span class="mono">(2000, 10, 10)</span> 通过 <span class="mono">gc.get_threshold()</span> 在本机确认为运行值,没有去找具体的默认值初始化代码行(那部分分散在解释器状态初始化逻辑里,不影响本文对阈值含义和触发规则的解释)。</li>
+      <li>演示动画的引用计数模型(创建、增减、归零释放、循环引用、GC 可达性扫描)由 Python 独立实现并交叉验证过——不是这份 C 源码的逐行翻译,而是复现了它对外可观察的行为规则,用真实实测过的两个场景(普通归零 + 循环引用)做参数。</li>
+      <li>没有涉及:自由线程(no-GIL)版本的本地/共享引用计数具体怎么合并与迁移、弱引用(<span class="mono">weakref</span>)如何绕开循环引用问题、<span class="mono">__del__</span> 方法本身如果又创建了新的循环引用会发生什么(历史上这曾经是"不可回收"垃圾的来源之一,近几个版本已经改进)。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="gen.html" target="_blank" rel="noopener">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">生成器:yield 怎么暂停又恢复</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Python 系列 · 第三篇 · 对象模型与引用计数 · 数据来自本机运行的 Python 3.14.7</footer>
+
+<script>
+const DATA = {"events": [{"obj": "X", "refcount": 1, "type": "create"}, {"obj": "X", "refcount": 2, "reason": "y = x (第二个变量名指向同一个对象)", "type": "incref"}, {"obj": "X", "refcount": 1, "reason": "del y", "type": "decref"}, {"obj": "X", "refcount": 0, "reason": "del x (最后一个引用没了,立即释放)", "type": "decref"}, {"obj": "X", "reason": "refcount 归零,立即释放(不需要等 GC)", "type": "dealloc"}, {"obj": "A", "refcount": 1, "type": "create"}, {"obj": "B", "refcount": 1, "type": "create"}, {"obj": "B", "refcount": 2, "reason": "A 现在引用了 B", "type": "incref"}, {"obj": "A", "refcount": 2, "reason": "B 现在引用了 A", "type": "incref"}, {"obj": "A", "refcount": 1, "reason": "del a (外部引用没了,但 B 还引用着 A)", "type": "decref"}, {"obj": "B", "refcount": 1, "reason": "del b (外部引用没了,但 A 还引用着 B)", "type": "decref"}, {"roots": [], "reachable": [], "unreachable": ["B", "A"], "type": "gc-pass"}, {"obj": "A", "reason": "refcount 始终 > 0,但从根节点不可达,被循环收集器回收", "type": "gc-dealloc"}, {"obj": "B", "reason": "refcount 始终 > 0,但从根节点不可达,被循环收集器回收", "type": "gc-dealloc"}]};
+
+(function(){
+  const events = DATA.events;
+  const grid = document.getElementById('refGrid');
+  const narration = document.getElementById('refNarration');
+  const statsBox = document.getElementById('refStats');
+  const counter = document.getElementById('refCounter');
+  let idx = 0, playing=false, playTimer=null;
+
+  const objNames = ['X', 'A', 'B'];
+  const boxes = {};
+  objNames.forEach(name => {
+    const box = document.createElement('div');
+    box.className = 'obj-box';
+    box.innerHTML = `<h5>${name}</h5><div class="rc">—</div><div class="rc-label">refcount</div><div class="status"></div>`;
+    grid.appendChild(box);
+    boxes[name] = box;
+  });
+
+  function describe(e){
+    if (e.type === 'create') return `创建对象 <span class="k">${e.obj}</span>,refcount = ${e.refcount}。`;
+    if (e.type === 'incref') return `<span class="k">${e.obj}</span> 的 refcount 加一 → ${e.refcount}:${e.reason}`;
+    if (e.type === 'decref') return `<span class="k">${e.obj}</span> 的 refcount 减一 → ${e.refcount}:${e.reason}`;
+    if (e.type === 'dealloc') return `<span class="k">${e.obj}</span>:${e.reason}`;
+    if (e.type === 'gc-pass') return `触发一次 GC 扫描,从根节点出发能到达的对象:[${e.reachable.join(', ') || '无'}];够不着的:[${e.unreachable.join(', ')}]。`;
+    if (e.type === 'gc-dealloc') return `<span class="k">${e.obj}</span>:${e.reason}`;
+    return e.type;
+  }
+
+  function replayUpTo(uptoIdx){
+    const refcount = {};
+    const freed = new Set();
+    const unreachableSet = new Set();
+    let lastGcPass = false;
+    for (let i = 0; i <= uptoIdx; i++){
+      const e = events[i];
+      if (e.type === 'create' || e.type === 'incref' || e.type === 'decref'){
+        refcount[e.obj] = e.refcount;
+      }
+      if (e.type === 'dealloc' || e.type === 'gc-dealloc'){
+        freed.add(e.obj);
+      }
+      if (e.type === 'gc-pass'){
+        unreachableSet.clear();
+        e.unreachable.forEach(o => unreachableSet.add(o));
+        lastGcPass = (i === uptoIdx);
+      } else {
+        lastGcPass = false;
+      }
+    }
+    return {refcount, freed, unreachableSet, lastGcPass};
+  }
+
+  function render(){
+    idx = Math.max(0, Math.min(events.length-1, idx));
+    const e = events[idx];
+    narration.innerHTML = describe(e);
+    const state = replayUpTo(idx);
+
+    objNames.forEach(name => {
+      const box = boxes[name];
+      const rc = box.querySelector('.rc');
+      const status = box.querySelector('.status');
+      const isFreed = state.freed.has(name);
+      const isActive = e.obj === name;
+      const isUnreachable = state.lastGcPass && state.unreachableSet.has(name);
+      box.className = 'obj-box' + (isActive?' active':'') + (isFreed?' freed':'') + (isUnreachable?' unreachable':'');
+      rc.textContent = name in state.refcount ? state.refcount[name] : '—';
+      status.textContent = isFreed ? '已释放' : (name in state.refcount ? '存活' : '未创建');
+    });
+
+    const freedCount = state.freed.size;
+    statsBox.innerHTML = `<div class="stat">已释放对象数<b>${freedCount}</b></div><div class="stat">当前阶段<b>${e.type}</b></div>`;
+
+    counter.textContent = `${idx+1} / ${events.length}`;
+    document.getElementById('refPrev').disabled = idx===0;
+    document.getElementById('refNext').disabled = idx===events.length-1;
+  }
+  document.getElementById('refPrev').onclick=()=>{idx--;render();stopPlay();};
+  document.getElementById('refNext').onclick=()=>{idx++;render();stopPlay();};
+  document.getElementById('refReset').onclick=()=>{idx=0;render();stopPlay();};
+  function stopPlay(){ playing=false; clearInterval(playTimer); document.getElementById('refPlay').textContent='▶ 自动播放'; }
+  document.getElementById('refPlay').onclick=()=>{
+    if(playing){ stopPlay(); return; }
+    playing=true; document.getElementById('refPlay').textContent='⏸ 暂停';
+    playTimer = setInterval(()=>{
+      if(idx>=events.length-1){ stopPlay(); return; }
+      idx++; render();
+    }, 900);
+  };
+  render();
+})();
+</script>
+
+</body>
+</html>

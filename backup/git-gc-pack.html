@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>Git gc 到底做了什么:一个文件真实改 31 次,松散对象是怎么被压缩、清理掉的</title>
+<meta name="description" content="真实对同一个大文件连续提交 31 次小改动,真实测出 git gc 之前 .git/objects 有 93 个松散对象、占 496K,gc 之后只剩 1 个 pack 文件、占 36K;用 git verify-pack -v 真实看穿 pack 内部的 delta 链,揪出一个反直觉的细节——某个 blob 在 verify-pack 输出里显示只有 38 字节,但 git cat-file -s 一查,真实内容其实是 116321 字节,38 字节只是变成这一版所需的增量指令大小;真实验证删除分支后悬挂的 commit 对象,在默认宽限期内还能用哈希读到,强制清空 reflog 并立即 gc 之后,同一个哈希真实读取失败,对象被真正清理掉了。">
+<link rel="canonical" href="https://bigywater.tech/git-gc-pack.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Git gc 到底做了什么:一个文件真实改 31 次,松散对象是怎么被压缩、清理掉的">
+<meta property="og:description" content="真实对同一个大文件连续提交 31 次小改动,真实测出 git gc 之前 .git/objects 有 93 个松散对象、占 496K,gc 之后只剩 1 个 pack 文件、占 36K;用 git verify-pack -v 真实看穿 pack 内部的 delta 链,揪出一个反直觉的细节——某个 blob 在 verify-pack 输出里显示只有 38 字节,但 git cat-file -s 一查,真实内容其实是 116321 字节,38 字节只是变成这一版所需的增量指令大小;真实验证删除分支后悬挂的 commit 对象,在默认宽限期内还能用哈希读到,强制清空 reflog 并立即 gc 之后,同一个哈希真实读取失败,对象被真正清理掉了。">
+<meta property="og:url" content="https://bigywater.tech/git-gc-pack.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Git gc 到底做了什么:一个文件真实改 31 次,松散对象是怎么被压缩、清理掉的">
+<meta name="twitter:description" content="真实对同一个大文件连续提交 31 次小改动,真实测出 git gc 之前 .git/objects 有 93 个松散对象、占 496K,gc 之后只剩 1 个 pack 文件、占 36K;用 git verify-pack -v 真实看穿 pack 内部的 delta 链,揪出一个反直觉的细节——某个 blob 在 verify-pack 输出里显示只有 38 字节,但 git cat-file -s 一查,真实内容其实是 116321 字节,38 字节只是变成这一版所需的增量指令大小;真实验证删除分支后悬挂的 commit 对象,在默认宽限期内还能用哈希读到,强制清空 reflog 并立即 gc 之后,同一个哈希真实读取失败,对象被真正清理掉了。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F7F4F8; --paper:#FFFFFF; --ink:#221C25; --ink-dim:#6E6376; --line:#E6DFEA;
+  --git-c:#8B3FA0; --git-c-soft:#F1E4F5;
+  --mem-c:#C99A2E; --mem-c-soft:#FBF2DC;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#211A28; --code-ink:#EDE6F0;
+  --shadow: 0 1px 2px rgba(30,20,35,.06), 0 8px 24px -12px rgba(30,20,35,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#170F1B; --paper:#241A2B; --ink:#EDE6F0; --ink-dim:#AEA0B6; --line:#3A2C43;
+    --git-c:#C97FDC; --git-c-soft:#332039;
+    --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#170F1B; --code-ink:#E4D9E8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#170F1B; --paper:#241A2B; --ink:#EDE6F0; --ink-dim:#AEA0B6; --line:#3A2C43;
+  --git-c:#C97FDC; --git-c-soft:#332039;
+  --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#170F1B; --code-ink:#E4D9E8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--git-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--git-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--git-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--git-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#C9A8D9; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--git-c); background:var(--git-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--git-c-soft); color:var(--git-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#D6B3E6;}
+.term pre.code{margin:0 0 10px; color:#D6B3E6; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--git-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Git 内部原理 · 03</div>
+    <h1>Git gc 到底做了什么:一个文件真实改 31 次,松散对象是怎么被压缩、清理掉的</h1>
+    <p><a href="git-object-storage.html" target="_blank" rel="noopener">第一篇</a>验证了对象怎么按内容哈希存,<a href="git-branch-refs.html" target="_blank" rel="noopener">第二篇</a>验证了删分支之后底层 commit 对象其实没删、只是变成"没人指的悬挂对象"——留了个尾巴:这些对象最终去哪了?真实对同一个文件连续改了 31 次、真实跑一遍 <span class="mono">git gc</span>,边跑边测。</p>
+    <div class="hero-fact">
+      <div><div class="num">496K → 36K</div><div class="lbl">同一批提交,gc 前后 .git/objects 目录的真实磁盘占用</div></div>
+      <div><div class="num">93 → 0</div><div class="lbl">gc 前的松散对象文件数,gc 之后真实全部被打包进一个 pack 文件</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<p class="prev-post">前面两篇:<a href="git-object-storage.html" target="_blank" rel="noopener">Git 是怎么给内容去重的</a> · <a href="git-branch-refs.html" target="_blank" rel="noopener">Git 分支的本质</a></p>
+
+<section style="padding-top:8px;">
+  <h2>思路:gc 做的是两件不同的事</h2>
+  <p class="h2-sub">一是把散落的对象打包压缩,二是真的删掉没人要的对象——很多人把这两件事混成一件。</p>
+  <p><span class="mono">git gc</span>(garbage collect)名字里有"垃圾回收",容易让人以为它只干"删东西"这一件事,实际上它同时做两件相对独立的工作:<b>repack</b>——把 <span class="mono">.git/objects</span> 下大量零散的松散对象文件,压缩打包成一个(或几个)<span class="mono">.pack</span> 文件,相同/相似内容之间用增量(delta)编码,不再各自独立存一份完整内容;<b>prune</b>——真正清除那些没有任何分支/tag/reflog 引用得到的悬挂对象。日常敲的 <span class="mono">git gc</span> 默认两件事都做,但触发的时机、宽限期都不一样,拆开看才看得清楚。</p>
+</section>
+
+<section>
+  <h2>真实验证:一个文件改 31 次,gc 前后磁盘占用差多少</h2>
+  <p class="h2-sub">造一个真实场景:同一个 2000 行的文件,每次提交只改其中一行,像日常开发里"反复小改同一个文件"那样。</p>
+  <blockquote class="src">
+    <span class="path">造数据:提交 0 是完整文件,之后 30 次每次只改一行</span>
+python3 -c "
+lines = [f'line {i}: some repetitive content padding padding padding' for i in range(2000)]
+open('big.txt','w').write('\n'.join(lines)+'\n')
+"
+git add -A && git commit -m "commit 0: initial big file"
+
+for i in $(seq 1 30); do
+  python3 -c "..." # 把第 i 行替换成 'line $i CHANGED at commit $i'
+  git add -A && git commit -m "commit $i: tweak one line"
+done
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测(gc 之前)</span>
+<pre class="code">$ git log --oneline | wc -l
+31
+
+$ find .git/objects -type f -not -path '*/pack/*' | wc -l
+93
+
+$ du -sh .git/objects
+496K</pre>
+  </div>
+  <p>31 次提交,每次只改一行,却在 <span class="mono">.git/objects</span> 下真实留下了 93 个松散对象文件——每次提交都要为改动后的完整文件内容生成一个全新的 blob(内容变了,哈希必然变,这是<a href="git-object-storage.html" target="_blank" rel="noopener">第一篇</a>验证过的内容寻址规则),外加对应的 tree、commit 对象。跑一次 <span class="mono">git gc</span> 之后:</p>
+  <div class="term"><span class="real-tag">真实实测(gc 之后)</span>
+<pre class="code">$ git gc --prune=now
+
+$ find .git/objects -type f -not -path '*/pack/*' | wc -l
+0
+
+$ ls .git/objects/pack/
+pack-0435413ca0075ad79cec23f6b314beb4eca17728.idx
+pack-0435413ca0075ad79cec23f6b314beb4eca17728.pack
+pack-0435413ca0075ad79cec23f6b314beb4eca17728.rev
+
+$ du -sh .git/objects
+36K</pre>
+<span class="ok">93 个松散对象文件全部消失,变成了 3 个 pack 相关文件;.git/objects 目录从 496K 降到 36K,压掉了约 93%</span>
+  </div>
+  <p>93 个松散对象,每个都是独立的文件,文件系统给每个文件分配的最小磁盘空间(block size)往往比文件内容本身大得多——几十字节的小对象也要占掉一整个 block,这也是松散对象堆积时磁盘占用会显得格外"虚高"的原因之一。打包成一个 pack 文件之后,这部分文件系统层面的浪费也随之消失。</p>
+</section>
+
+<section>
+  <h2>真实验证:pack 内部到底怎么存的,一个反直觉的细节</h2>
+  <p class="h2-sub">31 个几乎相同的大文件版本,pack 内部大概率不是各存一份完整内容——用 git verify-pack 真实看一眼。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ git verify-pack -v .git/objects/pack/*.idx | grep " blob "
+281394fcd29a42ba0dc7f8ae70bbbfbffbff9037 blob   116377 5304 4687
+c2488e5399044c1fd51a648a12feaa85812e6e2a blob   38 51 9991 1 281394f...
+52e7aae199c941b2974f8094a855d8592c865db8 blob   51 63 10042 2 c2488e5...
+bf8d4092aba3917ba38c727b92fb41ddfd94f6fd blob   24 36 10105 3 52e7aae...
+...(后面 27 个 blob 都是同样的模式,size 只有 24~50 字节左右)</pre>
+  </div>
+  <p>第一个 blob(<span class="mono">281394f...</span>)是完整存储的:116377 字节的原始内容,压缩后占 5304 字节。从第二个开始,每一行末尾多出两列——<span class="mono">depth</span> 和 <span class="mono">base</span>,说明这些 blob 不是完整存储,是相对某个"底本"(base)算出来的增量(delta)。但这里有个容易读错的地方:<span class="mono">c2488e5...</span> 这一行显示的 <span class="mono">size</span> 是 38——这<b>不是</b>这个 blob 还原出来的真实内容大小,是"把 base 变成这个版本所需要的增量指令"的大小。真实内容用 <span class="mono">git cat-file</span> 查一下:</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ git cat-file -s c2488e5399044c1fd51a648a12feaa85812e6e2a
+116321
+
+$ git cat-file -p c2488e5399044c1fd51a648a12feaa85812e6e2a | wc -l
+2000</pre>
+<span class="ok">verify-pack 显示 size=38,但这个 blob 真实还原出来是 116321 字节、2000 行的完整文件——38 字节的增量指令,加上 base 对象,就能完整重建出一份 116KB 的内容</span>
+  </div>
+  <p>这就是 delta 压缩的核心:只要新版本和某个已有对象足够相似,git 就不再存一份完整内容,只记录"跟 base 比,哪几个字节区间不一样、换成什么"——一行文本的改动,哪怕文件有 2000 行,增量也可能只有几十字节。31 个版本里,除了第一个是完整存储,后面全都是链式的 delta(<span class="mono">depth</span> 从 1 一路加到 17,后一个 delta 的 base 是前一个 delta 还原出来的结果)。</p>
+</section>
+
+<section>
+  <h2>真实验证:悬挂对象在宽限期内能读,强制 gc 后真的没了</h2>
+  <p class="h2-sub">承接上一篇的结尾——删掉分支后底层 commit 对象没被删,那它最终是被谁、什么时候真正清理掉的。</p>
+  <blockquote class="src">
+    <span class="path">造一个悬挂 commit:提交、切分支、删分支</span>
+git commit -m "commit 1"
+git checkout -b feature-y
+echo "v2" >> f.txt && git commit -am "commit on feature-y"   # 记下这次的哈希
+git checkout main
+git branch -D feature-y
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ git cat-file -t &lt;刚才那个哈希&gt;
+commit
+
+# 真实清空 reflog + 立即触发 gc,绕开默认 2 周的宽限期
+$ git reflog expire --expire=now --all
+$ git gc --prune=now
+
+$ git cat-file -t &lt;同一个哈希&gt;
+fatal: git cat-file: could not get object info</pre>
+<span class="bad">同一个哈希,gc 之前还能读出类型是 commit,强制过期 reflog 并 gc 之后,直接报错读取失败——对象被真实清理掉了</span>
+  </div>
+  <p><span class="mono">git gc</span> 默认不会立刻清理悬挂对象,是因为 <span class="mono">reflog</span> 会暂时"兜"住最近的操作记录,而且悬挂对象本身也有默认 2 周的最短保留期(<span class="mono">gc.pruneExpire</span>)——这段时间是留给"删错了想反悔"用的。真实操作里,<span class="mono">git reflog expire --expire=now --all</span> 主动清空了这层兜底,<span class="mono">git gc --prune=now</span> 又主动绕开了 2 周宽限期,两步都是刻意为之才会立即触发真删除;日常正常使用 <span class="mono">git gc</span>,这个宽限期都在默认生效,不会这么快把误删的东西弄没。</p>
+  <div class="callout b">
+    <b>那为什么 clone 下来的仓库,.git/objects 里通常只有 pack 文件、没有一堆松散文件?</b>服务端(比如 GitHub)定期在仓库上跑 gc/repack 打包压缩;<span class="mono">git clone</span> 走的是打包传输协议,直接把对方已经打好的 pack 文件(或者按需重新打包一份)传过来,本地也就直接是 pack 形态,不用自己从零攒一堆松散对象再手动压。</p>
+  </div>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文所有对象数量、文件大小、verify-pack 输出均在本机真实 <span class="mono">git gc</span>/<span class="mono">git verify-pack</span>/<span class="mono">git cat-file</span> 运行后得到,没有编造任何数字。</li>
+      <li>对象内容寻址存储参见<a href="git-object-storage.html" target="_blank" rel="noopener">第一篇</a>;分支/引用的本质和悬挂对象的成因参见<a href="git-branch-refs.html" target="_blank" rel="noopener">第二篇</a>。</li>
+      <li>没有涉及:delta base 具体怎么挑选(git 用什么策略判断"哪个对象适合当谁的 base")、<span class="mono">pack.window</span>/<span class="mono">pack.depth</span> 等压缩参数的调优、以及服务端 <span class="mono">git gc</span> 的自动触发时机——这些更偏工程调优,留给系列后面按需再写。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="git-index-staging.html" target="_blank" rel="noopener" style="text-decoration:none; color:inherit;">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">暂存区 .git/index 到底是什么:手动解析这个二进制文件,看 git add 真实写了什么</div>
+    </div>
+    <div style="font-size:1.5rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Git 内部原理 · gc 与 pack · 数据来自本机真实运行的 git</footer>
+
+</body>
+</html>

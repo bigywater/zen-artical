@@ -1,0 +1,26 @@
+from lib import *
+S = SS('h17')
+steps = [
+    step("服务端 ChainUnaryInterceptor(A, B, C)、客户端 WithChainUnaryInterceptor(a, b, c),一次 Unary 调用的执行轨迹:客户端a前 → b前 → c前 → 服务端A前 → B前 → C前 → handler → 服务端C后 → B后 → A后 → 客户端c后 → b后 → a后。按写的顺序从外到内进入,返回时从内到外退出——像洋葱;客户端的 c 最内层,紧挨着网络,服务端的 A 最外层,最先看到请求。", t=tl(S(1)), done=lidx(S(1), '客户端a前'), mark=lidx(S(1), '客户端a前'), b=bars([['进入时经过的拦截器层数(客户端 3 + 服务端 3)', 6, '6'], ['返回时经过的拦截器层数', 6, '6']], 7, mark=[0], done=[1]), kv=KV([['进入', 'a → b → c → A → B → C → handler'], ['返回', 'C → B → A → c → b → a'], ['形状', '洋葱:先进的后出']], ['形状'])),
+    step("同时用单个的 UnaryInterceptor(X) 和 ChainUnaryInterceptor(Y, Z)(客户端是 WithUnaryInterceptor(x) 和 WithChainUnaryInterceptor(y, z)):不管选项是先写 Chain 还是先写单个,服务端和客户端的顺序都是 X 在最外层,然后 Y、Z。单个拦截器总是排在链的前面,和书写顺序无关。", t=tl(S(2)), done=lidx(S(2), '先写单个后写 Chain'), mark=lidx(S(2), '先写 Chain 后写单个'), b=bars([['两种写法得到的顺序是否相同(1 = 相同)', 1, '相同']], 1.2, done=[0]), kv=KV([['先写 Chain 后写单个', 'x → y → z → X → Y → Z'], ['先写单个后写 Chain', 'x → y → z → X → Y → Z(相同)'], ['结论', '单个的总在最外层']], ['结论'])),
+    step("拦截器能改的东西:客户端拦截器用 AppendToOutgoingContext 加了 x-trace=t-123;服务端拦截器读出它放进 ctx,handler 里取到 x-trace=“t-123”;服务端拦截器还改写了 handler 的返回值(客户端收到“handler 的返回值(被服务端拦截器改写)”),并用 grpc.SetHeader 回传响应头 x-served-by=interceptor,客户端读到了。拦截器看得到 ctx、metadata、请求和响应对象,可以读写。", t=tl(S(3)), done=lidx(S(3), 'err=<nil>'), mark=lidx(S(3), 'err=<nil>'), b=bars([['拦截器能改的东西:ctx / metadata / 返回值 / 响应头', 4, '4 项都改成了']], 5, done=[0]), kv=KV([['ctx', 'handler 取到 x-trace=t-123'], ['返回值', 'Msg 被改写'], ['响应头', 'x-served-by=interceptor']], ['返回值'])),
+    step("拦截器可以不调用下一层(短路)。服务端“鉴权”拦截器:没带 authorization 的请求得到 Unauthenticated“缺少 authorization”,handler 被调用 0 次;带了 token 则放行,handler 被调用 1 次。客户端拦截器在本地直接返回 ResourceExhausted(模拟本地限流):代理看到客户端发出的 HEADERS 0 个——请求根本没有离开客户端。", t=tl(S(4)), done=lidx(S(4), '客户端拦截器短路'), mark=lidx(S(4), '没带 token'), b=bars([['没带 token:handler 被调用', 0, '0'], ['带 token:handler 被调用', 1, '1'], ['客户端短路:线上 HEADERS', 0, '0']], 1.2, mark=[0], done=[1, 2]), kv=KV([['服务端鉴权', '无 token:Unauthenticated,handler 0 次'], ['放行', '有 token:handler 1 次'], ['客户端短路', '线上 0 个 HEADERS']], ['客户端短路'])),
+    step("流式 RPC 的拦截器:一次服务端流(服务端发 5 条),StreamInterceptor 只被调用 1 次,一元拦截器 0 次;包装 ServerStream 的 SendMsg/RecvMsg 后能数消息:SendMsg 成功 5、RecvMsg 成功 1(那 1 条是客户端的请求消息)。一次双向流来回 7 条:StreamInterceptor 累计 2 次(多的 1 次来自前面那个流),SendMsg 成功 7、RecvMsg 成功 7。之后一次 Unary:一元拦截器累计 1 次,StreamInterceptor 仍是 2 次——流拦截器每个流进来一次,对每条消息要用包装。", t=tl(S(5)), done=lidx(S(5), '再来一次 Unary'), mark=lidx(S(5), '一次服务端流'), b=bars([['一个服务端流里 StreamInterceptor 调用', 1, '1'], ['同一个流里 SendMsg 成功', 5, '5']], 6, mark=[0], done=[1]), kv=KV([['StreamInterceptor', '每个流 1 次,不是每条消息'], ['数消息', '要包装 SendMsg/RecvMsg'], ['一元拦截器', '对流不起作用']], ['数消息'])),
+    step("handler 里 panic:没有恢复拦截器时,整个进程直接退出(子进程退出码 2,输出以 panic: handler 里出错了 开头);加一个 recover 的一元拦截器,出错的调用得到 code=Internal message=“panic: handler 里出错了”,之后的调用 err=<nil>、msg=“ok”,进程退出码 0——服务还活着。grpc-go 默认不会替你 recover,线上服务一般都应该加这个拦截器。", t=tl(S(6)), done=lidx(S(6), 'recover   子进程退出码 0'), mark=lidx(S(6), 'norecover 子进程退出码 2'), b=bars([['没有 recover:子进程退出码', 2, '2'], ['有 recover:子进程退出码', 0, '0']], 2.5, mark=[0], done=[1]), kv=KV([['没有 recover', 'panic 让整个进程退出,退出码 2'], ['有 recover 拦截器', '这次调用 Internal,服务继续'], ['默认', '不 recover']], ['默认'])),
+    step("拦截器的开销:服务端和客户端各加 0、1、10 个什么都不做的一元拦截器,各 20000 次顺序调用、5 轮取中位数:0 个 60.7 µs/次,1 个 60.8 µs/次,10 个 61.5 µs/次。10 层空拦截器每次调用大约多 0.8 µs(同一台机器、同一个进程里,只作量级参考,这个差别接近测量误差)——拦截器本身的开销远小于一次调用,真正的开销在拦截器里做的事(日志、序列化、网络请求)。", t=tl(S(7)), done=lidx(S(7), '每端 10 个拦截器'), mark=lidx(S(7), '每端  0 个拦截器'), b=bars([['0 个拦截器 µs/次', 60.7, '60.7'], ['1 个', 60.8, '60.8'], ['10 个', 61.5, '61.5']], 65, mark=[0], done=[1, 2]), kv=KV([['0 个', '60.7 µs'], ['1 个', '60.8 µs'], ['10 个', '61.5 µs,接近测量误差']], ['10 个'])),
+]
+A = mkarth('h17', 17, 'gRPC,拦截器,Interceptor,Chain,鉴权,recover,流式拦截,Go,真实验证,动画演示',
+    '实测 gRPC 拦截器:链式拦截器的洋葱顺序、单个拦截器总在最外层、能改 ctx/metadata/返回值、能短路、流拦截器只调用一次要包装才能数消息、panic 不 recover 会让进程退出、空拦截器的开销。',
+    '拦截器是 gRPC 里放日志、鉴权、限流、指标的地方。多个拦截器按什么顺序执行?能改什么?流式调用怎么办?handler panic 了会怎样?这篇逐项验证。',
+    [('a b c → A B C → handler', '客户端三层、服务端三层拦截器时,请求进入的顺序(返回时反过来)'), ('退出码 2 / 0', 'handler panic 时没有与有 recover 拦截器,服务进程的结局'), ('+0.8 µs', '10 层空拦截器让每次调用多出的耗时(60.7 → 61.5 µs,接近测量误差)')],
+    [('拦截器是什么', '<p>在 handler 前后插入的函数:服务端拦截器包住 handler,客户端拦截器包住真正发请求的 invoker。一元和流式各有自己的类型。</p>'),
+     ('执行顺序', '<p>ChainUnaryInterceptor(A, B, C) 里 A 在最外层:A前 → B前 → C前 → handler → C后 → B后 → A后。单独用 UnaryInterceptor 设置的总是排在链的前面,和选项的书写顺序无关。</p>'),
+     ('能改什么', '<p>拦截器拿到 ctx、metadata、请求和响应对象,可以读写、改返回值、用 SetHeader 加响应头。</p>'),
+     ('短路', '<p>不调用下一层就是短路:服务端鉴权失败时 handler 不会执行;客户端拦截器直接返回时请求不会发出(线上没有任何 HEADERS)。</p>'),
+     ('流式拦截器', '<p>StreamInterceptor 每个流调用一次,而不是每条消息。要统计或检查每条消息,需要包装 ServerStream/ClientStream 的 SendMsg、RecvMsg。一元拦截器对流不起作用。</p>'),
+     ('panic', '<p>grpc-go 不会替你 recover handler 里的 panic,不处理就是整个进程退出。加一个 recover 拦截器把它变成 Internal 错误。</p>'),
+     ('开销', '<p>空拦截器的开销很小(本机实测 10 层不到 1 µs);真正的成本来自拦截器里做的事。</p>')],
+    steps,
+    [ENV_H + '。顺序由每个拦截器往同一个日志里写“前/后”得到;“线上 HEADERS 0 个”来自抓包代理;panic 实验在子进程里运行,以退出码判断;开销实验是单进程内的顺序调用,5 轮取中位数,量级参考,不是严格基准',
+     '没有验证:流式客户端拦截器(StreamClientInterceptor)的行为和包装 ClientStream;拦截器里的 context 取消与 deadline 传递;常用拦截器库(如 go-grpc-middleware)的行为;stats.Handler 与拦截器的区别;拦截器里发生 panic 时 grpc-go 之外的框架(如 gateway)的处理'],
+    '拦截器')

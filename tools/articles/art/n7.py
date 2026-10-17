@@ -1,0 +1,18 @@
+from lib import *
+S = SS('n7')
+steps = [
+    step("同样的 10 个“写错”的 URL,RedirectFixedPath 默认 false 时全是 404;设成 true 后全部 301:/USERS/Profile → /users/profile;/hello → /Hello(按路由注册时的大小写);/users//profile、/users/./profile、/users/x/../profile、//users/profile 都被清理成 /users/profile;/Files/ABC → /files/ABC(参数值 ABC 的大小写保持不变);/DIR 和 /DIR/ 都是 /dir/;/users/PROFILE/ 同时修正大小写和多余的结尾斜杠。", t=tl(S(1)), mark=lidx(S(1), 'RedirectFixedPath = true'), done=lidx(S(1), '/USERS/Profile           → 301', '/Files/ABC               → 301', '/users/x/../profile      → 301', '/DIR                     → 301'), b=bars([['RedirectFixedPath=false 的 301 个数', 0, '0 / 10'], ['RedirectFixedPath=true 的 301 个数', 10, '10 / 10']], 10, mark=[1]), kv=KV([['大小写', '改成路由注册时的写法,参数值不动'], ['// ./ ../', 'cleanPath 化简'], ['结尾斜杠', '一并修正']], ['大小写'])),
+    step("源码只有 6 行:先 cleanPath(rPath),再 root.findCaseInsensitivePath(…, trailingSlash) 在树上做不区分大小写的查找,找到就改写 URL.Path 并调 redirectRequest——和 TSR 一样 GET 是 301、其他方法 307。POST /api/items 与 POST /api//items 都被 307 到 /Api/Items;GET /api/items 因为路由是 POST,仍是 404。路由 /Docs/ 时 /docs 与 /DOCS/ 都被 301 到 /Docs/。", t=tl(S(2)), mark=lidx(S(2), 'findCaseInsensitivePath(cleanPath(rPath), trailingSlash)', 'POST   /api/items', 'POST   /api//items'), done=lidx(S(2), 'RedirectFixedPath:      false', '/docs                    → 301', '/DOCS/                   → 301'), kv=KV([['顺序', 'cleanPath → 不区分大小写查找 → redirectRequest'], ['POST', '307 到规范路径'], ['默认值', 'gin.go 212 行:false']], ['顺序'])),
+    step("代价:树里 1000 条 /api/v1/resourceN/items/:id 路由。命中的请求不受影响(38.3 ns 对 38.3 ns,0 allocs);不存在的 /nothing/here 从 35.9 ns 涨到 137.2 ns,多 1 次分配;/api/v1/resource500/other 从 49.5 ns 涨到 162.9 ns。两轮 9 次中位数,第一轮 137.7 / 163.0 ns。", t=tl(S(3)), mark=lidx(S(3), 'fixed=true 404'), done=lidx(S(3), 'fixed=false 404', 'fixed=true 命中'), b=bars([['404 /nothing/here,fixed=false', 35.9, '35.9 ns'], ['404 /nothing/here,fixed=true', 137.2, '137.2 ns'], ['404 /api/…/other,fixed=false', 49.5, '49.5 ns'], ['404 /api/…/other,fixed=true', 162.9, '162.9 ns']], 162.9, done=[0, 2], mark=[1, 3]), kv=KV([['命中', '38.3 ns,不受影响'], ['404', '3–4 倍,并多 1 次内存分配'], ['影响面', '只有 404 的请求付这个代价']], ['404'])),
+]
+A = mkartn('n7', 7, 'Gin,RedirectFixedPath,路径修正,大小写,重定向,Go,真实验证,动画演示',
+    '在 Gin v1.12.0 里实测 RedirectFixedPath(默认 false):打开后 10 种写错的 URL(大小写、重复斜杠、./、../、结尾斜杠)全部 301 到规范路径;POST 是 307;命中路由的耗时不变,但 404 请求的耗时从约 36 ns 涨到约 137 ns。',
+    '用户把 /Users/Profile 写成 /users/profile,Gin 默认给 404。打开 RedirectFixedPath 能帮他们改过来,代价是什么?这篇用 10 个写错的 URL 看修正规则,再测打开之后命中和 404 的耗时差别。',
+    [('10 / 10', '打开 RedirectFixedPath 后被 301 修正的错误写法个数(关闭时 0 个)'), ('36 → 137 ns', '/nothing/here 这类 404 请求的耗时'), ('38.3 = 38.3 ns', '命中路由的耗时,打开前后相同')],
+    [('能修什么', '<p>大小写会被改成路由注册时的写法(<code>/hello</code> → <code>/Hello</code>);重复斜杠、<code>./</code>、<code>../</code> 被 <code>cleanPath</code> 化简;结尾斜杠也一并处理。参数的值不会被改动:<code>/Files/ABC</code> 只把静态的 <code>Files</code> 改成 <code>files</code>,<code>ABC</code> 保持原样。</p><p>注意修正后的 301 是给客户端的,浏览器地址栏会变成规范路径。</p>'),
+     ('源码与方法', '<p>实现就是 <code>redirectFixedPath</code> 里的几行:先 <code>cleanPath</code>,再在这个方法的树里做不区分大小写的查找(并把 RedirectFixedPath 自己当作“是否顺便修正结尾斜杠”传进去),成功就走 <code>redirectRequest</code>。所以状态码规则与上一篇相同:GET 301,其他方法 307。查找只在当前方法的树里进行,GET 请求不会被修正到一条 POST 路由。</p>'),
+     ('代价只落在 404 上', '<p>命中的请求根本不会走到这段代码,耗时不变。每个不存在的路径却要多做一次 <code>cleanPath</code> 和一次不区分大小写的树遍历(并且多一次内存分配),在 1000 条路由的树里,404 从约 36 ns 涨到约 137 ns。对正常流量没有影响;如果会被扫描器、爬虫大量打 404,这点开销才值得注意。</p>')],
+    steps,
+    [ENV_N_GIN + '。前两节用 httptest 直接调用 ServeHTTP;基准是对 Engine.ServeHTTP 加一个丢弃输出的 ResponseWriter 的 testing.Benchmark,9 轮取中位数,整个实验跑了两轮;每种路由表只有 GET',
+     '没有验证:非 ASCII(中文、带重音字母)路径的大小写折叠;路由树更大(上万条)时 404 的耗时;与 RedirectTrailingSlash 都关掉/都打开的所有组合;真实浏览器对这类 301 的缓存'],
+    '路径修正')

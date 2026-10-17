@@ -1,0 +1,24 @@
+from lib import *
+S = SS('l35')
+steps = [
+    step("起点:a.txt 只改了工作区(' M'),b.txt 一部分已暂存、另一部分没暂存('MM')。git status --short 显示这两行。", t=tl(S(1)), mark=lidx(S(1), ' M a.txt', 'MM b.txt'), done=lidx(S(1), 'git status --short'), kv=KV([['a.txt', '工作区有改动,未暂存'], ['b.txt', '暂存区一份、工作区又改了一份']], ['b.txt'])),
+    step("git stash 之后工作区干净,git stash list 一行 stash@{0}: WIP on main: b1ce1bc 起点;对象数从 5 增加到 11(新增 6 个:2 个 commit、2 个 tree、2 个 blob)。refs/stash 是一个 commit,有 2 个 parent:^1 是基础提交 b1ce1bc(检查为 True),^2 的说明是“index on main: b1ce1bc 起点”——一个专门保存暂存区快照的 commit。三个 tree 分别对应:基础 HEAD(a.txt 末行 a1,b.txt 末行 b1)、^2(暂存区:a.txt 仍是 a1,b.txt 末行是 b2 暂存的)、refs/stash 自己(工作区快照:a.txt 末行 a2 工作区改的,b.txt 末行 b3 又改了没暂存)。一次 stash 保存了三份状态。", t=tl(S(2)), mark=lidx(S(2), 'parent', 'index on main', '新增 6 个'), done=lidx(S(2), '基础 HEAD', '^2(index commit', 'refs/stash(工作区快照)', '^1 是基础提交'), kv=KV([['refs/stash', '2 个 parent 的 commit(工作区快照)'], ['^1', '基础提交 HEAD'], ['^2', 'index commit(暂存区快照)'], ['一次 stash', '+2 commit +2 tree +blob']], ['^2'])),
+    step("git stash show -p 的输出(+a2 工作区改的、+b2 暂存的、+b3 又改了没暂存)和 git diff refs/stash^1 refs/stash 完全相同(True):stash show 就是“基础提交”到“stash 提交”的差异,暂存区那份(^2)不参与这个显示。", t=tl(S(3)), mark=lidx(S(3), '完全相同: True'), done=lidx(S(3), '+a2 工作区改的', '+b2 暂存的', '+b3 又改了没暂存'), kv=KV([['stash show -p', '= git diff stash^1 stash'], ['不含', 'index commit 的内容单独呈现']], ['stash show -p'])),
+    step("git stash -u 多一个 parent:refs/stash 有 3 个 parent,^3 的说明是“untracked files on main: b1ce1bc 起点”,它的 tree 里是 new.txt(未跟踪文件)。对比不加 -u:new.txt 不会进 stash,留在工作区(ls 里还有 a.txt、b.txt、new.txt),refs/stash 只有 2 个 parent。", t=tl(S(4)), mark=lidx(S(4), 'untracked files on main', 'new.txt'), done=lidx(S(4), 'parent', '2'), kv=KV([['-u', '第 3 个 parent 装未跟踪文件'], ['-a', '再加上被忽略的文件(本文没有验证)'], ['不加 -u', '未跟踪文件留在工作区']], ['-u'])),
+    step("stash 栈 = refs/stash 的 reflog:连续 stash 三次(第 1/2/3 个),git stash list 是 stash@{0}: 第 3 个、@{1}: 第 2 个、@{2}: 第 1 个;.git/logs/refs/stash 里是三行文本,每行旧 hash、新 hash、操作者、说明。stash@{0}^ 是基础提交 b1ce1bc,不是 stash@{1}——旧的 stash 没有任何 parent 链接,只是 reflog 里的记录。git stash drop stash@{1} 删的是 reflog 里的那一行,列表里剩下“第 3 个”和“第 1 个”。", t=tl(S(5)), mark=lidx(S(5), '(stash@{0} 的 ^1 是基础提交', 'drop 的是 reflog'), done=lidx(S(5), 'stash@{0}: On main: 第 3 个', 'stash@{2}: On main: 第 1 个', 'logs/refs/stash'), kv=KV([['stash list', '= refs/stash 的 reflog'], ['旧 stash', '不在 parent 链上'], ['drop', '删掉 reflog 的一行']], ['stash list'])),
+    step("apply / pop 靠三方合并:基础是 stash 的 ^1,所以 stash 之后又提交了别的(c.txt),pop 仍然成功,a.txt 变成 ' M',stash 栈清空(wc -l 为 0)。若别人改了同一处(a.txt 被另一个提交改过),pop 报 CONFLICT (content): Merge conflict in a.txt,并输出 The stash entry is kept in case you need it again.,git status 是 UU a.txt,stash 仍留着(wc -l 为 1)。", t=tl(S(6)), mark=lidx(S(6), 'CONFLICT', 'kept in case', 'UU a.txt'), done=lidx(S(6), 'git stash pop', ' M a.txt'), kv=KV([['三方合并', '基础 = stash^1,一方 = HEAD,另一方 = stash'], ['成功', 'stash 被丢弃'], ['冲突', '保留 stash,等你解决']], ['三方合并'])),
+]
+A = mkarti('l35', 35, 'Git,stash,index commit,reflog,三方合并,真实验证,动画演示',
+    '拆开一次 git stash:refs/stash 是带 2 个 parent 的 commit(基础提交加一个保存暂存区的 index commit),-u 再多一个装未跟踪文件的第 3 个 parent;一次 stash 新增 2 个 commit、2 个 tree、2 个 blob;stash show 等价于 git diff stash^1 stash;stash 栈就是 refs/stash 的 reflog,旧的 stash 不在 parent 链上;pop 是以 stash^1 为基础的三方合并,冲突时保留 stash。',
+    'git stash 到底往 .git 里写了什么?一次 stash 产生几个 commit、暂存区的改动存在哪、多个 stash 之间靠什么串起来?这篇把 refs/stash 的结构逐层拆开,再看 pop 为什么能应用到别的提交上。',
+    [('2 个 commit', '普通 git stash 创建的 commit 数:工作区快照加 index commit;-u 时变成 3 个'), ('reflog', 'git stash list 其实就是 refs/stash 的 reflog,旧 stash 之间没有 parent 链接'), ('stash@{0}^', '指向基础提交,而不是上一个 stash')],
+    [('起点', '<p>一个文件只改了工作区,另一个文件一部分已暂存、一部分没暂存——stash 要保存的是三份状态:HEAD、暂存区、工作区。</p>'),
+     ('refs/stash 的结构', '<p><code>refs/stash</code> 是一个 commit:它的 tree 是工作区(已跟踪文件)的快照,第一个 parent 是基础提交,第二个 parent 是“index on …”那个 commit,tree 是暂存区。所以 <code>git stash</code> 新增 2 个 commit、2 个 tree 和相应的 blob。</p>'),
+     ('stash show', '<p><code>git stash show -p</code> 等价于 <code>git diff stash^1 stash</code>,只显示基础提交到工作区快照的差异。</p>'),
+     ('-u', '<p><code>-u</code> 在 <code>refs/stash</code> 上再加第 3 个 parent,说明是“untracked files on …”,tree 里是未跟踪文件。不加 <code>-u</code>,未跟踪文件留在工作区。</p>'),
+     ('stash 栈', '<p>多个 stash 不是靠 parent 链接成栈的,而是靠 <code>refs/stash</code> 的 reflog:<code>git stash list</code> 就是 <code>git reflog show stash</code>。<code>stash@{0}^</code> 是基础提交。<code>drop</code> 删的是 reflog 的一行;被删掉的 stash commit 仍是对象库里的不可达对象(见 fsck 一篇)。</p>'),
+     ('apply 与 pop', '<p>应用 stash 是一次三方合并:基础是 <code>stash^1</code>,一方是当前 HEAD,另一方是 stash 提交,所以能应用到之后的新提交上。成功后 <code>pop</code> 丢弃它,冲突时保留并提示。</p>')],
+    steps,
+    [ENV_I_GIT + '。作者与时间固定,stash 提交的时间戳与基础提交相同(hash 可复现);对象数 = count + in-pack',
+     '没有验证:-a(包含被忽略的文件);stash push 加路径参数(pathspec);git stash branch;stash create / store 的低级命令;pop 时 --index 恢复暂存区的行为;stash 数量很多时 reflog 的大小与过期(stash 的 reflog 不会过期的说法没有验证)'],
+    'stash 的实现')

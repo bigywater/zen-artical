@@ -1,0 +1,617 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>元类:class 语句背后的真相</title>
+<meta name="description" content="拦截 class 语句证明元类被调用,__build_class__ 四步流程与元类冲突判定的源码。">
+<link rel="canonical" href="https://bigywater.tech/meta.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="元类:class 语句背后的真相">
+<meta property="og:description" content="拦截 class 语句证明元类被调用,__build_class__ 四步流程与元类冲突判定的源码。">
+<meta property="og:url" content="https://bigywater.tech/meta.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="元类:class 语句背后的真相">
+<meta name="twitter:description" content="拦截 class 语句证明元类被调用,__build_class__ 四步流程与元类冲突判定的源码。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F3F6FA; --paper:#FFFFFF; --ink:#1A2233; --ink-dim:#5A6B80; --line:#DCE4EE;
+  --py-c:#2F6FB0; --py-c-soft:#E4EEF9;
+  --mem-c:#C99A2E; --mem-c-soft:#FBF2DC;
+  --gil-c:#7B4FA8; --gil-c-soft:#EFE6F7;
+  --code-bg:#1B2233; --code-ink:#E7ECF5;
+  --shadow: 0 1px 2px rgba(20,30,50,.06), 0 8px 24px -12px rgba(20,30,50,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#10151F; --paper:#1A2233; --ink:#E7ECF5; --ink-dim:#9AAAC0; --line:#2C3850;
+    --py-c:#6FA8E0; --py-c-soft:#1E3350;
+    --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+    --gil-c:#B08AE0; --gil-c-soft:#332545;
+    --code-bg:#0D1119; --code-ink:#E2E8F5;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#10151F; --paper:#1A2233; --ink:#E7ECF5; --ink-dim:#9AAAC0; --line:#2C3850;
+  --py-c:#6FA8E0; --py-c-soft:#1E3350;
+  --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+  --gil-c:#B08AE0; --gil-c-soft:#332545;
+  --code-bg:#0D1119; --code-ink:#E2E8F5;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--py-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--py-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--py-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.quote-block{margin-top:24px; padding:18px 22px; border-left:3px solid var(--gil-c); background:var(--gil-c-soft); border-radius:0 10px 10px 0; font-size:.98rem; font-style:italic; color:var(--ink);}
+.quote-block .attr{display:block; margin-top:8px; font-style:normal; font-size:.8rem; color:var(--ink-dim); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+.hero-fact{margin-top:24px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--py-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.a .tag{background:var(--py-c-soft); color:var(--py-c);}
+.card.b .tag{background:var(--mem-c-soft); color:var(--mem-c);}
+.card.c .tag{background:var(--gil-c-soft); color:var(--gil-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#8FA0BC; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#9FC3EE;}
+
+.callout{border-left:3px solid var(--py-c); background:var(--py-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+.callout.c{border-color:var(--gil-c); background:var(--gil-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--py-c-soft); color:var(--py-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#9FC3EE;}
+.term pre.code{margin:0 0 10px; color:#9FC3EE; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+.term .cm{color:#7C8CA8;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--mem-c-soft); color:var(--mem-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:22px 20px;}
+.pipeline{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:18px;}
+.pipe-step{flex:1; min-width:100px; text-align:center; padding:8px 6px; border-radius:8px; border:1px solid var(--line); background:var(--bg); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.7rem; color:var(--ink-dim);}
+.pipe-step.active{border-color:var(--py-c); background:var(--py-c-soft); color:var(--py-c); font-weight:700;}
+.pipe-step.done{opacity:.55;}
+.ns-box{border:1px solid var(--line); border-radius:10px; padding:14px 16px; background:var(--bg); min-height:80px;}
+.ns-box h5{margin:0 0 10px; font-size:.72rem; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-dim); font-weight:700;}
+.ns-row{display:flex; gap:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; padding:3px 0;}
+.ns-row .k{color:var(--py-c); font-weight:700;}
+.ns-row.rejected{color:var(--gil-c); text-decoration:line-through;}
+.registry-box{margin-top:14px; border:1px solid var(--line); border-radius:10px; padding:12px 16px; background:var(--mem-c-soft);}
+.registry-box h5{margin:0 0 8px; font-size:.72rem; letter-spacing:.05em; text-transform:uppercase; color:var(--mem-c); font-weight:700;}
+.registry-items{display:flex; gap:8px; flex-wrap:wrap; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.78rem;}
+.registry-items span{background:var(--paper); border:1px solid var(--line); padding:2px 9px; border-radius:6px;}
+.stat-row{display:flex; gap:16px; flex-wrap:wrap; margin:14px 0 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem;}
+.stat{border:1px solid var(--line); border-radius:8px; padding:8px 12px; background:var(--bg);}
+.stat b{color:var(--py-c); display:block; font-size:1rem; font-variant-numeric:tabular-nums;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--py-c); color:var(--py-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--py-c); border-color:var(--py-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{display:flex; align-items:center; gap:10px; margin-bottom:24px; font-size:.88rem; color:var(--ink-dim); flex-wrap:wrap;}
+.prev-post a{font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--py-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Python 系列 · 第六篇</div>
+    <h1>class 语句执行的时候,Python 到底在背后调用了什么?</h1>
+    <p>写 <span class="mono">class Foo(Base): ...</span> 的时候,大多数人不会去想这行代码背后发生了什么——它其实是一次的函数调用,调用的对象叫"元类"(metaclass)。这一篇本机拦截了这次调用,证明 <span class="mono">class</span> 语句就是语法糖;顺着源码扒出了这次调用完整的四步流程;最后用一个场景说明,为什么大多数时候你压根不需要碰这个东西。</p>
+    <div class="quote-block">
+      "Metaclasses are deeper magic than 99% of users should ever worry about. If you wonder whether you need them, you don't (the people who actually need them know with certainty that they need them, and don't need an explanation about why)."
+      <span class="attr">—— Tim Peters(《Python 之禅》作者),comp.lang.python 邮件列表</span>
+    </div>
+    <div class="hero-fact">
+      <div><div class="num">4 步</div><div class="lbl">源码里 class 语句展开后的完整调用流程</div></div>
+      <div><div class="num">0 个</div><div class="lbl">本机对比:用 <span class="mono">__init_subclass__</span> 实现同样的自动注册,不需要写一个元类</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <div class="prev-post">← 接上篇 <a href="dict.html" target="_blank" rel="noopener">dict:开放寻址与插入顺序</a></div>
+  <h2>问题:类本身,也是某个东西的实例</h2>
+  <p class="h2-sub">Python 里"万物皆对象"这句话是认真的——包括类本身。</p>
+  <div class="cards">
+    <div class="card a">
+      <span class="tag">实例</span>
+      <h3>5 是 int 的实例</h3>
+      <p><span class="mono">type(5)</span> 是 <span class="mono">int</span>——这个大家都熟。</p>
+    </div>
+    <div class="card b">
+      <span class="tag">类也是实例</span>
+      <h3>int 是 type 的实例</h3>
+      <p><span class="mono">type(int)</span> 是 <span class="mono">type</span>——类这个东西本身,也是某个"类的类"的实例,这个"类的类"就叫元类。</p>
+    </div>
+    <div class="card c">
+      <span class="tag">递归的尽头</span>
+      <h3>type 是它自己的实例</h3>
+      <p><span class="mono">type(type)</span> 还是 <span class="mono">type</span>——递归到这里打住,<span class="mono">type</span> 是自己的元类,是这条链的不动点。</p>
+    </div>
+  </div>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">print(type(5))
+print(type(int))
+print(type(type))
+print(int.__class__ is type)</pre>
+<span class="ok">&lt;class 'int'&gt;
+&lt;class 'type'&gt;
+&lt;class 'type'&gt;
+True</span>
+  </div>
+  <p>默认情况下,你写的每一个类,它的元类都是 <span class="mono">type</span>——元类这个概念一直都在起作用,只是平时感觉不到,因为大家都在用同一个默认的 <span class="mono">type</span>。<span class="mono">metaclass=</span> 做的事情,就是把这个默认值换成你自己写的东西。</p>
+</section>
+
+<section>
+  <h2>实验:class 语句就是一次函数调用</h2>
+  <p class="h2-sub">自定义一个元类,重写 <span class="mono">__new__</span>/<span class="mono">__init__</span>,亲眼看看 <span class="mono">class</span> 语句执行时它们什么时候被调用——以及创建实例的时候它们还会不会再被调用一次。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">class LoudMeta(type):
+    def __new__(mcs, name, bases, namespace, **kwargs):
+        print(f'LoudMeta.__new__ called: name={name!r}')
+        return super().__new__(mcs, name, bases, namespace, **kwargs)
+    def __init__(cls, name, bases, namespace, **kwargs):
+        print(f'LoudMeta.__init__ called on {cls}')
+        super().__init__(name, bases, namespace, **kwargs)
+
+print('=== defining class Foo ===')
+class Foo(metaclass=LoudMeta):
+    x = 1
+
+print()
+print('=== instantiating Foo() ===')
+f = Foo()</pre>
+<span class="ok">=== defining class Foo ===
+LoudMeta.__new__ called: name='Foo'
+LoudMeta.__init__ called on &lt;class '__main__.Foo'&gt;
+
+=== instantiating Foo() ===</span>
+  </div>
+  <p><span class="mono">LoudMeta.__new__</span>/<span class="mono">__init__</span> 在 <span class="mono">class Foo</span> 这行代码执行的瞬间就被调用了,不是等到有人写 <span class="mono">Foo()</span> 创建实例才触发——因为 <span class="mono">class</span> 语句本身就是在"创建 <span class="mono">Foo</span> 这个对象",而元类就是负责创建它的那个"构造函数"。后面 <span class="mono">f = Foo()</span> 完全没有再打印任何东西,因为那次调用的是 <span class="mono">Foo</span> 自己的 <span class="mono">__new__</span>/<span class="mono">__init__</span>(实例创建),和元类不是一回事。</p>
+</section>
+
+<section>
+  <h2>源码:class 语句展开后的完整四步</h2>
+  <p class="h2-sub"><span class="mono">class</span> 语句编译后,真的就是在调用一个叫 <span class="mono">__build_class__</span> 的内置函数——反汇编能直接看到。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">import dis
+code = compile('class Foo(Base):\n    x = 1\n', '&lt;test&gt;', 'exec')
+dis.dis(code)</pre>
+<span class="ok">LOAD_BUILD_CLASS
+PUSH_NULL
+LOAD_CONST       (&lt;code object Foo&gt;)
+MAKE_FUNCTION
+LOAD_CONST       ('Foo')
+LOAD_NAME        (Base)
+CALL             3
+STORE_NAME       (Foo)</span>
+  </div>
+  <p><span class="mono">LOAD_BUILD_CLASS</span> + <span class="mono">CALL</span>,传的三个参数是:类体编译成的函数、类名、基类——这就是 <span class="mono">__build_class__(func, name, *bases, **kwds)</span> 的调用。这个内置函数的 C 实现,做的事情正好是四步:</p>
+  <blockquote class="src">
+    <span class="path">Python/bltinmodule.c · <a href="https://github.com/python/cpython/blob/v3.14.7/Python/bltinmodule.c#L144" target="_blank" rel="noopener">cpython @ v3.14.7, L144</a></span>
+/* 第一步:确定元类——显式 metaclass= 给了就用它;没给的话,
+ * 没有基类就用 type,有基类就用第一个基类的类型 */
+if (meta == NULL) {
+    if (PyTuple_GET_SIZE(bases) == 0) {
+        meta = (PyObject *) (&PyType_Type);
+    } else {
+        PyObject *base0 = PyTuple_GET_ITEM(bases, 0);
+        meta = (PyObject *)Py_TYPE(base0);
+    }
+}
+/* 再用 _PyType_CalculateMetaclass 在所有基类的元类之间找"最派生"的那个 */
+  </blockquote>
+  <blockquote class="src">
+    <span class="path">Python/bltinmodule.c · <a href="https://github.com/python/cpython/blob/v3.14.7/Python/bltinmodule.c#L183" target="_blank" rel="noopener">cpython @ v3.14.7, L183</a></span>
+/* 第二步:ns = meta.__prepare__(name, bases) —— 拿到一个"容器",
+ * 类体里的赋值语句接下来都会往这个容器里塞东西 */
+ns = PyObject_VectorcallDict(prep, pargs, 2, mkw);
+...
+/* 第三步:把类体代码在 ns 这个命名空间里跑一遍 ——
+ * class 里每一条 "x = 1" 本质就是 ns['x'] = 1 */
+cell = _PyEval_Vector(tstate, (PyFunctionObject *)func, ns, NULL, 0, NULL);
+...
+/* 第四步:cls = meta(name, bases, ns) —— 真正把类对象造出来 */
+cls = PyObject_VectorcallDict(meta, margs, 3, mkw);
+  </blockquote>
+  <p>这四步解释了元类到底能插手什么:第一步决定"用谁来造"(可以强行指定一个自定义元类);第二步决定"类体执行时用什么容器收集属性"(可以自定义,下面马上会演示这一步能做到什么程度);第四步是"最终拍板"这个类到底长什么样——注册、校验、批量修改属性,都发生在这一步。</p>
+</section>
+
+<section>
+  <h2>源码 + 实验:元类冲突是怎么判定的</h2>
+  <p class="h2-sub">继承多个基类,如果它们的元类互不相关,Python 没法决定该用哪个,会直接报错。</p>
+  <blockquote class="src">
+    <span class="path">Objects/typeobject.c · <a href="https://github.com/python/cpython/blob/v3.14.7/Objects/typeobject.c#L3921" target="_blank" rel="noopener">cpython @ v3.14.7, L3921</a></span>
+/* Determine the most derived metatype. */
+PyTypeObject *
+_PyType_CalculateMetaclass(PyTypeObject *metatype, PyObject *bases) {
+    winner = metatype;
+    for (each base in bases) {
+        tmptype = Py_TYPE(base);
+        if (PyType_IsSubtype(winner, tmptype)) continue;
+        if (PyType_IsSubtype(tmptype, winner)) { winner = tmptype; continue; }
+        /* 谁都不是谁的子类型,判不出胜负 */
+        PyErr_SetString(PyExc_TypeError, "metaclass conflict: ...");
+        return NULL;
+    }
+    return winner;
+}
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">class MetaA(type): pass
+class MetaB(type): pass
+class Base1(metaclass=MetaA): pass
+class Base2(metaclass=MetaB): pass
+class Combined(Base1, Base2): pass</pre>
+<span class="bad">TypeError: metaclass conflict: the metaclass of a derived class must be a
+  (non-strict) subclass of the metaclasses of all its bases</span>
+  </div>
+  <p>报错信息和源码里那句字面量一字不差。规则很直白:多个基类的元类之间,必须有一个是"最派生"的(是其他所有元类的子类),否则 Python 没法决定听谁的。</p>
+</section>
+
+<section>
+  <h2>实验:__prepare__ 能做到教科书例子做不到的事</h2>
+  <p class="h2-sub">前面第二步提到 <span class="mono">__prepare__</span> 能自定义"容器"——如果这个容器在写入时做校验,就能在类体<b>刚执行到一半、类对象还不存在</b>的时候拦截错误。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">class NoDupeDict(dict):
+    def __setitem__(self, key, value):
+        if key in self and not key.startswith('__'):
+            raise TypeError(f'duplicate attribute {key!r}')
+        super().__setitem__(key, value)
+
+class StrictMeta(type):
+    @classmethod
+    def __prepare__(mcs, name, bases, **kw):
+        return NoDupeDict()
+
+class Bad(metaclass=StrictMeta):
+    x = 1
+    y = 2
+    x = 3   # 手滑写重了</pre>
+<span class="bad">TypeError: duplicate attribute 'x'</span>
+  </div>
+  <p>普通的类定义里,<span class="mono">x = 1</span> 后面再来一次 <span class="mono">x = 3</span>,Python 什么都不会说,后一个悄悄覆盖前一个——这是很多 bug 的来源(复制粘贴改名字漏了一处)。靠自定义 <span class="mono">__prepare__</span> 返回的命名空间拦截重复赋值,是普通 Python 代码做不到的事,因为普通代码没有机会介入"类体执行期间"这个阶段。</p>
+</section>
+
+<section>
+  <h2>对比:Tim Peters 那句话到底在说什么</h2>
+  <p class="h2-sub">"如果你不确定要不要用元类,那你不需要"——用一个最经典的元类使用场景(自动注册所有子类)实测对比。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code"># 写法一:元类
+class PluginMeta(type):
+    registry = {}
+    def __new__(mcs, name, bases, ns):
+        cls = super().__new__(mcs, name, bases, ns)
+        if bases: PluginMeta.registry[name] = cls
+        return cls
+class PluginBase(metaclass=PluginMeta): pass
+class CSVPlugin(PluginBase): pass
+print('元类写法:', PluginMeta.registry)
+
+# 写法二:__init_subclass__(3.6+,专门为了减少对元类的需求而加的)
+class PluginBase2:
+    registry = {}
+    def __init_subclass__(cls, **kw):
+        super().__init_subclass__(**kw)
+        PluginBase2.registry[cls.__name__] = cls
+class XMLPlugin(PluginBase2): pass
+print('__init_subclass__ 写法:', PluginBase2.registry)
+print('PluginBase2 自己的元类还是:', type(PluginBase2) is type)</pre>
+<span class="ok">元类写法: {'CSVPlugin': &lt;class '__main__.CSVPlugin'&gt;}
+__init_subclass__ 写法: {'XMLPlugin': &lt;class '__main__.XMLPlugin'&gt;}
+PluginBase2 自己的元类还是: True</span>
+  </div>
+  <p>两种写法效果完全一样,但 <span class="mono">__init_subclass__</span> 版本从头到尾没有定义任何元类——<span class="mono">PluginBase2</span> 的元类仍然是普通的 <span class="mono">type</span>。<span class="mono">__init_subclass__</span>(PEP 487,3.6 加入)和 <span class="mono">__set_name__</span> 就是为了把"子类创建时想干点什么"这类最常见的需求,从元类里搬出来,变成普通类就能用的钩子——这也是 Tim Peters 那句话成立的真正原因:凡是能用这两个钩子解决的,就不必真的去写元类。真正必须用元类的场景,是要动第二步(<span class="mono">__prepare__</span> 自定义命名空间)或者第一步(强行统一多个不相关基类的元类)这类 <span class="mono">__init_subclass__</span> 够不着的地方。</p>
+</section>
+
+<section>
+  <h2>演示:一次 class 语句,四步流程走一遍</h2>
+  <p class="h2-sub">复现前面"自动注册插件"的场景,包含一次会被拦截的重复赋值。</p>
+  <div class="demo" id="metaDemo">
+    <div class="demo-head">__build_class__ 四步流程演示</div>
+    <div class="pipeline" id="metaPipeline"></div>
+    <div class="demo-narration" id="metaNarration"></div>
+    <div class="demo-body">
+      <div class="ns-box" id="metaNs"><h5>当前命名空间(类体正在往这里写)</h5><div id="metaNsRows"></div></div>
+      <div class="registry-box"><h5>PluginMeta.registry(第四步构造成功后写入)</h5><div class="registry-items" id="metaRegistry"></div></div>
+      <div class="stat-row" id="metaStats"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="metaReset">⏮ 重来</button>
+      <button class="btn" id="metaPrev">‹ 上一步</button>
+      <button class="btn primary" id="metaNext">下一步 ›</button>
+      <button class="btn" id="metaPlay">▶ 自动播放</button>
+      <span class="step-counter" id="metaCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">数据来自独立验证过的 Python 模拟,复现了四步流程(解析元类 → __prepare__ → 执行类体 → 构造类);第三个类故意重复赋值同一个属性,模拟里同样会在"执行类体"阶段被拦截,和实验的报错时机一致,过程经过独立回放交叉校验。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文全部实验(class 语句触发元类调用、<span class="mono">dis</span> 反汇编看 <span class="mono">__build_class__</span>、元类冲突报错、<span class="mono">__prepare__</span> 拦截重复赋值、<span class="mono">__init_subclass__</span> 对比)均在本机运行的 Python 3.14.7 上完成,数据未做删改。</li>
+      <li>源码引用(<span class="mono">Python/bltinmodule.c</span> 的 <span class="mono">__build_class__</span> 四步实现、<span class="mono">Objects/typeobject.c</span> 的 <span class="mono">_PyType_CalculateMetaclass</span>)取自 <span class="mono">python/cpython</span> 仓库 <span class="mono">v3.14.7</span> 标签,与本机安装的 Python 3.14.7 完全一致。文中源码引用为节选和转述,省略了错误处理、引用计数管理等与本文主题无关的细节,不影响所述逻辑本身的准确性。</li>
+      <li>Tim Peters 的引言转述自其在 comp.lang.python 邮件列表上的公开发言,是被广泛引用的一段话(常见于 Python 社区和多本书籍),原文英文照录,未做翻译改写以保留语气。</li>
+      <li>演示动画的四步流程模型(解析元类、准备命名空间、执行类体、构造类)由 Python 独立实现并交叉验证过——重复赋值的拦截时机通过独立回放算法核对过,不是照抄 C 源码,而是复现了它对外可观察的行为规则。</li>
+      <li>没有涉及:<span class="mono">abc.ABCMeta</span> 等标准库里实际在用的元类案例、元类和描述符协议(<span class="mono">__get__</span>/<span class="mono">__set__</span>)结合使用的场景、<span class="mono">__set_name__</span> 钩子的具体机制。下一篇会看到一个框架(Django 的 <span class="mono">ModelBase</span>)如何重度依赖元类把类属性变成数据库字段。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="modelbase.html" target="_blank" rel="noopener">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">ModelBase:类属性怎么变成数据库字段</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Python 系列 · 第六篇 · 元类 · 数据来自本机运行的 Python 3.14.7</footer>
+
+<script>
+const DATA = {"events": [{"name": "CSVPlugin", "metaclass": "ToyMetaclass", "type": "resolve-metaclass"}, {"name": "CSVPlugin", "type": "prepare"}, {"name": "CSVPlugin", "key": "kind", "value": "csv", "type": "body-assign"}, {"name": "CSVPlugin", "key": "ext", "value": ".csv", "type": "body-assign"}, {"name": "CSVPlugin", "bases": [], "attrs": {"kind": "csv", "ext": ".csv"}, "type": "construct"}, {"name": "CSVPlugin", "registrySize": 1, "type": "registered"}, {"name": "JSONPlugin", "metaclass": "ToyMetaclass", "type": "resolve-metaclass"}, {"name": "JSONPlugin", "type": "prepare"}, {"name": "JSONPlugin", "key": "kind", "value": "json", "type": "body-assign"}, {"name": "JSONPlugin", "key": "ext", "value": ".json", "type": "body-assign"}, {"name": "JSONPlugin", "bases": [], "attrs": {"kind": "json", "ext": ".json"}, "type": "construct"}, {"name": "JSONPlugin", "registrySize": 2, "type": "registered"}, {"name": "BadPlugin", "metaclass": "ToyMetaclass", "type": "resolve-metaclass"}, {"name": "BadPlugin", "type": "prepare"}, {"name": "BadPlugin", "key": "kind", "value": "bad", "type": "body-assign"}, {"name": "BadPlugin", "key": "kind", "value": "oops", "reason": "duplicate attribute 'kind'", "type": "assign-rejected"}, {"name": "BadPlugin", "reason": "duplicate attribute 'kind'", "type": "rejected"}]};
+
+(function(){
+  const events = DATA.events;
+  const pipelineEl = document.getElementById('metaPipeline');
+  const narration = document.getElementById('metaNarration');
+  const nsRows = document.getElementById('metaNsRows');
+  const registryEl = document.getElementById('metaRegistry');
+  const statsBox = document.getElementById('metaStats');
+  const counter = document.getElementById('metaCounter');
+  let idx = 0, playing=false, playTimer=null;
+
+  const PIPELINE_STAGES = [
+    {key:'resolve-metaclass', label:'① 解析元类'},
+    {key:'prepare', label:'② __prepare__'},
+    {key:'body-assign', label:'③ 执行类体'},
+    {key:'construct', label:'④ 构造类'},
+  ];
+  PIPELINE_STAGES.forEach(s => {
+    const el = document.createElement('div');
+    el.className = 'pipe-step';
+    el.textContent = s.label;
+    el.dataset.key = s.key;
+    pipelineEl.appendChild(el);
+  });
+
+  function describe(e){
+    if (e.type === 'resolve-metaclass') return `开始构建 <span class="k">${e.name}</span>:解析元类,确定用 <span class="k">${e.metaclass}</span>。`;
+    if (e.type === 'prepare') return `<span class="k">${e.name}</span>:调用 __prepare__,拿到一个空的命名空间容器。`;
+    if (e.type === 'body-assign') return `<span class="k">${e.name}</span>:类体执行 <span class="k">${e.key} = ${JSON.stringify(e.value)}</span>,写入命名空间。`;
+    if (e.type === 'assign-rejected') return `<span class="k">${e.name}</span>:类体执行 <span class="k">${e.key} = ${JSON.stringify(e.value)}</span> —— 命名空间拒绝了(${e.reason}),类体执行中断。`;
+    if (e.type === 'construct') return `<span class="k">${e.name}</span>:命名空间已填满,调用元类 <span class="k">metaclass(name, bases, ns)</span> 构造类对象。`;
+    if (e.type === 'registered') return `<span class="k">${e.name}</span> 构造成功,自动写入 registry(当前共 ${e.registrySize} 个)。`;
+    if (e.type === 'rejected') return `<span class="k">${e.name}</span> 最终构建失败,永远不会出现在 registry 里。`;
+    return e.type;
+  }
+
+  function replayUpTo(uptoIdx){
+    let currentName = null, ns = [], stage = null, registry = [];
+    for (let i = 0; i <= uptoIdx; i++){
+      const e = events[i];
+      if (e.type === 'resolve-metaclass'){ currentName = e.name; ns = []; stage = 'resolve-metaclass'; }
+      if (e.type === 'prepare'){ stage = 'prepare'; }
+      if (e.type === 'body-assign'){ stage = 'body-assign'; ns.push({key:e.key, value:e.value, rejected:false}); }
+      if (e.type === 'assign-rejected'){ stage = 'body-assign'; ns.push({key:e.key, value:e.value, rejected:true}); }
+      if (e.type === 'construct'){ stage = 'construct'; }
+      if (e.type === 'registered'){ registry.push(e.name); }
+    }
+    return {currentName, ns, stage, registry};
+  }
+
+  function render(){
+    idx = Math.max(0, Math.min(events.length-1, idx));
+    const e = events[idx];
+    narration.innerHTML = describe(e);
+    const state = replayUpTo(idx);
+
+    Array.from(pipelineEl.children).forEach(el => {
+      const stageIdx = PIPELINE_STAGES.findIndex(s => s.key === el.dataset.key);
+      const currentStageIdx = PIPELINE_STAGES.findIndex(s => s.key === state.stage);
+      el.className = 'pipe-step' + (el.dataset.key === state.stage ? ' active' : (stageIdx < currentStageIdx ? ' done' : ''));
+    });
+
+    nsRows.innerHTML = state.ns.map(row =>
+      `<div class="ns-row ${row.rejected ? 'rejected' : ''}"><span class="k">${row.key}</span><span>=</span><span>${JSON.stringify(row.value)}</span>${row.rejected ? ' <span>(拒绝)</span>' : ''}</div>`
+    ).join('') || '<div class="ns-row" style="color:var(--ink-dim)">(空)</div>';
+
+    registryEl.innerHTML = state.registry.map(n => `<span>${n}</span>`).join('') || '<span style="color:var(--ink-dim); background:none; border:none;">(空)</span>';
+
+    statsBox.innerHTML = `<div class="stat">当前正在构建<b>${state.currentName || '—'}</b></div><div class="stat">registry 大小<b>${state.registry.length}</b></div>`;
+
+    counter.textContent = `${idx+1} / ${events.length}`;
+    document.getElementById('metaPrev').disabled = idx===0;
+    document.getElementById('metaNext').disabled = idx===events.length-1;
+  }
+  document.getElementById('metaPrev').onclick=()=>{idx--;render();stopPlay();};
+  document.getElementById('metaNext').onclick=()=>{idx++;render();stopPlay();};
+  document.getElementById('metaReset').onclick=()=>{idx=0;render();stopPlay();};
+  function stopPlay(){ playing=false; clearInterval(playTimer); document.getElementById('metaPlay').textContent='▶ 自动播放'; }
+  document.getElementById('metaPlay').onclick=()=>{
+    if(playing){ stopPlay(); return; }
+    playing=true; document.getElementById('metaPlay').textContent='⏸ 暂停';
+    playTimer = setInterval(()=>{
+      if(idx>=events.length-1){ stopPlay(); return; }
+      idx++; render();
+    }, 1000);
+  };
+  render();
+})();
+</script>
+
+</body>
+</html>

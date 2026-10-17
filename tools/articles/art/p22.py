@@ -1,0 +1,22 @@
+from lib import *
+S = SS('p22')
+steps = [
+    step("Python 3.14 里 asyncio.TimeoutError 就是内置的 TimeoutError。wait_for(work(1.0), 0.2) 和 async with asyncio.timeout(0.2) 效果一样:约 200 ms 抛 TimeoutError,被取消的协程收到取消。嵌套时先到期的先触发:外层 timeout(0.3) 包着内层 timeout(1.0),301 ms 抛出;timeout 里用 cm.reschedule 把到期时间改成再过 0.2 秒,总共 301 ms 抛出。没超时的 async with 里 cm.expired() 是 False,超时了是 True。", t=tl(S(1)), done=lidx(S(1), 'wait_for(work(1.0), 0.2)', 'async with asyncio.timeout(0.2)'), mark=lidx(S(1), '外层 timeout(0.3)', 'reschedule', 'cm.expired()'), kv=KV([['TimeoutError', 'asyncio.TimeoutError 就是它'], ['嵌套', '先到期的先触发'], ['reschedule', '运行中改到期时间']], ['嵌套'])),
+    step("取消是协作式的。如果被取消的协程吞掉 CancelledError 又继续干活,超时就拦不住它:swallower 在 0.2 秒到期后收到取消,却又睡了 1 秒,wait_for(swallower(), 0.2) 在 1202 ms 时返回了 'swallower 结束',没有抛 TimeoutError。finally 里还有 0.1 秒的清理 await:wait_for(…, 0.2) 要等清理做完才抛 TimeoutError,耗时 302 ms。", t=tl(S(2)), done=lidx(S(2), 'finally 里还有 0.1 秒的清理'), mark=lidx(S(2), 'swallower'), b=bars([['swallower:wait_for(…,0.2) 实际耗时 ms', 1202, '1202'], ['finally 有清理:耗时 ms', 302, '302'], ['超时设定 ms', 200, '200']], 1250, mark=[0], done=[1]), kv=KV([['吞掉 CancelledError', '超时失效,1202 ms 后正常返回'], ['finally 里 await', '等清理做完,302 ms'], ['原因', '取消是协作式的']], ['吞掉 CancelledError'])),
+    step("shield 保护里面的任务:wait_for(shield(task), 0.1) 在 101 ms 超时,但 task 没有被取消,task.done() 当时是 False;再过 0.6 秒它自己跑完了,task.result()=42,副作用(done 日志)也发生了。对照:不加 shield 的 wait_for(task, 0.1) 把 task 取消(task.cancelled()=True),副作用没有发生。超时后结果拿不到的 shield 任务仍在后台消耗资源。", t=tl(S(3)), done=lidx(S(3), 'wait_for(shield(task), 0.1)', '再过 0.6 秒'), mark=lidx(S(3), '对照'), kv=KV([['shield + 超时', '任务继续跑完,结果还在'], ['没有 shield', '任务被取消'], ['代价', '超时后还在后台占资源']], ['代价'])),
+    step("一个任务失败时:asyncio.gather 抛出 ValueError 的时刻,两个 ticker 才计数 2;再过 0.7 秒它们在后台继续跑完,计数到了 20——gather 抛异常并没有取消其它任务。TaskGroup 抛出 ExceptionGroup(含 ValueError),此刻计数 2,再过 0.7 秒仍是 2,其它任务已被取消。爬虫里用 gather 并发抓取,一个任务失败后其它请求仍在继续发。", t=tl(S(4)), done=lidx(S(4), 'TaskGroup 抛出', '其它任务已被取消'), mark=lidx(S(4), 'gather 抛出', '在后台继续跑完'), b=bars([['gather 抛异常 0.7 秒后 ticker 计数', 20, '20'], ['TaskGroup 抛异常 0.7 秒后 ticker 计数', 2, '2']], 20, mark=[0], done=[1]), kv=KV([['gather', '其它任务继续在后台跑'], ['TaskGroup', '其它任务被取消'], ['异常', 'TaskGroup 抛 ExceptionGroup']], ['gather'])),
+    step("取消一个进行中的 aiohttp 请求:连续 2 个正常请求累计连接数 1 → 1(复用同一条连接);第 3 个请求在 0.1 秒被 asyncio.timeout 取消,之后第 4 个请求累计连接数变成 2——被取消的请求用的那条连接已被关闭,下一个请求要重新建立连接。超时频繁的爬虫因此还会多付连接建立的代价。", t=tl(S(5)), done=lidx(S(5), '累计连接数'), kv=KV([['正常请求', '复用同一条连接(1 条)'], ['被取消的请求', '连接被关闭'], ['下一个请求', '新建连接(累计 2 条)']], ['被取消的请求'])),
+]
+A = mkartp('p22', 22, '爬虫,asyncio,超时,取消,wait_for,timeout,TaskGroup,gather,shield,Python,真实验证,动画演示',
+    '实测 asyncio 的取消与超时:wait_for 和 asyncio.timeout 都在约 200 ms 抛 TimeoutError;协程吞掉 CancelledError 时超时失效(1202 ms 后正常返回);shield 让任务在超时后继续跑完;gather 一个任务失败后其它任务仍在后台运行,TaskGroup 会取消它们;被取消的 aiohttp 请求会让连接关闭。',
+    '给爬虫的请求设超时看起来简单,但 asyncio 的取消是协作式的,不同写法的行为差别不小。这篇用本机实验把 wait_for、asyncio.timeout、shield、gather、TaskGroup 的行为逐一量出来,并看看取消一个进行中的 HTTP 请求对连接的影响。',
+    [('1202 ms', '协程吞掉 CancelledError 时,wait_for(…, 0.2) 实际返回的时间,并且没有抛 TimeoutError'), ('20 对 2', 'gather 与 TaskGroup 在一个任务失败 0.7 秒后,其它任务的计数(gather 里它们还在跑)'), ('2', '一个请求被超时取消后,第 4 个请求累计用到的连接数(正常复用时是 1)')],
+    [('两种写法与嵌套', '<p><code>wait_for</code> 和 <code>asyncio.timeout</code> 在时间上等价,都抛内置的 <code>TimeoutError</code>。<code>asyncio.timeout</code> 是上下文管理器,能嵌套,先到期的先触发,还能用 <code>reschedule</code> 在运行中修改到期时间,适合做“整个流程的总期限”。</p>'),
+     ('取消是协作式的', '<p>超时通过向任务投递 <code>CancelledError</code> 实现。如果任务捕获并吞掉了它,超时就拦不住:实测 <code>wait_for(…, 0.2)</code> 在 1202 ms 后正常返回结果。<code>finally</code> 里如果还有 <code>await</code>,超时的抛出也要等清理做完(302 ms 而不是 200 ms)。</p>'),
+     ('shield', '<p><code>asyncio.shield</code> 让超时只取消外层的包装,里面的任务继续跑完,结果还能拿到。代价是超时之后它仍在后台消耗资源,爬虫里要小心这种“幽灵请求”。</p>'),
+     ('gather 与 TaskGroup', '<p><code>asyncio.gather</code> 在一个任务抛异常时直接把异常抛给调用者,其它任务仍在后台继续(实测计数一直走到 20)。<code>TaskGroup</code> 会取消其它任务,并把异常打包成 <code>ExceptionGroup</code>(用 <code>except*</code> 接)。</p>'),
+     ('取消请求与连接', '<p>取消一个正在进行的 aiohttp 请求后,它占用的那条连接会被关闭,下一个请求要新建连接(实测累计连接数从 1 变成 2)。这又把第 2 篇讲的建连接成本带回来。</p>')],
+    steps,
+    [ENV_P + '。Python 3.14.8 的 asyncio;各小实验用 asyncio.sleep 模拟工作;计数用后台 ticker 每 50 ms 加一;最后一节用 aiohttp 3.14.3 访问每个请求停 0.3 秒的本机服务器,连接数由服务器记录;每项各跑一次,毫秒数仅供参考',
+     '没有验证:Python 3.11 及更早版本里 wait_for 的不同实现(那时它与 timeout 的行为有差异);asyncio.timeout 与 uncancel() 的配合;嵌套 TaskGroup 的取消传播;aiohttp 自己的 ClientTimeout 各项(connect、sock_read 等)取消时的行为;取消发生在响应读取到一半时服务器端的表现'],
+    '取消与超时')

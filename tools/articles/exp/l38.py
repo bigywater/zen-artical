@@ -1,0 +1,40 @@
+import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from ll import *
+tee('l38')
+def ent(d, p): return next(e for e in parse_index(d / '.git' / 'index')[1] if e['path'] == p)
+def fl(d, p): e = ent(d, p); return f'flags=0x{e["flags"]:04x} assume-valid={bool(e["flags"] & 0x8000)} extended={bool(e["flags"] & 0x4000)} xflags=0x{e["xflags"]:04x} skip-worktree={bool(e["xflags"] & 0x4000)}'
+def mk(name):
+    d = lab(name); ci(d, '起点', {'a.txt': 'a1\n', 'b.txt': 'b1\n', 'c.txt': 'c1\n'}, t=0); run(d, 'git branch other'); return d
+print('== 一:两个标记在 index 条目里的位置不同:assume-valid 在 flags 里,skip-worktree 在扩展标志里(index 因此升到 v3)')
+d = mk('l38a'); print('  设置之前   index 版本 %d' % parse_index(d / '.git' / 'index')[0], '|', fl(d, 'a.txt'))
+run(d, 'git update-index --assume-unchanged a.txt'); print('  assume-unchanged  版本 %d' % parse_index(d / '.git' / 'index')[0], '|', fl(d, 'a.txt'))
+run(d, 'git update-index --skip-worktree b.txt'); print('  再加 skip-worktree 版本 %d' % parse_index(d / '.git' / 'index')[0], '|', fl(d, 'b.txt'))
+sh(d, 'git ls-files -v')
+print('== 二:改了文件,git status 还看得到吗')
+W(d, {'a.txt': 'a1 本地改\n', 'b.txt': 'b1 本地改\n', 'c.txt': 'c1 本地改\n'})
+sh(d, 'git status --short; echo "(a、b 被隐藏,c 正常显示)"; git diff --stat | tail -2')
+print('== 三:git add 一个被标记的文件')
+sh(d, 'git add a.txt b.txt 2>&1 | head -5 | cut -c1-90')
+for f in ['a.txt', 'b.txt']:
+    print(f'  {f}: 工作区 blob {out1(d, f"git hash-object {f}")[:8]}  暂存区 blob {out1(d, f"git rev-parse :{f}")[:8]}  HEAD blob {out1(d, f"git rev-parse HEAD:{f}")[:8]}  → ' + ('已暂存' if out1(d, f"git rev-parse :{f}") == out1(d, f"git hash-object {f}") else '没有暂存'))
+print('== 四:另一个分支修改了这些文件,切过去会怎样')
+d = mk('l38b')
+run(d, 'git checkout -q other && echo "a1 other 分支改的" > a.txt && echo "b1 other 分支改的" > b.txt && echo "c1 other 分支改的" > c.txt && git commit -qam other改', 1); run(d, 'git checkout -q main')
+run(d, 'git update-index --assume-unchanged a.txt; git update-index --skip-worktree b.txt')
+W(d, {'a.txt': 'a1 本地的未提交修改\n', 'b.txt': 'b1 本地的未提交修改\n', 'c.txt': 'c1 本地的未提交修改\n'})
+for nm, f in [('assume-unchanged 的 a.txt', 'a.txt'), ('skip-worktree 的 b.txt', 'b.txt'), ('普通的 c.txt', 'c.txt')]:
+    print(f'  {nm:<26}', end=' ')
+    # 每个文件单独试:其它文件先恢复
+    dd = mk('l38x'); run(dd, 'git checkout -q other && echo "改了" > ' + f + ' && git commit -qam o', 1); run(dd, 'git checkout -q main')
+    run(dd, f'git update-index --{"assume-unchanged" if f == "a.txt" else "skip-worktree" if f == "b.txt" else "really-refresh"} {f}' if f != 'c.txt' else 'true')
+    W(dd, {f: f'{f} 本地的未提交修改\n'})
+    rc, o = run(dd, 'git checkout other 2>&1 | head -4')
+    print('→', o.replace('\n', ' / ')[:150], '| 切换后文件内容:', (dd / f).read_text().strip(), '| 本地修改还在:', '本地的未提交修改' in (dd / f).read_text())
+print('== 五:git reset --hard 与 git stash 会不会碰它们')
+d = mk('l38c'); run(d, 'git update-index --assume-unchanged a.txt; git update-index --skip-worktree b.txt')
+W(d, {'a.txt': 'a1 本地改\n', 'b.txt': 'b1 本地改\n', 'c.txt': 'c1 本地改\n'})
+sh(d, 'git reset --hard -q; for f in a b c; do printf "%s.txt: " $f; cat $f.txt; done')
+W(d, {'a.txt': 'a1 本地改\n', 'b.txt': 'b1 本地改\n', 'c.txt': 'c1 本地改\n'})
+sh(d, 'git stash -q 2>&1; for f in a b c; do printf "%s.txt: " $f; cat $f.txt; done; git stash list | wc -l; echo "-- stash 里保存了:"; git stash show --stat | head -3')
+print('== 六:清除标记')
+sh(d, 'git update-index --no-assume-unchanged a.txt; git update-index --no-skip-worktree b.txt; git ls-files -v; git status --short')

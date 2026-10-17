@@ -1,0 +1,660 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>B+树里的一次查找</title>
+<meta name="description" content="从根节点到叶子节点,一次索引查找的完整路径。">
+<link rel="canonical" href="https://bigywater.tech/btree.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="B+树里的一次查找">
+<meta property="og:description" content="从根节点到叶子节点,一次索引查找的完整路径。">
+<meta property="og:url" content="https://bigywater.tech/btree.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="B+树里的一次查找">
+<meta name="twitter:description" content="从根节点到叶子节点,一次索引查找的完整路径。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#EFF1F3; --paper:#FFFFFF; --ink:#1B1F24; --ink-dim:#5B6470; --line:#D8DCE1;
+  --node-c:#1F6FA8; --node-c-soft:#E4EFF6;
+  --key-c:#8B5A2B; --key-c-soft:#F3E9DD;
+  --io-c:#A13D3D; --io-c-soft:#F7E7E5;
+  --code-bg:#1B1F24; --code-ink:#E7EAED;
+  --shadow: 0 1px 2px rgba(20,25,30,.06), 0 8px 24px -12px rgba(20,25,30,.15);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#12151A; --paper:#1A1E24; --ink:#E7EAED; --ink-dim:#9AA4B0; --line:#2B3138;
+    --node-c:#5FA8DE; --node-c-soft:#1D2C38;
+    --key-c:#D6A15C; --key-c-soft:#332619;
+    --io-c:#E27A7A; --io-c-soft:#3A2323;
+    --code-bg:#0E1013; --code-ink:#DCE1E6;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#12151A; --paper:#1A1E24; --ink:#E7EAED; --ink-dim:#9AA4B0; --line:#2B3138;
+  --node-c:#5FA8DE; --node-c-soft:#1D2C38;
+  --key-c:#D6A15C; --key-c-soft:#332619;
+  --io-c:#E27A7A; --io-c-soft:#3A2323;
+  --code-bg:#0E1013; --code-ink:#DCE1E6;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{
+  background:var(--bg); color:var(--ink); margin:0;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+  line-height:1.65;
+}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--node-c);}
+
+.hero{padding:72px 24px 40px; text-align:left;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--node-c);
+  display:flex; align-items:center; gap:8px; margin-bottom:18px;
+}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--node-c);}
+h1{font-size:2.3rem; line-height:1.25; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{
+  margin-top:28px; display:flex; gap:0; border:1px solid var(--line); border-radius:12px;
+  overflow:hidden; background:var(--paper); box-shadow:var(--shadow);
+}
+.hero-fact>div{flex:1; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.5rem; font-weight:600; color:var(--node-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+.section-inner{max-width:920px; margin:0 auto;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{
+  background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px;
+  box-shadow:var(--shadow);
+}
+.card .tag{
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem;
+  letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;
+}
+.card.node .tag{background:var(--node-c-soft); color:var(--node-c);}
+.card.key .tag{background:var(--key-c-soft); color:var(--key-c);}
+.card.io .tag{background:var(--io-c-soft); color:var(--io-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+blockquote.src{
+  margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink);
+  border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;
+}
+blockquote.src .path{color:#8B95A1; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#8FC7EA;}
+
+.callout{
+  border-left:3px solid var(--node-c); background:var(--node-c-soft); border-radius:0 10px 10px 0;
+  padding:14px 18px; margin:20px 0; font-size:.95rem;
+}
+.callout.io{border-color:var(--io-c); background:var(--io-c-soft);}
+.callout.key{border-color:var(--key-c); background:var(--key-c-soft);}
+
+/* ---------- interactive demo ---------- */
+.demo{
+  background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow);
+  margin:24px 0; overflow:hidden;
+}
+.demo-head{
+  padding:14px 20px; border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between;
+  gap:12px; flex-wrap:wrap;
+}
+.demo-title{font-weight:600; font-size:.95rem;}
+.demo-narration{
+  min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line);
+  background:var(--bg);
+}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--key-c-soft); color:var(--key-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:20px; overflow-x:auto;}
+.demo-controls{
+  padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line);
+  flex-wrap:wrap;
+}
+.btn{
+  font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink);
+  padding:7px 14px; border-radius:8px; cursor:pointer;
+}
+.btn:hover{border-color:var(--node-c); color:var(--node-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--node-c); border-color:var(--node-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+.demo-controls input[type=range]{flex:1; min-width:120px; accent-color:var(--node-c);}
+
+svg text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+.tnode{fill:var(--paper); stroke:var(--line); stroke-width:1.5; rx:8;}
+.tnode.active{stroke:var(--node-c); stroke-width:2.5;}
+.tnode.leaf{fill:var(--node-c-soft);}
+.tnode.visited{stroke:var(--key-c); stroke-width:2;}
+.tnode.found{fill:var(--key-c-soft); stroke:var(--key-c); stroke-width:2.5;}
+.tnode.notfound{fill:var(--io-c-soft); stroke:var(--io-c); stroke-width:2.5;}
+.tkey{font-size:12px; fill:var(--ink);}
+.tlink{stroke:var(--line); stroke-width:1.5; fill:none;}
+.tlink.leaf-link{stroke:var(--key-c); stroke-dasharray:3 2;}
+.tlink.path{stroke:var(--node-c); stroke-width:2.5;}
+.nodelabel{font-size:9px; fill:var(--ink-dim);}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.next-post{
+  display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;
+  background:var(--node-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px;
+}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>MySQL / InnoDB 存储引擎系列 · 第一篇</div>
+    <h1>为什么一次索引查找,最多只需要访问 3、4 个页面?</h1>
+    <p>InnoDB 把每张表的索引组织成一棵 <b>B+树</b>。这篇文章会拆开这棵树的每一层:<b>页(page)</b>是什么、<b>叶子节点</b>存了什么、树里的<b>查找</b>是怎么一步步走下去的,以及<b>树高</b>为什么在千万行数据下也只有 3~4 层。</p>
+    <p>所有结构和数字不是背出来的——文中的树高、扇出、页内查找算法,都直接在一台本机运行的 MySQL 9.7.1 上建表、插入 50 万行、再逐字节解析的 <span class="mono">.ibd</span> 文件验证过。</p>
+    <div class="hero-fact">
+      <div><div class="num">16 KB</div><div class="lbl">InnoDB 页大小(本机 <span class="mono">innodb_page_size</span> 实测值)</div></div>
+      <div><div class="num">497,016</div><div class="lbl">测试表行数</div></div>
+      <div><div class="num">3 层</div><div class="lbl">实测 B+树高度(根 + 内部 + 叶子)</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <h2>三种页,一棵树</h2>
+  <p class="h2-sub">InnoDB 里没有"表"这种物理存在,只有一棵棵由固定大小的页拼成的 B+树。</p>
+  <div class="cards">
+    <div class="card node">
+      <span class="tag">根 / 内部节点</span>
+      <h3>存的是"路标",不是数据</h3>
+      <p>每条记录是 <span class="mono">(key, 子页页号)</span> 这样一个指针,不存整行。相当于一本书目录里"第 3 章 → 第 88 页",不是章节正文本身。</p>
+    </div>
+    <div class="card key">
+      <span class="tag">叶子节点</span>
+      <h3>真正的数据在这一层</h3>
+      <p>聚簇索引(主键)的叶子存<b>完整的一行</b>;二级索引的叶子只存<b>索引列 + 主键值</b>。这个区别是下一篇"回表"的根源。</p>
+    </div>
+    <div class="card io">
+      <span class="tag">页 / Page</span>
+      <h3>磁盘 I/O 的最小单位</h3>
+      <p>不管是根、内部节点还是叶子,物理上都是一个 <b>16KB</b> 的定长块。CPU 读写内存以字节为单位,InnoDB 读写磁盘以"页"为单位——这就是 B+树这种"矮胖"结构存在的全部理由。</p>
+    </div>
+  </div>
+  <div class="callout">
+    为什么不用普通二叉树?二叉树"瘦高",千万行数据要 20+ 层,对应 20+ 次磁盘 I/O。B+树把每个节点撑到一页能装下的最大指针数(扇出),用"矮胖"换来"树高低",而树高直接等于最坏情况下的页面访问次数。
+  </div>
+</section>
+
+<section>
+  <h2>页内怎么查?——页目录 + 二分查找</h2>
+  <p class="h2-sub">"从根走到叶子"只是故事的一半。走到某一页之后,页里几百条记录又是怎么被快速定位的?</p>
+  <p>InnoDB 不会在一页几百条记录里从头扫到尾。每页维护一个<b>页目录(page directory)</b>——一个稀疏的"分组索引":每 4~8 条记录设一个目录槽(slot),槽里存着这组记录里"最大的那条"的地址。查找时先在目录槽上做二分查找,缩小到某一组,再在组内(最多 8 条)线性扫一遍。</p>
+  <blockquote class="src">
+    <span class="path">storage/innobase/page/page0cur.cc · <a href="https://github.com/mysql/mysql-server/blob/mysql-9.7.1/storage/innobase/page/page0cur.cc#L420" target="_blank" rel="noopener">mysql-server @ mysql-9.7.1, L420</a></span>
+/* Perform binary search. First the search is done through the page
+directory, after that as a linear search in the list of records
+owned by the upper limit directory slot. */
+  </blockquote>
+  <p>目录槽的分组大小是有硬编码上下限的——同样能在源码里核对到(<span class="mono">PAGE_DIR_SLOT_MAX_N_OWNED = 8</span>,<span class="mono">PAGE_DIR_SLOT_MIN_N_OWNED = 4</span>,<span class="mono">page0types.h</span>),这也是"页内查找"复杂度接近 O(log n) 而不是 O(n) 的原因——它本质上和"从根到叶子"是同一个套路:二分缩小范围,套了两层。</p>
+</section>
+
+<section>
+  <h2>演示:一棵 B+树是怎么长起来的</h2>
+  <p class="h2-sub"> InnoDB 页能装下几百条记录,没法在屏幕上画清楚。这里用一棵每页最多 3 个键(阶为 4)的"玩具"B+树做演示——结构规则和页完全一样,只是把"能装多少"从几百缩小到 3,方便肉眼看清每一步分裂。</p>
+  <div class="demo" id="buildDemo">
+    <div class="demo-head">
+      <div class="demo-title">插入序列:<span class="mono" id="buildSeqLabel"></span></div>
+    </div>
+    <div class="demo-narration" id="buildNarration"></div>
+    <div class="demo-body"><svg id="buildSvg" width="100%" viewBox="0 0 880 360" style="min-width:640px;"></svg></div>
+    <div class="demo-controls">
+      <button class="btn" id="buildReset">⏮ 重来</button>
+      <button class="btn" id="buildPrev">‹ 上一步</button>
+      <button class="btn primary" id="buildNext">下一步 ›</button>
+      <button class="btn" id="buildPlay">▶ 自动播放</button>
+      <input type="range" id="buildSlider" min="0" value="0" step="1">
+      <span class="step-counter" id="buildCounter"></span>
+    </div>
+  </div>
+  <p>关键规则,和 InnoDB 完全一致,只是尺度不同:</p>
+  <ul>
+    <li><b>叶子分裂</b>:一页装不下了,从中间切开,分裂出的<b>右半边第一个 key 被"复制"一份</b>提升到父节点当路标——注意是复制,原 key 仍留在叶子里。</li>
+    <li><b>内部节点分裂</b>:同样从中间切开,但中间的 key 是<b>被"移动"</b>上去的,不会同时留在两个子节点里。</li>
+    <li><b>叶子间有一条链表</b>(图中虚线):做范围扫描(<span class="mono">WHERE id BETWEEN ...</span>)时,只要定位到起点叶子,后面沿链表向右走就行,不用每次都从根重新出发。</li>
+  </ul>
+</section>
+
+<section>
+  <h2>演示:一次查找,命中与未命中</h2>
+  <p class="h2-sub">用上面长成的树,分别查一个存在的 key(27)和一个不存在的 key(26),看查找路径。</p>
+  <div class="demo" id="searchDemo">
+    <div class="demo-head">
+      <div class="demo-title">选择要查找的 key</div>
+      <div>
+        <button class="btn primary" id="searchHitBtn">查找 27(命中)</button>
+        <button class="btn" id="searchMissBtn">查找 26(未命中)</button>
+      </div>
+    </div>
+    <div class="demo-narration" id="searchNarration"></div>
+    <div class="demo-body"><svg id="searchSvg" width="100%" viewBox="0 0 880 360" style="min-width:640px;"></svg></div>
+    <div class="demo-controls">
+      <button class="btn" id="searchReset">⏮ 重来</button>
+      <button class="btn" id="searchPrev">‹ 上一步</button>
+      <button class="btn primary" id="searchNext">下一步 ›</button>
+      <span class="step-counter" id="searchCounter"></span>
+    </div>
+  </div>
+  <div class="callout key">
+    两次查找路径长度都是 <b>3</b>——树高是几,最坏情况下查找就要走几步,<b>不管 key 存不存在</b>。这正是"树高即 I/O 次数上限"这句话的字面意思。
+  </div>
+</section>
+
+<section>
+  <h2>回到数据:树高为什么只有 3 层</h2>
+  <p class="h2-sub">玩具树的阶是 4, InnoDB 页是 16KB,一页能塞下的指针数(扇出)是几百甚至近千。下面是本机建表实测的数字。</p>
+  <table class="mono">
+    <tr><th>索引</th><th>层数(实测)</th><th>根页指针数</th><th>中间层页数</th><th>叶子页数</th><th>叶子平均记录数</th></tr>
+    <tr><td>PRIMARY(聚簇索引)</td><td>3</td><td>4</td><td>4</td><td>3,186</td><td>156.9</td></tr>
+    <tr><td>idx_user_id(二级索引)</td><td>3</td><td>2</td><td>2</td><td>663</td><td>754.1</td></tr>
+    <tr><td>idx_user_status(二级索引)</td><td>3</td><td>2</td><td>2</td><td>693</td><td>721.5</td></tr>
+  </table>
+  <p style="font-size:.85rem; color:var(--ink-dim);">测试表 <span class="mono">orders</span>(id BIGINT 主键 + user_id/status/amount/created_at/note,单行约 106 字节),497,016 行。以上数字来自直接按 InnoDB 页格式解析 <span class="mono">orders.ibd</span> 原始字节得到——不是估算。</p>
+  <blockquote class="src">
+    <span class="path">直接解析 .ibd 文件用到的页头偏移量,均在以下文件核对过(commit 与本机 MySQL 9.7.1 完全一致):</span>
+storage/innobase/include/fil0types.h
+  FIL_PAGE_TYPE   = 24   (页类型,INDEX 页的值是 17855)
+  FIL_PAGE_DATA   = 38   (页头起始,即下面 PAGE_HEADER)
+storage/innobase/include/page0types.h  (相对 PAGE_HEADER=38 的偏移)
+  PAGE_N_RECS     = 16   → 绝对偏移 54   本页记录数
+  PAGE_LEVEL      = 26   → 绝对偏移 64   层号,0 = 叶子
+  PAGE_INDEX_ID   = 28   → 绝对偏移 66   属于哪个索引
+  </blockquote>
+  <p>能看出两件事:</p>
+  <p>① <b>聚簇索引叶子平均只装 157 行</b>,二级索引叶子却能装 700 多条——因为聚簇索引叶子存整行(106 字节/行),二级索引叶子只存"索引列 + 主键"(窄得多),同样 16KB 能装下更多条目。这就是"瘦索引扇出更大、树更矮"的直接证据。</p>
+  <p>② <b>根节点只有 2~4 个指针</b>,却能扇出到几千个叶子页——中间层的一个内部页平均能装下 331~797 个指针。3 层树的容量粗略是 <span class="mono">根扇出 × 中间层扇出 × 叶子平均行数</span>,随便代入这组实测数字,轻松覆盖千万级行数,这也是"InnoDB 的 B+树通常 3~4 层就够存几千万行"这个说法的来源——不是经验之谈,是扇出数字算出来的。</p>
+</section>
+
+<section>
+  <h2>树高的数学:为什么加一层能覆盖的行数是指数级增长</h2>
+  <p>设内部节点平均扇出为 <span class="mono">F</span>,叶子平均行数为 <span class="mono">R</span>,树高为 <span class="mono">h</span>(叶子算 1 层),能覆盖的总行数大约是:</p>
+  <blockquote class="src">capacity(h) ≈ F^(h-1) × R</blockquote>
+  <p>拿 PRIMARY 索引实测的 <span class="mono">F≈797</span>(中间层平均扇出)、<span class="mono">R≈157</span> 代入:</p>
+  <table class="mono">
+    <tr><th>树高 h</th><th>capacity(h)</th><th>对应页访问次数</th></tr>
+    <tr><td>1(只有叶子)</td><td>≈ 157</td><td>1</td></tr>
+    <tr><td>2(根直接指叶子)</td><td>≈ 797 × 157 ≈ 12.5 万</td><td>2</td></tr>
+    <tr><td>3(我们实测的情况)</td><td>≈ 797² × 157 ≈ 1 亿</td><td>3</td></tr>
+    <tr><td>4</td><td>≈ 797³ × 157 ≈ 800 亿</td><td>4</td></tr>
+  </table>
+  <p>这就是为什么"树高只加一层"能让容量跳一个数量级以上——扇出是底数,树高是指数。反过来说,只要不是极端窄行(比如整行几 KB 的大字段表),千万甚至上亿行数据落在 3~4 层是常态。<b>这也是为什么讨论 MySQL 性能时,"树高"和"页面访问次数"经常被当成同一件事在说。</b></p>
+  <div class="callout io">
+    一次索引查找的磁盘 I/O 上限 ≈ 树高。根页几乎总是常驻内存(所有查询都要经过它,被 InnoDB Buffer Pool 优先保留),所以实际需要"临时"读盘的往往是 h－1 次甚至更少——这背后 Buffer Pool 具体怎么决定"谁该留、谁该被挤走",是系列第三篇"Buffer Pool 与刷脏"要展开的话题。
+  </div>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>演示用的玩具 B+树阶为 4(每节点最多 3 个 key),仅用于把分裂/查找的过程画得肉眼可见; InnoDB 页没有固定的"阶",扇出由页大小(16KB)和记录宽度动态决定,本文"回到数据"一节的表格就是这台机器上的扇出。</li>
+      <li>页内查找一节的源码引用(<span class="mono">page0cur.cc</span> 二分查找的注释)与本文用于解析 <span class="mono">.ibd</span> 文件的字段偏移量,均取自 <span class="mono">mysql/mysql-server</span> 仓库 <span class="mono">mysql-9.7.1</span> 标签(commit <span class="mono">a26ea1a2</span>),与本机安装的 MySQL 9.7.1 版本完全一致。</li>
+      <li>直接解析 <span class="mono">.ibd</span> 文件拿到的"树高"结果,用两种独立方式互相核对过:(a)按根页页号读取该页的 <span class="mono">PAGE_LEVEL</span> 字段;(b)全文件扫描按 <span class="mono">index_id</span> 分组统计每一层的页数。两者结果一致。全文件扫描中曾出现个别"幽灵根页"(层号异常但不是当前树的根)——这是 <span class="mono">ALTER TABLE ADD INDEX</span> 重建过程中产生、之后被释放但尚未被覆写的旧页残留,InnoDB 释放页时不会立刻清零内容,不代表当前树结构有误,已用(a)的权威根页号排除。</li>
+      <li>没有涉及:自适应哈希索引(Adaptive Hash Index)、压缩页(page compression)、MVCC/undo 版本链、锁与事务隔离级别对读路径的影响——这些是更深的话题,不在"结构与查找"这一篇的范围内。</li>
+      <li>聚簇索引与二级索引"回表"的 I/O 代价是系列第二篇的内容,Buffer Pool 缓存/淘汰机制是第三篇的内容。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="btree2.html" target="_blank" rel="noopener" style="text-decoration:none; color:inherit;">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">回表与覆盖索引:二级索引为什么要多走一次</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>InnoDB B+树系列 · 第一篇 · 结构与查找与树高 · 数据来自本机 MySQL 9.7.1 真实实测</footer>
+
+<script>
+const DATA = {"order": 4, "insertSeq": [10, 20, 5, 6, 12, 30, 7, 17, 3, 25, 27, 40, 2, 18], "buildEvents": [{"key": 10, "path": [1], "type": "insert-descend", "snapshot": {"rootId": 1, "nodes": {"1": {"id": 1, "leaf": true, "keys": [], "children": [], "next": null}}}}, {"key": 10, "nodeId": 1, "type": "insert-place", "snapshot": {"rootId": 1, "nodes": {"1": {"id": 1, "leaf": true, "keys": [10], "children": [], "next": null}}}}, {"key": 20, "path": [1], "type": "insert-descend", "snapshot": {"rootId": 1, "nodes": {"1": {"id": 1, "leaf": true, "keys": [10], "children": [], "next": null}}}}, {"key": 20, "nodeId": 1, "type": "insert-place", "snapshot": {"rootId": 1, "nodes": {"1": {"id": 1, "leaf": true, "keys": [10, 20], "children": [], "next": null}}}}, {"key": 5, "path": [1], "type": "insert-descend", "snapshot": {"rootId": 1, "nodes": {"1": {"id": 1, "leaf": true, "keys": [10, 20], "children": [], "next": null}}}}, {"key": 5, "nodeId": 1, "type": "insert-place", "snapshot": {"rootId": 1, "nodes": {"1": {"id": 1, "leaf": true, "keys": [5, 10, 20], "children": [], "next": null}}}}, {"key": 6, "path": [1], "type": "insert-descend", "snapshot": {"rootId": 1, "nodes": {"1": {"id": 1, "leaf": true, "keys": [5, 10, 20], "children": [], "next": null}}}}, {"key": 6, "nodeId": 1, "type": "insert-place", "snapshot": {"rootId": 1, "nodes": {"1": {"id": 1, "leaf": true, "keys": [5, 6, 10, 20], "children": [], "next": null}}}}, {"leftId": 1, "rightId": 2, "sepKey": 10, "leftKeys": [5, 6], "rightKeys": [10, 20], "type": "split-leaf", "snapshot": {"rootId": 1, "nodes": {"1": {"id": 1, "leaf": true, "keys": [5, 6], "children": [], "next": 2}}}}, {"rootId": 3, "sepKey": 10, "type": "new-root", "snapshot": {"rootId": 3, "nodes": {"3": {"id": 3, "leaf": false, "keys": [10], "children": [1, 2], "next": null}, "2": {"id": 2, "leaf": true, "keys": [10, 20], "children": [], "next": null}, "1": {"id": 1, "leaf": true, "keys": [5, 6], "children": [], "next": 2}}}}, {"key": 12, "path": [3, 2], "type": "insert-descend", "snapshot": {"rootId": 3, "nodes": {"3": {"id": 3, "leaf": false, "keys": [10], "children": [1, 2], "next": null}, "2": {"id": 2, "leaf": true, "keys": [10, 20], "children": [], "next": null}, "1": {"id": 1, "leaf": true, "keys": [5, 6], "children": [], "next": 2}}}}, {"key": 12, "nodeId": 2, "type": "insert-place", "snapshot": {"rootId": 3, "nodes": {"3": {"id": 3, "leaf": false, "keys": [10], "children": [1, 2], "next": null}, "2": {"id": 2, "leaf": true, "keys": [10, 12, 20], "children": [], "next": null}, "1": {"id": 1, "leaf": true, "keys": [5, 6], "children": [], "next": 2}}}}, {"key": 30, "path": [3, 2], "type": "insert-descend", "snapshot": {"rootId": 3, "nodes": {"3": {"id": 3, "leaf": false, "keys": [10], "children": [1, 2], "next": null}, "2": {"id": 2, "leaf": true, "keys": [10, 12, 20], "children": [], "next": null}, "1": {"id": 1, "leaf": true, "keys": [5, 6], "children": [], "next": 2}}}}, {"key": 30, "nodeId": 2, "type": "insert-place", "snapshot": {"rootId": 3, "nodes": {"3": {"id": 3, "leaf": false, "keys": [10], "children": [1, 2], "next": null}, "2": {"id": 2, "leaf": true, "keys": [10, 12, 20, 30], "children": [], "next": null}, "1": {"id": 1, "leaf": true, "keys": [5, 6], "children": [], "next": 2}}}}, {"leftId": 2, "rightId": 4, "sepKey": 20, "leftKeys": [10, 12], "rightKeys": [20, 30], "type": "split-leaf", "snapshot": {"rootId": 3, "nodes": {"3": {"id": 3, "leaf": false, "keys": [10], "children": [1, 2], "next": null}, "2": {"id": 2, "leaf": true, "keys": [10, 12], "children": [], "next": 4}, "1": {"id": 1, "leaf": true, "keys": [5, 6], "children": [], "next": 2}}}}, {"parentId": 3, "sepKey": 20, "childId": 4, "type": "promote", "snapshot": {"rootId": 3, "nodes": {"3": {"id": 3, "leaf": false, "keys": [10, 20], "children": [1, 2, 4], "next": null}, "4": {"id": 4, "leaf": true, "keys": [20, 30], "children": [], "next": null}, "2": {"id": 2, "leaf": true, "keys": [10, 12], "children": [], "next": 4}, "1": {"id": 1, "leaf": true, "keys": [5, 6], "children": [], "next": 2}}}}, {"key": 7, "path": [3, 1], "type": "insert-descend", "snapshot": {"rootId": 3, "nodes": {"3": {"id": 3, "leaf": false, "keys": [10, 20], "children": [1, 2, 4], "next": null}, "4": {"id": 4, "leaf": true, "keys": [20, 30], "children": [], "next": null}, "2": {"id": 2, "leaf": true, "keys": [10, 12], "children": [], "next": 4}, "1": {"id": 1, "leaf": true, "keys": [5, 6], "children": [], "next": 2}}}}, {"key": 7, "nodeId": 1, "type": "insert-place", "snapshot": {"rootId": 3, "nodes": {"3": {"id": 3, "leaf": false, "keys": [10, 20], "children": [1, 2, 4], "next": null}, "4": {"id": 4, "leaf": true, "keys": [20, 30], "children": [], "next": null}, "2": {"id": 2, "leaf": true, "keys": [10, 12], "children": [], "next": 4}, "1": {"id": 1, "leaf": true, "keys": [5, 6, 7], "children": [], "next": 2}}}}, {"key": 17, "path": [3, 2], "type": "insert-descend", "snapshot": {"rootId": 3, "nodes": {"3": {"id": 3, "leaf": false, "keys": [10, 20], "children": [1, 2, 4], "next": null}, "4": {"id": 4, "leaf": true, "keys": [20, 30], "children": [], "next": null}, "2": {"id": 2, "leaf": true, "keys": [10, 12], "children": [], "next": 4}, "1": {"id": 1, "leaf": true, "keys": [5, 6, 7], "children": [], "next": 2}}}}, {"key": 17, "nodeId": 2, "type": "insert-place", "snapshot": {"rootId": 3, "nodes": {"3": {"id": 3, "leaf": false, "keys": [10, 20], "children": [1, 2, 4], "next": null}, "4": {"id": 4, "leaf": true, "keys": [20, 30], "children": [], "next": null}, "2": {"id": 2, "leaf": true, "keys": [10, 12, 17], "children": [], "next": 4}, "1": {"id": 1, "leaf": true, "keys": [5, 6, 7], "children": [], "next": 2}}}}, {"key": 3, "path": [3, 1], "type": "insert-descend", "snapshot": {"rootId": 3, "nodes": {"3": {"id": 3, "leaf": false, "keys": [10, 20], "children": [1, 2, 4], "next": null}, "4": {"id": 4, "leaf": true, "keys": [20, 30], "children": [], "next": null}, "2": {"id": 2, "leaf": true, "keys": [10, 12, 17], "children": [], "next": 4}, "1": {"id": 1, "leaf": true, "keys": [5, 6, 7], "children": [], "next": 2}}}}, {"key": 3, "nodeId": 1, "type": "insert-place", "snapshot": {"rootId": 3, "nodes": {"3": {"id": 3, "leaf": false, "keys": [10, 20], "children": [1, 2, 4], "next": null}, "4": {"id": 4, "leaf": true, "keys": [20, 30], "children": [], "next": null}, "2": {"id": 2, "leaf": true, "keys": [10, 12, 17], "children": [], "next": 4}, "1": {"id": 1, "leaf": true, "keys": [3, 5, 6, 7], "children": [], "next": 2}}}}, {"leftId": 1, "rightId": 5, "sepKey": 6, "leftKeys": [3, 5], "rightKeys": [6, 7], "type": "split-leaf", "snapshot": {"rootId": 3, "nodes": {"3": {"id": 3, "leaf": false, "keys": [10, 20], "children": [1, 2, 4], "next": null}, "4": {"id": 4, "leaf": true, "keys": [20, 30], "children": [], "next": null}, "2": {"id": 2, "leaf": true, "keys": [10, 12, 17], "children": [], "next": 4}, "1": {"id": 1, "leaf": true, "keys": [3, 5], "children": [], "next": 5}}}}, {"parentId": 3, "sepKey": 6, "childId": 5, "type": "promote", "snapshot": {"rootId": 3, "nodes": {"3": {"id": 3, "leaf": false, "keys": [6, 10, 20], "children": [1, 5, 2, 4], "next": null}, "4": {"id": 4, "leaf": true, "keys": [20, 30], "children": [], "next": null}, "2": {"id": 2, "leaf": true, "keys": [10, 12, 17], "children": [], "next": 4}, "5": {"id": 5, "leaf": true, "keys": [6, 7], "children": [], "next": 2}, "1": {"id": 1, "leaf": true, "keys": [3, 5], "children": [], "next": 5}}}}, {"key": 25, "path": [3, 4], "type": "insert-descend", "snapshot": {"rootId": 3, "nodes": {"3": {"id": 3, "leaf": false, "keys": [6, 10, 20], "children": [1, 5, 2, 4], "next": null}, "4": {"id": 4, "leaf": true, "keys": [20, 30], "children": [], "next": null}, "2": {"id": 2, "leaf": true, "keys": [10, 12, 17], "children": [], "next": 4}, "5": {"id": 5, "leaf": true, "keys": [6, 7], "children": [], "next": 2}, "1": {"id": 1, "leaf": true, "keys": [3, 5], "children": [], "next": 5}}}}, {"key": 25, "nodeId": 4, "type": "insert-place", "snapshot": {"rootId": 3, "nodes": {"3": {"id": 3, "leaf": false, "keys": [6, 10, 20], "children": [1, 5, 2, 4], "next": null}, "4": {"id": 4, "leaf": true, "keys": [20, 25, 30], "children": [], "next": null}, "2": {"id": 2, "leaf": true, "keys": [10, 12, 17], "children": [], "next": 4}, "5": {"id": 5, "leaf": true, "keys": [6, 7], "children": [], "next": 2}, "1": {"id": 1, "leaf": true, "keys": [3, 5], "children": [], "next": 5}}}}, {"key": 27, "path": [3, 4], "type": "insert-descend", "snapshot": {"rootId": 3, "nodes": {"3": {"id": 3, "leaf": false, "keys": [6, 10, 20], "children": [1, 5, 2, 4], "next": null}, "4": {"id": 4, "leaf": true, "keys": [20, 25, 30], "children": [], "next": null}, "2": {"id": 2, "leaf": true, "keys": [10, 12, 17], "children": [], "next": 4}, "5": {"id": 5, "leaf": true, "keys": [6, 7], "children": [], "next": 2}, "1": {"id": 1, "leaf": true, "keys": [3, 5], "children": [], "next": 5}}}}, {"key": 27, "nodeId": 4, "type": "insert-place", "snapshot": {"rootId": 3, "nodes": {"3": {"id": 3, "leaf": false, "keys": [6, 10, 20], "children": [1, 5, 2, 4], "next": null}, "4": {"id": 4, "leaf": true, "keys": [20, 25, 27, 30], "children": [], "next": null}, "2": {"id": 2, "leaf": true, "keys": [10, 12, 17], "children": [], "next": 4}, "5": {"id": 5, "leaf": true, "keys": [6, 7], "children": [], "next": 2}, "1": {"id": 1, "leaf": true, "keys": [3, 5], "children": [], "next": 5}}}}, {"leftId": 4, "rightId": 6, "sepKey": 27, "leftKeys": [20, 25], "rightKeys": [27, 30], "type": "split-leaf", "snapshot": {"rootId": 3, "nodes": {"3": {"id": 3, "leaf": false, "keys": [6, 10, 20], "children": [1, 5, 2, 4], "next": null}, "4": {"id": 4, "leaf": true, "keys": [20, 25], "children": [], "next": 6}, "2": {"id": 2, "leaf": true, "keys": [10, 12, 17], "children": [], "next": 4}, "5": {"id": 5, "leaf": true, "keys": [6, 7], "children": [], "next": 2}, "1": {"id": 1, "leaf": true, "keys": [3, 5], "children": [], "next": 5}}}}, {"parentId": 3, "sepKey": 27, "childId": 6, "type": "promote", "snapshot": {"rootId": 3, "nodes": {"3": {"id": 3, "leaf": false, "keys": [6, 10, 20, 27], "children": [1, 5, 2, 4, 6], "next": null}, "6": {"id": 6, "leaf": true, "keys": [27, 30], "children": [], "next": null}, "4": {"id": 4, "leaf": true, "keys": [20, 25], "children": [], "next": 6}, "2": {"id": 2, "leaf": true, "keys": [10, 12, 17], "children": [], "next": 4}, "5": {"id": 5, "leaf": true, "keys": [6, 7], "children": [], "next": 2}, "1": {"id": 1, "leaf": true, "keys": [3, 5], "children": [], "next": 5}}}}, {"leftId": 3, "rightId": 7, "sepKey": 20, "leftKeys": [6, 10], "rightKeys": [27], "type": "split-internal", "snapshot": {"rootId": 3, "nodes": {"3": {"id": 3, "leaf": false, "keys": [6, 10], "children": [1, 5, 2], "next": null}, "2": {"id": 2, "leaf": true, "keys": [10, 12, 17], "children": [], "next": 4}, "5": {"id": 5, "leaf": true, "keys": [6, 7], "children": [], "next": 2}, "1": {"id": 1, "leaf": true, "keys": [3, 5], "children": [], "next": 5}}}}, {"rootId": 8, "sepKey": 20, "type": "new-root", "snapshot": {"rootId": 8, "nodes": {"8": {"id": 8, "leaf": false, "keys": [20], "children": [3, 7], "next": null}, "7": {"id": 7, "leaf": false, "keys": [27], "children": [4, 6], "next": null}, "6": {"id": 6, "leaf": true, "keys": [27, 30], "children": [], "next": null}, "4": {"id": 4, "leaf": true, "keys": [20, 25], "children": [], "next": 6}, "3": {"id": 3, "leaf": false, "keys": [6, 10], "children": [1, 5, 2], "next": null}, "2": {"id": 2, "leaf": true, "keys": [10, 12, 17], "children": [], "next": 4}, "5": {"id": 5, "leaf": true, "keys": [6, 7], "children": [], "next": 2}, "1": {"id": 1, "leaf": true, "keys": [3, 5], "children": [], "next": 5}}}}, {"key": 40, "path": [8, 7, 6], "type": "insert-descend", "snapshot": {"rootId": 8, "nodes": {"8": {"id": 8, "leaf": false, "keys": [20], "children": [3, 7], "next": null}, "7": {"id": 7, "leaf": false, "keys": [27], "children": [4, 6], "next": null}, "6": {"id": 6, "leaf": true, "keys": [27, 30], "children": [], "next": null}, "4": {"id": 4, "leaf": true, "keys": [20, 25], "children": [], "next": 6}, "3": {"id": 3, "leaf": false, "keys": [6, 10], "children": [1, 5, 2], "next": null}, "2": {"id": 2, "leaf": true, "keys": [10, 12, 17], "children": [], "next": 4}, "5": {"id": 5, "leaf": true, "keys": [6, 7], "children": [], "next": 2}, "1": {"id": 1, "leaf": true, "keys": [3, 5], "children": [], "next": 5}}}}, {"key": 40, "nodeId": 6, "type": "insert-place", "snapshot": {"rootId": 8, "nodes": {"8": {"id": 8, "leaf": false, "keys": [20], "children": [3, 7], "next": null}, "7": {"id": 7, "leaf": false, "keys": [27], "children": [4, 6], "next": null}, "6": {"id": 6, "leaf": true, "keys": [27, 30, 40], "children": [], "next": null}, "4": {"id": 4, "leaf": true, "keys": [20, 25], "children": [], "next": 6}, "3": {"id": 3, "leaf": false, "keys": [6, 10], "children": [1, 5, 2], "next": null}, "2": {"id": 2, "leaf": true, "keys": [10, 12, 17], "children": [], "next": 4}, "5": {"id": 5, "leaf": true, "keys": [6, 7], "children": [], "next": 2}, "1": {"id": 1, "leaf": true, "keys": [3, 5], "children": [], "next": 5}}}}, {"key": 2, "path": [8, 3, 1], "type": "insert-descend", "snapshot": {"rootId": 8, "nodes": {"8": {"id": 8, "leaf": false, "keys": [20], "children": [3, 7], "next": null}, "7": {"id": 7, "leaf": false, "keys": [27], "children": [4, 6], "next": null}, "6": {"id": 6, "leaf": true, "keys": [27, 30, 40], "children": [], "next": null}, "4": {"id": 4, "leaf": true, "keys": [20, 25], "children": [], "next": 6}, "3": {"id": 3, "leaf": false, "keys": [6, 10], "children": [1, 5, 2], "next": null}, "2": {"id": 2, "leaf": true, "keys": [10, 12, 17], "children": [], "next": 4}, "5": {"id": 5, "leaf": true, "keys": [6, 7], "children": [], "next": 2}, "1": {"id": 1, "leaf": true, "keys": [3, 5], "children": [], "next": 5}}}}, {"key": 2, "nodeId": 1, "type": "insert-place", "snapshot": {"rootId": 8, "nodes": {"8": {"id": 8, "leaf": false, "keys": [20], "children": [3, 7], "next": null}, "7": {"id": 7, "leaf": false, "keys": [27], "children": [4, 6], "next": null}, "6": {"id": 6, "leaf": true, "keys": [27, 30, 40], "children": [], "next": null}, "4": {"id": 4, "leaf": true, "keys": [20, 25], "children": [], "next": 6}, "3": {"id": 3, "leaf": false, "keys": [6, 10], "children": [1, 5, 2], "next": null}, "2": {"id": 2, "leaf": true, "keys": [10, 12, 17], "children": [], "next": 4}, "5": {"id": 5, "leaf": true, "keys": [6, 7], "children": [], "next": 2}, "1": {"id": 1, "leaf": true, "keys": [2, 3, 5], "children": [], "next": 5}}}}, {"key": 18, "path": [8, 3, 2], "type": "insert-descend", "snapshot": {"rootId": 8, "nodes": {"8": {"id": 8, "leaf": false, "keys": [20], "children": [3, 7], "next": null}, "7": {"id": 7, "leaf": false, "keys": [27], "children": [4, 6], "next": null}, "6": {"id": 6, "leaf": true, "keys": [27, 30, 40], "children": [], "next": null}, "4": {"id": 4, "leaf": true, "keys": [20, 25], "children": [], "next": 6}, "3": {"id": 3, "leaf": false, "keys": [6, 10], "children": [1, 5, 2], "next": null}, "2": {"id": 2, "leaf": true, "keys": [10, 12, 17], "children": [], "next": 4}, "5": {"id": 5, "leaf": true, "keys": [6, 7], "children": [], "next": 2}, "1": {"id": 1, "leaf": true, "keys": [2, 3, 5], "children": [], "next": 5}}}}, {"key": 18, "nodeId": 2, "type": "insert-place", "snapshot": {"rootId": 8, "nodes": {"8": {"id": 8, "leaf": false, "keys": [20], "children": [3, 7], "next": null}, "7": {"id": 7, "leaf": false, "keys": [27], "children": [4, 6], "next": null}, "6": {"id": 6, "leaf": true, "keys": [27, 30, 40], "children": [], "next": null}, "4": {"id": 4, "leaf": true, "keys": [20, 25], "children": [], "next": 6}, "3": {"id": 3, "leaf": false, "keys": [6, 10], "children": [1, 5, 2], "next": null}, "2": {"id": 2, "leaf": true, "keys": [10, 12, 17, 18], "children": [], "next": 4}, "5": {"id": 5, "leaf": true, "keys": [6, 7], "children": [], "next": 2}, "1": {"id": 1, "leaf": true, "keys": [2, 3, 5], "children": [], "next": 5}}}}, {"leftId": 2, "rightId": 9, "sepKey": 17, "leftKeys": [10, 12], "rightKeys": [17, 18], "type": "split-leaf", "snapshot": {"rootId": 8, "nodes": {"8": {"id": 8, "leaf": false, "keys": [20], "children": [3, 7], "next": null}, "7": {"id": 7, "leaf": false, "keys": [27], "children": [4, 6], "next": null}, "6": {"id": 6, "leaf": true, "keys": [27, 30, 40], "children": [], "next": null}, "4": {"id": 4, "leaf": true, "keys": [20, 25], "children": [], "next": 6}, "3": {"id": 3, "leaf": false, "keys": [6, 10], "children": [1, 5, 2], "next": null}, "2": {"id": 2, "leaf": true, "keys": [10, 12], "children": [], "next": 9}, "5": {"id": 5, "leaf": true, "keys": [6, 7], "children": [], "next": 2}, "1": {"id": 1, "leaf": true, "keys": [2, 3, 5], "children": [], "next": 5}}}}, {"parentId": 3, "sepKey": 17, "childId": 9, "type": "promote", "snapshot": {"rootId": 8, "nodes": {"8": {"id": 8, "leaf": false, "keys": [20], "children": [3, 7], "next": null}, "7": {"id": 7, "leaf": false, "keys": [27], "children": [4, 6], "next": null}, "6": {"id": 6, "leaf": true, "keys": [27, 30, 40], "children": [], "next": null}, "4": {"id": 4, "leaf": true, "keys": [20, 25], "children": [], "next": 6}, "3": {"id": 3, "leaf": false, "keys": [6, 10, 17], "children": [1, 5, 2, 9], "next": null}, "9": {"id": 9, "leaf": true, "keys": [17, 18], "children": [], "next": 4}, "2": {"id": 2, "leaf": true, "keys": [10, 12], "children": [], "next": 9}, "5": {"id": 5, "leaf": true, "keys": [6, 7], "children": [], "next": 2}, "1": {"id": 1, "leaf": true, "keys": [2, 3, 5], "children": [], "next": 5}}}}], "searchEvents": [{"nodeId": 8, "keys": [20], "key": 27, "chosenChildIdx": 1, "leaf": false, "type": "search-step", "snapshot": {"rootId": 8, "nodes": {"8": {"id": 8, "leaf": false, "keys": [20], "children": [3, 7], "next": null}, "7": {"id": 7, "leaf": false, "keys": [27], "children": [4, 6], "next": null}, "6": {"id": 6, "leaf": true, "keys": [27, 30, 40], "children": [], "next": null}, "4": {"id": 4, "leaf": true, "keys": [20, 25], "children": [], "next": 6}, "3": {"id": 3, "leaf": false, "keys": [6, 10, 17], "children": [1, 5, 2, 9], "next": null}, "9": {"id": 9, "leaf": true, "keys": [17, 18], "children": [], "next": 4}, "2": {"id": 2, "leaf": true, "keys": [10, 12], "children": [], "next": 9}, "5": {"id": 5, "leaf": true, "keys": [6, 7], "children": [], "next": 2}, "1": {"id": 1, "leaf": true, "keys": [2, 3, 5], "children": [], "next": 5}}}}, {"nodeId": 7, "keys": [27], "key": 27, "chosenChildIdx": 1, "leaf": false, "type": "search-step", "snapshot": {"rootId": 8, "nodes": {"8": {"id": 8, "leaf": false, "keys": [20], "children": [3, 7], "next": null}, "7": {"id": 7, "leaf": false, "keys": [27], "children": [4, 6], "next": null}, "6": {"id": 6, "leaf": true, "keys": [27, 30, 40], "children": [], "next": null}, "4": {"id": 4, "leaf": true, "keys": [20, 25], "children": [], "next": 6}, "3": {"id": 3, "leaf": false, "keys": [6, 10, 17], "children": [1, 5, 2, 9], "next": null}, "9": {"id": 9, "leaf": true, "keys": [17, 18], "children": [], "next": 4}, "2": {"id": 2, "leaf": true, "keys": [10, 12], "children": [], "next": 9}, "5": {"id": 5, "leaf": true, "keys": [6, 7], "children": [], "next": 2}, "1": {"id": 1, "leaf": true, "keys": [2, 3, 5], "children": [], "next": 5}}}}, {"nodeId": 6, "keys": [27, 30, 40], "key": 27, "chosenChildIdx": null, "leaf": true, "found": true, "type": "search-step", "snapshot": {"rootId": 8, "nodes": {"8": {"id": 8, "leaf": false, "keys": [20], "children": [3, 7], "next": null}, "7": {"id": 7, "leaf": false, "keys": [27], "children": [4, 6], "next": null}, "6": {"id": 6, "leaf": true, "keys": [27, 30, 40], "children": [], "next": null}, "4": {"id": 4, "leaf": true, "keys": [20, 25], "children": [], "next": 6}, "3": {"id": 3, "leaf": false, "keys": [6, 10, 17], "children": [1, 5, 2, 9], "next": null}, "9": {"id": 9, "leaf": true, "keys": [17, 18], "children": [], "next": 4}, "2": {"id": 2, "leaf": true, "keys": [10, 12], "children": [], "next": 9}, "5": {"id": 5, "leaf": true, "keys": [6, 7], "children": [], "next": 2}, "1": {"id": 1, "leaf": true, "keys": [2, 3, 5], "children": [], "next": 5}}}}, {"nodeId": 8, "keys": [20], "key": 26, "chosenChildIdx": 1, "leaf": false, "type": "search-step", "snapshot": {"rootId": 8, "nodes": {"8": {"id": 8, "leaf": false, "keys": [20], "children": [3, 7], "next": null}, "7": {"id": 7, "leaf": false, "keys": [27], "children": [4, 6], "next": null}, "6": {"id": 6, "leaf": true, "keys": [27, 30, 40], "children": [], "next": null}, "4": {"id": 4, "leaf": true, "keys": [20, 25], "children": [], "next": 6}, "3": {"id": 3, "leaf": false, "keys": [6, 10, 17], "children": [1, 5, 2, 9], "next": null}, "9": {"id": 9, "leaf": true, "keys": [17, 18], "children": [], "next": 4}, "2": {"id": 2, "leaf": true, "keys": [10, 12], "children": [], "next": 9}, "5": {"id": 5, "leaf": true, "keys": [6, 7], "children": [], "next": 2}, "1": {"id": 1, "leaf": true, "keys": [2, 3, 5], "children": [], "next": 5}}}}, {"nodeId": 7, "keys": [27], "key": 26, "chosenChildIdx": 0, "leaf": false, "type": "search-step", "snapshot": {"rootId": 8, "nodes": {"8": {"id": 8, "leaf": false, "keys": [20], "children": [3, 7], "next": null}, "7": {"id": 7, "leaf": false, "keys": [27], "children": [4, 6], "next": null}, "6": {"id": 6, "leaf": true, "keys": [27, 30, 40], "children": [], "next": null}, "4": {"id": 4, "leaf": true, "keys": [20, 25], "children": [], "next": 6}, "3": {"id": 3, "leaf": false, "keys": [6, 10, 17], "children": [1, 5, 2, 9], "next": null}, "9": {"id": 9, "leaf": true, "keys": [17, 18], "children": [], "next": 4}, "2": {"id": 2, "leaf": true, "keys": [10, 12], "children": [], "next": 9}, "5": {"id": 5, "leaf": true, "keys": [6, 7], "children": [], "next": 2}, "1": {"id": 1, "leaf": true, "keys": [2, 3, 5], "children": [], "next": 5}}}}, {"nodeId": 4, "keys": [20, 25], "key": 26, "chosenChildIdx": null, "leaf": true, "found": false, "type": "search-step", "snapshot": {"rootId": 8, "nodes": {"8": {"id": 8, "leaf": false, "keys": [20], "children": [3, 7], "next": null}, "7": {"id": 7, "leaf": false, "keys": [27], "children": [4, 6], "next": null}, "6": {"id": 6, "leaf": true, "keys": [27, 30, 40], "children": [], "next": null}, "4": {"id": 4, "leaf": true, "keys": [20, 25], "children": [], "next": 6}, "3": {"id": 3, "leaf": false, "keys": [6, 10, 17], "children": [1, 5, 2, 9], "next": null}, "9": {"id": 9, "leaf": true, "keys": [17, 18], "children": [], "next": 4}, "2": {"id": 2, "leaf": true, "keys": [10, 12], "children": [], "next": 9}, "5": {"id": 5, "leaf": true, "keys": [6, 7], "children": [], "next": 2}, "1": {"id": 1, "leaf": true, "keys": [2, 3, 5], "children": [], "next": 5}}}}], "demoHitKey": 27, "demoMissKey": 26, "finalSnapshot": {"rootId": 8, "nodes": {"8": {"id": 8, "leaf": false, "keys": [20], "children": [3, 7], "next": null}, "7": {"id": 7, "leaf": false, "keys": [27], "children": [4, 6], "next": null}, "6": {"id": 6, "leaf": true, "keys": [27, 30, 40], "children": [], "next": null}, "4": {"id": 4, "leaf": true, "keys": [20, 25], "children": [], "next": 6}, "3": {"id": 3, "leaf": false, "keys": [6, 10, 17], "children": [1, 5, 2, 9], "next": null}, "9": {"id": 9, "leaf": true, "keys": [17, 18], "children": [], "next": 4}, "2": {"id": 2, "leaf": true, "keys": [10, 12], "children": [], "next": 9}, "5": {"id": 5, "leaf": true, "keys": [6, 7], "children": [], "next": 2}, "1": {"id": 1, "leaf": true, "keys": [2, 3, 5], "children": [], "next": 5}}}, "height": 3};
+
+function buildAdj(snapshot){
+  // compute a simple layered layout: BFS from root, group by depth
+  const nodes = snapshot.nodes;
+  const rootId = String(snapshot.rootId);
+  const depthOf = {};
+  const order = [];
+  const q = [[rootId,0]];
+  const seen = new Set();
+  while(q.length){
+    const [id,d] = q.shift();
+    if(seen.has(id)) continue;
+    seen.add(id);
+    depthOf[id]=d; order.push(id);
+    const n = nodes[id];
+    if(!n.leaf){ for(const c of n.children) q.push([String(c), d+1]); }
+  }
+  const byDepth = {};
+  for(const id of order){ (byDepth[depthOf[id]] = byDepth[depthOf[id]]||[]).push(id); }
+  return {depthOf, byDepth, maxDepth: Math.max(...Object.values(depthOf))};
+}
+
+function layoutPositions(snapshot, W, H){
+  const {byDepth, maxDepth} = buildAdj(snapshot);
+  const pos = {};
+  const rowH = H / (maxDepth+1);
+  for(let d=0; d<=maxDepth; d++){
+    const ids = byDepth[d] || [];
+    const colW = W / (ids.length+1);
+    ids.forEach((id,i)=>{
+      pos[id] = {x: colW*(i+1), y: rowH*d + rowH/2};
+    });
+  }
+  return pos;
+}
+
+function nodeWidth(n){ return Math.max(46, n.keys.length*26 + 20); }
+
+function renderTree(svg, snapshot, opts){
+  opts = opts || {};
+  const W=880,H=360;
+  const pos = layoutPositions(snapshot, W, H-20);
+  let html = '';
+  // links: parent -> child
+  for(const id in snapshot.nodes){
+    const n = snapshot.nodes[id];
+    if(!n.leaf){
+      n.children.forEach((cid,i)=>{
+        const p1=pos[id], p2=pos[String(cid)];
+        if(!p1||!p2) return;
+        const isPath = opts.pathEdges && opts.pathEdges.has(id+'->'+cid);
+        html += `<path class="tlink ${isPath?'path':''}" d="M${p1.x},${p1.y+18} C${p1.x},${(p1.y+p2.y)/2} ${p2.x},${(p1.y+p2.y)/2} ${p2.x},${p2.y-18}"/>`;
+      });
+    }
+  }
+  // leaf links (dashed chain)
+  for(const id in snapshot.nodes){
+    const n = snapshot.nodes[id];
+    if(n.leaf && n.next){
+      const p1=pos[id], p2=pos[String(n.next)];
+      if(p1&&p2){
+        html += `<path class="tlink leaf-link" d="M${p1.x+nodeWidth(n)/2+4},${p1.y} L${p2.x-nodeWidth(snapshot.nodes[String(n.next)])/2-4},${p2.y}"/>`;
+      }
+    }
+  }
+  // nodes
+  for(const id in snapshot.nodes){
+    const n = snapshot.nodes[id];
+    const p = pos[id];
+    if(!p) continue;
+    const w = nodeWidth(n);
+    let cls = 'tnode' + (n.leaf?' leaf':'');
+    if(opts.activeId===id) cls += ' active';
+    if(opts.visitedIds && opts.visitedIds.has(id)) cls += ' visited';
+    if(opts.foundId===id) cls += ' found';
+    if(opts.notfoundId===id) cls += ' notfound';
+    html += `<g>`;
+    html += `<rect class="${cls}" x="${p.x-w/2}" y="${p.y-18}" width="${w}" height="36" rx="8"></rect>`;
+    html += `<text class="tkey" x="${p.x}" y="${p.y+5}" text-anchor="middle">${n.keys.join(' | ')}</text>`;
+    html += `<text class="nodelabel" x="${p.x}" y="${p.y-24}" text-anchor="middle">${n.leaf?'leaf':'node'} #${id}</text>`;
+    html += `</g>`;
+  }
+  svg.innerHTML = html;
+}
+
+// ---------------- build demo ----------------
+(function(){
+  const events = DATA.buildEvents;
+  const svg = document.getElementById('buildSvg');
+  const narration = document.getElementById('buildNarration');
+  const counter = document.getElementById('buildCounter');
+  const slider = document.getElementById('buildSlider');
+  slider.max = events.length-1;
+  document.getElementById('buildSeqLabel').textContent = DATA.insertSeq.join(', ');
+  let idx = 0;
+  let playing = false, playTimer=null;
+
+  function describe(e){
+    switch(e.type){
+      case 'insert-descend': return `插入 <span class="k">${e.key}</span>:从根往下找应该插入哪个叶子。`;
+      case 'insert-place': return `把 <span class="k">${e.key}</span> 放进节点 #${e.nodeId},按顺序插入(保持叶子内有序)。`;
+      case 'split-leaf': return `节点 #${e.leftId} 装不下了(超过 3 个 key),从中间切开:左边留 [${e.leftKeys}],右边分出新叶子 #${e.rightId} [${e.rightKeys}]。分隔 key <span class="k">${e.sepKey}</span> 被<b>复制</b>一份提升到父节点。`;
+      case 'split-internal': return `内部节点 #${e.leftId} 也装不下了,从中间切开:左边 [${e.leftKeys}],右边新节点 #${e.rightId} [${e.rightKeys}]。中间 key <span class="k">${e.sepKey}</span> 被<b>移动</b>上去(不留副本)。`;
+      case 'new-root': return `树又长高一层——新的根节点 #${e.rootId} 诞生,只有一个分隔 key <span class="k">${e.sepKey}</span>。`;
+      case 'promote': return `分隔 key <span class="k">${e.sepKey}</span> 被插入父节点 #${e.parentId},同时挂上新的子指针(节点 #${e.childId})。`;
+      default: return e.type;
+    }
+  }
+
+  function render(){
+    idx = Math.max(0, Math.min(events.length-1, idx));
+    slider.value = idx;
+    const e = events[idx];
+    narration.innerHTML = describe(e);
+    renderTree(svg, e.snapshot, {activeId: String(e.nodeId||e.leftId||e.rootId||e.parentId||'')});
+    counter.textContent = `${idx+1} / ${events.length}`;
+    document.getElementById('buildPrev').disabled = idx===0;
+    document.getElementById('buildNext').disabled = idx===events.length-1;
+  }
+  document.getElementById('buildPrev').onclick=()=>{idx--;render();stopPlay();};
+  document.getElementById('buildNext').onclick=()=>{idx++;render();stopPlay();};
+  document.getElementById('buildReset').onclick=()=>{idx=0;render();stopPlay();};
+  slider.oninput=()=>{idx=+slider.value;render();stopPlay();};
+  function stopPlay(){ playing=false; clearInterval(playTimer); document.getElementById('buildPlay').textContent='▶ 自动播放'; }
+  document.getElementById('buildPlay').onclick=()=>{
+    if(playing){ stopPlay(); return; }
+    playing = true;
+    document.getElementById('buildPlay').textContent = '⏸ 暂停';
+    playTimer = setInterval(()=>{
+      if(idx>=events.length-1){ stopPlay(); return; }
+      idx++; render();
+    }, 900);
+  };
+  render();
+})();
+
+// ---------------- search demo ----------------
+(function(){
+  const svg = document.getElementById('searchSvg');
+  const narration = document.getElementById('searchNarration');
+  const counter = document.getElementById('searchCounter');
+  const finalSnapshot = DATA.finalSnapshot;
+  let events = DATA.searchEvents.slice(0,3);
+  let idx = 0;
+
+  function describe(e, i){
+    const visited = new Set(events.slice(0,i+1).map(ev=>String(ev.nodeId)));
+    if(e.leaf){
+      return e.found
+        ? `到达叶子节点 #${e.nodeId} [${e.keys}]:在其中找到了 <span class="k">${e.key}</span>。命中,查找结束。共访问 ${i+1} 个页面。`
+        : `到达叶子节点 #${e.nodeId} [${e.keys}]:遍历这一页,没有 <span class="k">${e.key}</span>。未命中,查找结束。仍然访问了 ${i+1} 个页面——树高决定了"最多走几步",不管找不找得到。`;
+    }
+    return `在节点 #${e.nodeId} [${e.keys}] 做二分查找:<span class="k">${e.key}</span> 应该落在第 ${e.chosenChildIdx+1} 个子指针指向的子树里,往下走。`;
+  }
+
+  function render(){
+    if(events.length===0){
+      narration.textContent = '点击上方按钮开始一次查找。';
+      renderTree(svg, finalSnapshot, {});
+      counter.textContent = '';
+      document.getElementById('searchPrev').disabled = true;
+      document.getElementById('searchNext').disabled = true;
+      return;
+    }
+    idx = Math.max(0, Math.min(events.length-1, idx));
+    const e = events[idx];
+    narration.innerHTML = describe(e, idx);
+    const visited = new Set(events.slice(0, idx+1).map(ev=>String(ev.nodeId)));
+    const pathEdges = new Set();
+    for(let i=0;i<idx;i++){
+      pathEdges.add(String(events[i].nodeId)+'->'+String(events[i+1].nodeId));
+    }
+    const opts = {activeId:String(e.nodeId), visitedIds:visited, pathEdges};
+    if(e.leaf && e.found) opts.foundId = String(e.nodeId);
+    if(e.leaf && !e.found) opts.notfoundId = String(e.nodeId);
+    renderTree(svg, finalSnapshot, opts);
+    counter.textContent = `${idx+1} / ${events.length}`;
+    document.getElementById('searchPrev').disabled = idx===0;
+    document.getElementById('searchNext').disabled = idx===events.length-1;
+  }
+  document.getElementById('searchPrev').onclick=()=>{idx--;render();};
+  document.getElementById('searchNext').onclick=()=>{idx++;render();};
+  document.getElementById('searchReset').onclick=()=>{idx=0;render();};
+  const hitBtn = document.getElementById('searchHitBtn');
+  const missBtn = document.getElementById('searchMissBtn');
+  hitBtn.onclick=()=>{ events = DATA.searchEvents.slice(0,3); idx=0; render(); hitBtn.classList.add('primary'); missBtn.classList.remove('primary'); };
+  missBtn.onclick=()=>{ events = DATA.searchEvents.slice(3,6); idx=0; render(); missBtn.classList.add('primary'); hitBtn.classList.remove('primary'); };
+  render();
+})();
+</script>
+
+</body>
+</html>

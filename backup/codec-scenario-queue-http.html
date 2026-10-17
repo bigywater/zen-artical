@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>场景二:Redis 里的任务体与页面缓存,小对象怎么压</title>
+<meta name="description" content="在独立的 redis-server 上测队列里的任务体:10 万个 376 字节的任务,JSON 每任务占 392.9 字节、Protobuf 265.8、JSON + zstd 字典 52.8;入队出队吞吐不降;50 个任务打包成一个元素每任务只占 36.1 字节;页面缓存用 zstd 字典从 68.7 MiB 降到 14.9 MiB。">
+<link rel="canonical" href="https://bigywater.tech/codec-scenario-queue-http.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="场景二:Redis 里的任务体与页面缓存,小对象怎么压">
+<meta property="og:description" content="在独立的 redis-server 上测队列里的任务体:10 万个 376 字节的任务,JSON 每任务占 392.9 字节、Protobuf 265.8、JSON + zstd 字典 52.8;入队出队吞吐不降;50 个任务打包成一个元素每任务只占 36.1 字节;页面缓存用 zstd 字典从 68.7 MiB 降到 14.9 MiB。">
+<meta property="og:url" content="https://bigywater.tech/codec-scenario-queue-http.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="场景二:Redis 里的任务体与页面缓存,小对象怎么压">
+<meta name="twitter:description" content="在独立的 redis-server 上测队列里的任务体:10 万个 376 字节的任务,JSON 每任务占 392.9 字节、Protobuf 265.8、JSON + zstd 字典 52.8;入队出队吞吐不降;50 个任务打包成一个元素每任务只占 36.1 字节;页面缓存用 zstd 字典从 68.7 MiB 降到 14.9 MiB。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">2535</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">70</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">97</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">56</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">78</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">114</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">111</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">88</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#A8561A; --series-c-soft:#F6E3D2;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#E39A5E; --series-c-soft:#33200F;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#E39A5E; --series-c-soft:#33200F;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>数据编码与压缩 · 22</div>
+  <h1>场景二:Redis 里的任务体与页面缓存,小对象怎么压</h1>
+  <p>爬虫的任务队列和页面缓存都放在 Redis 里,内存是钱。任务体该用什么格式,压不压缩,打包多大,缓存的页面要不要压缩?这篇在本机独立的 Redis 上逐项量内存、吞吐和网络流量。</p>
+  <div class="hero-fact">
+<div><div class="num">392.9 对 52.8 字节</div><div class="lbl">队列里一个任务占的 Redis 内存:JSON 与 JSON + zstd-3 + 字典</div></div><div><div class="num">68.7 对 14.9 MiB</div><div class="lbl">缓存 5000 个页面:原样存放与 zstd-3 + 字典</div></div><div><div class="num">265.8 对 36.1 字节</div><div class="lbl">一个任务占的内存:每元素 1 个任务与每元素 50 个任务(整体 zstd-3)</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="codec-scenario-storage.html">场景一:爬虫结果落盘,JSON Lines 加 zstd 对比 sqlite BLOB</a></div>
+<section>
+  <h2>任务体</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  任务数 100000;紧凑 JSON 平均 376 字节</pre></div>
+  <p>任务里很多内容是每个任务都相同的(UA、语言、referrer)。直接把常量字段拿出任务体,JSON 就从 392.9 降到 183.1 字节/任务;换 Protobuf 是 265.8;JSON 加 zstd 字典是 52.8。字典能把这些重复统统吃掉。</p>
+</section>
+<section>
+  <h2>吞吐</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  编码                                 平均载荷   Redis 内存增量     每任务内存  其中 Redis 自身开销      网络入流量
+  JSON                              376.1       37.5MiB    392.9B         16.8B     38.7MiB
+  JSON(常量字段不进任务体)                   176.1       17.5MiB    183.1B          7.1B     19.7MiB
+  MessagePack                       332.1       32.7MiB    343.3B         11.3B     34.5MiB
+  Protobuf                          258.3       25.4MiB    265.8B          7.5B     27.5MiB
+  pickle(只在可信环境用)                   389.1       39.3MiB    412.0B         22.9B     40.0MiB
+  JSON + zstd-3                     258.2       25.4MiB    265.8B          7.6B     27.5MiB
+  JSON + zstd-3 + 字典                 50.3        5.0MiB     52.8B          2.6B      7.6MiB
+  Protobuf + zstd-3 + 字典             51.2        5.1MiB     53.8B          2.6B      7.7MiB
+  JSON + lz4                        326.3       32.7MiB    343.3B         17.0B     34.0MiB</pre></div>
+  <p>MessagePack 和 Protobuf 的编码解码比 JSON 快;压缩加字典的 JSON 入队 128789 个/秒,和纯 JSON(138308)接近。在 Python 里瓶颈是编码解码和 Redis 往返,不是压缩本身。</p>
+</section>
+<section>
+  <h2>打包</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  JSON                           入队   138308 个/秒;出队 + 解码   153853 个/秒
+  MessagePack                    入队   214950 个/秒;出队 + 解码   199171 个/秒
+  Protobuf                       入队   178133 个/秒;出队 + 解码   238389 个/秒
+  pickle(只在可信环境用)                入队   195311 个/秒;出队 + 解码   194645 个/秒
+  JSON + zstd-3                  入队    94576 个/秒;出队 + 解码   126820 个/秒
+  JSON + zstd-3 + 字典             入队   128789 个/秒;出队 + 解码   151041 个/秒
+  Protobuf + zstd-3 + 字典         入队   154402 个/秒;出队 + 解码   216982 个/秒
+  JSON + lz4                     入队   125481 个/秒;出队 + 解码   144472 个/秒</pre></div>
+  <p>把 N 个任务打包成一个元素再压缩,每任务内存随 N 增大迅速下降(1 个 265.8,10 个 63.4,50 个 36.1,200 个 31.0 字节)。但租约、重试、去重都以元素为粒度,崩溃时要重做整包(见第 66 篇)。</p>
+</section>
+<section>
+  <h2>缓存页面</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">      每元素任务数     元素数   Redis 内存增量     每任务内存
+           1  100000       25.4MiB    265.8B
+          10   10000        6.0MiB     63.4B
+          50    2000        3.4MiB     36.1B
+         200     500        3.0MiB     31.0B
+  (元素里装的任务越多,每个任务的内存越小,但一个 worker 取走一个元素就是取走 N 个任务,崩溃时要重新入队 N 个;租约、重试、去重都以元素为粒度)</pre></div>
+  <p>13 KiB 的页面原样存 68.7 MiB(5000 页),lz4 29.6 MiB,zstd-3 20.5 MiB,zstd-3 加字典 14.9 MiB;读取加解压的吞吐 lz4 最快,zstd 约 46000/秒,brotli q5 只有 24219/秒。缓存适合 zstd-3 或加字典,生成一次读很多次。</p>
+</section>
+<section>
+  <h2>Redis 自身开销</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  存储方式               平均值大小    Redis 内存增量         写入        读取 + 解压
+  原样                 13907        68.7MiB    41961/秒       59061/秒 (解压校验通过)
+  lz4                 5862        29.6MiB    73115/秒       73856/秒 (解压校验通过)
+  zstd-3              4013        20.5MiB    75343/秒       46750/秒 (解压校验通过)
+  zstd-3 + 字典         2903        14.9MiB    91079/秒       46016/秒 (解压校验通过)
+  brotli q5           3891        19.8MiB    83252/秒       24219/秒 (解压校验通过)</pre></div>
+  <p>同样 300 字节,列表元素额外占 16.9 字节,单独的 key 67.3,哈希 field 71.3。把小对象放进列表比单独的 key 省内存。</p>
+</section>
+<section>
+  <h2>什么时候别压</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  列表元素 RPUSH q           每个元素共占  316.9 字节(载荷 300 字节,额外  16.9 字节)
+  单独的 key SET k:i        每个元素共占  367.3 字节(载荷 300 字节,额外  67.3 字节)
+  哈希 field HSET h        每个元素共占  371.3 字节(载荷 300 字节,额外  71.3 字节)
+  集合成员 SADD s            每个元素共占  341.1 字节(载荷 300 字节,额外  41.1 字节)</pre></div>
+  <p>任务体已经很小(比如只有 url),压缩的收益有限,而每个任务加字典后要保证 worker 和队列里的字典 ID 一致,版本升级时队列里还有旧字典压的任务,要继续能解(见第 17 篇)。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">队列与缓存</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "b", "kind": "bars", "label": "数字对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "一个爬虫任务体(url、深度、父页面、重试次数、UA、语言、meta、入队时间……):10 万个任务,紧凑 JSON 平均 376 字节。样例:{\"url\":\"https://shop.example.com/category/17/item/2035219?ref=list&page=1\",\"depth\":4,\"parent\":\"https://shop.example.com/category/57/\",\"retry\":0,\"ua\":\"MyCrawler/1.0 (+https://example.org/bot.html; ops@example.org)\",\"accept_language\":\"zh-CN,zh;q=0.9,en;q=0.8\",\"meta\":{…},…}。任务里有一大半是每个任务都相同的内容(UA、语言、referrer),这是后面所有压缩、去重手法都能利用的。", "s": {"t": {"lines": ["  任务数 100000;紧凑 JSON 平均 376 字节"], "cur": [], "mark": [], "done": []}, "done": [0], "b": {"items": [["任务体 JSON 字节", 376, "376"], ["去掉常量字段后", 176, "176"]], "max": 380, "cur": [], "mark": [], "done": [1]}, "kv": {"items": [["任务数", "10 万"], ["JSON 平均", "376 字节"], ["其中", "大半是每个任务都相同的常量字段"]], "hl": ["其中"]}}}, {"note": "10 万个任务 RPUSH 进 Redis 列表(pipeline 每批 500)后实际多用的内存(每任务)和网络入流量:JSON 平均载荷 376.1 字节,Redis 多用 37.5 MiB(每任务 392.9 字节,其中 Redis 自身开销 16.8 字节),网络入流量 38.7 MiB;常量字段不进任务体的 JSON 176.1 字节、17.5 MiB(183.1 字节);MessagePack 332.1、32.7 MiB(343.3);Protobuf 258.3、25.4 MiB(265.8);pickle 389.1、39.3 MiB(412.0,只在可信环境使用);JSON + zstd-3 258.2、25.4 MiB(265.8);JSON + zstd-3 + 字典 50.3 字节、5.0 MiB(52.8),网络入流量 7.6 MiB;Protobuf + zstd-3 + 字典 51.2、5.1 MiB(53.8);JSON + lz4 326.3、32.7 MiB。字典把每个任务从 392.9 字节降到 52.8 字节(省 87%),比 Protobuf(265.8)小得多;把常量字段拿出任务体也省了 53%。", "s": {"t": {"lines": ["  编码                                 平均载荷   Redis 内存增量     每任务内存  其中 Redis 自身开销      网络入流量", "  JSON                              376.1       37.5MiB    392.9B         16.8B     38.7MiB", "  JSON(常量字段不进任务体)                   176.1       17.5MiB    183.1B          7.1B     19.7MiB", "  MessagePack                       332.1       32.7MiB    343.3B         11.3B     34.5MiB", "  Protobuf                          258.3       25.4MiB    265.8B          7.5B     27.5MiB", "  pickle(只在可信环境用)                   389.1       39.3MiB    412.0B         22.9B     40.0MiB", "  JSON + zstd-3                     258.2       25.4MiB    265.8B          7.6B     27.5MiB", "  JSON + zstd-3 + 字典                 50.3        5.0MiB     52.8B          2.6B      7.6MiB", "  Protobuf + zstd-3 + 字典             51.2        5.1MiB     53.8B          2.6B      7.7MiB", "  JSON + lz4                        326.3       32.7MiB    343.3B         17.0B     34.0MiB"], "cur": [], "mark": [], "done": []}, "done": [7], "mark": [1], "b": {"items": [["JSON 每任务内存 B", 392.9, "392.9"], ["Protobuf", 265.8, "265.8"], ["JSON 常量字段不进任务体", 183.1, "183.1"], ["JSON + zstd-3 + 字典", 52.8, "52.8"]], "max": 400, "cur": [], "mark": [0], "done": [3]}, "kv": {"items": [["JSON", "392.9 字节/任务,共 37.5 MiB"], ["Protobuf", "265.8 字节/任务"], ["JSON + zstd + 字典", "52.8 字节/任务,共 5.0 MiB"]], "hl": ["JSON + zstd + 字典"]}}}, {"note": "入队再出队的吞吐(10 万个任务 RPUSH 后 LPOP,单线程,pipeline 每批 500,含编码压缩与解码的 CPU,3 次取中间):JSON 入队 138308 个/秒、出队加解码 153853 个/秒;MessagePack 214950 / 199171;Protobuf 178133 / 238389;pickle 195311 / 194645;JSON + zstd-3 94576 / 126820;JSON + zstd-3 + 字典 128789 / 151041;Protobuf + zstd-3 + 字典 154402 / 216982;JSON + lz4 125481 / 144472。加了字典的压缩吞吐不比纯 JSON 差多少(128789 对 138308),比无字典 zstd-3(94576)还快;瓶颈主要在 Python 的编码解码和 Redis 往返,不在压缩。", "s": {"t": {"lines": ["  JSON                           入队   138308 个/秒;出队 + 解码   153853 个/秒", "  MessagePack                    入队   214950 个/秒;出队 + 解码   199171 个/秒", "  Protobuf                       入队   178133 个/秒;出队 + 解码   238389 个/秒", "  pickle(只在可信环境用)                入队   195311 个/秒;出队 + 解码   194645 个/秒", "  JSON + zstd-3                  入队    94576 个/秒;出队 + 解码   126820 个/秒", "  JSON + zstd-3 + 字典             入队   128789 个/秒;出队 + 解码   151041 个/秒", "  Protobuf + zstd-3 + 字典         入队   154402 个/秒;出队 + 解码   216982 个/秒", "  JSON + lz4                     入队   125481 个/秒;出队 + 解码   144472 个/秒"], "cur": [], "mark": [], "done": []}, "done": [5], "mark": [4], "b": {"items": [["JSON 入队 /秒(千)", 138.3, "138.3"], ["MessagePack 入队", 215.0, "215.0"], ["JSON + zstd-3 入队", 94.6, "94.6"], ["JSON + zstd-3 + 字典 入队", 128.8, "128.8"]], "max": 220, "cur": [], "mark": [2], "done": [3]}, "kv": {"items": [["JSON", "入队 138308,出队 153853 个/秒"], ["JSON + zstd-3 + 字典", "入队 128789,出队 151041 个/秒"], ["Protobuf", "入队 178133,出队 238389 个/秒"]], "hl": ["JSON + zstd-3 + 字典"]}}}, {"note": "把多个任务打包成一个 Redis 元素(整体 zstd-3):每元素 1 个任务,10 万个元素,Redis 内存 25.4 MiB(每任务 265.8 字节);10 个任务,1 万个元素,6.0 MiB(63.4 字节);50 个,2000 个元素,3.4 MiB(36.1);200 个,500 个元素,3.0 MiB(31.0)。元素里装的任务越多,每个任务占的内存越小——200 个一包只有 31.0 字节/任务;但第 66 篇的租约、重试、去重都以元素为粒度,一个 worker 取走一个元素就是取走 N 个任务,崩溃时要重新入队 N 个。", "s": {"t": {"lines": ["      每元素任务数     元素数   Redis 内存增量     每任务内存", "           1  100000       25.4MiB    265.8B", "          10   10000        6.0MiB     63.4B", "          50    2000        3.4MiB     36.1B", "         200     500        3.0MiB     31.0B", "  (元素里装的任务越多,每个任务的内存越小,但一个 worker 取走一个元素就是取走 N 个任务,崩溃时要重新入队 N 个;租约、重试、去重都以元素为粒度)"], "cur": [], "mark": [], "done": []}, "done": [3], "mark": [1], "b": {"items": [["每元素 1 个任务 B/任务", 265.8, "265.8"], ["10 个", 63.4, "63.4"], ["50 个", 36.1, "36.1"], ["200 个", 31.0, "31.0"]], "max": 270, "cur": [], "mark": [0], "done": [3]}, "kv": {"items": [["每元素 1 个", "265.8 字节/任务"], ["每元素 50 个", "36.1 字节/任务"], ["代价", "租约和重试以元素为单位,崩溃要重做 N 个"]], "hl": ["代价"]}}}, {"note": "把页面缓存在 Redis 里(5000 页,每页约 13 KiB HTML):原样存放 平均 13907 字节,Redis 多用 68.7 MiB,写入 41961 个/秒,读取加解压 59061 个/秒;lz4 5862 字节、29.6 MiB、73115 / 73856;zstd-3 4013 字节、20.5 MiB、75343 / 46750;zstd-3 加 64 KiB 字典 2903 字节、14.9 MiB、91079 / 46016;brotli q5 3891 字节、19.8 MiB、83252 / 24219。都通过解压校验。内存从 68.7 MiB 降到 14.9 MiB(省 78%),读取吞吐没有明显下降(59061 对 46016);lz4 读取最快(73856),brotli 读取最慢(24219)。", "s": {"t": {"lines": ["  存储方式               平均值大小    Redis 内存增量         写入        读取 + 解压", "  原样                 13907        68.7MiB    41961/秒       59061/秒 (解压校验通过)", "  lz4                 5862        29.6MiB    73115/秒       73856/秒 (解压校验通过)", "  zstd-3              4013        20.5MiB    75343/秒       46750/秒 (解压校验通过)", "  zstd-3 + 字典         2903        14.9MiB    91079/秒       46016/秒 (解压校验通过)", "  brotli q5           3891        19.8MiB    83252/秒       24219/秒 (解压校验通过)"], "cur": [], "mark": [], "done": []}, "done": [4], "mark": [1], "b": {"items": [["原样 内存 MiB", 68.7, "68.7"], ["lz4", 29.6, "29.6"], ["zstd-3", 20.5, "20.5"], ["zstd-3 + 字典", 14.9, "14.9"]], "max": 70, "cur": [], "mark": [0], "done": [3]}, "kv": {"items": [["原样", "68.7 MiB,读取 59061/秒"], ["zstd-3 + 字典", "14.9 MiB,读取 46016/秒"], ["brotli q5", "19.8 MiB,读取只有 24219/秒"]], "hl": ["zstd-3 + 字典"]}}}, {"note": "Redis 里每个元素自己的开销(10 万个,载荷 300 字节):列表元素 RPUSH 每个共占 316.9 字节(额外 16.9 字节);单独的 key SET 367.3(额外 67.3);哈希 field HSET 371.3(额外 71.3);集合成员 SADD 341.1(额外 41.1)。同样的载荷放进列表比放进单独的 key 每个省 50 字节;载荷越小,这部分额外开销占的比例越大——所以小任务的压缩要看的是“载荷加开销”,不只是载荷。", "s": {"t": {"lines": ["  列表元素 RPUSH q           每个元素共占  316.9 字节(载荷 300 字节,额外  16.9 字节)", "  单独的 key SET k:i        每个元素共占  367.3 字节(载荷 300 字节,额外  67.3 字节)", "  哈希 field HSET h        每个元素共占  371.3 字节(载荷 300 字节,额外  71.3 字节)", "  集合成员 SADD s            每个元素共占  341.1 字节(载荷 300 字节,额外  41.1 字节)"], "cur": [], "mark": [], "done": []}, "done": [0], "mark": [2], "b": {"items": [["列表元素 额外字节", 16.9, "16.9"], ["集合成员", 41.1, "41.1"], ["单独 key", 67.3, "67.3"], ["哈希 field", 71.3, "71.3"]], "max": 75, "cur": [], "mark": [2, 3], "done": [0]}, "kv": {"items": [["列表元素", "额外 16.9 字节"], ["单独的 key", "额外 67.3 字节"], ["哈希 field", "额外 71.3 字节"]], "hl": ["列表元素"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / Python 3.14.8(系统 Python,自带 compression.zstd)/ zstandard 0.25.0 / lz4 4.4.5 / zstd、lz4、brotli、protoc 命令行(Homebrew);msgpack、protobuf、snappy 等第三方库临时装在临时目录里,用完删除;所有数据都是本机脚本生成的合成数据(固定随机种子),没有使用任何真实网站或用户的数据;计时用 time.perf_counter,取多次中位数,数字每次运行会有小幅抖动。redis-server 8.10.2 独立实例(只监听 127.0.0.1 的 9700 以上端口,关闭持久化,实验后关闭;没有碰本机已有的 Redis)、redis-py 8.0.1;任务体由固定种子合成(UA、语言、referrer 是常量,与真实爬虫的任务体相比重复度偏高,字典的收益是上界);Redis 内存用 INFO memory 的 used_memory 差值(包含分配开销);吞吐是 3 次取中间值,单线程 pipeline 每批 500;网络入流量用 INFO stats 的 total_net_input_bytes</li><li>没有验证:真实爬虫任务的重复度;列表以外的结构(sorted set 的优先队列、Streams)的内存开销;Redis 开启 AOF/RDB 持久化后的情况;复制到副本时的网络字节;大 value 对 Redis 单线程延迟的影响(第 67 篇看过大 key 的删除);客户端压缩与 Redis 模块(如 RedisJSON)的比较</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="codec-choosing.html">
+    <div>
+      <div class="t1">下一篇 · 数据编码与压缩 23</div>
+      <div class="t2">选型总结:一张决策表和每条结论的前提</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>数据编码与压缩 · 场景二:Redis 里的任务体与页面缓存,小对象怎么压 · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

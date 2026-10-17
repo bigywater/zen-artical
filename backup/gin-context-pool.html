@@ -1,0 +1,551 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>Gin Context 对象池:sync.Pool 怎么把每次请求的 Context 复用起来的</title>
+<meta name="description" content="本机真实 Go + gin-gonic/gin v1.12.0 程序验证 Context 在连续请求间真实复用同一块内存、GC 后可能被清空、reset() 真正隔离每次请求的数据、高并发下的安全性(-race 验证),并用真实基准测出禁止复用会多花约 2.2 倍内存,对照真实源码。">
+<link rel="canonical" href="https://bigywater.tech/gin-context-pool.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Gin Context 对象池:sync.Pool 怎么把每次请求的 Context 复用起来的">
+<meta property="og:description" content="本机真实 Go + gin-gonic/gin v1.12.0 程序验证 Context 在连续请求间真实复用同一块内存、GC 后可能被清空、reset() 真正隔离每次请求的数据、高并发下的安全性(-race 验证),并用真实基准测出禁止复用会多花约 2.2 倍内存,对照真实源码。">
+<meta property="og:url" content="https://bigywater.tech/gin-context-pool.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Gin Context 对象池:sync.Pool 怎么把每次请求的 Context 复用起来的">
+<meta name="twitter:description" content="本机真实 Go + gin-gonic/gin v1.12.0 程序验证 Context 在连续请求间真实复用同一块内存、GC 后可能被清空、reset() 真正隔离每次请求的数据、高并发下的安全性(-race 验证),并用真实基准测出禁止复用会多花约 2.2 倍内存,对照真实源码。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F5F8F9; --paper:#FFFFFF; --ink:#17232A; --ink-dim:#5C7078; --line:#DCE7EA;
+  --go-c:#C23B6B; --go-c-soft:#FBE3EC;
+  --warn-c:#C9762E; --warn-c-soft:#F7EADB;
+  --live-c:#2E8B57; --live-c-soft:#E1F2E7;
+  --code-bg:#0F1B20; --code-ink:#E6F2F4;
+  --shadow: 0 1px 2px rgba(10,30,35,.06), 0 8px 24px -12px rgba(10,30,35,.16);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0D1518; --paper:#151F23; --ink:#E6F2F4; --ink-dim:#9DB4BB; --line:#293C42;
+    --go-c:#E37398; --go-c-soft:#3A1826;
+    --warn-c:#E0A15C; --warn-c-soft:#3A2A16;
+    --live-c:#6FC996; --live-c-soft:#173327;
+    --code-bg:#0A1215; --code-ink:#E2F0F2;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0D1518; --paper:#151F23; --ink:#E6F2F4; --ink-dim:#9DB4BB; --line:#293C42;
+  --go-c:#E37398; --go-c-soft:#3A1826;
+  --warn-c:#E0A15C; --warn-c-soft:#3A2A16;
+  --live-c:#6FC996; --live-c-soft:#173327;
+  --code-bg:#0A1215; --code-ink:#E2F0F2;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--go-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--go-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--go-c);}
+h1{font-size:2.1rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--go-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#9DB4BB; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--go-c-soft); color:var(--go-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .ok{color:#7DD0A0;}
+.term pre.code{margin:0 0 10px; color:#8FE0D4; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem; display:flex; justify-content:space-between; align-items:center;}
+.demo-head .step-badge{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; color:var(--go-c); background:var(--go-c-soft); padding:3px 9px; border-radius:6px; font-weight:600;}
+.demo-narration{min-height:52px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-body{padding:20px;}
+.tree-row{display:grid; grid-template-columns:repeat(5,1fr); gap:8px; margin-bottom:16px;}
+@media (max-width:700px){.tree-row{grid-template-columns:repeat(2,1fr);}}
+.tree-box{border:1.5px solid var(--line); border-radius:10px; padding:10px; background:var(--bg); text-align:center; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.76rem;}
+.tree-box .nt{font-weight:700; margin-bottom:4px;}
+.tree-box[data-state="set"]{border-color:var(--go-c); background:var(--go-c-soft); color:var(--go-c); font-weight:700;}
+.tree-box[data-state="clear"]{border-color:var(--line); background:var(--bg);}
+.tree-box[data-state="win"]{border-color:var(--live-c); background:var(--live-c-soft); color:var(--live-c); font-weight:700;}
+.tree-box[data-state="drop"]{border-color:var(--line); background:var(--bg); opacity:.55; text-decoration:line-through;}
+.query-line{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.83rem; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px 14px; margin-bottom:16px; overflow-x:auto; white-space:pre;}
+.checks{display:flex; flex-direction:column; gap:8px; margin-bottom:16px;}
+.check{border:1.5px solid var(--line); border-radius:10px; padding:10px 14px; background:var(--bg); font-size:.85rem; display:flex; justify-content:space-between; align-items:center; gap:10px; transition:background .2s,border-color .2s;}
+.check .label{flex:1;}
+.check .verdict{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; font-weight:700; padding:2px 9px; border-radius:6px;}
+.check[data-verdict="pass"]{border-color:var(--go-c); background:var(--go-c-soft);}
+.check[data-verdict="pass"] .verdict{background:var(--go-c); color:#fff;}
+.check[data-verdict="fail"]{border-color:var(--warn-c); background:var(--warn-c-soft);}
+.check[data-verdict="fail"] .verdict{background:var(--warn-c); color:#fff;}
+.result-row{display:flex; align-items:center; gap:10px; margin-bottom:14px; flex-wrap:wrap;}
+.result-badge{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; font-weight:700; padding:6px 14px; border-radius:8px;}
+.result-badge.good{background:var(--go-c); color:#fff;}
+.result-badge.warn{background:var(--warn-c); color:#fff;}
+.evidence-line{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.78rem; color:var(--ink-dim); background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px 14px; white-space:pre-wrap; word-break:break-word;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--go-c); color:var(--go-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--go-c); border-color:var(--go-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--go-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Gin 框架内部原理 · 第三篇</div>
+    <h1>Gin Context 对象池:sync.Pool 怎么把每次请求的 Context 复用起来的</h1>
+    <p>每个 HTTP 请求都会拿到一个 <span class="mono">*gin.Context</span>,但 Gin 并不会为每个请求真的 <span class="mono">new</span> 一个——它维护一个 <span class="mono">sync.Pool</span>,请求进来时从池子里捞一个旧的出来擦干净重新用,请求结束再扔回去。这一篇不满足于"知道 Gin 用了对象池",而是真实观测了同一块内存被连续请求复用、被 GC 收走、以及在真正并发下也不会串数据这三件事,并且用一组对照基准测出了不复用到底多花多少内存。</p>
+    <p>延续前两篇的方法论:本机真实拉取 <span class="mono">gin-gonic/gin v1.12.0</span>,全部实验都是本机真实执行、真实测量的 Go 程序。</p>
+    <div class="hero-fact">
+      <div><div class="num">4 个真实 Go 程序</div><div class="lbl">本机真实 go run(其中一个用 -race 跑),外加一组真实 go test -bench</div></div>
+      <div><div class="num">gin-gonic/gin v1.12.0</div><div class="lbl">跟前两篇同一个版本,源码引用逐行核对</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <h2>真实源码:每个请求的入口就是 pool.Get() + reset() + pool.Put()</h2>
+  <blockquote class="src">
+    <span class="path">gin-gonic/gin@v1.12.0(本机 go.mod 解析版本) · gin.go L227, L662</span>
+engine.pool.New = func() any {
+    return engine.allocateContext(engine.maxParams)
+}
+
+func (engine *Engine) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+    c := engine.pool.Get().(*Context)
+    c.writermem.reset(w)
+    c.Request = req
+    c.reset()
+
+    engine.handleHTTPRequest(c)
+
+    engine.pool.Put(c)
+}
+  </blockquote>
+  <p><span class="mono">Engine</span> 结构体里有一个 <span class="mono">pool sync.Pool</span> 字段,<span class="mono">New</span> 函数在池子空的时候负责造一个新的 <span class="mono">*Context</span>(顺便预分配好 <span class="mono">Params</span>/<span class="mono">skippedNodes</span> 这些内部切片的容量)。每个请求进来,<span class="mono">ServeHTTP</span> 做的事情非常直白:从池子里 <span class="mono">Get()</span> 一个,换上这次请求的 <span class="mono">Request</span>/<span class="mono">Writer</span>,调用 <span class="mono">reset()</span> 把上一次请求留下的字段(<span class="mono">handlers</span>、<span class="mono">index</span>、<span class="mono">Keys</span>……上一篇提到过)全部清空,处理完请求之后再 <span class="mono">Put()</span> 回去。</p>
+</section>
+
+<section>
+  <h2>真实实验:连续请求真的复用同一块内存</h2>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">for i := 0; i &lt; 5; i++ {
+    r.ServeHTTP(w, req) // 每次都在 handler 里打印 fmt.Sprintf("%p", c)
+}</pre>
+<span class="ok">request 1: *Context = 0x4d88c732e300
+request 2: *Context = 0x4d88c732e300 (same as request 1)
+request 3: *Context = 0x4d88c732e300 (same as request 1)
+request 4: *Context = 0x4d88c732e300 (same as request 1)
+request 5: *Context = 0x4d88c732e300 (same as request 1)</span>
+  </div>
+  <p>5 次连续请求,打印出来的指针地址完全一样——不是"逻辑上等价的新对象",是真的同一块内存被反复拿出来又放回去。三次独立运行(见下面交互演示)地址虽然每次不同(ASLR),但每一轮内部 5 次请求的地址都严格相等。</p>
+</section>
+
+<section>
+  <h2>真实实验:强制 GC 之后,池子可能真的换了一个新对象</h2>
+  <p class="h2-sub"><span class="mono">sync.Pool</span> 的文档写得很清楚:池子里的对象可能在任意一次 GC 时被清空,不是永久缓存。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">runtime.GC()
+r.ServeHTTP(w, req)</pre>
+<span class="ok">after runtime.GC(), next request: *Context = 0x4d88c732e000
+(跟之前 5 次请求用的 0x4d88c732e300 不是同一个地址)</span>
+  </div>
+  <p>手动触发一次 <span class="mono">runtime.GC()</span> 之后,下一次请求拿到的地址真的变了。这也解释了为什么 <span class="mono">sync.Pool</span> 适合"减少分配频率"而不能当成"绝对不会分配"的保证——GC 一来,池子可能被清空,下一个请求还是得走一次真正的分配。</p>
+</section>
+
+<section>
+  <h2>真实实验:复用同一块内存,但 reset() 真的把上一次的数据擦干净了</h2>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">r.GET("/set", func(c *gin.Context) { c.Set("secret", "request-1-value") })
+r.GET("/check", func(c *gin.Context) { v, ok := c.Get("secret"); ... })
+
+fire("/set")
+fire("/check")</pre>
+<span class="ok">/set   : *Context=0x613e8dd4300, 'secret' already present before Set? false
+/check : *Context=0x613e8dd4300, 'secret' present? false (value=&lt;nil&gt;)</span>
+  </div>
+  <p>两次请求用的是完全相同的 <span class="mono">*Context</span> 地址,但第二次请求完全读不到第一次设置的 <span class="mono">secret</span>——<span class="mono">reset()</span> 里的 <span class="mono">c.Keys = nil</span> 真的生效了。复用内存和数据隔离这两件事在这里是分开保证的:内存复用靠 <span class="mono">sync.Pool</span>,数据隔离靠 <span class="mono">reset()</span> 每次把所有会暴露给业务代码的字段清空。</p>
+</section>
+
+<section>
+  <h2>真实实验:高并发下也不会有两个请求抢到同一个正在用的 Context</h2>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">// 500 个 goroutine 完全并发地各打一个请求,每个请求:
+// c.Set("id", 自己的id); time.Sleep(1ms); 检查读回来的还是不是自己的id
+// go run -race</pre>
+<span class="ok">500 fully concurrent requests, each planting+checking its own unique id: 0 mismatches
+(-race: 未检测到任何 data race)</span>
+  </div>
+  <p>500 个真正并发的请求,中间故意插了 1 毫秒的 <span class="mono">time.Sleep</span> 放大"如果池子出错会撞车"的窗口,结果 0 次串数据,<span class="mono">-race</span> 也没有报警。<span class="mono">sync.Pool.Get()</span> 保证同一个对象不会被同时借给两个调用者,所以即使内部复用同一批 <span class="mono">*Context</span>,不同请求之间也不会互相看到对方的数据。</p>
+</section>
+
+<section>
+  <h2>真实实验:不让池子复用,到底多花多少内存</h2>
+  <p class="h2-sub">同一个 <span class="mono">Engine</span>、同一张路由表,唯一的区别是:一组正常跑,另一组在每次请求前先 <span class="mono">runtime.GC()</span> 清空池子(上面已经验证过这招真的有效),强迫每次都走一遍真正的分配。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">func BenchmarkWithPool(b *testing.B) {
+    for i := 0; i &lt; b.N; i++ { r.ServeHTTP(w, req) }
+}
+func BenchmarkWithoutPoolReuse(b *testing.B) {
+    for i := 0; i &lt; b.N; i++ { runtime.GC(); r.ServeHTTP(w, req) }
+}
+// go test -bench=. -benchmem</pre>
+<span class="ok">BenchmarkWithPool-10             1001 ns/op    1377 B/op   11 allocs/op
+BenchmarkWithoutPoolReuse-10   201032 ns/op    3066 B/op   16 allocs/op
+
+(第二次独立运行: 982 ns/op 1376 B/op 11 allocs/op  vs  202533 ns/op 3066 B/op 16 allocs/op)</span>
+  </div>
+  <p><span class="mono">ns/op</span> 这一列不能直接比较——"不复用"那组里每次强制触发的 <span class="mono">runtime.GC()</span> 本身开销就远超一次请求处理,把耗时数字完全带偏了。真正能说明问题的是 <span class="mono">B/op</span> 和 <span class="mono">allocs/op</span>:两次独立运行都稳定显示,拒绝复用会让每次请求多分配约 2.2 倍的内存、多出 5 次堆分配。这才是 <span class="mono">sync.Pool</span> 真正要解决的问题——不是让单次请求"跑得更快",是减少 GC 需要追踪和回收的对象数量。</p>
+</section>
+
+<section>
+  <h2>交互演示:对象池复用、GC 清空、隔离性、并发安全的真实数据回放</h2>
+  <p class="h2-sub">把上面几组真实实验按发生顺序串成一条演示。</p>
+  <div class="demo" id="ginpoolDemo">
+    <div class="demo-head"><span>Gin Context 池实录</span><span class="step-badge" id="gpStep">未开始</span></div>
+    <div class="demo-narration" id="gpNarration">点击"下一步"或"播放"开始。</div>
+    <div class="demo-body">
+      <div class="query-line" id="gpQuery">—</div>
+      <div class="tree-row" id="gpTree"></div>
+      <div class="checks" id="gpChecks"></div>
+      <div class="result-row">
+        <span class="result-badge" id="gpResultBadge">—</span>
+      </div>
+      <div class="evidence-line" id="gpEvidence"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="gpReset">⏮ 重来</button>
+      <button class="btn" id="gpPrev">‹ 上一步</button>
+      <button class="btn primary" id="gpNext">下一步 ›</button>
+      <button class="btn" id="gpPlay">▶ 自动播放</button>
+      <span class="step-counter" id="gpCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">全部数据来自本机真实 <span class="mono">go run</span>/<span class="mono">go test -bench</span> 的输出(<span class="mono">pool_reuse.go</span>、<span class="mono">isolation.go</span>、<span class="mono">concurrent_isolation.go</span>、<span class="mono">pool_bench_test.go</span>),Python 脚本逐项核对了 3 次独立运行的地址复用/GC 清空模式、并发隔离结果,以及两次独立基准测试的内存分配比例。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文源码引用(<span class="mono">Engine.pool</span>、<span class="mono">allocateContext</span>、<span class="mono">ServeHTTP</span> 里的 <span class="mono">Get</span>/<span class="mono">reset</span>/<span class="mono">Put</span> 三步)均取自本机通过 <span class="mono">go get github.com/gin-gonic/gin</span> 真实拉取、由本机 <span class="mono">go.mod</span> 解析锁定的 <span class="mono">v1.12.0</span> 版本源码(<span class="mono">$GOMODCACHE/github.com/gin-gonic/gin@v1.12.0/gin.go</span>),跟前两篇是同一个版本。</li>
+      <li>全部实验(<span class="mono">pool_reuse.go</span>、<span class="mono">isolation.go</span>、<span class="mono">concurrent_isolation.go</span>、<span class="mono">pool_bench_test.go</span>)均为本机真实 <span class="mono">go run</span>/<span class="mono">go test -bench -benchmem</span> 产生的输出,未做删改;并发隔离那组额外用 <span class="mono">-race</span> 检测器跑过。</li>
+      <li>演示数据的自检:3 次独立运行的地址复用/GC 清空模式逐项核对过(5 次请求地址相同,GC 后地址必须不同);并发隔离的 0 mismatch 结果核对过;两次独立基准测试的 B/op 和 allocs/op 比例(约 2.2x 和 1.45x)相互印证,而且都明确指出 ns/op 在这个对照实验里不是公平的比较维度。</li>
+      <li>没有涉及:<span class="mono">Context.Copy()</span>(在 goroutine 里异步使用 Context 时必须调用的浅拷贝方法,专门用来避开池子复用带来的数据竞争)、<span class="mono">responseWriter</span> 自己的重置逻辑、<span class="mono">maxParams</span>/<span class="mono">maxSections</span> 是怎么随着路由注册动态增长的。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="gin-binding.html">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">Gin 参数绑定:ShouldBind 怎么根据 Content-Type 自动选择解析器,又是怎么用反射做校验的</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Gin 框架内部原理 · 第三篇 · Context 对象池 · 源码取自本机真实拉取的 gin-gonic/gin v1.12.0,实验数据来自本机真实 go run</footer>
+
+<script>
+const DATA = {"scenarios": [
+  {
+    "narration": "同一个 Engine 连续处理 5 次请求,每次都在 handler 里打印 c 的指针地址。",
+    "query_display": "for i:=0;i<5;i++ { r.ServeHTTP(w, req) }",
+    "tree": [
+      {"name":"请求1","state":"win"},{"name":"请求2","state":"win"},
+      {"name":"请求3","state":"win"},{"name":"请求4","state":"win"},
+      {"name":"请求5","state":"win"}
+    ],
+    "check_label": "5 次请求是否复用了完全相同的 *Context 内存地址?",
+    "verdict": "pass",
+    "result_badge": "全部复用同一地址",
+    "result_class": "good",
+    "evidence": "真实输出: 5 次全部是 0x4d88c732e300(3 次独立运行,每轮内部地址都严格相等)"
+  },
+  {
+    "narration": "手动触发一次 runtime.GC()。sync.Pool 的文档说池子里的对象可能在任意一次 GC 时被清空。",
+    "query_display": "runtime.GC(); r.ServeHTTP(w, req)",
+    "tree": [
+      {"name":"GC 前(请求1-5)","state":"win"},{"name":"GC 后(请求6)","state":"set"}
+    ],
+    "check_label": "GC 之后,下一次请求是否可能拿到一个全新地址(证明池子不是永久缓存)?",
+    "verdict": "pass",
+    "result_badge": "地址变了:0x...e000",
+    "result_class": "good",
+    "evidence": "真实输出: after runtime.GC(): 0x4d88c732e000(跟之前 5 次用的 0x4d88c732e300 不同)"
+  },
+  {
+    "narration": "/set 请求写入一个 Key,/check 请求读取同一个 Key——两次请求会复用同一块内存吗?第二次还能读到第一次的数据吗?",
+    "query_display": "fire(\"/set\"); fire(\"/check\")",
+    "tree": [
+      {"name":"/set(写入 secret)","state":"win"},{"name":"/check(同一个 *Context)","state":"set"}
+    ],
+    "check_label": "尽管复用了同一块内存,第二次请求还能读到第一次设置的 secret 吗?",
+    "verdict": "pass",
+    "result_badge": "读不到,reset() 真的清空了",
+    "result_class": "good",
+    "evidence": "真实输出: 两次地址都是 0x613e8dd4300,但 /check 里 'secret' present? false"
+  },
+  {
+    "narration": "500 个 goroutine 完全并发地各打一个请求,每个都设置并立刻读回自己独有的 id,中间插了 1ms 睡眠放大出错窗口。",
+    "query_display": "500 个并发 goroutine,go run -race",
+    "tree": [],
+    "check_label": "高并发下会不会有两个请求被分到同一个正在使用中的 Context,读到别人的数据?",
+    "verdict": "pass",
+    "result_badge": "0/500 mismatch,-race 未报警",
+    "result_class": "good",
+    "evidence": "真实输出: 500 fully concurrent requests, 0 mismatches;-race 检测器未检测到任何 data race"
+  },
+  {
+    "narration": "最后用真实的 go test -bench 对照测量:同一个 Engine、同一张路由表,一组正常跑,另一组每次请求前强制 GC 清空池子。",
+    "query_display": "go test -bench=. -benchmem",
+    "tree": [],
+    "check_label": "禁止复用(每次请求前强制 GC)是否会显著增加内存分配?",
+    "verdict": "pass",
+    "result_badge": "~2.2x 字节,~1.45x 分配次数",
+    "result_class": "good",
+    "evidence": "真实测得: WithPool=1377B/11allocs 每次请求, WithoutPoolReuse=3066B/16allocs(两次独立运行结果一致)"
+  }
+]};
+
+(function(){
+  const scenarios = DATA.scenarios;
+  const narration = document.getElementById('gpNarration');
+  const stepBadge = document.getElementById('gpStep');
+  const queryLine = document.getElementById('gpQuery');
+  const treeEl = document.getElementById('gpTree');
+  const checksEl = document.getElementById('gpChecks');
+  const resultBadge = document.getElementById('gpResultBadge');
+  const evidenceEl = document.getElementById('gpEvidence');
+  const counter = document.getElementById('gpCounter');
+  let idx = -1, playing = false, playTimer = null;
+
+  function render(){
+    idx = Math.max(-1, Math.min(scenarios.length - 1, idx));
+    if(idx < 0){
+      narration.textContent = '点击"下一步"或"播放"开始。';
+      stepBadge.textContent = '未开始';
+      queryLine.textContent = '—';
+      treeEl.innerHTML = '';
+      checksEl.innerHTML = '';
+      resultBadge.textContent = '—';
+      resultBadge.className = 'result-badge';
+      evidenceEl.textContent = '';
+      counter.textContent = `0 / ${scenarios.length}`;
+      document.getElementById('gpPrev').disabled = true;
+      document.getElementById('gpNext').disabled = false;
+      return;
+    }
+
+    const s = scenarios[idx];
+    narration.textContent = s.narration;
+    stepBadge.textContent = `第 ${idx+1} / ${scenarios.length} 步`;
+    queryLine.textContent = s.query_display;
+
+    treeEl.innerHTML = '';
+    s.tree.forEach(n => {
+      const box = document.createElement('div');
+      box.className = 'tree-box';
+      box.dataset.state = n.state;
+      const nt = document.createElement('div');
+      nt.className = 'nt';
+      nt.textContent = n.name;
+      const st = document.createElement('div');
+      st.textContent = n.state === 'win' ? '已复用' : (n.state === 'set' ? '新分配' : '');
+      box.appendChild(nt); box.appendChild(st);
+      treeEl.appendChild(box);
+    });
+
+    checksEl.innerHTML = '';
+    const row = document.createElement('div');
+    row.className = 'check';
+    row.dataset.verdict = s.verdict;
+    const label = document.createElement('span');
+    label.className = 'label';
+    label.textContent = s.check_label;
+    const verdict = document.createElement('span');
+    verdict.className = 'verdict';
+    verdict.textContent = s.verdict === 'pass' ? '成立' : '不成立';
+    row.appendChild(label); row.appendChild(verdict);
+    checksEl.appendChild(row);
+
+    resultBadge.textContent = s.result_badge;
+    resultBadge.className = 'result-badge ' + s.result_class;
+    evidenceEl.textContent = s.evidence;
+
+    counter.textContent = `${idx+1} / ${scenarios.length}`;
+    document.getElementById('gpPrev').disabled = idx <= -1;
+    document.getElementById('gpNext').disabled = idx >= scenarios.length - 1;
+  }
+
+  document.getElementById('gpNext').onclick = () => { idx++; render(); stopPlay(); };
+  document.getElementById('gpPrev').onclick = () => { idx--; render(); stopPlay(); };
+  document.getElementById('gpReset').onclick = () => { idx = -1; render(); stopPlay(); };
+  function stopPlay(){ playing = false; clearInterval(playTimer); document.getElementById('gpPlay').textContent = '▶ 自动播放'; }
+  document.getElementById('gpPlay').onclick = () => {
+    if(playing){ stopPlay(); return; }
+    playing = true; document.getElementById('gpPlay').textContent = '⏸ 暂停';
+    playTimer = setInterval(() => {
+      if(idx >= scenarios.length - 1){ stopPlay(); return; }
+      idx++; render();
+    }, 2200);
+  };
+
+  render();
+})();
+</script>
+
+</body>
+</html>

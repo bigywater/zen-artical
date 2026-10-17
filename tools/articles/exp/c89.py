@@ -1,0 +1,41 @@
+import sys, os, re, time, subprocess, json, datetime; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from dl import *
+tee('c89')
+img('alpine:3.20', 'python:3.12-alpine')
+purge()
+def vm(cmd):
+    rc, o = dk('run', '--rm', '--privileged', '--pid=host', *LAB, 'alpine:3.20', 'nsenter', '-t', '1', '-m', '-u', '-n', '-i', 'sh', '-c', cmd, raw=True)
+    return o.strip()
+print('== 一:容器的时间就是虚拟机内核的时间(Docker Engine 29.8.2,Docker Desktop)')
+n = 'bwlab-c89a'
+dk('run', '-d', '--name', n, *LAB, 'alpine:3.20', 'sleep', '300'); time.sleep(0.5)
+PYN = 'bwlab-c89py'
+dk('run', '-d', '--name', PYN, *LAB, 'python:3.12-alpine', 'sleep', '300'); time.sleep(0.5)
+diffs = []
+for _ in range(7):
+    t0 = time.time_ns(); rc, o = dk('exec', PYN, 'python', '-c', 'import time; print(time.time_ns())'); t1 = time.time_ns()
+    diffs.append((int(o.strip().splitlines()[-1]) - (t0 + t1) // 2) / 1e6)
+print(f'  容器里 Python 的 time.time_ns() 相对 Mac 上调用前后时间的中点,差值(毫秒,7 次;docker exec 的往返不对称,所以只能看量级):{[round(x) for x in diffs]}')
+print(f'  虚拟机里的 date +%s 与容器一致吗?虚拟机 {vm("date +%s")},容器 {dk("exec", n, "date", "+%s")[1].strip()}(两次命令之间有间隔)')
+print('  时间命名空间:容器 /proc/self/ns/time = ' + dk('exec', n, 'readlink', '/proc/self/ns/time')[1].strip() + ';虚拟机 PID 1 的 = ' + vm('readlink /proc/1/ns/time'))
+print('  容器的时间命名空间偏移 /proc/self/timens_offsets:' + dk('exec', n, 'cat', '/proc/self/timens_offsets')[1].strip().replace('\n', ' ; '))
+print('  容器里 /proc/uptime 的开机时间(秒) = ' + dk('exec', n, 'cut', '-d.', '-f1', '/proc/uptime')[1].strip() + ';虚拟机 = ' + vm('cut -d. -f1 /proc/uptime') + '(容器的 uptime 是虚拟机的,不是容器自己的)')
+print('== 二:时区')
+print('  默认容器的 date:' + dk('exec', n, 'date')[1].strip() + ';TZ 未设置')
+print(f'  Mac 上的 date:{subprocess.run(["date"], capture_output=True, text=True).stdout.strip()}')
+print('  -e TZ=Asia/Shanghai(alpine 镜像里没有 /usr/share/zoneinfo):' + dk('run', '--rm', '-e', 'TZ=Asia/Shanghai', 'alpine:3.20', 'date')[1].strip())
+print('  -e TZ=CST-8(POSIX 写法,不需要时区数据库):' + dk('run', '--rm', '-e', 'TZ=CST-8', 'alpine:3.20', 'date')[1].strip())
+print('  python:3.12-alpine 有 /usr/share/zoneinfo?' + dk('run', '--rm', 'python:3.12-alpine', 'sh', '-c', 'ls -d /usr/share/zoneinfo 2>&1')[1].strip() + ';-e TZ=Asia/Shanghai:' + dk('run', '--rm', '-e', 'TZ=Asia/Shanghai', 'python:3.12-alpine', 'date')[1].strip())
+print('  Python 的 datetime.now() 在 TZ=Asia/Shanghai 的容器里:' + dk('run', '--rm', '-e', 'TZ=Asia/Shanghai', 'python:3.12-alpine', 'python', '-c', 'import datetime, time; print(datetime.datetime.now().isoformat(timespec="seconds"), time.tzname)')[1].strip())
+rc, o = dk('run', '--rm', '-v', '/etc/localtime:/etc/localtime:ro', 'alpine:3.20', 'date')
+print(f'  -v /etc/localtime:/etc/localtime:ro(Mac 的 /etc/localtime 是指向 /var/db/timezone/… 的符号链接):退出码 {rc};{o.strip().splitlines()[-1][:120]}')
+print('== 三:容器里不能改系统时间')
+rc, o = dk('exec', n, 'date', '-s', '2000-01-01 00:00:00'); print(f'  date -s "2000-01-01 00:00:00"(默认没有 CAP_SYS_TIME):退出码 {rc};输出:{o.strip().replace(chr(10), " ⏎ ")[:120]}')
+print('  紧接着再看容器里的 date:' + dk('exec', n, 'date')[1].strip() + '(时间没有被改)')
+print('  容器的 capability 里有 sys_time 吗?' + ('有' if int(dk('exec', n, 'sh', '-c', "grep CapEff /proc/self/status | awk '{print $2}'")[1].strip(), 16) >> 25 & 1 else '没有'))
+print('== 四:日志的时间戳用 UTC,和容器的 TZ 无关')
+m = 'bwlab-c89b'
+dk('run', '-d', '--name', m, *LAB, '-e', 'TZ=Asia/Shanghai', 'python:3.12-alpine', 'sh', '-c', 'date; sleep 60'); time.sleep(1)
+print('  容器自己 date 的输出:' + dk('logs', m)[1].strip() + ';docker logs -t 给的时间戳:' + dk('logs', '-t', m)[1].strip().split()[0])
+print('  docker inspect StartedAt = ' + out('inspect', '--format', '{{.State.StartedAt}}', m))
+purge()

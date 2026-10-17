@@ -1,0 +1,17 @@
+from lib import *
+S = SS('f54')
+R = J('f54'); cs = R['cost']; lz = R['lazy']
+steps = [
+    step("模板里不用传就有的东西:config(Config)、request、session、g、url_for、get_flashed_messages 都能直接用,GET /defaults 渲染出 config=Config|request=/defaults|session=SecureCookieSession|g=_AppCtxGlobals|url_for=/defaults|flashed=0。其中 g、request 是 Flask 自带的上下文处理器 _default_template_ctx_processor 注入的:update_template_context 往空字典里放入的键是 bp_global、g、now_called、request、site_name、util(后四项里除 g、request 外都是本篇自己的处理器加的);config、session、url_for 等是 Jinja 环境的全局。", t=tl(S(1)), done=lidx(S(1), 'GET /defaults', 'update_template_context'), mark=lidx(S(1), 'Flask 自带的上下文处理器'), kv=KV([['默认处理器', '_default_template_ctx_processor 注入 g、request'], ['config / session / url_for', 'Jinja 全局']], ['默认处理器'])),
+    step("自己的上下文处理器返回字典,会合并进每次渲染的上下文:两个处理器都返回 site_name 时,后注册的覆盖先注册的(渲染得到「被第二个覆盖」);视图里显式传的同名变量最优先(render_template_string('{{ site_name }}', site_name='视图里传的') → 视图里传的)。", t=tl(S(2)), done=lidx(S(2), 'site_name = 视图里传的'), mark=lidx(S(2), '不传时的 site_name'), kv=KV([['多个处理器', '后注册的覆盖先注册的'], ['视图里传的', '最优先']], ['视图里传的'])),
+    step("处理器每次渲染都执行:渲染 3 次,处理器被调用 3 次;一次渲染里用 5 次变量,处理器只调用 1 次(返回的字典在渲染开始时算一次)。", t=tl(S(3)), done=lidx(S(3), '渲染 3 次后', '一次渲染里用 5 次变量'), kv=KV([['渲染 3 次', '处理器执行 3 次'], ['一次渲染用 5 次变量', '处理器 1 次']], ['渲染 3 次'])),
+    step("蓝图的 context_processor 只对蓝图自己的视图生效:GET /b/t(蓝图的视图)得到「blueprint 的变量|bp 注册的全局变量」,GET /t(应用的视图)得到「无|bp 注册的全局变量」;用 app_context_processor 注册的(bp_global)对所有视图生效。", t=tl(S(4)), done=lidx(S(4), 'GET /b/t', 'GET /t'), kv=KV([['bp.context_processor', '只对蓝图的视图'], ['bp.app_context_processor', '对整个应用']], ['bp.context_processor'])),
+    step(f"处理器里放函数(惰性求值):渲染 3 次「没用到变量」的页面,eager 处理器(直接算好值)执行了 {lz[0]} 次,而 lazy 处理器里的函数执行 {lz[1]} 次;渲染 1 次用到 l_value() 的页面,函数执行 {R['lazy2']} 次。昂贵的值(查库、算统计)放成函数,模板用到才算。", t=tl(S(5)), done=lidx(S(5), '没用到变量'), mark=lidx(S(5), '用到 l_value()'), kv=KV([['eager 值', '每次渲染都算'], ['函数', '模板调用时才算']], ['函数'])),
+    step(f"处理器的耗时:没有处理器时每个请求 {cs['0 个处理器']:.0f} µs;10 个空处理器 {cs['10 个空处理器']:.0f} µs;10 个各睡 0.5 ms 的处理器 {cs['10 个各 0.5 ms 的处理器']:.0f} µs(每个处理器的 sleep 实际约 0.8 ms)。慢的处理器会拖慢每一次渲染,不管页面用没用到它的数据。", t=tl(S(6)), b=bars([['0 个', cs['0 个处理器'], f"{cs['0 个处理器']:.0f} µs"], ['10 个空处理器', cs['10 个空处理器'], f"{cs['10 个空处理器']:.0f} µs"], ['10 个各 0.5 ms', cs['10 个各 0.5 ms 的处理器'], f"{cs['10 个各 0.5 ms 的处理器']:.0f} µs"]], cs['10 个各 0.5 ms 的处理器'], done=[0, 1, 2]), kv=KV([['0 个', f"{cs['0 个处理器']:.0f} µs"], ['10 个空处理器', f"{cs['10 个空处理器']:.0f} µs"], ['10 个各 0.5 ms', f"{cs['10 个各 0.5 ms 的处理器']:.0f} µs"]], ['10 个各 0.5 ms'])),
+]
+A = mkartf('f54', 54, 'Flask,Context Processor,模板上下文,Jinja2,真实验证,动画演示',
+    f'实测 Flask 的上下文处理器:默认注入 g 与 request;自己的处理器合并进每次渲染、后注册覆盖先注册、视图传的最优先;每次渲染执行一次;蓝图的只对蓝图生效、app_ 前缀的全局生效;处理器里放函数实现惰性;10 个各 0.5 ms 的处理器让每次渲染变成约 {cs["10 个各 0.5 ms 的处理器"]:.0f} µs。',
+    '模板里为什么不用传 request 和 g 就能用?想让所有模板都有一个变量怎么写?处理器什么时候执行、执行几次?放太多会不会拖慢页面?这篇逐项实测。',
+    [('每次渲染 1 次', '上下文处理器的执行频率(与模板用不用变量无关)'), ('后注册的赢', '多个处理器返回同名变量时的覆盖规则'), (f'{cs["10 个各 0.5 ms 的处理器"]:.0f} µs', '10 个各睡 0.5 ms 的处理器下一次渲染的耗时')],
+    [('默认注入的变量', '<p>上一篇:<a href="flask-template-inheritance-block.html">模板继承与 Block</a>;下一篇:<a href="flask-custom-template-filter.html">自定义 Template Filter</a>。全局函数与它的区别见<a href="flask-custom-template-global.html">自定义 Template Global</a>。</p>'), ('自己的处理器与覆盖规则', None), ('执行频率', None), ('蓝图的处理器', None), ('惰性函数', None), ('耗时', None)],
+    steps, [ENV_F, '没有验证:异步视图里的处理器、处理器里访问数据库的事务边界、{% include %} 与 {% import %} 是否重新调用处理器(本篇只验证了单个模板的调用次数)、Flask-Login 的 current_user 是怎么通过处理器注入的'], '上下文处理器')

@@ -1,0 +1,24 @@
+from lib import *
+S = SS('s9')
+steps = [
+    step("RFPDupeFilter 把请求变成指纹再比较,指纹是 SHA1(方法 + 规范化后的 URL + 请求体)。逐对比较 URL(14 对):查询参数顺序、#片段、主机名大小写、百分号编码的十六进制大小写、中文原样与百分号编码、%20 与 +、末尾的 ?、/./ 与 /../、重复键的顺序,这些都被当成同一个;不同的有:默认端口 :80(a.com/p 与 a.com:80/p 竟然不同)、路径末尾的 /、http 与 https、空参数 ?a= 与没有 a、www.a.com 与 a.com。", t=tl(S(1)), mark=lidx(S(1), '默认端口', '末尾的 / (路径)', 'http 与 https', '空参数', 'www.a.com'), done=lidx(S(1), '查询参数顺序', '片段', '主机名大小写', '中文原样', '空格', '重复键'), kv=KV([['相同', '参数顺序、#片段、主机大小写、%XX 大小写、中文编码、%20/+、末尾 ?'], ['不同', ':80、末尾 /、http/https、?a= 与无参数、www.'], ['算法', 'SHA1,20 字节']], ['不同'])),
+    step("方法和请求体参与指纹,请求头和 meta 默认不参与:GET 与 POST 不同;POST 体 JSON 键顺序不同(同样内容)、form 参数顺序不同、多一个空格,都是不同(请求体逐字节比较);Cookie、Accept-Language 头不同指纹相同,用 fingerprint(include_headers=['Accept-Language']) 才把头算进去;meta 不同指纹相同,自定义 fingerprinter 把 meta['page'] 拼进 SHA1 后才不同。", t=tl(S(2)), mark=lidx(S(2), 'POST 体', 'Cookie 头不同', 'meta 不同(默认)'), done=lidx(S(2), 'include_headers', '自定义 fingerprinter', 'GET 与 POST'), kv=KV([['方法', '参与'], ['请求体', '逐字节参与(键顺序也算)'], ['请求头 / meta', '默认不参与'], ['想让它们参与', 'include_headers 或自定义 fingerprinter']], ['请求体'])),
+    step("两个开关:默认 #片段不参与,keep_fragments=True 后 #x 与 #y 不同;meta 里 verbatim_url=True 时 URL 不做规范化,连“只差参数顺序”的两个 URL 也变成不同。需要保留片段(无头浏览器场景)或 URL 的大小写、顺序有意义时用。", t=tl(S(3)), mark=lidx(S(3), 'keep_fragments', 'verbatim_url'), done=lidx(S(3), '默认'), kv=KV([['默认', '#x 与 #y 相同'], ['keep_fragments=True', '不同'], ['verbatim_url=True', '不规范化,参数顺序也算']], ['verbatim_url=True'])),
+    step("真实抓取:回调 yield 了 /x?a=1&b=2、/x?b=2&a=1、/x?a=1&b=2#f、/y,还有一个 dont_filter=True 的 /x?a=1&b=2。服务器收到 /seed、/x?a=1&b=2、/y、/x?a=1&b=2(dont_filter 那个绕过去重又来了一次),dupefilter/filtered = 2,scheduler/enqueued = 4。默认日志只在 DEBUG 级别打第一条 “Filtered duplicate request … no more duplicates will be shown”;DUPEFILTER_DEBUG=1 把每条都打出来,带上 referer。", t=tl(S(4)), mark=lidx(S(4), 'DUPEFILTER_DEBUG=1'), done=lidx(S(4), '默认'), kv=KV([['被过滤', '2 个(参数顺序不同、带 #f)'], ['dont_filter=True', '照样发出'], ['日志', '默认只打第一条;DEBUG=1 全打']], ['被过滤'])),
+    step("JOBDIR 里的 requests.seen:每个指纹是 2 字节长度加 20 字节 SHA1,即 22 字节;第 1 次运行 1000 个请求,文件 22,000 字节。同一个 JOBDIR 第 2 次运行(1500 个 p),服务器只收到 501 个请求(seed 加新的 500 个),dupefilter/filtered = 1000,文件长到 33,000 字节。dont_filter=True 的请求不会写进 requests.seen(seed 没有被记录);第 3 次运行里 seed 没写 dont_filter,第一次进了 seed(服务器收到 1 个请求),随后 1500 个子请求全部被过滤,文件 33,022 字节。自己写 start() 时不会自动带 dont_filter=True(默认的 start() 才带)。", t=tl(S(5)), mark=lidx(S(5), '第 3 次运行'), done=lidx(S(5), '第 1 次运行', '第 2 次运行', '22 字节/个'), b=bars([['第 1 次', 22000, '22,000 字节'], ['第 2 次', 33000, '33,000 字节'], ['第 3 次', 33022, '33,022 字节']], 33022, mark=[2], done=[0, 1]), kv=KV([['每个指纹', '2 + 20 = 22 字节'], ['第 2 次运行', '501 个请求,过滤 1000 个'], ['dont_filter=True', '不写进 requests.seen']], ['dont_filter=True'])),
+    step("开销:20,000 个请求的指纹平均 10.3 微秒/个(含 URL 规范化和 SHA1,首次计算,每个请求的结果有缓存);100 万个 20 字节指纹放进 Python 的 set,tracemalloc 记录 86.6 MB,平均 87 字节/个(bytes 对象 53 字节加上 set 的表项)——指纹本身只有 20 字节,但内存里每个要花 4 倍多。", t=tl(S(6)), mark=lidx(S(6), '86.6 MB'), done=lidx(S(6), '10.3'), b=bars([['指纹本身', 20, '20 字节'], ['set 里每个', 87, '87 字节']], 87, mark=[1], done=[0]), kv=KV([['每个指纹计算', '10.3 µs'], ['100 万个指纹', '86.6 MB(set)'], ['每个', '87 字节(指纹 20 字节)']], ['100 万个指纹'])),
+]
+A = mkarts('s9', 9, 'Scrapy,去重,RFPDupeFilter,请求指纹,JOBDIR,dont_filter,真实验证,动画演示',
+    '实测 Scrapy 2.19 的请求去重:参数顺序、#片段、主机大小写算同一个,:80、末尾 /、http/https、www. 算不同;POST 体逐字节比较、请求头和 meta 默认不参与;requests.seen 每个指纹 22 字节;自己写的 start() 默认不带 dont_filter;100 万个指纹的 set 占 86.6 MB。',
+    '两个看起来差不多的 URL,Scrapy 认为是同一个请求还是两个?这篇把请求指纹的每个输入——URL 规范化、方法、请求体、请求头、meta、片段——逐个对比,再看 JOBDIR 里的 requests.seen 和指纹集合的内存开销。',
+    [('SHA1 20 字节', '请求指纹 = SHA1(方法 + 规范化 URL + 请求体)'), ('22 字节', 'requests.seen 里每个指纹(2 字节长度 + 20 字节)'), ('86.6 MB', '100 万个指纹放进 Python set 的内存')],
+    [('URL 规范化', '<p>指纹先用 <code>w3lib.url.canonicalize_url</code> 规范化 URL:查询参数排序、去掉片段、统一百分号编码大小写等。但 <code>:80</code> 默认端口、末尾的 <code>/</code>、<code>www.</code> 前缀都不会被抹平。</p>'),
+     ('方法、请求体、请求头', '<p>方法和请求体参与指纹(请求体按字节比较,JSON 键顺序不同就是不同请求);请求头和 meta 默认不参与,要自定义 <code>fingerprinter</code>。</p>'),
+     ('片段与原样 URL', '<p><code>keep_fragments</code> 和 <code>verbatim_url</code> 可以分别保留片段、取消规范化。</p>'),
+     ('过滤的表现', '<p>被过滤的请求不会发出,只在 <code>dupefilter/filtered</code> 里计数;<code>dont_filter=True</code> 的请求不检查也不记录指纹。</p>'),
+     ('JOBDIR 与 requests.seen', '<p>启用 <code>JOBDIR</code> 后指纹顺序追加写进 <code>requests.seen</code>,下次运行读回来;自己写的 <code>start()</code> 要自己加 <code>dont_filter=True</code>,否则重启时起始请求会被去重。</p>'),
+     ('内存与耗时', '<p>每个指纹 20 字节,但在 Python set 里平均占 87 字节;计算一个指纹约 16 微秒。大规模爬取要考虑 Bloom filter 之类的替代方案(本文没有测)。</p>')],
+    steps,
+    [ENV_Y + '。第一到三节直接在虚拟环境里调用 scrapy.utils.request.fingerprint;第四、五节是真实抓取;第六节指纹耗时用 20,000 个不同 URL 的请求,内存用 tracemalloc 测 100 万个 SHA1 的 set',
+     '没有验证:Bloom filter 或 Redis 去重的替代实现;REQUEST_FINGERPRINTER_CLASS 其它实现的互操作;缓存(HTTP 缓存)用的指纹是否与去重一致;不同 w3lib 版本的规范化差异;百万级请求的真实 RSS(只测了 set 本身)'],
+    '请求去重')

@@ -1,0 +1,57 @@
+import sys, os, re, time; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from jl import *; from jpal import *
+tee('j280'); R = {}
+FILES = {'logging.properties': JPA_LOGGING,
+ 'Calls.java': 'import java.util.concurrent.atomic.*; public class Calls { static final AtomicInteger toDb = new AtomicInteger(), toEntity = new AtomicInteger(), nullToDb = new AtomicInteger(), nullToEntity = new AtomicInteger(); static void reset() { toDb.set(0); toEntity.set(0); nullToDb.set(0); nullToEntity.set(0); } static String snap() { return "convertToDatabaseColumn " + toDb + " 次(其中参数为 null " + nullToDb + " 次),convertToEntityAttribute " + toEntity + " 次(其中参数为 null " + nullToEntity + " 次)"; } }',
+ 'CsvConverter.java': 'import jakarta.persistence.*; import java.util.*;\n@Converter public class CsvConverter implements AttributeConverter<Set<String>, String> { public String convertToDatabaseColumn(Set<String> s) { Calls.toDb.incrementAndGet(); if (s == null) { Calls.nullToDb.incrementAndGet(); return null; } return String.join(",", new TreeSet<>(s)); } public Set<String> convertToEntityAttribute(String v) { Calls.toEntity.incrementAndGet(); if (v == null) { Calls.nullToEntity.incrementAndGet(); return null; } return v.isEmpty() ? new HashSet<>() : new HashSet<>(Arrays.asList(v.split(","))); } }',
+ 'DayConverter.java': 'import jakarta.persistence.*; import java.time.*;\n@Converter public class DayConverter implements AttributeConverter<LocalDate, Integer> { public Integer convertToDatabaseColumn(LocalDate d) { Calls.toDb.incrementAndGet(); if (d == null) { Calls.nullToDb.incrementAndGet(); return null; } return d.getYear() * 10000 + d.getMonthValue() * 100 + d.getDayOfMonth(); } public LocalDate convertToEntityAttribute(Integer v) { Calls.toEntity.incrementAndGet(); if (v == null) { Calls.nullToEntity.incrementAndGet(); return null; } return LocalDate.of(v / 10000, v / 100 % 100, v % 100); } }',
+ 'YN.java': 'import jakarta.persistence.*;\n@Converter(autoApply = true) public class YN implements AttributeConverter<Boolean, String> { public String convertToDatabaseColumn(Boolean b) { return b == null ? null : (b ? "Y" : "N"); } public Boolean convertToEntityAttribute(String v) { if (v == null) return null; if (v.equals("Y")) return true; if (v.equals("N")) return false; throw new IllegalArgumentException("数据库里的 Y/N 列出现了无法识别的值:\'" + v + "\'"); } }',
+ 'Doc.java': 'import jakarta.persistence.*; import java.time.*; import java.util.*;\n@Entity public class Doc { @Id @GeneratedValue(strategy = GenerationType.IDENTITY) Long id; String title; @Convert(converter = CsvConverter.class) Set<String> tags; @Convert(converter = DayConverter.class) LocalDate day; Boolean archived; boolean pinned; Doc() {} Doc(String t, Set<String> tg, LocalDate d, Boolean a, boolean p) { title = t; tags = tg; day = d; archived = a; pinned = p; } }',
+ 'Main.java': r'''
+import jakarta.persistence.*; import org.hibernate.*; import java.time.*; import java.util.*; import java.sql.*;
+public class Main {
+  static EntityManagerFactory emf; static void say(String s) { System.out.println("RES " + s); } static void sec(String s) { System.out.println("SEC " + s); }
+  static long stmts() { return emf.unwrap(SessionFactory.class).getStatistics().getPrepareStatementCount(); }
+  static String t(Throwable e) { Throwable c = e; StringBuilder b = new StringBuilder(e.getClass().getSimpleName()); while (c.getCause() != null && c.getCause() != c) { c = c.getCause(); b.append(" ← ").append(c.getClass().getSimpleName()); } String m = String.valueOf(c.getMessage()).replaceAll("\\s+", " "); return b + ":" + m.substring(0, Math.min(120, m.length())); }
+  static String raw(String sql) throws Exception { try (Connection c = DriverManager.getConnection("jdbc:postgresql://127.0.0.1:9501/lab", "lab", ""); Statement s = c.createStatement(); ResultSet r = s.executeQuery(sql)) { StringBuilder sb = new StringBuilder(); while (r.next()) { for (int i = 1; i <= r.getMetaData().getColumnCount(); i++) sb.append(i > 1 ? " | " : "").append(r.getString(i) + "(" + r.getMetaData().getColumnTypeName(i) + ")"); sb.append("; "); } return sb.toString(); } }
+  static void jdbc(String sql) throws Exception { try (Connection c = DriverManager.getConnection("jdbc:postgresql://127.0.0.1:9501/lab", "lab", ""); Statement s = c.createStatement()) { s.execute(sql); } }
+  public static void main(String[] a) throws Exception {
+    emf = Persistence.createEntityManagerFactory("demo");
+    sec("== 一:转换后数据库里存的是什么");
+    EntityManager em = emf.createEntityManager(); em.getTransaction().begin(); em.persist(new Doc("d1", new HashSet<>(List.of("java", "jpa", "sql")), LocalDate.of(2026, 10, 5), true, false)); em.getTransaction().commit(); em.close();
+    say("原生 SQL 读到的列:" + raw("select tags, day, archived, pinned from doc")); say("列类型:tags 是 varchar,day 是 integer(int4),archived 与 pinned 都是 varchar 的 Y/N——autoApply 的 Boolean 转换器也应用到了基本类型 boolean 的 pinned 上");
+    em = emf.createEntityManager(); Doc d = em.find(Doc.class, 1L); say("find 回来:tags = " + new TreeSet<>(d.tags) + ",day = " + d.day + ",archived = " + d.archived + ",pinned = " + d.pinned + "(autoApply 的 YN 转换器对 Boolean archived 与基本类型 boolean pinned 都生效)"); em.close();
+    sec("== 二:null 与空值:转换器会被调用,并且要自己处理 null");
+    Calls.reset(); em = emf.createEntityManager(); em.getTransaction().begin(); em.persist(new Doc("null-doc", null, null, null, false)); em.getTransaction().commit(); em.close(); say("persist 一个 tags / day / archived 全为 null 的实体:" + Calls.snap());
+    say("库里的值:" + raw("select tags, day, archived from doc where title = 'null-doc'")); Calls.reset(); em = emf.createEntityManager(); Doc nd = em.find(Doc.class, 2L); say("find 回来:tags = " + nd.tags + ",day = " + nd.day + ",archived = " + nd.archived + ";" + Calls.snap()); em.close();
+    Calls.reset(); em = emf.createEntityManager(); em.getTransaction().begin(); em.persist(new Doc("empty-doc", new HashSet<>(), LocalDate.of(2026, 1, 1), false, false)); em.getTransaction().commit(); em.close(); say("空集合 new HashSet<>() 存进去:库里的 tags = " + raw("select tags from doc where title = 'empty-doc'") + "(空串,不是 NULL)"); em = emf.createEntityManager(); Doc ed = em.find(Doc.class, 3L); say("读回来:tags = " + ed.tags + ",tags == null 为 " + (ed.tags == null) + ",size = " + ed.tags.size()); em.close();
+    sec("== 三:脏检查:原地修改被转换的可变对象(Set),能不能被发现");
+    em = emf.createEntityManager(); em.getTransaction().begin(); Doc m = em.find(Doc.class, 1L); long s1 = stmts(); m.tags.add("new-tag"); em.getTransaction().commit(); say("find 之后直接 m.tags.add(\"new-tag\")(原地修改)并 commit:新增 SQL " + (stmts() - s1) + " 条;库里的 tags = " + raw("select tags from doc where id = 1")); em.close();
+    em = emf.createEntityManager(); em.getTransaction().begin(); m = em.find(Doc.class, 1L); s1 = stmts(); Set<String> same = new HashSet<>(m.tags); m.tags = same; em.getTransaction().commit(); say("换成一个内容完全相同的新 Set 对象并 commit:新增 SQL " + (stmts() - s1) + " 条(按转换后的值比较,没有变化)"); em.close();
+    em = emf.createEntityManager(); em.getTransaction().begin(); m = em.find(Doc.class, 1L); s1 = stmts(); Set<String> copy = new HashSet<>(m.tags); copy.add("x2"); m.tags = copy; em.getTransaction().commit(); say("换成一个多了 x2 的新 Set 对象并 commit:新增 SQL " + (stmts() - s1) + " 条;库里的 tags = " + raw("select tags from doc where id = 1")); em.close();
+    em = emf.createEntityManager(); em.getTransaction().begin(); m = em.find(Doc.class, 1L); s1 = stmts(); m.day = m.day.plusDays(0); m.day = LocalDate.of(2026, 10, 5); em.getTransaction().commit(); say("LocalDate(不可变类型)赋成一个相等的新对象并 commit:新增 UPDATE " + (stmts() - s1) + " 条(转换后的值相等,不更新)"); em.close();
+    sec("== 四:转换器被调用的次数");
+    jdbc("insert into doc(title, tags, day, archived, pinned) select 't' || g, 'a,b', 20260101, 'N', 'N' from generate_series(1, 1000) g"); Calls.reset(); em = emf.createEntityManager(); em.getTransaction().begin(); List<Doc> all = em.createQuery("select d from Doc d where d.title like 't%'", Doc.class).getResultList(); say("加载 " + all.size() + " 个实体:" + Calls.snap()); Calls.reset(); em.flush(); say("没有任何修改时 flush:" + Calls.snap()); Calls.reset(); all.get(0).tags = new HashSet<>(List.of("x")); em.flush(); say("改了一个实体的 tags 之后 flush:" + Calls.snap()); Calls.reset(); em.getTransaction().rollback(); em.close();
+    Calls.reset(); em = emf.createEntityManager(); em.getTransaction().begin(); for (int i = 0; i < 100; i++) em.persist(new Doc("p" + i, new HashSet<>(List.of("a")), LocalDate.of(2026, 1, 1), false, false)); em.flush(); say("persist 100 个实体并 flush:" + Calls.snap()); em.getTransaction().rollback(); em.close();
+    sec("== 五:查询里的转换:参数、字面量与投影");
+    em = emf.createEntityManager(); Calls.reset(); List<Doc> r1 = em.createQuery("select d from Doc d where d.archived = :a", Doc.class).setParameter("a", true).getResultList(); say("参数 d.archived = :a(true):命中 " + r1.size() + " 行(参数被转换成 Y 再比较)");
+    List<Doc> r2 = em.createQuery("select d from Doc d where d.archived = true", Doc.class).getResultList(); say("字面量 d.archived = true:命中 " + r2.size() + " 行(字面量也被转换)");
+    List<Doc> r3 = em.createQuery("select d from Doc d where d.day = :day", Doc.class).setParameter("day", LocalDate.of(2026, 10, 5)).getResultList(); say("参数 d.day = :day(LocalDate):命中 " + r3.size() + " 行(参数被转换成整数 20261005)");
+    try { List<Doc> r4 = em.createQuery("select d from Doc d where d.day >= :day and d.day < :day2", Doc.class).setParameter("day", LocalDate.of(2026, 1, 1)).setParameter("day2", LocalDate.of(2026, 12, 31)).getResultList(); say("范围比较 d.day >= :day and d.day < :day2:命中 " + r4.size() + " 行(转换后的整数 yyyymmdd 保持了顺序,可以做范围查询)"); } catch (Throwable ex) { say("范围比较:" + t(ex)); }
+    try { em.createQuery("select d from Doc d where d.tags like :p", Doc.class).setParameter("p", "%java%").getResultList(); say("d.tags like '%java%'(tags 是 Set<String> 转换成字符串):没有报错"); } catch (Throwable ex) { say("d.tags like :p:" + t(ex)); }
+    List<Object[]> rows = em.createQuery("select d.day, d.archived from Doc d where d.id = 1", Object[].class).getResultList(); say("投影 select d.day, d.archived:" + rows.get(0)[0] + "(" + rows.get(0)[0].getClass().getSimpleName() + "), " + rows.get(0)[1] + "(" + rows.get(0)[1].getClass().getSimpleName() + ")(投影结果也被转换回实体字段类型)"); em.close();
+    sec("== 六:数据库里的值无法转换回来时");
+    jdbc("alter table doc drop constraint doc_archived_check"); jdbc("update doc set archived = 'X' where id = 1"); em = emf.createEntityManager(); try { Doc bad = em.find(Doc.class, 1L); say("find 读到 archived = 'X' 的行:成功,archived = " + bad.archived); } catch (Throwable ex) { say("find 读到 archived = 'X' 的行:" + t(ex)); } em.close();
+    em = emf.createEntityManager(); try { long n = em.createQuery("select count(d) from Doc d", Long.class).getSingleResult(); say("不读取该列的聚合查询 count(d):" + n + " 行(没有触发转换,不受影响)"); } catch (Throwable ex) { say("count:" + t(ex)); } try { List<Doc> l = em.createQuery("select d from Doc d", Doc.class).setMaxResults(3000).getResultList(); say("select d from Doc d(包含坏行):成功读回 " + l.size() + " 行"); } catch (Throwable ex) { say("select d from Doc d(包含坏行):" + t(ex)); } em.close();
+    emf.close();
+  }
+}
+'''}
+pg = PGI(9501).start()
+try:
+    rc, o = jpa('j280a', FILES, ['Doc', 'YN', 'CsvConverter', 'DayConverter'], props={'hibernate.show_sql': 'false'}, timeout=600)
+finally: pg.stop()
+if rc != 0: print(o[:3000]); sys.exit()
+for l in o.splitlines():
+    if l.startswith('SEC '): print(l[4:])
+    elif l.startswith('RES '): print('  ' + l[4:])

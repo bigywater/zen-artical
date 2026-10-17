@@ -1,0 +1,24 @@
+from lib import *
+S = SS('l66')
+steps = [
+    step("给最新提交加一条笔记(git notes add -m …):HEAD 的 hash 没变(True)——笔记不改变提交本身。git log 在提交下面多显示一段 Notes:(%N 占位符就是笔记内容):“这次提交通过了人工评审,评审人:小王”。笔记存在新建的 ref refs/notes/commits 里,git notes list 的每一行是“笔记对象 hash  被注解的提交 hash”。", t=tl(S(1)), mark=lidx(S(1), 'HEAD 的 hash 没变: True', '这次提交通过了人工评审'), done=lidx(S(1), 'refs/notes/commits', '<sha40> <sha40>'), kv=KV([['提交 hash', '不变'], ['笔记', '存在 refs/notes/commits'], ['git notes list', '笔记对象  被注解的提交']], ['笔记'])),
+    step("refs/notes/commits 是一个普通的分支,它的 tree 里只有一个条目:文件名是被注解的提交的完整 hash(检查等于 HEAD:True),文件内容就是笔记。每次修改笔记就是在这个“分支”上加一个提交:git log refs/notes/commits 看到 Notes added by 'git notes add'、再 append 一次之后又多了 Notes added by 'git notes append';git notes show HEAD 显示两段内容(原来的笔记 + 补充)。", t=tl(S(2)), mark=lidx(S(2), "Notes added by 'git notes append'", '文件名等于 HEAD 的完整 hash: True'), done=lidx(S(2), '100644 blob', "Notes added by 'git notes add'", '补充:已合并到主线'), kv=KV([['tree', '提交 hash → 笔记内容'], ['每次修改', 'refs/notes/commits 上多一个提交'], ['历史', '笔记本身也有历史']], ['tree'])),
+    step("可以有多个命名空间:--ref=build 把“构建 #1234 成功”存在 refs/notes/build 里,和 refs/notes/commits 并存。git log 默认只显示 refs/notes/commits 的笔记;加 --notes=build 才多出 Notes (build): 一段;配置 notes.displayRef = refs/notes/* 之后,git log 同时显示所有命名空间(先 commits 的,再 Notes (build):)。", t=tl(S(3)), mark=lidx(S(3), 'refs/notes/build', 'Notes (build):', 'notes.displayRef'), done=lidx(S(3), '--notes=build', '构建 #1234 成功'), kv=KV([['--ref=<名>', '另一个命名空间'], ['--notes=<名>', 'log 里显示它'], ['notes.displayRef', '默认显示哪些命名空间']], ['notes.displayRef'])),
+    step("改写历史后笔记“丢”了:topic 上的 T1 带笔记,git rebase 之后 T1 有了新 hash,git log 里 T1 的笔记 [] 是空的——笔记按旧 hash 挂着,notes list 里仍有 1 条,对应的是 rebase 之前的旧提交。配置 notes.rewriteRef = refs/notes/commits 之后重做同样的 rebase,新 T1 的笔记显示 [T1 的笔记],notes 里变成 2 条(旧的和新的各一条)。", t=tl(S(4)), mark=lidx(S(4), '笔记: []', '笔记: [T1 的笔记', '现在 notes 里的条数: 2'), done=lidx(S(4), '1 条笔记,对应的提交现在已不在 topic 分支上'), kv=KV([['默认', '改写后笔记留在旧提交上'], ['notes.rewriteRef', '改写时把笔记复制到新提交'], ['结果', '新旧各一条']], ['notes.rewriteRef'])),
+    step("笔记多了 tree 会“扇出”:10 条和 50 条笔记时,顶层 tree 分别有 10、50 个条目,文件名是完整 hash;100 条时变成 84 个条目,条目名是两位十六进制的目录(06…),150 条 116 个、200 条 145 个、300 条 181 个——和 .git/objects 的目录做法一样,按 hash 前两位分目录。一个 tree 里条目太多会让读写变慢,所以 git 在大约 50 到 100 条之间开始扇出。", t=tl(S(5)), mark=lidx(S(5), '100 条笔记', '300 条笔记'), done=lidx(S(5), '10 条笔记', '50 条笔记'), b=bars([['50 条笔记', 50, '顶层 50 个条目(不扇出)'], ['100 条笔记', 84, '顶层 84 个目录(扇出)'], ['300 条笔记', 181, '顶层 181 个目录']], 181, mark=[1, 2], done=[0]), kv=KV([['不扇出', '文件名 = 完整 hash'], ['扇出', '两位十六进制目录 + 剩余 38 位'], ['临界点', '50 到 100 条之间']], ['扇出'])),
+    step("笔记不随 push / fetch 同步:push main 之后 git ls-remote 只有 HEAD 和 refs/heads/main,没有 refs/notes;clone 出来的仓库 git notes list 得到 0 条。要显式推送 refs/notes/*:refs/notes/*,并在 clone 里 git fetch origin \"refs/notes/*:refs/notes/*\",之后 git notes list 才有 1 条,git log 里才看到“提交二: 这次提交通过了人工评审…”。", t=tl(S(6)), mark=lidx(S(6), '本地的笔记数: 0', '显式 fetch 之后本地的笔记数: 1'), done=lidx(S(6), 'refs/heads/main', '这次提交通过了人工评审'), kv=KV([['默认', '不推送、不抓取 refs/notes'], ['同步', 'refspec refs/notes/*:refs/notes/*'], ['clone', '拿不到笔记']], ['同步'])),
+]
+A = mkarti('l66', 66, 'Git,notes,refs/notes,笔记,真实验证,动画演示',
+    '实测 git notes:笔记不改变提交的 hash,存在 refs/notes/commits 这个普通分支里,tree 里“文件名=被注解的提交 hash、内容=笔记”,每次修改多一个提交;可以有多个命名空间(--ref、--notes、notes.displayRef);rebase 后笔记留在旧提交上,notes.rewriteRef 才会复制;50 条以下不扇出,100 条起按两位十六进制目录扇出;笔记不随 push / fetch / clone 同步,要显式 refspec。',
+    'git notes 让你给已有的提交加说明而不改变提交的 hash。它存在哪里、怎么显示、改写历史之后会怎样、为什么 clone 不带笔记?这篇逐项实测,并看笔记很多时 tree 怎么扇出。',
+    [('hash 不变', '加笔记后提交本身的 hash 不变,笔记存在 refs/notes/commits'), ('50 → 100', '笔记数从 50 增加到 100 时,tree 从“文件名=hash”变成“两位十六进制目录扇出”'), ('refs/notes/*', 'push 与 fetch 默认不包含的命名空间,要显式 refspec')],
+    [('不改变提交', '<p>给提交加笔记后提交本身的 hash 不变,<code>git log</code> 在提交后面多显示一段 Notes:(<code>%N</code> 占位符)。笔记存在另一个 ref <code>refs/notes/commits</code> 里。</p>'),
+     ('笔记的存储', '<p><code>refs/notes/commits</code> 是一个普通分支:它的 tree 把“被注解的提交的完整 hash”当文件名,笔记内容是文件内容;每次修改在这个分支上加一个提交,所以笔记本身也有历史。</p>'),
+     ('显示', '<p><code>git log</code> 默认显示 <code>refs/notes/commits</code> 的笔记(<code>%N</code> 占位符);用 <code>--ref</code> 可以建别的命名空间,<code>--notes=&lt;名&gt;</code> 或 <code>notes.displayRef</code> 控制显示哪些。</p>'),
+     ('改写历史', '<p>笔记按提交 hash 挂着,rebase / amend 得到新 hash 后默认看不到旧笔记;设置 <code>notes.rewriteRef</code> 才会在改写时把笔记复制到新提交。</p>'),
+     ('扇出', '<p>笔记不多时 tree 条目就是完整 hash;笔记增多(本例 50 到 100 条之间)git 自动改用两位十六进制的子目录来扇出,和 <code>.git/objects</code> 的做法相同。</p>'),
+     ('同步', '<p><code>refs/notes/*</code> 不在默认的 fetch / push refspec 里,clone 也不带笔记。要同步需要显式地推送、抓取 <code>refs/notes/*:refs/notes/*</code>。</p>')],
+    steps,
+    [ENV_I_GIT + '。“扇出临界点”只测了 10、50、100、150、200、300 几个点,精确的阈值没有确定;笔记的批量添加用 for 循环调用 git notes add;远程是本机的裸仓库',
+     '没有验证:git notes merge 解决不同人对同一提交的笔记冲突;notes.rewriteMode(overwrite / concatenate / cat_sort_uniq / ignore);git notes prune;GitHub 等托管平台对 refs/notes 的支持;笔记很多时对 git log 性能的影响'],
+    'git notes')

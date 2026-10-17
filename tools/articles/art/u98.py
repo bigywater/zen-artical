@@ -1,0 +1,17 @@
+from lib import *
+S = SS('u98')
+steps = [
+    step("async fn 的返回值是一个编译器生成的状态机,大小由要跨 await 保存的局部变量决定。空的 async fn 是 1 字节(只有一个状态标记);跨 await 存活的 [u8; 1000] 数组让 Future 变成 1002 字节;a[1000] + b[2000] 都跨 await 则是 3002 字节。", t=tl(S(1)), done=lidx(S(1), 'nothing()', 'buf[1000] 跨 await', 'a[1000] + b[2000]'), b=bars([['空 async fn', 1, '1 B'], ['buf[1000] 跨 await', 1002, '1002 B'], ['a + b 跨 await', 3002, '3002 B']], 3002, done=[0, 1, 2]), kv=KV([['空', '1 字节'], ['跨 await 的 1000 字节', '1002 字节'], ['跨 await 的 3000 字节', '3002 字节']], ['跨 await 的 1000 字节'])),
+    step("关键细节:看的是作用域,不是最后一次使用。buf 在 await 之前最后一次用到、但仍在作用域内时,Future 还是 1002 字节;把 buf 放进内层 { } 块,await 之前作用域就结束了,Future 只有 2 字节。想让 async fn 的 Future 变小,就用内层块缩短大变量的作用域。", t=tl(S(1)), mark=lidx(S(1), '仍在作用域内', '内层'), kv=KV([['await 前用完但还在作用域', '1002 字节'], ['放进内层 { } 块', '2 字节']], ['放进内层 { } 块'])),
+    step("两个 await 的 Future:只有一个 1000 字节数组跨第二个 await,Future 是 1002 字节 —— 状态机的各个状态共享同一块存储(取最大的一个状态,而不是各状态相加)。YieldNow 自己是 1 字节。", t=tl(S(1)), done=lidx(S(1), '两个 await', 'YieldNow'), kv=KV([['各状态的变量', '共用存储,取最大']], ['各状态的变量'])),
+    step("状态保存:f() 里 for 循环三次 yield_now().await。第 1 次 poll 打印「状态0 开始」后 Pending;第 2、3、4 次 poll 各从上次停下的 await 处继续,sum 与 i 保持不变地累加(i = 1 sum = 1 → i = 2 sum = 3 → i = 3 sum = 6);第 4 次 Ready(6),共 poll 4 次。", t=tl(S(2)), done=lidx(S(2), '状态0', 'i = 1', 'i = 2', 'i = 3', 'Ready(6)'), kv=KV([['局部变量', 'Pending 之后仍保存在 Future 里'], ['poll 次数', '4(3 个 await + 1)']], ['局部变量'])),
+    step("状态机只能走一遍:已经 Ready 的 async fn 再 poll,panic:`async fn` resumed after completion,进程退出码 101。", t=tl(S(3)), mark=lidx(S(3), 'resumed after completion'), done=lidx(S(3), '第一次 poll'), kv=KV([['完成后再 poll', 'panic']], ['完成后再 poll'])),
+    step("async fn 不能直接递归:fib(n) 里 fib(n - 1).await 报 error[E0733]: recursion in an async fn requires boxing,note 说递归调用必须引入间接层(Box::pin),否则 Future 会无限大。用 Box::pin(async move { … }) 返回 Pin<Box<dyn Future>> 就可以,fib(10) = 55。", t=tl(S(4)), mark=lidx(S(4), 'error[E0733]'), done=lidx(S(4), 'Ready(55)'), kv=KV([['直接递归', 'E0733:Future 无限大'], ['Box::pin', '用堆打断递归']], ['Box::pin'])),
+    step("跨 await 持有引用的 async fn 的 Future 是 !Unpin:is_unpin(&f) 报 error[E0277]: `{async fn body of borrows()}` cannot be unpinned,note 建议使用 pin! 宏或 Box::pin。因为状态机里同时存着 local 和指向它的引用(自引用),移动它会让引用悬空,必须先 Pin。YieldNow 没有自引用,是 Unpin,不报错。", t=tl(S(5)), mark=lidx(S(5), 'error[E0277]', 'cannot be unpinned'), kv=KV([['含自引用的 Future', '!Unpin,必须 Pin 后才能 poll'], ['YieldNow', 'Unpin']], ['含自引用的 Future'])),
+]
+A = mkart('u98', 98, 'Rust,async,await,状态机,真实验证,动画演示',
+    'async fn 的 Future 是状态机:大小取决于跨 await 保存的局部变量(空 1 字节、跨 await 的 1000 字节数组 1002 字节、3000 字节 3002 字节),而且看作用域而不是最后一次使用(放进内层块只有 2 字节);poll 4 次保存并恢复局部变量;完成后再 poll panic;递归要 Box::pin(E0733);自引用 Future 是 !Unpin(E0277)。',
+    '.await 背后到底发生了什么?编译器把 async fn 变成一个枚举状态机,每个 await 点是一个状态,跨 await 的局部变量存在 Future 里。这篇用 size_of_val 直接量出状态机的大小,再验证它如何保存状态、为什么不能递归、为什么需要 Pin。',
+    [('2 对 1002 字节', '同一个数组放进内层块与留在函数作用域时,Future 的大小'), ('E0733', 'async fn 直接递归的错误码'), ('4 次', '三个 await 的 async fn 从开始到 Ready 所需的 poll 次数')],
+    [('Future 的大小', '<p>Future 与 Poll 见<a href="rust-future-poll.html">Future 与 Poll</a>。</p>'), ('状态保存与恢复', None), ('完成后再 poll', None), ('递归', None), ('自引用与 Pin', '<p>Pin 见<a href="rust-pin-unpin.html">Pin 与 Unpin</a>。</p>')],
+    steps, [ENV_U + '。大小来自 std::mem::size_of_val', '没有验证:状态机的具体枚举布局(没有用 -Z dump-mir 看 coroutine)、更复杂的 select/join 的 Future 大小、-Zprint-type-sizes 的输出、编译器对内部变量布局的优化在其他版本是否一致'], 'async/await 状态机')

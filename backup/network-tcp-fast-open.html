@@ -1,0 +1,628 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>TCP Fast Open:把数据塞进 SYN</title>
+<meta name="description" content="实测 TCP Fast Open:macOS 上服务端 listen 后才能设选项、客户端用 connectx;cookie 与 SYN 带数据、50 ms 延迟下 202 ms 降到 101 ms、example.com 接受 SYN 里的请求;服务端密钥轮换后旧 cookie 被拒、数据不丢;客户端在 SYN 重传 3 次后对该目的地停用 TFO,停用只针对该目的地、至少 40 分钟没有恢复;Linux 容器对照:省一个往返、对不支持的服务端回退、SYN 数据可被重放、带数据的 SYN 被丢弃时每个连接多等约 1 秒。">
+<link rel="canonical" href="https://bigywater.tech/network-tcp-fast-open.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="TCP Fast Open:把数据塞进 SYN">
+<meta property="og:description" content="实测 TCP Fast Open:macOS 上服务端 listen 后才能设选项、客户端用 connectx;cookie 与 SYN 带数据、50 ms 延迟下 202 ms 降到 101 ms、example.com 接受 SYN 里的请求;服务端密钥轮换后旧 cookie 被拒、数据不丢;客户端在 SYN 重传 3 次后对该目的地停用 TFO,停用只针对该目的地、至少 40 分钟没有恢复;Linux 容器对照:省一个往返、对不支持的服务端回退、SYN 数据可被重放、带数据的 SYN 被丢弃时每个连接多等约 1 秒。">
+<meta property="og:url" content="https://bigywater.tech/network-tcp-fast-open.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="TCP Fast Open:把数据塞进 SYN">
+<meta name="twitter:description" content="实测 TCP Fast Open:macOS 上服务端 listen 后才能设选项、客户端用 connectx;cookie 与 SYN 带数据、50 ms 延迟下 202 ms 降到 101 ms、example.com 接受 SYN 里的请求;服务端密钥轮换后旧 cookie 被拒、数据不丢;客户端在 SYN 重传 3 次后对该目的地停用 TFO,停用只针对该目的地、至少 40 分钟没有恢复;Linux 容器对照:省一个往返、对不支持的服务端回退、SYN 数据可被重放、带数据的 SYN 被丢弃时每个连接多等约 1 秒。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">2768</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">70</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">97</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">56</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">78</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">114</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">111</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">88</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#40678F; --series-c-soft:#DDE7F2;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#86B1DC; --series-c-soft:#16263A;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#86B1DC; --series-c-soft:#16263A;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>网络协议 · 60</div>
+  <h1>TCP Fast Open:把数据塞进 SYN</h1>
+  <p>TCP Fast Open 想把“握手一个往返 + 请求应答一个往返”压成一个往返:第一次连接拿一个 cookie,以后的连接把数据直接塞进 SYN。这篇先在 macOS 上实测它在线上长什么样、能省多少时间、公网上谁支持,再用 root 权限补上密钥轮换和“客户端为什么悄悄不用了”,最后在 Linux 容器里对照 Linux 的行为、重放和被中间设备丢弃的情形。</p>
+  <div class="hero-fact">
+<div><div class="num">202 → 101 ms</div><div class="lbl">50 ms 单向延迟的链路上,普通 connect + send 与 SYN 带数据的 connectx 的耗时中位数</div></div><div><div class="num">3 次重传后停用</div><div class="lbl">macOS 在 SYN 带数据重传 3 次后对该目的地不再发 TFO 选项,至少 40 分钟没有恢复</div></div><div><div class="num">5 次</div><div class="lbl">被重放的 SYN 让 Linux 服务端应用读到同一份数据的次数(含原始 1 次)</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="network-reuseaddr-reuseport.html">SO_REUSEADDR 与 SO_REUSEPORT:端口复用的两种含义</a></div>
+<section>
+  <h2>开关与调用方式</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  net.inet.tcp.fastopen: 3
+  net.inet.tcp.fastopen_backlog: 10
+  listen() 之前对监听套接字 setsockopt(TCP_FASTOPEN, 1):EINVAL
+  listen() 之后 setsockopt(TCP_FASTOPEN, 1):成功,读回 1
+  Python 的 socket 模块里有 TCP_FASTOPEN: True;有 MSG_FASTOPEN: False(Linux 用 sendto + MSG_FASTOPEN,macOS 用 connectx,这里通过 ctypes 调用 libc 的 connectx)</pre></div>
+  <p>net.inet.tcp.fastopen=3;服务端要在 listen() 之后设 TCP_FASTOPEN;客户端用 connectx 带数据(Python 需要 ctypes)。</p>
+</section>
+<section>
+  <h2>服务端不支持时</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  服务端收到的数据 [b'hello0', b'hello1', b'hello2', b'hello3', b'hello4', b'hello5', b'hello6', b'hello7']
+  第 1 个:SYN 载荷 0 字节,TFO 选项长度 [2],cookie 前 4 字节 -;SYN+ACK 的 TFO 选项 无;SYN 选项 ['MSS', 'WS', 'TS', 'SACKok', 'TFO']
+  第 2 个:SYN 载荷 0 字节,TFO 选项长度 [2],cookie 前 4 字节 -;SYN+ACK 的 TFO 选项 无;SYN 选项 ['MSS', 'WS', 'TS', 'SACKok', 'TFO']
+  第 3 个:SYN 载荷 0 字节,TFO 选项长度 [2],cookie 前 4 字节 -;SYN+ACK 的 TFO 选项 无;SYN 选项 ['MSS', 'WS', 'TS', 'SACKok', 'TFO']
+  第 4 个:SYN 载荷 0 字节,TFO 选项长度 [2],cookie 前 4 字节 -;SYN+ACK 的 TFO 选项 无;SYN 选项 ['MSS', 'WS', 'TS', 'SACKok', 'TFO']
+  第 5 个:SYN 载荷 0 字节,TFO 选项长度 [2],cookie 前 4 字节 -;SYN+ACK 的 TFO 选项 无;SYN 选项 ['MSS', 'WS', 'TS', 'SACKok', 'TFO']
+  第 6 个:SYN 载荷 0 字节,TFO 选项长度 [2],cookie 前 4 字节 -;SYN+ACK 的 TFO 选项 无;SYN 选项 ['MSS', 'WS', 'TS', 'SACKok', 'TFO']
+  第 7 个:SYN 载荷 0 字节,TFO 选项长度 [2],cookie 前 4 字节 -;SYN+ACK 的 TFO 选项 无;SYN 选项 ['MSS', 'WS', 'TS', 'SACKok', 'TFO']
+  第 8 个:SYN 载荷 0 字节,TFO 选项长度 [2],cookie 前 4 字节 -;SYN+ACK 的 TFO 选项 无;SYN 选项 ['MSS', 'WS', 'TS', 'SACKok', 'TFO']</pre></div>
+  <p>用一个客户端从没用过的目的地做对照:8 次连接的 SYN 都是 0 字节、带长度 2 的 TFO 选项请求 cookie,服务端不回 TFO 选项,数据在握手后才发。</p>
+</section>
+<section>
+  <h2>cookie 与 SYN 带数据</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  服务端收到的数据 12 条,全部正确:True
+  12 个连接的 SYN 载荷(字节):[0, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7]
+  12 个 SYN 的 TFO 选项长度:[[2], [10], [10], [10], [10], [10], [10], [10], [10], [10], [10], [10]](2 = 只请求 cookie;10 = 带 8 字节 cookie)
+  第 2 个连接(SYN 里带数据的第一个)的全部包:
+    +   0.00 ms  C→S  SYN       载荷   7 字节  选项 ['MSS', 'WS', 'TS', 'SACKok', 'TFO']  ← TFO 选项长度 [10]
+    +   0.26 ms  S→C  SYN+ACK   载荷   0 字节  选项 ['MSS', 'WS', 'TS', 'SACKok']
+    +   0.32 ms  C→S  ACK       载荷   0 字节  选项 ['TS']
+    +   0.34 ms  S→C  ACK       载荷   0 字节  选项 ['TS']
+    +   0.47 ms  S→C  PSH+ACK   载荷  10 字节  选项 ['TS']
+    +   0.56 ms  C→S  FIN+ACK   载荷   0 字节  选项 ['TS']
+    +   0.58 ms  S→C  ACK       载荷   0 字节  选项 ['TS']
+    +  55.64 ms  S→C  FIN+ACK   载荷   0 字节  选项 ['TS']
+    +  55.77 ms  C→S  ACK       载荷   0 字节  选项 ['TS']
+  它的 SYN+ACK 的 ack = SYN 的 seq + 8(1 个 SYN + 7 字节数据)</pre></div>
+  <p>第一个连接请求 cookie(TFO 选项长 2);之后的连接 SYN 带 8 字节 cookie(选项长 10)和数据,SYN+ACK 的 ack 确认了数据。</p>
+</section>
+<section>
+  <h2>省下一个往返</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  普通 connect + send     :逐次(ms):[202, 200, 201, 202]
+  connectx(TFO)         :逐次(ms):[205, 101, 100, 103]
+  connectx 这 4 次的 SYN 载荷(字节):[0, 5, 5, 5]
+  普通 connect + send 中位 202 ms;connectx 里 SYN 带数据的 3 次中位 101 ms,SYN 没带数据的 1 次中位 205 ms;省下 101 ms ≈ 1.0 个 RTT(RTT = 2 × 50 ms)</pre></div>
+  <p>50 ms 单向延迟下,普通连接 202 ms,带数据的 TFO 连接 101 ms。</p>
+</section>
+<section>
+  <h2>公网服务器</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  connectx 第 1 次:SYN 载荷 56 字节,SYN 选项 ['MSS', 'WS', 'TS', 'SACKok', 'TFO'](TFO 选项长度 [10]);SYN+ACK 选项 ['MSS', 'SACKok', 'TS', 'WS'](TFO 选项长度 []),ack = SYN 的 seq + 57
+  connectx 第 2 次:SYN 载荷 56 字节,SYN 选项 ['MSS', 'WS', 'TS', 'SACKok', 'TFO'](TFO 选项长度 [10]);SYN+ACK 选项 ['MSS', 'SACKok', 'TS', 'WS'](TFO 选项长度 []),ack = SYN 的 seq + 57
+  connectx 第 3 次:SYN 载荷 56 字节,SYN 选项 ['MSS', 'WS', 'TS', 'SACKok', 'TFO'](TFO 选项长度 [10]);SYN+ACK 选项 ['MSS', 'SACKok', 'TS', 'WS'](TFO 选项长度 []),ack = SYN 的 seq + 57
+  connectx 到收到响应第一批字节:[267, 243, 248] ms;响应开头 [b'HTTP/1.1 200'];普通 connect + send:[386, 378, 476] ms</pre></div>
+  <p>example.com 接受 SYN 里的 56 字节请求并确认,首字节比普通连接快约一个 RTT。</p>
+</section>
+<section>
+  <h2>服务端密钥轮换</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  设置 K1:net.inet.tcp.fastopen_key:  -&gt;
+  换成 K2:net.inet.tcp.fastopen_key:  -&gt;
+  服务端收到的数据 [b'hello0', b'hello1', b'hello2', b'hello3', b'hello4', b'hello5', b'hello6'],全部正确:True
+  第 1 个:SYN 载荷 0 字节,TFO 选项长度 [2],cookie 前 4 字节 -;SYN+ACK 的 TFO 选项 e317342e
+  第 2 个:SYN 载荷 6 字节,TFO 选项长度 [10],cookie 前 4 字节 e317342e;SYN+ACK 的 TFO 选项 无,数据被接受
+  第 3 个:SYN 载荷 6 字节,TFO 选项长度 [10],cookie 前 4 字节 e317342e;SYN+ACK 的 TFO 选项 无,数据被接受
+  第 4 个:SYN 载荷 6 字节,TFO 选项长度 [10],cookie 前 4 字节 e317342e;SYN+ACK 的 TFO 选项 533701b8,数据没被接受(ack = seq + 1)   ← 换密钥之后
+  第 5 个:SYN 载荷 6 字节,TFO 选项长度 [10],cookie 前 4 字节 533701b8;SYN+ACK 的 TFO 选项 无,数据被接受   ← 换密钥之后
+  第 6 个:SYN 载荷 6 字节,TFO 选项长度 [10],cookie 前 4 字节 533701b8;SYN+ACK 的 TFO 选项 无,数据被接受   ← 换密钥之后
+  第 7 个:SYN 载荷 6 字节,TFO 选项长度 [10],cookie 前 4 字节 533701b8;SYN+ACK 的 TFO 选项 无,数据被接受   ← 换密钥之后</pre></div>
+  <p>换密钥之后,旧 cookie 被拒,SYN+ACK 的 ack 只有 seq + 1 并带来新 cookie,数据在握手后重发,不丢;下一个连接起用新 cookie。</p>
+</section>
+<section>
+  <h2>客户端悄悄停用</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  连接总数 40(前 3 个无丢包;其后 30 个在 30% 丢包下;之后每 10 秒一次);丢包阶段 connectx/recv 失败 0 次
+  无丢包第 1 个:0B/TFO2
+  无丢包第 2 个:7B/TFO10
+  无丢包第 3 个:7B/TFO10
+  丢包第  1 个:6B/TFO10
+  丢包第  2 个:6B/TFO10 → 0B/无TFO
+  丢包第  3 个:6B/TFO10
+  丢包第  4 个:6B/TFO10 → 0B/无TFO
+  丢包第  5 个:6B/TFO10 → 0B/无TFO
+  丢包第  6 个:0B/无TFO
+  丢包第  7 个:0B/无TFO
+  丢包第  8 个:0B/无TFO
+  丢包第  9 个:0B/无TFO
+  丢包第 10 个:0B/无TFO
+  丢包第 11 个:0B/无TFO
+  丢包第 12 个:0B/无TFO
+  丢包第 13 个:0B/无TFO
+  丢包第 14 个:0B/无TFO
+  丢包第 15 个:0B/无TFO
+  丢包第 16 个:0B/无TFO
+  丢包第 17 个:0B/无TFO
+  丢包第 18 个:0B/无TFO
+  丢包第 19 个:0B/无TFO
+  丢包第 20 个:0B/无TFO
+  丢包第 21 个:0B/无TFO
+  丢包第 22 个:0B/无TFO
+  丢包第 23 个:0B/无TFO
+  丢包第 24 个:0B/无TFO
+  丢包第 25 个:0B/无TFO
+  丢包第 26 个:0B/无TFO
+  丢包第 27 个:0B/无TFO
+  丢包第 28 个:0B/无TFO
+  丢包第 29 个:0B/无TFO
+  丢包第 30 个:0B/无TFO
+  关掉丢包之后:
+    +   0 s:0B/无TFO
+    +  10 s:0B/无TFO
+    +  20 s:0B/无TFO
+    +  30 s:0B/无TFO
+    +  40 s:0B/无TFO
+    +  50 s:0B/无TFO
+    +  60 s:0B/无TFO
+    +  70 s:0B/无TFO
+    +  80 s:0B/无TFO
+    +  90 s:0B/无TFO
+    + 100 s:0B/无TFO
+    + 110 s:0B/无TFO
+    + 120 s:0B/无TFO
+    + 130 s:0B/无TFO
+    + 140 s:0B/无TFO
+    + 150 s:0B/无TFO
+    + 160 s:0B/无TFO
+    + 170 s:0B/无TFO
+    + 180 s:0B/无TFO
+    + 190 s:0B/无TFO
+    + 200 s:0B/无TFO
+    + 210 s:0B/无TFO
+    + 220 s:0B/无TFO
+    + 230 s:0B/无TFO
+    + 240 s:0B/无TFO
+    + 250 s:0B/无TFO
+    + 260 s:0B/无TFO
+    + 270 s:0B/无TFO
+    + 280 s:0B/无TFO
+    + 290 s:0B/无TFO
+    + 300 s:0B/无TFO
+    + 310 s:0B/无TFO
+    + 320 s:0B/无TFO
+    + 330 s:0B/无TFO
+    + 340 s:0B/无TFO
+    + 350 s:0B/无TFO</pre></div>
+  <p>30% 丢包下,SYN 带数据的重传 3 次之后,客户端对该目的地不再发 TFO 选项;丢包关掉后至少 40 分钟没有恢复。</p>
+</section>
+<section>
+  <h2>停用的范围与恢复</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  同一目的地、新端口:0B/无TFO;0B/无TFO;0B/无TFO
+  新目的地 127.77.0.22:0B/TFO2;6B/TFO10;6B/TFO10
+    +    1 s:0B/无TFO
+    +   61 s:0B/无TFO
+    +  121 s:0B/无TFO
+    +  181 s:0B/无TFO
+    + 2281 s:0B/无TFO
+    + 2341 s:0B/无TFO
+    + 2401 s:0B/无TFO
+  共轮询 41 次,覆盖 2401 秒;最后一次 SYN 载荷 0 字节;没有恢复</pre></div>
+  <p>停用是按目的地址记的:同一目的地换端口仍不尝试,别的目的地不受影响;之后每 60 秒试一次,共 41 次、覆盖 2401 秒,没有恢复。</p>
+</section>
+<section>
+  <h2>Linux:省一个往返</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  清掉缓存前 ip tcp_metrics 里的 TFO 记录:1 条带 fo_cookie
+  清掉后:0 条带 fo_cookie
+  耗时(ms):普通 connect + send ['313.5', '215.0', '213.0', '212.5'];TFO(第 1 次取 cookie)['214.1', '103.7', '110.7', '108.7', '108.8'];清缓存后 TFO ['214.8', '102.3']
+  普通 4 次中位 214 ms;TFO 里 SYN 带数据的 4 次中位 109 ms
+  每个连接的 SYN(按时间顺序:4 个普通、5 个 TFO、2 个清缓存后):
+    第 1 个:SYN 载荷 0 字节,TFO 选项长度 无,cookie 前 4 字节 -;SYN+ACK 的 TFO 选项 无
+    第 2 个:SYN 载荷 0 字节,TFO 选项长度 无,cookie 前 4 字节 -;SYN+ACK 的 TFO 选项 无
+    第 3 个:SYN 载荷 0 字节,TFO 选项长度 无,cookie 前 4 字节 -;SYN+ACK 的 TFO 选项 无
+    第 4 个:SYN 载荷 0 字节,TFO 选项长度 无,cookie 前 4 字节 -;SYN+ACK 的 TFO 选项 无
+    第 5 个:SYN 载荷 0 字节,TFO 选项长度 [2],cookie 前 4 字节 -;SYN+ACK 的 TFO 选项 a407c2fe
+    第 6 个:SYN 载荷 2 字节,TFO 选项长度 [10],cookie 前 4 字节 a407c2fe;SYN+ACK 的 TFO 选项 无,数据被接受
+    第 7 个:SYN 载荷 2 字节,TFO 选项长度 [10],cookie 前 4 字节 a407c2fe;SYN+ACK 的 TFO 选项 无,数据被接受
+    第 8 个:SYN 载荷 2 字节,TFO 选项长度 [10],cookie 前 4 字节 a407c2fe;SYN+ACK 的 TFO 选项 无,数据被接受
+    第 9 个:SYN 载荷 2 字节,TFO 选项长度 [10],cookie 前 4 字节 a407c2fe;SYN+ACK 的 TFO 选项 无,数据被接受
+    第 10 个:SYN 载荷 0 字节,TFO 选项长度 [2],cookie 前 4 字节 -;SYN+ACK 的 TFO 选项 a407c2fe
+    第 11 个:SYN 载荷 2 字节,TFO 选项长度 [10],cookie 前 4 字节 a407c2fe;SYN+ACK 的 TFO 选项 无,数据被接受
+  服务端收到的数据:n0 n1 n2 n3 t0 t1 t2 t3 t4 f0 f1</pre></div>
+  <p>同样 100 ms 往返,Linux 的 TFO 连接中位 109 ms,普通连接 214 ms;ip tcp_metrics flush 清掉缓存后又要重新取 cookie。</p>
+</section>
+<section>
+  <h2>对不支持的服务端</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  3 次耗时(ms):['217.3', '216.1', '213.6']
+    第 1 个:SYN 载荷 2 字节,TFO 选项长度 [10],cookie 前 4 字节 a407c2fe;SYN+ACK 的 TFO 选项 无,数据没被接受(ack = seq + 1)
+    第 2 个:SYN 载荷 2 字节,TFO 选项长度 [10],cookie 前 4 字节 a407c2fe;SYN+ACK 的 TFO 选项 无,数据没被接受(ack = seq + 1)
+    第 3 个:SYN 载荷 2 字节,TFO 选项长度 [10],cookie 前 4 字节 a407c2fe;SYN+ACK 的 TFO 选项 无,数据没被接受(ack = seq + 1)
+  服务端(7001)收到的数据:x0 x1 x2</pre></div>
+  <p>Linux 客户端把 cookie 和数据发给没开 TFO 的端口:数据没被确认,握手后重发,不丢不重,耗时与普通连接一样。</p>
+</section>
+<section>
+  <h2>SYN 里的数据可被重放</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  (容器网卡开着发送校验和卸载,抓到的出站包里 TCP 校验和是占位值,直接重发会被服务端丢弃——第一次尝试时服务端计数 TcpInCsumErrors = 2,重发的包没有生效;下面是重新计算校验和之后的结果)
+  抓到的 SYN:载荷 7 字节,TFO 选项长度 [10]
+  服务端内核计数 TcpExtTCPFastOpenPassive(收到有效 cookie 的 SYN 并建立子连接的次数)增加了 5(1 次原始 + 重放)
+  服务端应用收到的记录(9 条):['order-0', 'order-0', "ERR ConnectionResetError(104, 'Connection reset by peer')", 'order-0', "ERR ConnectionResetError(104, 'Connection reset by peer')", 'order-0', "ERR ConnectionResetError(104, 'Connection reset by peer')", 'order-0', "ERR ConnectionResetError(104, 'Connection reset by peer')"]
+  其中应用读到 order-0 的有 5 次,另有 4 条是随后收到客户端 RST 的报错(客户端内核没有对应的套接字,对重放引发的 SYN+ACK 回 RST)</pre></div>
+  <p>原样重发抓到的 SYN,服务端应用又读到同一份数据:5 次读取里有 4 次来自重放。所以只适合幂等请求。</p>
+</section>
+<section>
+  <h2>被中间设备丢弃</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  tcp_fastopen_blackhole_timeout_sec = 0
+  丢弃期间 5 次耗时(ms):['1269.1', '1227.7', '1228.9', '1227.0', '1231.1'];撤掉规则后再 3 次:['106.0', '106.2', '103.0']
+    第 1 个连接的 SYN(相对时间 s / 载荷):+0.0s/2B, +1.1s/0B
+    第 2 个连接的 SYN(相对时间 s / 载荷):+0.0s/2B, +1.0s/0B
+    第 3 个连接的 SYN(相对时间 s / 载荷):+0.0s/2B, +1.0s/0B
+    第 4 个连接的 SYN(相对时间 s / 载荷):+0.0s/2B, +1.0s/0B
+    第 5 个连接的 SYN(相对时间 s / 载荷):+0.0s/2B, +1.0s/0B
+    第 6 个连接的 SYN(相对时间 s / 载荷):+0.0s/2B
+    第 7 个连接的 SYN(相对时间 s / 载荷):+0.0s/2B
+    第 8 个连接的 SYN(相对时间 s / 载荷):+0.0s/2B
+  客户端内核计数(从本组容器启动起累计,其中第十节的 3 次 + 本节的 5 次 = 8 次 SYN 里的数据没被对端确认):TcpExtTCPFastOpenActiveFail 8;TcpExtTCPFastOpenBlackhole 0;
+  服务端收到的数据:d0 d1 d2 d3 d4 e0 e1 e2</pre></div>
+  <p>带数据的 SYN 被丢掉时,Linux 约 1 秒后重传无数据的 SYN,每个连接多等约 1.0 秒;这个内核里的黑洞检测没启用,连续 5 次都是这样。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">TCP Fast Open</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "b", "kind": "bars", "label": "数字对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "先看开关。net.inet.tcp.fastopen = 3(位掩码:1 客户端、2 服务端,都开),fastopen_backlog = 10。服务端要在 listen() 之后才能对监听套接字 setsockopt(TCP_FASTOPEN, 1):listen() 之前设置得到 EINVAL,之后成功、读回 1。客户端在 macOS 上不是 Linux 的 sendto + MSG_FASTOPEN(Python 的 socket 模块里没有 MSG_FASTOPEN),而是系统调用 connectx,带上 CONNECT_DATA_IDEMPOTENT 标志和一块数据;Python 没有封装,我用 ctypes 直接调用 libc 的 connectx。", "s": {"t": {"lines": ["  net.inet.tcp.fastopen: 3", "  net.inet.tcp.fastopen_backlog: 10", "  listen() 之前对监听套接字 setsockopt(TCP_FASTOPEN, 1):EINVAL", "  listen() 之后 setsockopt(TCP_FASTOPEN, 1):成功,读回 1", "  Python 的 socket 模块里有 TCP_FASTOPEN: True;有 MSG_FASTOPEN: False(Linux 用 sendto + MSG_FASTOPEN,macOS 用 connectx,这里通过 ctypes 调用 libc 的 connectx)"], "cur": [], "mark": [], "done": []}, "mark": [2, 3], "done": [0, 1, 4], "kv": {"items": [["net.inet.tcp.fastopen", "3(客户端 + 服务端)"], ["服务端", "listen() 之后 setsockopt(0x105)"], ["客户端", "connectx(ctypes 调用)"]], "hl": ["客户端"]}}}, {"note": "换一个客户端从没用过的目的地做干净对照:lo0 上新加的别名 127.77.0.11,服务端不开 TFO,连续 8 次 connectx(各带 6 字节)。服务端 8 条数据全部收到(hello0 到 hello7)。8 个 SYN 全都一样:载荷 0 字节,选项 MSS / WS / TS / SACKok 之外多一个长度 2 的 TFO 选项(只请求 cookie,没有数据),SYN+ACK 里没有 TFO 选项——服务端没有响应这个请求。8 次都如此,客户端没有因为得不到 cookie 就不再尝试;数据是握手完成之后才发出的。(我最初在 127.0.0.1 上做这个对照,但那个目的地的 TFO 早已被客户端停用,SYN 里连请求 cookie 的选项都看不到,没有对照意义;原因见第七、八节。)", "s": {"t": {"lines": ["  服务端收到的数据 [b'hello0', b'hello1', b'hello2', b'hello3', b'hello4', b'hello5', b'hello6', b'hello7']", "  第 1 个:SYN 载荷 0 字节,TFO 选项长度 [2],cookie 前 4 字节 -;SYN+ACK 的 TFO 选项 无;SYN 选项 ['MSS', 'WS', 'TS', 'SACKok', 'TFO']", "  第 2 个:SYN 载荷 0 字节,TFO 选项长度 [2],cookie 前 4 字节 -;SYN+ACK 的 TFO 选项 无;SYN 选项 ['MSS', 'WS', 'TS', 'SACKok', 'TFO']", "  第 3 个:SYN 载荷 0 字节,TFO 选项长度 [2],cookie 前 4 字节 -;SYN+ACK 的 TFO 选项 无;SYN 选项 ['MSS', 'WS', 'TS', 'SACKok', 'TFO']", "  第 4 个:SYN 载荷 0 字节,TFO 选项长度 [2],cookie 前 4 字节 -;SYN+ACK 的 TFO 选项 无;SYN 选项 ['MSS', 'WS', 'TS', 'SACKok', 'TFO']", "  第 5 个:SYN 载荷 0 字节,TFO 选项长度 [2],cookie 前 4 字节 -;SYN+ACK 的 TFO 选项 无;SYN 选项 ['MSS', 'WS', 'TS', 'SACKok', 'TFO']", "  第 6 个:SYN 载荷 0 字节,TFO 选项长度 [2],cookie 前 4 字节 -;SYN+ACK 的 TFO 选项 无;SYN 选项 ['MSS', 'WS', 'TS', 'SACKok', 'TFO']", "  第 7 个:SYN 载荷 0 字节,TFO 选项长度 [2],cookie 前 4 字节 -;SYN+ACK 的 TFO 选项 无;SYN 选项 ['MSS', 'WS', 'TS', 'SACKok', 'TFO']", "  第 8 个:SYN 载荷 0 字节,TFO 选项长度 [2],cookie 前 4 字节 -;SYN+ACK 的 TFO 选项 无;SYN 选项 ['MSS', 'WS', 'TS', 'SACKok', 'TFO']"], "cur": [], "mark": [], "done": []}, "mark": [1, 8], "done": [0], "kv": {"items": [["SYN 载荷", "8 次都是 0 字节"], ["SYN 的 TFO 选项", "8 次都带长度 2(请求 cookie)"], ["SYN+ACK", "没有 TFO 选项"], ["数据", "握手之后才发出"]], "hl": ["SYN 的 TFO 选项"]}}}, {"note": "换一个没用过的目的地(本机 en0 的 IPv4 地址,发往它的包走 lo0),服务端开 TFO,连续 12 次 connectx,各带 7 字节。12 个 SYN 的载荷:[0, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7]。第 1 个连接 SYN 里只有长度 2 的 TFO 选项——客户端请求 cookie,服务端在 SYN+ACK 里给了 cookie;从第 2 个连接起,SYN 带着长度 10 的 TFO 选项(8 字节 cookie)和 7 字节数据。第 2 个连接的线上:+0.00 ms SYN 带 7 字节,+0.26 ms SYN+ACK 的 ack = SYN 的 seq + 8(SYN 占 1 + 数据 7 字节),+0.32 ms ACK,服务端在数据到达后 +0.47 ms 就回了 10 字节应答。12 条数据服务端全部正确收到。", "s": {"t": {"lines": ["  服务端收到的数据 12 条,全部正确:True", "  12 个连接的 SYN 载荷(字节):[0, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7]", "  12 个 SYN 的 TFO 选项长度:[[2], [10], [10], [10], [10], [10], [10], [10], [10], [10], [10], [10]](2 = 只请求 cookie;10 = 带 8 字节 cookie)", "  第 2 个连接(SYN 里带数据的第一个)的全部包:", "    +   0.00 ms  C→S  SYN       载荷   7 字节  选项 ['MSS', 'WS', 'TS', 'SACKok', 'TFO']  ← TFO 选项长度 [10]", "    +   0.26 ms  S→C  SYN+ACK   载荷   0 字节  选项 ['MSS', 'WS', 'TS', 'SACKok']", "    +   0.32 ms  C→S  ACK       载荷   0 字节  选项 ['TS']", "    +   0.34 ms  S→C  ACK       载荷   0 字节  选项 ['TS']", "    +   0.47 ms  S→C  PSH+ACK   载荷  10 字节  选项 ['TS']", "    +   0.56 ms  C→S  FIN+ACK   载荷   0 字节  选项 ['TS']", "    +   0.58 ms  S→C  ACK       载荷   0 字节  选项 ['TS']", "    +  55.64 ms  S→C  FIN+ACK   载荷   0 字节  选项 ['TS']", "    +  55.77 ms  C→S  ACK       载荷   0 字节  选项 ['TS']", "  它的 SYN+ACK 的 ack = SYN 的 seq + 8(1 个 SYN + 7 字节数据)"], "cur": [], "mark": [], "done": []}, "mark": [1, 2, 13], "done": [0, 3], "b": {"items": [["第 1 个连接 SYN 载荷", 0, "0 字节"], ["第 2~12 个连接 SYN 载荷", 7, "7 字节"]], "max": 7, "cur": [], "mark": [1], "done": [0]}, "kv": {"items": [["第 1 个", "SYN 无数据,TFO 选项长 2(要 cookie)"], ["第 2~12 个", "SYN 带 7 字节,TFO 选项长 10"], ["SYN+ACK 的 ack", "seq + 8(确认了数据)"]], "hl": ["第 2~12 个"]}}}, {"note": "省下多少时间:又换一个没用过的目的地(本机 en0 的链路本地 IPv6 地址),lo0 上每方向加 50 ms 延迟(RTT 100 ms)。4 次普通 connect + send:202 / 200 / 201 / 202 ms,中位 202 ms。4 次 connectx:205 / 101 / 100 / 103 ms,SYN 载荷 [0, 5, 5, 5]——第 1 次取 cookie,SYN 里没有数据,耗时 205 ms 和普通连接一样;后 3 次 SYN 带 5 字节,耗时中位 101 ms。省下 101 ms,正好约 1 个 RTT:数据在 SYN 里到达,服务端不用等握手完成就能回应,请求-应答少一个往返。", "s": {"t": {"lines": ["  普通 connect + send     :逐次(ms):[202, 200, 201, 202]", "  connectx(TFO)         :逐次(ms):[205, 101, 100, 103]", "  connectx 这 4 次的 SYN 载荷(字节):[0, 5, 5, 5]", "  普通 connect + send 中位 202 ms;connectx 里 SYN 带数据的 3 次中位 101 ms,SYN 没带数据的 1 次中位 205 ms;省下 101 ms ≈ 1.0 个 RTT(RTT = 2 × 50 ms)"], "cur": [], "mark": [], "done": []}, "mark": [1, 3], "done": [0, 3], "b": {"items": [["普通 connect + send", 202, "202 ms"], ["connectx(无 cookie)", 205, "205 ms"], ["connectx(SYN 带数据)", 101, "101 ms"]], "max": 205, "cur": [], "mark": [2], "done": [0, 1]}, "kv": {"items": [["普通 connect + send", "中位 202 ms"], ["第 1 次 connectx(取 cookie)", "205 ms"], ["后 3 次(SYN 带数据)", "中位 101 ms"], ["省下", "101 ms ≈ 1 个 RTT"]], "hl": ["省下"]}}}, {"note": "真实服务器:对 example.com:80 用 connectx,把 56 字节的 HTTP 请求放进 SYN。3 次的 SYN 载荷都是 56 字节,TFO 选项长度 10(带 cookie——这台本机此前已经拿到过 example.com 的 cookie);服务器的 SYN+ACK 的 ack = SYN 的 seq + 57,即确认了 SYN 里的数据,说明 example.com 的服务器接受了 SYN 里的请求。从发起到收到响应第一批字节:267 / 243 / 248 ms;普通 connect + send 的 3 次是 386 / 378 / 476 ms。差不多省下一个 RTT。SYN+ACK 的选项里没有 TFO(原因没有查证)。", "s": {"t": {"lines": ["  connectx 第 1 次:SYN 载荷 56 字节,SYN 选项 ['MSS', 'WS', 'TS', 'SACKok', 'TFO'](TFO 选项长度 [10]);SYN+ACK 选项 ['MSS', 'SACKok', 'TS', 'WS'](TFO 选项长度 []),ack = SYN 的 seq + 57", "  connectx 第 2 次:SYN 载荷 56 字节,SYN 选项 ['MSS', 'WS', 'TS', 'SACKok', 'TFO'](TFO 选项长度 [10]);SYN+ACK 选项 ['MSS', 'SACKok', 'TS', 'WS'](TFO 选项长度 []),ack = SYN 的 seq + 57", "  connectx 第 3 次:SYN 载荷 56 字节,SYN 选项 ['MSS', 'WS', 'TS', 'SACKok', 'TFO'](TFO 选项长度 [10]);SYN+ACK 选项 ['MSS', 'SACKok', 'TS', 'WS'](TFO 选项长度 []),ack = SYN 的 seq + 57", "  connectx 到收到响应第一批字节:[267, 243, 248] ms;响应开头 [b'HTTP/1.1 200'];普通 connect + send:[386, 378, 476] ms"], "cur": [], "mark": [], "done": []}, "mark": [0, 3], "done": [1, 2], "b": {"items": [["connectx 带数据", 248, "约 250 ms"], ["普通 connect + send", 386, "约 390 ms"]], "max": 476, "cur": [], "mark": [0], "done": [1]}, "kv": {"items": [["SYN 载荷", "56 字节(HTTP 请求)"], ["SYN+ACK 的 ack", "seq + 57,数据被确认"], ["首字节", "267 / 243 / 248 ms"], ["普通连接", "386 / 378 / 476 ms"]], "hl": ["SYN+ACK 的 ack"]}}}, {"note": "服务端密钥轮换(需要 root:sysctl net.inet.tcp.fastopen_key,值是 32 个十六进制字符,读回是空的,不能回读)。目的地 127.77.0.12,服务端开 TFO,先设密钥 K1:连接 1 请求 cookie,SYN+ACK 带回 cookie(前 4 字节 e317342e);连接 2、3 的 SYN 带这个 cookie 和 6 字节数据,SYN+ACK 的 ack = SYN 的 seq + 7,数据被接受。然后换成密钥 K2:连接 4 的 SYN 仍带旧 cookie 和数据,服务端不接受——SYN+ACK 的 ack 只有 seq + 1,数据没被确认,同时 SYN+ACK 里带来一个新 cookie(前 4 字节 533701b8);数据在握手之后由客户端重发,服务端应用照样完整收到 hello3。连接 5~7 的 SYN 用新 cookie,数据又被接受。7 条数据全部正确收到。所以密钥轮换的代价是一个连接回到普通握手速度,没有数据丢失,客户端自己换上新 cookie。", "s": {"t": {"lines": ["  设置 K1:net.inet.tcp.fastopen_key:  ->", "  换成 K2:net.inet.tcp.fastopen_key:  ->", "  服务端收到的数据 [b'hello0', b'hello1', b'hello2', b'hello3', b'hello4', b'hello5', b'hello6'],全部正确:True", "  第 1 个:SYN 载荷 0 字节,TFO 选项长度 [2],cookie 前 4 字节 -;SYN+ACK 的 TFO 选项 e317342e", "  第 2 个:SYN 载荷 6 字节,TFO 选项长度 [10],cookie 前 4 字节 e317342e;SYN+ACK 的 TFO 选项 无,数据被接受", "  第 3 个:SYN 载荷 6 字节,TFO 选项长度 [10],cookie 前 4 字节 e317342e;SYN+ACK 的 TFO 选项 无,数据被接受", "  第 4 个:SYN 载荷 6 字节,TFO 选项长度 [10],cookie 前 4 字节 e317342e;SYN+ACK 的 TFO 选项 533701b8,数据没被接受(ack = seq + 1)   ← 换密钥之后", "  第 5 个:SYN 载荷 6 字节,TFO 选项长度 [10],cookie 前 4 字节 533701b8;SYN+ACK 的 TFO 选项 无,数据被接受   ← 换密钥之后", "  第 6 个:SYN 载荷 6 字节,TFO 选项长度 [10],cookie 前 4 字节 533701b8;SYN+ACK 的 TFO 选项 无,数据被接受   ← 换密钥之后", "  第 7 个:SYN 载荷 6 字节,TFO 选项长度 [10],cookie 前 4 字节 533701b8;SYN+ACK 的 TFO 选项 无,数据被接受   ← 换密钥之后"], "cur": [], "mark": [], "done": []}, "mark": [6], "done": [0, 1, 4, 5, 7], "kv": {"items": [["K1 下的连接 2、3", "旧 cookie 有效,数据被接受"], ["换成 K2 后的连接 4", "旧 cookie 被拒,ack = seq + 1,SYN+ACK 带新 cookie"], ["连接 5~7", "新 cookie,数据被接受"], ["7 条数据", "全部收到"]], "hl": ["换成 K2 后的连接 4"]}}}, {"note": "客户端什么时候停用 TFO(这回在 127.77.0.21 上有意去触发)。服务端开 TFO,先无丢包连 3 次:第 1 个 SYN 请求 cookie(0 字节、TFO 选项长 2),第 2、3 个 SYN 带 7 字节数据和 8 字节 cookie。然后用 netlab 开每方向 30% 丢包(单向延迟 20 ms),连 30 次(每次 connectx 带 6 字节),30 次连接都最终成功(失败 0 次)。看每个连接的 SYN 序列:第 1 个 6B/TFO10,一次通过;第 2 个 SYN 丢了,重传的 SYN 变成 0 字节、不再带 TFO 选项;第 3 个又一次通过;第 4、5 个也都是重传成无数据的 SYN;从第 6 个连接起直到第 30 个,SYN 都是 0B 且没有 TFO 选项——客户端已经对这个目的地不再尝试 TFO,连请求 cookie 的选项都没有了。也就是第 2、4、5 个连接的 SYN 各丢失过一次、共 3 次之后,客户端就停用了;“3 次”只是这一次运行里的数,阈值和计数规则没有确认。关掉丢包后每 10 秒连一次、共 36 次(350 秒):SYN 始终是 0B、无 TFO 选项,350 秒内没有恢复。", "s": {"t": {"lines": ["  连接总数 40(前 3 个无丢包;其后 30 个在 30% 丢包下;之后每 10 秒一次);丢包阶段 connectx/recv 失败 0 次", "  无丢包第 1 个:0B/TFO2", "  无丢包第 2 个:7B/TFO10", "  无丢包第 3 个:7B/TFO10", "  丢包第  1 个:6B/TFO10", "  丢包第  2 个:6B/TFO10 → 0B/无TFO", "  丢包第  3 个:6B/TFO10", "  丢包第  4 个:6B/TFO10 → 0B/无TFO", "  丢包第  5 个:6B/TFO10 → 0B/无TFO", "  丢包第  6 个:0B/无TFO", "  丢包第  7 个:0B/无TFO", "  丢包第  8 个:0B/无TFO", "  丢包第  9 个:0B/无TFO", "  丢包第 10 个:0B/无TFO", "  丢包第 11 个:0B/无TFO", "  丢包第 12 个:0B/无TFO", "  丢包第 13 个:0B/无TFO", "  丢包第 14 个:0B/无TFO", "  丢包第 15 个:0B/无TFO", "  丢包第 16 个:0B/无TFO", "  丢包第 17 个:0B/无TFO", "  丢包第 18 个:0B/无TFO", "  丢包第 19 个:0B/无TFO", "  丢包第 20 个:0B/无TFO", "  丢包第 21 个:0B/无TFO", "  丢包第 22 个:0B/无TFO", "  丢包第 23 个:0B/无TFO", "  丢包第 24 个:0B/无TFO", "  丢包第 25 个:0B/无TFO", "  丢包第 26 个:0B/无TFO", "  丢包第 27 个:0B/无TFO", "  丢包第 28 个:0B/无TFO", "  丢包第 29 个:0B/无TFO", "  丢包第 30 个:0B/无TFO", "  关掉丢包之后:", "    +   0 s:0B/无TFO", "    +  10 s:0B/无TFO", "    +  20 s:0B/无TFO", "    +  30 s:0B/无TFO", "    +  40 s:0B/无TFO", "    +  50 s:0B/无TFO", "    +  60 s:0B/无TFO", "    +  70 s:0B/无TFO", "    +  80 s:0B/无TFO", "    +  90 s:0B/无TFO", "    + 100 s:0B/无TFO", "    + 110 s:0B/无TFO", "    + 120 s:0B/无TFO", "    + 130 s:0B/无TFO", "    + 140 s:0B/无TFO", "    + 150 s:0B/无TFO", "    + 160 s:0B/无TFO", "    + 170 s:0B/无TFO", "    + 180 s:0B/无TFO", "    + 190 s:0B/无TFO", "    + 200 s:0B/无TFO", "    + 210 s:0B/无TFO", "    + 220 s:0B/无TFO", "    + 230 s:0B/无TFO", "    + 240 s:0B/无TFO", "    + 250 s:0B/无TFO", "    + 260 s:0B/无TFO", "    + 270 s:0B/无TFO", "    + 280 s:0B/无TFO", "    + 290 s:0B/无TFO", "    + 300 s:0B/无TFO", "    + 310 s:0B/无TFO", "    + 320 s:0B/无TFO", "    + 330 s:0B/无TFO", "    + 340 s:0B/无TFO", "    + 350 s:0B/无TFO"], "cur": [], "mark": [], "done": []}, "mark": [5, 7, 8, 9, 33], "done": [2, 3, 4, 6, 70], "kv": {"items": [["无丢包", "第 2、3 个连接 SYN 带 7 字节"], ["30% 丢包下", "第 2、4、5 个连接的 SYN 重传成无数据"], ["第 6 个连接起", "SYN 里没有 TFO 选项(已停用)"], ["关掉丢包后 350 秒", "没有恢复"]], "hl": ["第 6 个连接起"]}}}, {"note": "停用的范围与恢复(紧接着第七节,同一个别名 127.77.0.21 仍处于停用状态)。(1)同一个目的地换一个端口,服务端开 TFO,连 3 次:SYN 都是 0B、无 TFO 选项——停用是按目的地址记的,换端口没用。(2)换一个没用过的目的地 127.77.0.22:第 1 个连接 0B/TFO 选项长 2(请求 cookie),第 2、3 个 6B/TFO 选项长 10,一切正常——别的目的地不受影响。(3)继续对 127.77.0.21 每 60 秒连一次,最长 40 分钟,等连续 2 次 SYN 里又带数据:共 41 次,覆盖 2401 秒,每一次 SYN 都是 0B、无 TFO 选项,40 分钟内没有恢复。加上第七节的 350 秒,这个目的地被停用后至少 40 分钟客户端一直没有再尝试;更长的恢复时间、是否要重启或清缓存才能恢复,我没有再等,也没有试 net.inet.tcp.clear_tfocache。", "s": {"t": {"lines": ["  同一目的地、新端口:0B/无TFO;0B/无TFO;0B/无TFO", "  新目的地 127.77.0.22:0B/TFO2;6B/TFO10;6B/TFO10", "    +    1 s:0B/无TFO", "    +   61 s:0B/无TFO", "    +  121 s:0B/无TFO", "    +  181 s:0B/无TFO", "    + 2281 s:0B/无TFO", "    + 2341 s:0B/无TFO", "    + 2401 s:0B/无TFO", "  共轮询 41 次,覆盖 2401 秒;最后一次 SYN 载荷 0 字节;没有恢复"], "cur": [], "mark": [], "done": []}, "mark": [0, 1, 8], "done": [2, 3, 9], "kv": {"items": [["同一目的地换端口", "仍是 0B、无 TFO 选项"], ["另一个目的地", "正常取 cookie、SYN 带数据"], ["等待 2401 秒", "41 次轮询,没有恢复"]], "hl": ["等待 2401 秒"]}}}, {"note": "Linux 对照(Docker Desktop 的 Linux 虚拟机,内核 7.0.14-linuxkit,两个容器之间每方向 50 ms,往返 100 ms)。客户端 sendto + MSG_FASTOPEN,服务端在 listen 之后设 TCP_FASTOPEN。4 次普通 connect + send:313 / 215 / 213 / 212 ms(第一次多出的约 100 ms 没有追查),中位 214 ms。5 次 TFO:214 / 104 / 111 / 109 / 109 ms——第 1 次 SYN 里没有数据、请求 cookie(SYN 里 TFO 选项长 2,SYN+ACK 带回 cookie),耗时和普通连接一样;后 4 次 SYN 带 2 字节数据和 8 字节 cookie,SYN+ACK 的 ack 确认了数据,中位 109 ms,比普通连接省约 105 ms,就是一个往返。ip tcp_metrics 里有一条带 fo_cookie 的记录;ip tcp_metrics flush 清掉之后,下一个连接又回到请求 cookie(215 ms),再下一个才带数据(102 ms)。Linux 的 cookie 记在内核的 tcp_metrics 里,可以这样清;macOS 上对应的开关是 net.inet.tcp.clear_tfocache,我没有给它免密权限,没有试。", "s": {"t": {"lines": ["  清掉缓存前 ip tcp_metrics 里的 TFO 记录:1 条带 fo_cookie", "  清掉后:0 条带 fo_cookie", "  耗时(ms):普通 connect + send ['313.5', '215.0', '213.0', '212.5'];TFO(第 1 次取 cookie)['214.1', '103.7', '110.7', '108.7', '108.8'];清缓存后 TFO ['214.8', '102.3']", "  普通 4 次中位 214 ms;TFO 里 SYN 带数据的 4 次中位 109 ms", "  每个连接的 SYN(按时间顺序:4 个普通、5 个 TFO、2 个清缓存后):", "    第 1 个:SYN 载荷 0 字节,TFO 选项长度 无,cookie 前 4 字节 -;SYN+ACK 的 TFO 选项 无", "    第 2 个:SYN 载荷 0 字节,TFO 选项长度 无,cookie 前 4 字节 -;SYN+ACK 的 TFO 选项 无", "    第 3 个:SYN 载荷 0 字节,TFO 选项长度 无,cookie 前 4 字节 -;SYN+ACK 的 TFO 选项 无", "    第 4 个:SYN 载荷 0 字节,TFO 选项长度 无,cookie 前 4 字节 -;SYN+ACK 的 TFO 选项 无", "    第 5 个:SYN 载荷 0 字节,TFO 选项长度 [2],cookie 前 4 字节 -;SYN+ACK 的 TFO 选项 a407c2fe", "    第 6 个:SYN 载荷 2 字节,TFO 选项长度 [10],cookie 前 4 字节 a407c2fe;SYN+ACK 的 TFO 选项 无,数据被接受", "    第 7 个:SYN 载荷 2 字节,TFO 选项长度 [10],cookie 前 4 字节 a407c2fe;SYN+ACK 的 TFO 选项 无,数据被接受", "    第 8 个:SYN 载荷 2 字节,TFO 选项长度 [10],cookie 前 4 字节 a407c2fe;SYN+ACK 的 TFO 选项 无,数据被接受", "    第 9 个:SYN 载荷 2 字节,TFO 选项长度 [10],cookie 前 4 字节 a407c2fe;SYN+ACK 的 TFO 选项 无,数据被接受", "    第 10 个:SYN 载荷 0 字节,TFO 选项长度 [2],cookie 前 4 字节 -;SYN+ACK 的 TFO 选项 a407c2fe", "    第 11 个:SYN 载荷 2 字节,TFO 选项长度 [10],cookie 前 4 字节 a407c2fe;SYN+ACK 的 TFO 选项 无,数据被接受", "  服务端收到的数据:n0 n1 n2 n3 t0 t1 t2 t3 t4 f0 f1"], "cur": [], "mark": [], "done": []}, "mark": [2, 3], "done": [0, 1, 9, 10, 14, 15], "b": {"items": [["普通 connect + send", 214, "214 ms"], ["TFO 第 1 次(取 cookie)", 214, "214 ms"], ["TFO(SYN 带数据)", 109, "109 ms"]], "max": 214, "cur": [], "mark": [2], "done": [0, 1]}, "kv": {"items": [["普通连接", "中位 214 ms"], ["TFO 取 cookie", "214 ms,和普通连接一样"], ["TFO SYN 带数据", "中位 109 ms,省约 105 ms"], ["flush 之后", "又回到请求 cookie"]], "hl": ["TFO SYN 带数据"]}}}, {"note": "Linux 客户端缓存着服务端的 cookie(Linux 的 cookie 按目的地址记),把带 cookie 和数据的 SYN 发给同一个地址上没开 TFO 的端口(7001)。3 次的 SYN 都带 2 字节数据和长度 10 的 TFO 选项;服务端内核不认这个选项,SYN+ACK 里没有 TFO 选项,ack = seq + 1,数据没被确认;客户端在握手完成后重发数据,服务端应用依次收到 x0 x1 x2,没有丢也没有重复;3 次耗时 217 / 216 / 214 ms,和普通连接(约 214 ms)一样。也就是说 TFO 对不支持的服务端是安全回退:只是没有省时间。", "s": {"t": {"lines": ["  3 次耗时(ms):['217.3', '216.1', '213.6']", "    第 1 个:SYN 载荷 2 字节,TFO 选项长度 [10],cookie 前 4 字节 a407c2fe;SYN+ACK 的 TFO 选项 无,数据没被接受(ack = seq + 1)", "    第 2 个:SYN 载荷 2 字节,TFO 选项长度 [10],cookie 前 4 字节 a407c2fe;SYN+ACK 的 TFO 选项 无,数据没被接受(ack = seq + 1)", "    第 3 个:SYN 载荷 2 字节,TFO 选项长度 [10],cookie 前 4 字节 a407c2fe;SYN+ACK 的 TFO 选项 无,数据没被接受(ack = seq + 1)", "  服务端(7001)收到的数据:x0 x1 x2"], "cur": [], "mark": [], "done": []}, "mark": [1, 3], "done": [0, 4], "kv": {"items": [["SYN", "带 2 字节数据 + 长度 10 的 TFO 选项"], ["SYN+ACK", "无 TFO 选项,ack = seq + 1"], ["数据", "握手后重发,x0 x1 x2 全部到达"], ["耗时", "217 / 216 / 214 ms,和普通连接一样"]], "hl": ["SYN+ACK"]}}}, {"note": "SYN 里的数据会被重放。cookie 是无状态的(只验证“这个客户端地址的 cookie 对不对”),服务端不记得“这个 SYN 来过”。让 Linux 客户端用有效 cookie 发一个带 order-0 的 TFO 连接,从抓包里取出那个 SYN(载荷 7 字节,TFO 选项长度 10),重新计算校验和后,用原始套接字原样重发 5 次(间隔 0.5 秒,源地址还是客户端自己的,相当于路径上的人重放)。服务端内核的 TcpExtTCPFastOpenPassive 计数增加了 5(1 次原始 + 4 次重放),服务端应用读到 order-0 共 5 次,另有 4 条是之后收到客户端 RST 的报错(客户端内核没有对应的套接字,对重放引发的 SYN+ACK 回 RST)。5 次重放里只有 4 次被计数,另一次为什么没有,没有查明。一个坑:容器网卡开着发送校验和卸载,抓到的出站包里 TCP 校验和只是占位值,第一次直接重发时服务端计数 TcpInCsumErrors = 2,重放没有生效,要先重算校验和。这就是规范说 SYN 里的数据可能被重复交付、所以 TFO 只适合幂等请求的原因。", "s": {"t": {"lines": ["  (容器网卡开着发送校验和卸载,抓到的出站包里 TCP 校验和是占位值,直接重发会被服务端丢弃——第一次尝试时服务端计数 TcpInCsumErrors = 2,重发的包没有生效;下面是重新计算校验和之后的结果)", "  抓到的 SYN:载荷 7 字节,TFO 选项长度 [10]", "  服务端内核计数 TcpExtTCPFastOpenPassive(收到有效 cookie 的 SYN 并建立子连接的次数)增加了 5(1 次原始 + 重放)", "  服务端应用收到的记录(9 条):['order-0', 'order-0', \"ERR ConnectionResetError(104, 'Connection reset by peer')\", 'order-0', \"ERR ConnectionResetError(104, 'Connection reset by peer')\", 'order-0', \"ERR ConnectionResetError(104, 'Connection reset by peer')\", 'order-0', \"ERR ConnectionResetError(104, 'Connection reset by peer')\"]", "  其中应用读到 order-0 的有 5 次,另有 4 条是随后收到客户端 RST 的报错(客户端内核没有对应的套接字,对重放引发的 SYN+ACK 回 RST)"], "cur": [], "mark": [], "done": []}, "mark": [2, 3, 4], "done": [0, 1], "kv": {"items": [["原始连接", "1 次"], ["原样重放的 SYN", "5 次,其中 4 次被服务端接受"], ["服务端应用读到 order-0", "共 5 次"], ["结论", "SYN 里的数据可以被重复交付"]], "hl": ["服务端应用读到 order-0"]}}}, {"note": "中间设备丢弃“带数据的 SYN”(在服务端容器上用 iptables 丢弃长度 ≥ 70 字节的 SYN,不带数据的 SYN 约 60 字节、请求 cookie 的约 64 字节)。Linux 客户端有有效 cookie,连续 5 次 TFO:每次第一个 SYN(2 字节数据)被丢掉,约 1.0 秒后重传的 SYN 变成 0 字节、没有数据,连接这才建立;5 次耗时 1269 / 1228 / 1229 / 1227 / 1231 ms(正常 TFO 约 109 ms,普通连接约 214 ms),也就是每个连接白等一个重传超时。5 次都是这样,Linux 客户端没有因为连续失败而不再尝试——这个虚拟机内核里 tcp_fastopen_blackhole_timeout_sec 是 0(黑洞检测没启用),TcpExtTCPFastOpenBlackhole 计数为 0,所以这不是 Linux 默认配置下的结论。撤掉规则后紧接着的 3 次立刻回到 106 / 106 / 103 ms。对比 macOS(第七节):同样的“SYN 带数据收不到回应”,macOS 在 3 次重传之后对该目的地停用 TFO,并且至少 40 分钟没有恢复(第八节)。", "s": {"t": {"lines": ["  tcp_fastopen_blackhole_timeout_sec = 0", "  丢弃期间 5 次耗时(ms):['1269.1', '1227.7', '1228.9', '1227.0', '1231.1'];撤掉规则后再 3 次:['106.0', '106.2', '103.0']", "    第 1 个连接的 SYN(相对时间 s / 载荷):+0.0s/2B, +1.1s/0B", "    第 2 个连接的 SYN(相对时间 s / 载荷):+0.0s/2B, +1.0s/0B", "    第 3 个连接的 SYN(相对时间 s / 载荷):+0.0s/2B, +1.0s/0B", "    第 4 个连接的 SYN(相对时间 s / 载荷):+0.0s/2B, +1.0s/0B", "    第 5 个连接的 SYN(相对时间 s / 载荷):+0.0s/2B, +1.0s/0B", "    第 6 个连接的 SYN(相对时间 s / 载荷):+0.0s/2B", "    第 7 个连接的 SYN(相对时间 s / 载荷):+0.0s/2B", "    第 8 个连接的 SYN(相对时间 s / 载荷):+0.0s/2B", "  客户端内核计数(从本组容器启动起累计,其中第十节的 3 次 + 本节的 5 次 = 8 次 SYN 里的数据没被对端确认):TcpExtTCPFastOpenActiveFail 8;TcpExtTCPFastOpenBlackhole 0;", "  服务端收到的数据:d0 d1 d2 d3 d4 e0 e1 e2"], "cur": [], "mark": [], "done": []}, "mark": [1, 2, 6], "done": [0, 7, 9, 10, 11], "b": {"items": [["TFO 正常", 109, "109 ms"], ["普通 connect + send", 214, "214 ms"], ["SYN 带数据被丢弃", 1229, "1229 ms"]], "max": 1229, "cur": [], "mark": [2], "done": [0, 1]}, "kv": {"items": [["被丢弃的 SYN", "2 字节数据 + cookie"], ["重传的 SYN", "约 1.0 秒后,0 字节、无数据"], ["5 次耗时", "约 1.23 秒"], ["撤掉规则后", "立刻回到约 105 ms"]], "hl": ["5 次耗时"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64(Apple 芯片)/ Python 3.14.8 / tcpdump(libpcap)/ scapy 2.8 / dpkt / dnspython / h2 / aioquic / OpenSSL / curl 8.7.1;抓包在 lo0(环回)上做,少数实验用真实网卡 en0(这台机器上 en0 是 Wi-Fi,tcpdump 看到的是系统转成以太网格式的帧,所以文中的“以太网头”都指这个 14 字节的头)或访问公网(会在文章里注明);需要丢包 / 延迟 / 限速时,用一个只作用于 lo0 端口 9400-9499 的 dummynet 辅助脚本(netlab);所有服务端都是本机自己起的进程;时间戳取自 tcpdump 的 -tt,数字每次运行会有小幅抖动。第一、三、四、五节来自较早的一次运行(lo0 和 example.com:80 各 3 次,第四节加了 netlab 每方向 50 ms);第二、六、七、八节在 lo0 的别名 127.77.0.N 上,别名的增删和 net.inet.tcp.fastopen_key 的设置通过一个只允许这几件事的免密 root 脚本完成,第七节用 netlab 开了 30% 丢包、单向 20 ms;第九到十二节在 Docker Desktop 的 Linux 虚拟机里的两个容器之间(内核 7.0.14-linuxkit,eth0 上 netem 每方向 50 ms),第十二节用 iptables 丢弃长度 ≥ 70 字节的 SYN 模拟中间设备</li><li>没有验证:macOS 客户端停用 TFO 的确切阈值和计数规则(只在 30% 丢包的一次运行里看到,SYN 带数据重传 3 次后停用);net.inet.tcp.clear_tfocache 能否清除这种停用(没有给它免密权限,没有试);cookie 的有效期和自动轮换周期(只试了手动换密钥);macOS 作为服务端时对 SYN 重放的反应(重放实验只在 Linux 容器里做,5 次重放里 1 次没有被计数,原因没有查明);Linux 内核的黑洞检测(这个虚拟机里该开关是 0,没有启用);公网上经过真实中间设备(NAT、防火墙)时 SYN 带数据的处理,这里只用 iptables 模拟;HTTP / TLS 之上的实际收益(TCP 握手之后 TLS 还要多个往返,TFO 只省 TCP 握手那一个)</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="network-bdp-buffers.html">
+    <div>
+      <div class="t1">下一篇 · 网络协议 61</div>
+      <div class="t2">带宽时延积与套接字缓冲区:怎样把长肥管道填满</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>网络协议 · TCP Fast Open:把数据塞进 SYN · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

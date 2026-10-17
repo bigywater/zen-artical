@@ -1,0 +1,15 @@
+from lib import *
+S = SS('f187')
+R = J('f187'); Dr = R['direct']; FB = R['fb']; kf = list(FB); PH = R['phase']; kp = list(PH); TK = R['tok']
+steps = [
+    step(f"直接把 SECRET_KEY 从旧换成新、不留 fallback:旧 key 的服务下旧 cookie 请求 /me 得到 user={Dr[0]!r};换成新 key 重启后,用同一个旧 cookie → user={Dr[1]!r}——签名对不上,Flask 把 session 当作空的,响应也没有提示什么。所有已登录用户同时被退出。这是「泄漏后立刻换 key」时可以接受的代价,日常轮换不该这样。", t=tl(S(1)), done=lidx(S(1), '旧 key 的服务'), mark=lidx(S(1), '换成新 key'), kv=KV([['旧 key', "user='ann'"], ['新 key,无 fallback', 'user=None,全体退出登录']], ['新 key,无 fallback'])),
+    step(f"Flask 3.1 的 SECRET_KEY_FALLBACKS=[旧 key]:新 key 的服务能读旧 cookie(user={FB[kf[0]][0]!r})。但 cookie 什么时候换成新 key 签名?session 没有被修改时,响应里没有 Set-Cookie(重新下发 cookie:{FB[kf[0]][1]}),cookie 一直是旧 key 签的;permanent session(SESSION_REFRESH_EACH_REQUEST 每次刷新过期时间)的请求会重新下发 cookie({FB[kf[1]][1]}),新 cookie 能被只有新 key 的服务读出({FB[kf[1]][2]!r})。所以旧 key 要保留到「所有旧 cookie 自然过期或被刷新」之后,不能一换就删。", t=tl(S(2)), done=lidx(S(2), 'permanent session'), mark=lidx(S(2), '只读,不修改'), kv=KV([['只读的请求', '不重签,仍是旧 key'], ['permanent session', '重签为新 key']], ['只读的请求'])),
+    step(f"多台实例滚动发布时顺序很重要。做法 1(一步到位:一台还是旧 key,另一台已是新 key + fallback 旧):A 签的 cookie 给 B → {PH[kp[0]][0]!r},但 B 签的 cookie 给 A → {PH[kp[0]][1]!r}——用户被路由到旧实例时又掉线,发布期间会反复登出。做法 2 分两步:第一步所有实例 SECRET_KEY=旧、FALLBACKS=[新](先让所有实例都认识新 key),此时互相接受({PH[kp[1]][0]!r} / {PH[kp[1]][1]!r});第二步所有实例 SECRET_KEY=新、FALLBACKS=[旧],仍然互相接受({PH[kp[2]][0]!r} / {PH[kp[2]][1]!r});最后等旧 cookie 过期再删掉旧 key。", t=tl(S(3)), done=lidx(S(3), '做法 2'), mark=lidx(S(3), '做法 1'), kv=KV([['一步到位', 'B 的 cookie 旧实例不认'], ['两步走', '两个阶段都互相接受']], ['两步走'])),
+    step(f"SECRET_KEY_FALLBACKS 只对 Flask 的 session 生效。自己用 itsdangerous 签的令牌(例如重置密码链接),校验代码只用 app.config['SECRET_KEY'] 时,换 key 后旧令牌 → HTTP {TK[0]} {TK[1]};把校验改成 URLSafeTimedSerializer([新 key, 旧 key])(itsdangerous 支持密钥列表,第一个用来签、其余只用来验)后 → HTTP {TK[2]} {TK[3]}。凡是用到 SECRET_KEY 的地方(令牌、签名 URL、第三方扩展里的签名)都要逐个检查是否支持回退。", t=tl(S(4)), done=lidx(S(4), '改成'), mark=lidx(S(4), '只用'), kv=KV([['只用新 key 校验', 'BadTimeSignature'], ['密钥列表', 'OK']], ['只用新 key 校验'])),
+]
+A = mkartf('f187', 187, 'Flask,SECRET_KEY,密钥轮换,session,itsdangerous,真实验证,动画演示',
+    '用两个真实的 gunicorn 实例验证 SECRET_KEY 轮换:直接换 key 会让旧 cookie 全部失效;SECRET_KEY_FALLBACKS 让旧 cookie 仍可读,但只在 session 被重新下发时才换成新 key;一步到位的滚动发布会让新实例签的 cookie 被旧实例拒绝,先加 fallback 再切换的两步走法两个阶段都互相接受;itsdangerous 自签令牌需要自己用密钥列表。',
+    'SECRET_KEY 迟早要换(泄漏、人员变动、定期轮换)。直接换会让所有人退出登录,多台实例滚动发布时还会出现「刚登录又掉线」。这篇用真实的服务验证 Flask 的 SECRET_KEY_FALLBACKS、滚动发布的正确顺序,以及它覆盖不到的地方(SECRET_KEY 的用法见第 119 篇,环境变量见第 184 篇)。',
+    [('user=None', '换 key 且无 fallback 后,旧 cookie 的 /me 结果'), ('两步走', '先让所有实例认新 key,再切换签名 key'), ('BadTimeSignature', 'itsdangerous 令牌在只用新 key 校验时的错误')],
+    [('直接换 key', '<p>上一篇:<a href="flask-production-debug-false.html">生产环境 DEBUG=False</a>;下一篇:<a href="flask-db-connection-health-check.html">数据库连接健康检查</a>。</p><p>实验的两个实例是真实的 gunicorn 进程,cookie 在它们之间手工传递。</p>'), ('SECRET_KEY_FALLBACKS', None), ('滚动发布', None), ('自签令牌', None)],
+    steps, [ENV_F + '。gunicorn(两个实例)、itsdangerous', '没有验证:Flask-WTF 的 CSRF 令牌与 Flask-Login 的 remember-me cookie 在换 key 后的行为、JWT 签名密钥的轮换(JWT 登录见第 109 篇)、密钥管理服务(KMS、Vault)、旧 cookie 到期时间的具体设置、同一 key 下 session 的 Cookie 大小'], 'Secret Key 轮换')

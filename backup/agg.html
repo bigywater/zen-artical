@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>聚合为什么和搜索是两回事</title>
+<meta name="description" content="doc_values 列式存储如何让聚合避开倒排索引的天然限制。">
+<link rel="canonical" href="https://bigywater.tech/agg.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="聚合为什么和搜索是两回事">
+<meta property="og:description" content="doc_values 列式存储如何让聚合避开倒排索引的天然限制。">
+<meta property="og:url" content="https://bigywater.tech/agg.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="聚合为什么和搜索是两回事">
+<meta name="twitter:description" content="doc_values 列式存储如何让聚合避开倒排索引的天然限制。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F6F7F9; --paper:#FFFFFF; --ink:#1C2230; --ink-dim:#5F6B7C; --line:#DEE3EA;
+  --term-c:#3B4C9E; --term-c-soft:#E7E9F7;
+  --match-c:#B8891A; --match-c-soft:#F6EDD9;
+  --postings-c:#12807E; --postings-c-soft:#DCF0EF;
+  --code-bg:#1C2230; --code-ink:#E7EAF0;
+  --shadow: 0 1px 2px rgba(20,25,40,.05), 0 8px 24px -12px rgba(20,25,40,.14);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#14171F; --paper:#1B1F2A; --ink:#E7EAF0; --ink-dim:#9AA3B5; --line:#2C3242;
+    --term-c:#8B9AE8; --term-c-soft:#232A46;
+    --match-c:#E0B75C; --match-c-soft:#332B18;
+    --postings-c:#5FC9C6; --postings-c-soft:#193232;
+    --code-bg:#10131A; --code-ink:#DCE1E6;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#14171F; --paper:#1B1F2A; --ink:#E7EAF0; --ink-dim:#9AA3B5; --line:#2C3242;
+  --term-c:#8B9AE8; --term-c-soft:#232A46;
+  --match-c:#E0B75C; --match-c-soft:#332B18;
+  --postings-c:#5FC9C6; --postings-c-soft:#193232;
+  --code-bg:#10131A; --code-ink:#DCE1E6;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",Helvetica,Arial,sans-serif; line-height:1.7;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+.wrap{max-width:880px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--term-c);}
+
+.hero{padding:68px 24px 36px;}
+.hero-inner{max-width:880px; margin:0 auto;}
+.eyebrow{font-size:.8rem; letter-spacing:.06em; text-transform:uppercase; color:var(--term-c); display:flex; align-items:center; gap:8px; margin-bottom:16px; font-weight:600;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--term-c);}
+h1{font-size:2.1rem; line-height:1.32; margin:0 0 18px; text-wrap:balance; letter-spacing:-.01em; font-weight:700;}
+.hero p{font-size:1.05rem; color:var(--ink-dim); max-width:680px; margin:0 0 14px;}
+.hero-fact{margin-top:26px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:700; color:var(--term-c);}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:40px 24px;}
+h2{font-size:1.4rem; margin:0 0 6px; letter-spacing:-.01em; font-weight:700;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 24px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:22px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.7rem; letter-spacing:.05em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.a .tag{background:var(--term-c-soft); color:var(--term-c);}
+.card.b .tag{background:var(--match-c-soft); color:var(--match-c);}
+.card.c .tag{background:var(--postings-c-soft); color:var(--postings-c);}
+.card h3{margin:0 0 8px; font-size:1.02rem;}
+.card p{font-size:.9rem; color:var(--ink-dim); margin:0;}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:16px 18px; margin:14px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--term-c-soft); color:var(--term-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#9DB4F0;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88A8A;}
+.term .cm{color:#8B95A1;}
+
+table{width:100%; border-collapse:collapse; margin:18px 0; font-size:.88rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.78rem; padding:8px 10px; border-bottom:1px solid var(--line);}
+td{padding:9px 10px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+.yes{color:var(--postings-c); font-weight:700;}
+.no{color:var(--match-c); font-weight:700;}
+
+.callout{border-left:3px solid var(--term-c); background:var(--term-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:18px 0; font-size:.94rem;}
+.callout.b{border-color:var(--match-c); background:var(--match-c-soft);}
+.callout.c{border-color:var(--postings-c); background:var(--postings-c-soft);}
+
+.rowcol{display:flex; gap:14px; margin:18px 0; flex-wrap:wrap;}
+.rowcol>div{flex:1; min-width:220px; border:1px solid var(--line); border-radius:10px; padding:14px 16px; background:var(--paper);}
+.rowcol h4{margin:0 0 10px; font-size:.78rem; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-dim); font-weight:700;}
+.docgrid{display:grid; grid-template-columns:repeat(3,1fr); gap:2px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem;}
+.docgrid .h{font-weight:700; color:var(--ink-dim); padding:4px 6px;}
+.docgrid .c{padding:4px 6px; background:var(--bg); border-radius:3px;}
+.rowview .docgrid{grid-template-columns:repeat(3,1fr);}
+.colview{display:flex; gap:8px;}
+.colview .colcard{flex:1; border:1px solid var(--postings-c); border-radius:6px; padding:6px; background:var(--postings-c-soft);}
+.colview .colcard h5{margin:0 0 4px; font-size:.68rem; color:var(--postings-c); font-weight:700;}
+.colview .colcard div{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.7rem; padding:2px 0;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px 22px; margin-top:18px;}
+.refs h3{margin:0 0 10px; font-size:.98rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.86rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{display:flex; align-items:center; gap:10px; margin-bottom:22px; font-size:.86rem; color:var(--ink-dim); flex-wrap:wrap;}
+.prev-post a{font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--term-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:36px 24px 56px; text-align:center; color:var(--ink-dim); font-size:.82rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Elasticsearch 系列 · 第五篇</div>
+    <h1>能被搜到的字段,为什么不一定能被统计?</h1>
+    <p>倒排索引(第一篇的话题)解决的是"哪些文档包含这个词"。但聚合要回答的是完全不同的问题:"这个字段的所有取值,分别有多少个文档"——这需要反过来,从文档快速取到字段值,倒排索引在这个方向上天生低效。Elasticsearch 为聚合专门准备了另一套结构:<b>doc values</b>,列式存储,和倒排索引并存,谁也不替代谁。</p>
+    <p>这篇继续用本机真实运行的 Elasticsearch,把"能搜到"和"能统计"这两件事到底差在哪,用真实报错和真实结果讲清楚。</p>
+    <div class="hero-fact">
+      <div><div class="num">524.0</div><div class="lbl">真实聚合算出的平均价格((599+449)/2)</div></div>
+      <div><div class="num">doc values</div><div class="lbl">真实报错信息里,Elasticsearch 亲口指出的关键机制</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <div class="prev-post">← 接上篇 <a href="routing.html" target="_blank" rel="noopener">分片与路由:一条文档怎么知道该去哪个分片</a></div>
+  <h2>两个方向,两套结构</h2>
+  <p class="h2-sub">"词 → 文档"和"文档 → 值"是两个相反的查找方向,各自需要一份为它优化过的物理结构。</p>
+  <div class="cards">
+    <div class="card a">
+      <span class="tag">倒排索引</span>
+      <h3>词 → 文档列表</h3>
+      <p>回答"包含'apple'这个词的文档有哪些"。这是搜索的方向,第一篇讲过的结构。</p>
+    </div>
+    <div class="card b">
+      <span class="tag">doc values</span>
+      <h3>文档 → 字段值(列式存储)</h3>
+      <p>回答"这份文档的 brand 字段是什么"。按列存,同一字段的所有值挨在一起,做统计/排序时不用满索引跳来跳去。</p>
+    </div>
+    <div class="card c">
+      <span class="tag">默认都开</span>
+      <h3>大部分字段类型两份都建</h3>
+      <p>keyword、数值、日期等字段默认<b>同时</b>拥有倒排索引(能被精确匹配)和 doc values(能被聚合/排序)——text 字段是唯一的例外,默认只有倒排索引。</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>行式 vs 列式:为什么方向不同,结构就得不同</h2>
+  <p class="h2-sub">倒排索引本质上是"按词分组"——这对统计"某个字段所有文档的取值分布"完全帮不上忙,你得反过来,一份一份翻文档去看它的字段值,这在几十万文档规模下极其低效。</p>
+  <div class="rowcol">
+    <div class="rowview">
+      <h4>倒排索引的组织方式(按词分组)</h4>
+      <div class="docgrid">
+        <div class="h">apple</div><div class="c">doc1, doc2</div><div></div>
+        <div class="h">samsung</div><div class="c">doc3</div><div></div>
+      </div>
+      <p style="font-size:.8rem; color:var(--ink-dim); margin-top:8px;">查"哪些文档是 apple"很快;查"doc2 的品牌是什么"得反着扫。</p>
+    </div>
+    <div class="colview">
+      <div class="colcard"><h5>doc1</h5><div>brand: apple</div><div>price: 599</div></div>
+      <div class="colcard"><h5>doc2</h5><div>brand: apple</div><div>price: —</div></div>
+      <div class="colcard"><h5>doc3</h5><div>brand: samsung</div><div>price: 449</div></div>
+    </div>
+  </div>
+  <p style="font-size:.8rem; color:var(--ink-dim);">右边就是 doc values 的组织方式——按文档 ID 顺序把每个字段的值挨个排开,做聚合时按顺序扫一遍就能拿到所有值,不需要经过倒排索引那套"词 → 文档"的结构。</p>
+</section>
+
+<section>
+  <h2>真实实验:同一个报错,两种触发方式</h2>
+  <p class="h2-sub">上一篇提到 text 字段做聚合会报错。这次反过来:手动关掉一个 keyword 字段的 doc values,看会不会报出<b>同一类</b>错误——如果是,说明真正起作用的是 doc values 这个机制本身,不是"keyword"这个类型名字的魔法。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cm">PUT /products2  { "mappings": { "properties": { "brand": { "type": "keyword", "doc_values": false }}}}</span>
+<span class="cm">POST /products2/_search  { "aggs": { "by_brand": { "terms": { "field": "brand" }}}}</span>
+<span class="bad">→ illegal_argument_exception: Can't load fielddata on [brand] because
+   fielddata is unsupported on fields of type [keyword]. Use doc values instead.</span>
+  </div>
+  <p>报错措辞不完全一样(keyword 字段直接被禁止退化到 fielddata,连"手动打开"这条路都没有——这一点比 text 字段更严格),但指向的是同一件事:<b>没有 doc values,就没法做聚合</b>,不管字段类型叫 text 还是 keyword。keyword 默认自带 doc values,所以平时感觉不到这层机制的存在;上一篇 text 字段报错,本质也是同一个原因——只是 text 默认没开。</p>
+</section>
+
+<section>
+  <h2>数值字段:天生就有,不用配置</h2>
+  <p class="h2-sub">数值、日期这类字段,doc values 默认就是开着的——聚合/排序开箱即用。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cm">POST /products/_search
+{ "aggs": {
+    "avg_price": { "avg": { "field": "price" }},
+    "by_brand": { "terms": { "field": "brand" },
+                  "aggs": { "avg_price": { "avg": { "field": "price" }}}}
+}}</span>
+<span class="ok">→ 整体均价: 524.0
+   按品牌分组:
+     Apple:      1 件,均价 599.0
+     Apple Inc.: 1 件,均价 null(没有 price 字段)
+     Samsung:    1 件,均价 449.0</span>
+  </div>
+  <p>这也是一次真实的嵌套聚合(bucket 聚合里再套 metric 聚合)——先按 brand 分组,组内再单独算均价,这是聚合最常见的用法,doc values 让它可以直接按列扫描完成,不用为每个分组重新翻一遍原始文档。</p>
+  <div class="callout">
+    注意"Apple"和"Apple Inc."被分成了两个桶——这正好是上一篇 keyword 字段"精确匹配、大小写标点都算数"的自然延伸:聚合按的是字段的精确取值分组,写法不统一,统计结果就会被拆散。这也是为什么设计索引时,用于聚合/筛选的字段,数据源头的格式一致性比搜索字段更重要。
+  </div>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文所有聚合结果、报错信息均为本机真实运行的 Elasticsearch 8.15.0(单节点)真实执行得到,未做任何删改;两次报错分别来自 <span class="mono">text</span> 字段默认关闭 fielddata、以及手动对 <span class="mono">keyword</span> 字段关闭 <span class="mono">doc_values</span> 两种真实触发路径。</li>
+      <li>"行式 vs 列式"一节的示意图是对 doc values 概念的简化图解,用来直观对比两种组织方式的方向差异,不是对 Lucene 实际磁盘格式(基于列式压缩编码,比这里画的连续排列复杂得多)的还原。</li>
+      <li>没有涉及:doc values 的具体磁盘编码格式(Lucene 的 <span class="mono">Numeric/Sorted/SortedSet</span> DocValues 格式)、聚合在多分片场景下"各分片先算再合并"的两阶段过程、<span class="mono">cardinality</span> 等近似聚合背后的 HyperLogLog 算法。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="replica.html" target="_blank" rel="noopener" style="text-decoration:none; color:inherit;">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">写入一致性:主分片和副本分片怎么保证不丢数据</div>
+    </div>
+    <div style="font-size:1.5rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Elasticsearch 系列 · 第五篇 · 聚合与 doc values · 数据来自本机真实运行的 Elasticsearch 8.15.0</footer>
+
+</body>
+</html>

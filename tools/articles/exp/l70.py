@@ -1,0 +1,35 @@
+import sys, os, re; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from ll import *
+tee('l70')
+import ll as _ll
+def run(d, cmd, t=0, **k): return _ll.run(d, cmd, t, **k)
+BIN = LT / '_bin'; shutil.rmtree(BIN, ignore_errors=True); BIN.mkdir()
+def script(name, body):
+    f = BIN / name; f.write_text('#!/bin/sh\n' + body + '\n'); f.chmod(0o755)
+d = lab('l70'); _ll.ci(d, 'x', {'a': '1\n'}, t=0); (d / 'sub').mkdir(); W(d, {'sub/f.txt': 'f\n'})
+P = lambda x=None: dict(PATH=f'{BIN}:/usr/bin:/bin:/usr/sbin:/sbin', **(x or {}))
+def sh2(cmd, dd=None, env=None, ind='  ', n=15):
+    rc, o = run(dd or d, cmd, env=P(env)); o = o.replace(str(BIN), '<bin>')
+    print(f'{ind}$ {cmd}'); [print(ind + '  ' + l) for l in o.split('\n')[:n] if l]
+    return rc, o
+print('== 一:git foo 找不到内置命令时,会去找可执行文件 git-foo(先 git --exec-path,再 PATH)')
+script('git-hello', 'echo "我是外部子命令 git-hello,参数: $@"; echo "当前目录: $(pwd | sed \'s#.*/##\')"; echo "GIT_EXEC_PATH 已设置: ${GIT_EXEC_PATH:+是}"')
+sh2('git hello 甲 乙')
+sh2('git --exec-path | sed "s#.*/Developer#<Xcode>/Developer#"; ls $(git --exec-path) | wc -l | sed "s/^ */exec-path 目录里的文件数: /"')
+sh2('git help -a | sed -n "/^External commands/,/^$/p"')
+print('== 二:没有这个子命令时的提示,以及 help.autocorrect')
+sh2('git stauts 2>&1 | head -4')
+sh2('git -c help.autocorrect=immediate stauts 2>&1 | head -3 | cut -c1-80')
+print('== 三:别名:alias.<名> = 命令;以 ! 开头则作为 shell 命令运行(在仓库根目录)')
+sh2('git config alias.co checkout; git config alias.last "log -1 --stat --format=%s"; git config alias.root "!pwd | sed \'s#.*/##\'"; git config alias.where "!echo \\"cwd=\\$(pwd | sed \'s#.*/##\') GIT_PREFIX=[\\$GIT_PREFIX]\\""; git co -b feat 2>&1 | head -1; git last | head -2')
+sh2('git root; echo "--- 从子目录 sub/ 里运行 ! 别名:"; cd sub && git where')
+print('== 四:别名不能覆盖内置命令;别名和外部子命令同名时谁赢')
+sh2('git config alias.status "log --oneline"; git status 2>&1 | head -2; git config --unset alias.status')
+sh2('git config alias.hello "!echo 我是别名 hello"; git hello')
+print('== 五:别名循环会被检测出来;别名之间可以套用')
+sh2('git config alias.a b; git config alias.b a; git a 2>&1 | head -3; git config --unset alias.a; git config --unset alias.b')
+sh2('git config alias.s status; git config alias.ss "s -s"; git ss')
+print('== 六:--help 和 `git help -a` 怎么看别名;被别名展开后的参数传递')
+sh2('git co --help 2>&1 | head -2')
+sh2('git help -a | sed -n "/^Command aliases/,\\$p" | head -9')
+sh2('git config alias.say "!f() { echo \\"收到 \\$# 个参数: \\$@\\"; }; f"; git say 甲 乙 丙')

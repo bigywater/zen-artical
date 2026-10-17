@@ -1,0 +1,18 @@
+from lib import *
+S = SS('p57')
+steps = [
+    step("同一段探测脚本(页面自己的 JavaScript 能读到什么)在两种启动方式下的结果。默认启动(headless=new 加远程调试端口):navigator.webdriver = false;加上 --enable-automation:navigator.webdriver = true,同时可视区域高度从 469 变成 413(多出的提示条占了空间);其余属性两者完全相同:languages=en-US,en、plugins=5、mimeTypes=2、hardwareConcurrency=10、window.chrome 是 object、screen=800x600、notification=default、hasFocus=false、visibility=visible、webgl=没有(因为我的启动参数关了 GPU)、语音数 0。也就是说,单凭连上了远程调试端口,navigator.webdriver 并不会变成 true;它是否为 true取决于启动参数。", t=tl(S(1)), done=lidx(S(1), 'webdriver', 'plugins', 'windowChrome'), mark=lidx(S(1), 'inner', 'hasFocus'), b=bars([['默认启动 inner 高度', 469, '469'], ['--enable-automation inner 高度', 413, '413']], 470, done=[0], mark=[1]), kv=KV([['默认启动 webdriver', 'false'], ['加 --enable-automation', 'webdriver = true,视口矮 56 像素'], ['其它属性', '两者完全相同']], ['加 --enable-automation'])),
+    step("服务器这一侧(请求头)的两种启动方式也相同:User-Agent 完整内容是 Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36——里面直接写着 HeadlessChrome;sec-ch-ua 是 \"Chromium\";v=\"154\", \"Google Chrome\";v=\"154\", \"Not A(Brand\";v=\"99\",sec-ch-ua-platform 是 \"macOS\",sec-ch-ua-mobile 是 ?0。JS 里读到的 userAgent 与请求头里的完全一致(同样含 HeadlessChrome)。", t=tl(S(2)), done=lidx(S(2), 'User-Agent', 'sec-ch-ua'), kv=KV([['User-Agent', '含 HeadlessChrome/154.0.0.0'], ['sec-ch-ua', 'Chromium、Google Chrome、Not A(Brand'], ['两种启动方式', '请求头完全一样']], ['User-Agent'])),
+    step("对照:requests 发出的请求,服务器能读到的只有请求头(Host、User-Agent: python-requests/2.34.2、Accept-Encoding、Accept、Connection)。页面上的 JavaScript 只能探测会执行脚本的客户端,对不执行脚本的 HTTP 客户端它根本探测不到;那种客户端留给服务器的只有头里这几项(第 15 篇比较过头的顺序和大小写)。", t=tl(S(3)), done=lidx(S(3), '请求头:'), kv=KV([['requests', '只有 5 个请求头'], ['脚本探测', '对不执行脚本的客户端无效'], ['服务器能看的', '请求头 + 连接层(TLS 指纹等)']], ['脚本探测'])),
+]
+A = mkartp('p57', 57, '爬虫,浏览器自动化,navigator.webdriver,HeadlessChrome,CDP,User-Agent,Python,真实验证,动画演示',
+    '在本机 headless Chrome 154 里让页面自己的 JavaScript 读自动化相关的值:只开远程调试端口时 navigator.webdriver 是 false,加 --enable-automation 才是 true(同时视口矮 56 像素);User-Agent 里直接写着 HeadlessChrome;JS 与请求头读到的 UA 一致。本文只描述页面能看到什么,不涉及隐藏办法。',
+    '网站的脚本能看到浏览器是不是被自动化工具控制吗?这篇在本机让 headless Chrome 加载一个探测页面,把页面自己的 JavaScript 能读到的一批属性和服务器能读到的请求头列出来。只是描述事实,理解自己的爬虫在对方眼里是什么样子;不涉及如何隐藏。',
+    [('false / true', '只开调试端口 与 加 --enable-automation 时 navigator.webdriver 的值'), ('HeadlessChrome', 'User-Agent 里自带的标识,请求头和 JS 里读到的一样'), ('469 对 413', '两种启动方式下 innerHeight——自动化提示条占了 56 像素')],
+    [('JS 能读到的', '<p>探测脚本读了 19 项:<code>navigator.webdriver</code>、<code>userAgent</code>、<code>userAgentData.brands</code>、<code>platform</code>、<code>languages</code>、<code>plugins</code>、<code>mimeTypes</code>、<code>hardwareConcurrency</code>、<code>window.chrome</code>、屏幕与窗口尺寸、通知权限、焦点、WebGL 渲染器、语音等。两种启动方式下,只有 <code>navigator.webdriver</code> 和 <code>innerHeight</code> 不同。</p>'),
+     ('请求头里的标识', '<p>Chrome 的 headless 模式在 User-Agent 里就是 <code>HeadlessChrome/154.0.0.0</code>,<code>sec-ch-ua</code> 和 <code>sec-ch-ua-platform</code> 随请求发出。这些是浏览器自己宣布的,爬虫是否应该修改它们是另一个问题(见后面 User-Agent 与联系方式一篇)。</p>'),
+     ('不执行脚本的客户端', '<p>用 requests 抓取时,服务器看不到任何脚本探测的结果,只有请求头和连接层的信息(第 15 篇的头顺序、第 13 篇的 TLS 会话、以及 JA3 指纹那一篇)。</p>')],
+    steps,
+    [ENV_P + '。Chrome 154.0.8037.98 通过 pcdp.py 启动(headless=new、--remote-debugging-port、--disable-gpu 等);探测页面是本机服务器上的最简页面,脚本由 CDP 的 Runtime.evaluate 执行并取回对象;“加 --enable-automation”是在同样参数后追加这一个启动参数;请求头来自本机服务器的记录;WebGL 显示“没有”是因为我的启动参数关闭了 GPU,不代表所有 headless 都没有;全部只在本机,没有访问任何真实网站',
+     '没有验证:非 headless(有界面)的 Chrome 的同一组值;Selenium/Playwright 驱动时这些值的变化(没有安装 chromedriver);更多的探测项(Canvas 指纹、字体列表、时区、权限 API 的行为);网站实际会怎样使用这些信号;反爬服务的具体做法;任何隐藏或伪装这些值的方法——不在本系列的范围内'],
+    '浏览器自动化信号')

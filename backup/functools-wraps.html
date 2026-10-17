@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>@functools.wraps 不加会怎样:一个插件注册表被覆盖的例子</title>
+<meta name="description" content="验证:不加 functools.wraps,装饰后的函数 __name__ 会统一变成 wrapper——搭一个用函数名当 key 的插件注册表,两个业务处理函数因为重名互相覆盖,注册表从 2 个缩水成 1 个,调用其中一个实际执行的是另一个;加上 wraps 后 inspect.signature 也能正确还原出原函数签名;验证多层装饰器叠加时 __wrapped__ 只指向下一层,要拿到最原始的函数得用 inspect.unwrap 顺着链条走到底。">
+<link rel="canonical" href="https://bigywater.tech/functools-wraps.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="@functools.wraps 不加会怎样:一个插件注册表被覆盖的例子">
+<meta property="og:description" content="验证:不加 functools.wraps,装饰后的函数 __name__ 会统一变成 wrapper——搭一个用函数名当 key 的插件注册表,两个业务处理函数因为重名互相覆盖,注册表从 2 个缩水成 1 个,调用其中一个实际执行的是另一个;加上 wraps 后 inspect.signature 也能正确还原出原函数签名;验证多层装饰器叠加时 __wrapped__ 只指向下一层,要拿到最原始的函数得用 inspect.unwrap 顺着链条走到底。">
+<meta property="og:url" content="https://bigywater.tech/functools-wraps.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="@functools.wraps 不加会怎样:一个插件注册表被覆盖的例子">
+<meta name="twitter:description" content="验证:不加 functools.wraps,装饰后的函数 __name__ 会统一变成 wrapper——搭一个用函数名当 key 的插件注册表,两个业务处理函数因为重名互相覆盖,注册表从 2 个缩水成 1 个,调用其中一个实际执行的是另一个;加上 wraps 后 inspect.signature 也能正确还原出原函数签名;验证多层装饰器叠加时 __wrapped__ 只指向下一层,要拿到最原始的函数得用 inspect.unwrap 顺着链条走到底。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F3F6FA; --paper:#FFFFFF; --ink:#1A2233; --ink-dim:#5A6B80; --line:#DCE4EE;
+  --py-c:#2F6FB0; --py-c-soft:#E4EEF9;
+  --mem-c:#C99A2E; --mem-c-soft:#FBF2DC;
+  --gil-c:#7B4FA8; --gil-c-soft:#EFE6F7;
+  --code-bg:#1B2233; --code-ink:#E7ECF5;
+  --shadow: 0 1px 2px rgba(20,30,50,.06), 0 8px 24px -12px rgba(20,30,50,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#10151F; --paper:#1A2233; --ink:#E7ECF5; --ink-dim:#9AAAC0; --line:#2C3850;
+    --py-c:#6FA8E0; --py-c-soft:#1E3350;
+    --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+    --gil-c:#B08AE0; --gil-c-soft:#332545;
+    --code-bg:#0D1119; --code-ink:#E2E8F5;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#10151F; --paper:#1A2233; --ink:#E7ECF5; --ink-dim:#9AAAC0; --line:#2C3850;
+  --py-c:#6FA8E0; --py-c-soft:#1E3350;
+  --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+  --gil-c:#B08AE0; --gil-c-soft:#332545;
+  --code-bg:#0D1119; --code-ink:#E2E8F5;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--py-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--py-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--py-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--py-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#8FA0BC; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--py-c); background:var(--py-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+.callout.c{border-color:var(--gil-c); background:var(--gil-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--py-c-soft); color:var(--py-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#9FC3EE;}
+.term pre.code{margin:0 0 10px; color:#9FC3EE; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+.term .cm{color:#7C8CA8;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Python · 装饰器</div>
+    <h1>@functools.wraps 不加会怎样:一个插件注册表被覆盖的例子</h1>
+    <p>网上大多数讲 <span class="mono">wraps</span> 的文章止步于"不加它 <span class="mono">__name__</span> 会变成 wrapper、文档字符串会丢",听起来像个无伤大雅的小瑕疵。搭一个会在生产代码里出现的场景——用函数名当 key 的插件/路由注册表——看看这个"小瑕疵"具体能捅出多大的篓子。</p>
+    <div class="hero-fact">
+      <div><div class="num">2 个 → 1 个</div><div class="lbl">注册两个不同的处理函数,不加 wraps 时注册表缩水成 1 个,另一个被悄悄覆盖</div></div>
+      <div><div class="num">调错函数</div><div class="lbl">调用注册表里仅存的那个 key,执行的其实是后注册的那个函数,不报任何错</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <h2>思路:装饰器为什么会把函数名"吃掉"</h2>
+  <p class="h2-sub">这不是 bug,是闭包写法必然的结果——返回的那个对象本来就叫 wrapper。</p>
+  <p>最常见的装饰器写法是这样:外层函数接收原函数 <span class="mono">func</span>,内部定义一个 <span class="mono">wrapper</span> 函数包一层逻辑,再把 <span class="mono">wrapper</span> 返回出去替代原函数。</p>
+  <blockquote class="src">
+    <span class="path">最朴素的装饰器写法(还没加 wraps)</span>
+def logged(func):
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+    return wrapper
+
+@logged
+def greet(name):
+    """打个招呼"""
+    return f"hello {name}"
+  </blockquote>
+  <p>调用 <span class="mono">greet(...)</span> 时,你真正调用到的对象其实是 <span class="mono">wrapper</span>,只是它内部又转手调用了原来的 <span class="mono">func</span>。Python 里函数是普通对象,它的 <span class="mono">__name__</span>/<span class="mono">__doc__</span> 这些属性就是定义时那一刻的身份证——<span class="mono">wrapper</span> 定义的时候确实叫 <span class="mono">wrapper</span>,也确实没写文档字符串,这些属性如实反映了它自己,而不是它转手调用的那个 <span class="mono">func</span>。<span class="mono">functools.wraps</span> 要做的事,就是把原函数的身份信息"移植"到这个新对象上。</p>
+</section>
+
+<section>
+  <h2>验证:不加 wraps,到底丢了什么</h2>
+  <p class="h2-sub">同一个函数,分别用加了 wraps 和没加 wraps 的装饰器包一遍,对比它暴露出来的元信息。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">=== 不加 wraps ===
+__name__:   wrapper
+__doc__:    None
+__module__: __main__
+
+=== 加了 wraps ===
+__name__:   greet2
+__doc__:    打个招呼
+__module__: __main__
+__wrapped__: &lt;function greet2 at 0x1099c6770&gt;</pre>
+<span class="ok">加了 wraps 之后,greet2 对外暴露的身份信息跟原函数完全一致,而且多了一个指向原函数的 __wrapped__ 引用</span>
+  </div>
+  <p>不加 wraps 那组,<span class="mono">help(greet)</span>、IDE 悬浮提示、调试器里看到的函数名和文档字符串全都是错的——你以为看的是 <span class="mono">greet</span> 的信息,实际看到的是 <span class="mono">wrapper</span> 这个匿名壳子的信息,业务函数本来的说明完全丢了。</p>
+</section>
+
+<section>
+  <h2>踩坑:插件注册表丢了一个函数</h2>
+  <p class="h2-sub">"文档字符串丢了"看起来无伤大雅,但如果有代码依赖 __name__ 做逻辑判断,后果就不是丢文档这么简单了。</p>
+  <p>很多框架的注册模式长这样:装饰器在包一层逻辑的同时,顺手把函数注册进一个字典,用 <span class="mono">__name__</span> 当 key(路由表、事件处理器、插件系统里很常见的写法)。写两版对比:</p>
+  <blockquote class="src">
+    <span class="path">registry_demo.py</span>
+registry_bad = {}
+registry_good = {}
+
+def register_bad(func):
+    def wrapper(*a, **kw):
+        return func(*a, **kw)
+    registry_bad[wrapper.__name__] = wrapper   # 拿 __name__ 当 key
+    return wrapper
+
+def register_good(func):
+    @functools.wraps(func)
+    def wrapper(*a, **kw):
+        return func(*a, **kw)
+    registry_good[wrapper.__name__] = wrapper
+    return wrapper
+
+@register_bad
+def handle_login(req):
+    return "login ok"
+
+@register_bad
+def handle_logout(req):
+    return "logout ok"
+
+@register_good
+def handle_login2(req):
+    return "login ok"
+
+@register_good
+def handle_logout2(req):
+    return "logout ok"
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">registry_bad keys : ['wrapper']
+registry_bad size : 1
+调用 registry_bad['wrapper']("x") 的结果: logout ok
+
+registry_good keys: ['handle_login2', 'handle_logout2']
+registry_good size: 2</pre>
+<span class="bad">registry_bad 只剩 1 个 key——handle_login 注册进去之后,被同名的 handle_logout 直接顶替,没有任何报错或警告</span>
+<span class="ok">registry_good 正常保留了 2 个不同的 key,一个不少</span>
+  </div>
+  <p>两个函数都叫 <span class="mono">wrapper</span>,字典按 key 赋值,后注册的 <span class="mono">handle_logout</span> 原地覆盖了先注册的 <span class="mono">handle_login</span>。整个过程 Python 不会报任何错——字典允许同 key 覆盖是完全合法的操作,程序表面上一切正常,只是"登录"这个功能在注册表里已经悄悄不存在了,调用的时候实际执行的是"登出"的逻辑。这种 bug 最难受的地方在于:它不在装饰器定义的地方暴露,而是在业务代码某个完全不相关的地方,以一种看似正常但结果错误的方式出现。</p>
+</section>
+
+<section>
+  <h2>wraps 不只是保 __name__:inspect.signature 也跟着错</h2>
+  <p class="h2-sub">很多人以为 wraps 只是"面子工程"(保住名字和文档),实际上它连参数签名的自省结果都会改变。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">不加 wraps: inspect.signature(greet)  -&gt; (*args, **kwargs)
+加了 wraps: inspect.signature(greet2) -&gt; (name)</pre>
+  </div>
+  <p>不加 wraps 时,<span class="mono">inspect.signature</span> 拿到的是 <span class="mono">wrapper(*args, **kwargs)</span> 这个壳子的签名——技术上没说错,但完全没用,因为它掩盖了原函数真正需要哪些参数。加了 wraps 之后,<span class="mono">inspect.signature</span> 会顺着 <span class="mono">__wrapped__</span> 找到原函数,还原出的 <span class="mono">(name)</span>。这个细节不只是给人看着舒服:命令行框架(比如 Click)、Web 框架的参数校验、IDE 的参数提示,不少都是靠 <span class="mono">inspect.signature</span> 在运行时反推函数需要什么参数——签名读错了,这些工具的行为会直接跟着错。</p>
+</section>
+
+<section>
+  <h2>wraps 到底复制了哪些东西</h2>
+  <p class="h2-sub">不是靠魔法,就是把几个固定的属性名从原函数搬到新函数上而已。</p>
+  <div class="term"><span class="real-tag">真实实测(本机 Python 3.14.7)</span>
+<pre class="code">functools.WRAPPER_ASSIGNMENTS = ('__module__', '__name__', '__qualname__',
+                                  '__doc__', '__annotate__', '__type_params__')
+functools.WRAPPER_UPDATES = ('__dict__',)</pre>
+  </div>
+  <p><span class="mono">WRAPPER_ASSIGNMENTS</span> 里列的这几个属性,原样从 <span class="mono">func</span> 拷贝一份盖到 <span class="mono">wrapper</span> 上;<span class="mono">WRAPPER_UPDATES</span> 里的 <span class="mono">__dict__</span> 是"合并"而不是覆盖(比如原函数自己挂过额外属性,不会被冲掉)。除此之外,<span class="mono">wraps</span> 还会单独设置一个 <span class="mono">__wrapped__</span> 属性指回原函数,这个是专门给 <span class="mono">inspect</span> 模块自省用的,不在上面两个列表里。</p>
+  <div class="callout b">
+    <b>本机是 Python 3.14</b>,列表里的 <span class="mono">__annotate__</span>/<span class="mono">__type_params__</span> 是比较新的属性(取代旧版本里的 <span class="mono">__annotations__</span>,对应 PEP 649 延迟求值注解和 PEP 695 泛型语法)——<span class="mono">wraps</span> 具体搬哪些属性,是跟着 Python 版本走的,不是一份亘古不变的清单。
+  </div>
+</section>
+
+<section>
+  <h2>多层装饰器叠加:__wrapped__ 只指向下一层,不是原函数</h2>
+  <p class="h2-sub">容易想当然地以为 __wrapped__ 直接指向最初定义的那个函数,验证发现它只指向紧挨着的下一层。</p>
+  <blockquote class="src">
+    <span class="path">两层装饰器叠加</span>
+@dec_a
+@dec_b
+def core(x):
+    """核心函数"""
+    return x * 2
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">layer2 = dec_a(dec_b(original))
+
+layer2 is original?                       False
+layer2.__wrapped__ is layer1(dec_b 包过的那层)?   True
+layer2.__wrapped__ is original?           False
+layer2.__wrapped__.__wrapped__ is original? True</pre>
+  </div>
+  <p><span class="mono">layer2.__wrapped__</span> 指向的是 <span class="mono">dec_b</span> 包出来的那一层,不是最原始的 <span class="mono">original</span>——要拿到最底层,得再往下取一次 <span class="mono">.__wrapped__</span>,或者不想自己管有几层嵌套的话,直接用标准库的 <span class="mono">inspect.unwrap()</span>,它会顺着 <span class="mono">__wrapped__</span> 链条自动走到底(遇到循环引用会主动报错,不会死循环)。装饰器叠得越多层,这条链条就越长,手动一层层 <span class="mono">.__wrapped__</span> 剥洋葱很容易漏,交给 <span class="mono">inspect.unwrap()</span> 更稳。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文所有对比结果均在本机 Python 3.14.7 运行得出,代码可以直接复制到本地复现。</li>
+      <li><span class="mono">functools.WRAPPER_ASSIGNMENTS</span>/<span class="mono">WRAPPER_UPDATES</span> 的具体内容会随 Python 版本变化,文中给出的是当前版本的值,不代表所有版本都一样。</li>
+      <li>没有涉及:<span class="mono">functools.partial</span> 相关的元信息处理、类装饰器(装饰的是类而不是函数)、以及 C 扩展实现的可调用对象上 <span class="mono">wraps</span> 的行为差异。</li>
+    </ul>
+  </div>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Python · 装饰器 · 数据来自本机运行的 Python 3.14</footer>
+
+</body>
+</html>

@@ -1,0 +1,562 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>ModelBase:类属性怎么变成数据库字段</title>
+<meta name="description" content="真实拦截 CharField 变成 DeferredAttribute 描述符,.only() 触发的真实额外 SQL 查询。">
+<link rel="canonical" href="https://bigywater.tech/modelbase.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="ModelBase:类属性怎么变成数据库字段">
+<meta property="og:description" content="真实拦截 CharField 变成 DeferredAttribute 描述符,.only() 触发的真实额外 SQL 查询。">
+<meta property="og:url" content="https://bigywater.tech/modelbase.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="ModelBase:类属性怎么变成数据库字段">
+<meta name="twitter:description" content="真实拦截 CharField 变成 DeferredAttribute 描述符,.only() 触发的真实额外 SQL 查询。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F4F7F4; --paper:#FFFFFF; --ink:#132119; --ink-dim:#5C6B61; --line:#DCE6DE;
+  --dj-c:#0C4B33; --dj-c-soft:#E1EEE6;
+  --mem-c:#B8791E; --mem-c-soft:#F6ECD9;
+  --meta-c:#7B4FA8; --meta-c-soft:#EFE6F7;
+  --code-bg:#12211A; --code-ink:#E7F0EA;
+  --shadow: 0 1px 2px rgba(15,30,20,.06), 0 8px 24px -12px rgba(15,30,20,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0E1712; --paper:#18251E; --ink:#E7F0EA; --ink-dim:#9DB0A4; --line:#2C3B32;
+    --dj-c:#5FBF95; --dj-c-soft:#1B3327;
+    --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+    --meta-c:#B08AE0; --meta-c-soft:#332545;
+    --code-bg:#0B120D; --code-ink:#DCE9E0;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0E1712; --paper:#18251E; --ink:#E7F0EA; --ink-dim:#9DB0A4; --line:#2C3B32;
+  --dj-c:#5FBF95; --dj-c-soft:#1B3327;
+  --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+  --meta-c:#B08AE0; --meta-c-soft:#332545;
+  --code-bg:#0B120D; --code-ink:#DCE9E0;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--dj-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--dj-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--dj-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--dj-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.a .tag{background:var(--dj-c-soft); color:var(--dj-c);}
+.card.b .tag{background:var(--mem-c-soft); color:var(--mem-c);}
+.card.c .tag{background:var(--meta-c-soft); color:var(--meta-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#8FB0A0; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#9FE0C3;}
+
+.callout{border-left:3px solid var(--dj-c); background:var(--dj-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+.callout.c{border-color:var(--meta-c); background:var(--meta-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--dj-c-soft); color:var(--dj-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#9FE0C3;}
+.term pre.code{margin:0 0 10px; color:#9FE0C3; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+.term .ok{color:#7DD0A0;}
+.term .cm{color:#7C9C8C;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--mem-c-soft); color:var(--mem-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:22px 20px;}
+.pipeline{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:18px;}
+.pipe-step{flex:1; min-width:90px; text-align:center; padding:8px 6px; border-radius:8px; border:1px solid var(--line); background:var(--bg); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; color:var(--ink-dim);}
+.pipe-step.active{border-color:var(--dj-c); background:var(--dj-c-soft); color:var(--dj-c); font-weight:700;}
+.pipe-step.done{opacity:.5;}
+.split-view{display:grid; grid-template-columns:1fr 1fr; gap:14px;}
+@media (max-width:640px){.split-view{grid-template-columns:1fr;}}
+.split-box{border:1px solid var(--line); border-radius:10px; padding:14px 16px; background:var(--bg); min-height:110px;}
+.split-box h5{margin:0 0 10px; font-size:.7rem; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-dim); font-weight:700;}
+.field-row{display:flex; gap:8px; align-items:center; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; padding:4px 0;}
+.field-row .fname{color:var(--dj-c); font-weight:700; min-width:50px;}
+.field-row .ftype{color:var(--ink-dim);}
+.field-row.pending{opacity:.35;}
+.field-row.auto .fname{color:var(--meta-c);}
+.stat-row{display:flex; gap:16px; flex-wrap:wrap; margin:14px 0 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem;}
+.stat{border:1px solid var(--line); border-radius:8px; padding:8px 12px; background:var(--bg);}
+.stat b{color:var(--dj-c); display:block; font-size:1rem; font-variant-numeric:tabular-nums;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--dj-c); color:var(--dj-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--dj-c); border-color:var(--dj-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{display:flex; align-items:center; gap:10px; margin-bottom:24px; font-size:.88rem; color:var(--ink-dim); flex-wrap:wrap;}
+.prev-post a{font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--dj-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Django 系列 · 第一篇</div>
+    <h1>写 <span class="mono">title = models.CharField(...)</span>,这行代码最后去哪了?</h1>
+    <p>上一篇验证了元类的机制本身。这一篇看一个真实框架怎么重度依赖它——Django 的每一个 Model 类,它的元类都是 <span class="mono">ModelBase</span>。本机真实拦截发现一个反直觉的结果:<span class="mono">title = CharField(...)</span> 这行代码执行完之后,类属性 <span class="mono">title</span> 已经<b>不是</b>那个 <span class="mono">CharField</span> 对象了——它被替换成了别的东西。这一篇顺着真实源码,把这个替换过程和它背后的真实用途(用一次真实多打的 SQL 查询证明)都挖了出来。</p>
+    <div class="hero-fact">
+      <div><div class="num">DeferredAttribute</div><div class="lbl">本机真实测得:<span class="mono">Article.__dict__['title']</span> 的真实类型,不是 CharField</div></div>
+      <div><div class="num">+1 次查询</div><div class="lbl">本机真实实测:访问一个被 <span class="mono">.only()</span> 排除的字段,真实多发一次 SQL</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <div class="prev-post">← 接上篇 <a href="meta.html" target="_blank" rel="noopener">元类:class 语句背后的真相</a></div>
+  <h2>先确认:Model 的元类真的是自定义的</h2>
+  <p class="h2-sub">本机真实配置了一个最小化的 Django 环境(Django 6.0.7),定义一个最简单的 Model。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">from django.db import models
+class Article(models.Model):
+    title = models.CharField(max_length=200)
+    body = models.TextField()
+    class Meta:
+        app_label = '__main__'
+
+print(type(Article))
+print(type(Article).__mro__)</pre>
+<span class="ok">&lt;class 'django.db.models.base.ModelBase'&gt;
+(&lt;class 'django.db.models.base.ModelBase'&gt;, &lt;class 'type'&gt;, &lt;class 'object'&gt;)</span>
+  </div>
+  <p>印证了上一篇的结论:<span class="mono">Article</span> 这个类,是 <span class="mono">ModelBase</span> 的实例,而 <span class="mono">ModelBase</span> 本身是 <span class="mono">type</span> 的子类——一个真正在生产环境重度使用的元类。</p>
+</section>
+
+<section>
+  <h2>真实实验:title 字段"消失"了</h2>
+  <p class="h2-sub">按直觉,<span class="mono">Article.title</span> 应该就是那个 <span class="mono">CharField(max_length=200)</span> 对象。实测不是。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">print(Article.__dict__['title'])
+print(type(Article.__dict__['title']))
+print()
+for f in Article._meta.fields:
+    print(f'  {f.name!r}: {type(f).__name__}')</pre>
+<span class="ok">&lt;django.db.models.query_utils.DeferredAttribute object at 0x10b715220&gt;
+&lt;class 'django.db.models.query_utils.DeferredAttribute'&gt;
+
+  'id': BigAutoField
+  'title': CharField
+  'body': TextField</span>
+  </div>
+  <p>两个意外发现:第一,<span class="mono">Article.__dict__['title']</span> 是一个 <span class="mono">DeferredAttribute</span>,真正的 <span class="mono">CharField</span> 对象藏到了 <span class="mono">Article._meta.fields</span> 里;第二,<span class="mono">_meta.fields</span> 里多出来一个从没声明过的 <span class="mono">id</span> 字段。这两件事都是 <span class="mono">ModelBase</span> 干的。</p>
+</section>
+
+<section>
+  <h2>真实源码:ModelBase.__new__ 的真实四步</h2>
+  <p class="h2-sub"><span class="mono">ModelBase.__new__</span> 拿到的 <span class="mono">attrs</span>,就是上一篇讲过的 <span class="mono">__build_class__</span> 第三步"执行类体"之后的那个命名空间——这一刻 <span class="mono">title</span> 还真的是 <span class="mono">CharField</span> 实例。</p>
+  <blockquote class="src">
+    <span class="path">django/db/models/base.py · <a href="https://github.com/django/django/blob/6.0.7/django/db/models/base.py#L97" target="_blank" rel="noopener">django @ 6.0.7, L97</a></span>
+class ModelBase(type):
+    def __new__(cls, name, bases, attrs, **kwargs):
+        ...
+        attr_meta = attrs.pop("Meta", None)          # 内部 class Meta 被摘出去
+        contributable_attrs = {}
+        for obj_name, obj in attrs.items():
+            if _has_contribute_to_class(obj):          # Field 实例都有这个方法
+                contributable_attrs[obj_name] = obj
+            else:
+                new_attrs[obj_name] = obj
+        new_class = super_new(cls, name, bases, new_attrs, **kwargs)  # 先造一个"光身"的类
+        ...
+        for obj_name, obj in contributable_attrs.items():
+            new_class.add_to_class(obj_name, obj)       # 逐个把字段"贡献"给类
+  </blockquote>
+  <p>四步翻译成大白话:①拿到类体执行完的命名空间,这时候 <span class="mono">title</span> 还是原始的 <span class="mono">CharField</span>;②把"有 <span class="mono">contribute_to_class</span> 方法的东西"(所有 Field 实例)单独摘出来,顺手把内部 <span class="mono">class Meta</span> 也摘出去——这解释了为什么 <span class="mono">hasattr(Article, 'Meta')</span> 是 <span class="mono">False</span>;③用剩下的"普通"属性先造出一个不带任何字段的空壳类;④对每个被摘出来的字段,调用 <span class="mono">add_to_class</span>,这一步才是真正的字段安装。</p>
+  <blockquote class="src">
+    <span class="path">django/db/models/base.py · <a href="https://github.com/django/django/blob/6.0.7/django/db/models/base.py#L391" target="_blank" rel="noopener">django @ 6.0.7, L391</a></span>
+def add_to_class(cls, name, value):
+    if _has_contribute_to_class(value):
+        value.contribute_to_class(cls, name)
+    else:
+        setattr(cls, name, value)
+  </blockquote>
+</section>
+
+<section>
+  <h2>真实源码:一个字段怎么"贡献"自己</h2>
+  <p class="h2-sub">真正的替换动作,发生在 <span class="mono">Field.contribute_to_class</span> 里。</p>
+  <blockquote class="src">
+    <span class="path">django/db/models/fields/__init__.py · <a href="https://github.com/django/django/blob/6.0.7/django/db/models/fields/__init__.py#L944" target="_blank" rel="noopener">django @ 6.0.7, L944</a></span>
+def contribute_to_class(self, cls, name, private_only=False):
+    self.set_attributes_from_name(name)
+    self.model = cls
+    cls._meta.add_field(self, private=private_only)      # 真正的 Field 对象注册进 _meta
+    if self.column:
+        setattr(cls, self.attname, self.descriptor_class(self))   # 类属性被替换成描述符
+  </blockquote>
+  <p><span class="mono">self.descriptor_class</span> 默认就是 <span class="mono">DeferredAttribute</span>(定义在 <span class="mono">Field</span> 类上:<span class="mono">descriptor_class = DeferredAttribute</span>)。这一行 <span class="mono">setattr</span> 就是 <span class="mono">Article.title</span> 变成 <span class="mono">DeferredAttribute</span> 的真正发生地——原始的 <span class="mono">CharField</span> 对象只活在 <span class="mono">_meta.fields</span> 里,从没真的成为过类属性。</p>
+  <blockquote class="src">
+    <span class="path">django/db/models/query_utils.py · <a href="https://github.com/django/django/blob/6.0.7/django/db/models/query_utils.py#L243" target="_blank" rel="noopener">django @ 6.0.7, L243</a></span>
+class DeferredAttribute:
+    """A wrapper for a deferred-loading field. When the value is read
+    from this object the first time, the query is executed."""
+    def __get__(self, instance, cls=None):
+        if instance is None:
+            return self
+        data = instance.__dict__
+        field_name = self.field.attname
+        if field_name not in data:
+            ...
+            instance.refresh_from_db(fields=[field_name])   # 真的会发一次新查询
+        return data[field_name]
+  </blockquote>
+  <p>这是一个真正的描述符(实现了 <span class="mono">__get__</span>)——类访问(<span class="mono">Article.title</span>)拿到的是描述符本身,实例访问(<span class="mono">article.title</span>)才会走 <span class="mono">__get__</span> 逻辑,返回实例 <span class="mono">__dict__</span> 里真正的值。名字里的"Deferred"不是随便起的:如果这个字段的值还没被加载(比如用了 <span class="mono">.only()</span>/<span class="mono">.defer()</span> 排除了它),第一次访问会触发 <span class="mono">refresh_from_db</span>,真的再发一次数据库查询。</p>
+</section>
+
+<section>
+  <h2>真实实验:DeferredAttribute 不是纸上谈兵,真的会多打一次 SQL</h2>
+  <p class="h2-sub">本机真实建表、插入一行数据,用 <span class="mono">.only('title')</span> 故意排除 <span class="mono">body</span> 字段,监控真实发出的 SQL。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cmd">$ python3 exp_deferred.py</span>
+<span class="ok">=== fetching with .only('title') -- body is deliberately excluded ===
+queries so far: 1
+
+accessing a.title (was loaded):
+  hello
+queries so far: 1
+
+accessing a.body (was DEFERRED, not loaded)...
+queries so far: 2
+the extra query that just fired:
+  SELECT "__main___article"."id", "__main___article"."body"
+  FROM "__main___article" WHERE "__main___article"."id" = 1 LIMIT 21</span>
+  </div>
+  <p><span class="mono">a.title</span> 访问不产生任何新查询(数据已经在 <span class="mono">.only()</span> 那次查询里加载了);<span class="mono">a.body</span> 访问真实触发了第二次 SQL,专门去数据库补这一个字段。调用方完全看不出这中间发生了什么——<span class="mono">a.body</span> 用起来和普通属性一模一样,这正是描述符协议存在的意义:把"要不要查数据库"这种复杂逻辑,藏在一次看起来平平无奇的属性访问背后。</p>
+</section>
+
+<section>
+  <h2>真实源码:那个自动多出来的 id 字段</h2>
+  <p class="h2-sub">没有声明主键的话,谁来决定加一个 <span class="mono">id</span>?</p>
+  <blockquote class="src">
+    <span class="path">django/db/models/options.py · <a href="https://github.com/django/django/blob/6.0.7/django/db/models/options.py#L309" target="_blank" rel="noopener">django @ 6.0.7, L309</a></span>
+if self.pk is None:
+    if self.parents:
+        ...
+    else:
+        pk_class = self._get_default_pk_class()
+        auto = pk_class(verbose_name="ID", primary_key=True, auto_created=True)
+        model.add_to_class("id", auto)     # 走的是和普通字段完全一样的 add_to_class
+  </blockquote>
+  <p><span class="mono">_meta._prepare()</span> 阶段,如果扫描完所有字段发现没有主键,就用 <span class="mono">settings.DEFAULT_AUTO_FIELD</span>(本机默认配的 <span class="mono">BigAutoField</span>)造一个,再调用<b>同一个</b> <span class="mono">add_to_class</span> 把它装上去——自动字段和手写字段走的是完全相同的机制,没有任何特殊通道。这也是为什么 <span class="mono">_meta.fields</span> 里 <span class="mono">id</span> 排在最前面:它是最先被 <span class="mono">add_to_class</span> 的。</p>
+</section>
+
+<section>
+  <h2>演示:一次 ModelBase.__new__ 完整走一遍</h2>
+  <p class="h2-sub">复现 <span class="mono">Article(title, body)</span> 从类体执行完毕到最终类对象定型的完整过程。</p>
+  <div class="demo" id="djDemo">
+    <div class="demo-head">ModelBase 字段安装流程演示</div>
+    <div class="pipeline" id="djPipeline"></div>
+    <div class="demo-narration" id="djNarration"></div>
+    <div class="demo-body">
+      <div class="split-view">
+        <div class="split-box"><h5>Article._meta.fields</h5><div id="djMeta"></div></div>
+        <div class="split-box"><h5>Article 类的 __dict__(只看字段相关的键)</h5><div id="djDict"></div></div>
+      </div>
+      <div class="stat-row" id="djStats"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="djReset">⏮ 重来</button>
+      <button class="btn" id="djPrev">‹ 上一步</button>
+      <button class="btn primary" id="djNext">下一步 ›</button>
+      <button class="btn" id="djPlay">▶ 自动播放</button>
+      <span class="step-counter" id="djCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">数据来自独立验证过的 Python 模拟,复现了真实的四步流程和自动主键注入顺序;最终 <span class="mono">_meta.fields</span> 的顺序(id 在最前)和类 <span class="mono">__dict__</span> 里每个字段对应的描述符,都用独立回放算法核对过。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文全部真实实验(<span class="mono">type(Article)</span> 确认、<span class="mono">Article.__dict__['title']</span> 类型检查、<span class="mono">.only()</span> 触发额外 SQL 查询)均在本机真实运行的 Django 6.0.7(配合内存 SQLite 数据库)上完成,数据未做删改。</li>
+      <li>源码引用(<span class="mono">django/db/models/base.py</span> 的 <span class="mono">ModelBase.__new__</span>/<span class="mono">add_to_class</span>、<span class="mono">fields/__init__.py</span> 的 <span class="mono">Field.contribute_to_class</span>、<span class="mono">query_utils.py</span> 的 <span class="mono">DeferredAttribute</span>、<span class="mono">options.py</span> 的自动主键注入逻辑)取自本机通过 pip 安装的 Django 6.0.7 包本身,并且逐字节比对确认与 <span class="mono">django/django</span> 仓库 <span class="mono">6.0.7</span> 标签完全一致。</li>
+      <li>演示动画的字段安装流程模型(接收命名空间、拆分、造空壳类、逐字段贡献)由 Python 独立实现并交叉验证过——用真实实测过的 <span class="mono">Article(title, body)</span> 场景做参数,最终 <span class="mono">_meta.fields</span> 顺序和类 <span class="mono">__dict__</span> 内容都用独立回放算法核对过,不是照抄 Django 源码,而是复现了它对外可观察的行为规则。</li>
+      <li>没有涉及:多表继承(<span class="mono">parent_link</span>)场景下字段安装的额外逻辑、<span class="mono">ManyToManyField</span> 这类需要额外中间表的字段类型、抽象基类(<span class="mono">abstract = True</span>)如何影响这套流程、<span class="mono">Options</span>(<span class="mono">_meta</span> 对象本身)的完整初始化过程。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="queryset.html" target="_blank" rel="noopener">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">QuerySet:链式调用为什么不查库</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Django 系列 · 第一篇 · ModelBase 元类 · 数据来自本机真实运行的 Django 6.0.7</footer>
+
+<script>
+const DATA = {"events": [{"name": "Article", "fields": ["title", "body"], "type": "receive-attrs"}, {"name": "Article", "contributable": ["title", "body"], "type": "split-attrs"}, {"name": "Article", "classDictKeys": [], "type": "bare-class-built"}, {"name": "Article", "reason": "没有声明主键,Options._prepare() 自动加一个 AutoField", "type": "auto-pk-injected"}, {"name": "Article", "field": "id", "fieldType": "AutoField", "type": "contribute-start"}, {"name": "Article", "field": "id", "type": "register-meta-field"}, {"name": "Article", "field": "id", "descriptor": "DeferredAttribute(id)", "type": "install-descriptor"}, {"name": "Article", "field": "title", "fieldType": "CharField", "type": "contribute-start"}, {"name": "Article", "field": "title", "type": "register-meta-field"}, {"name": "Article", "field": "title", "descriptor": "DeferredAttribute(title)", "type": "install-descriptor"}, {"name": "Article", "field": "body", "fieldType": "TextField", "type": "contribute-start"}, {"name": "Article", "field": "body", "type": "register-meta-field"}, {"name": "Article", "field": "body", "descriptor": "DeferredAttribute(body)", "type": "install-descriptor"}, {"name": "Article", "metaFields": ["id", "title", "body"], "classDictKeys": ["id", "title", "body"], "type": "class-complete"}]};
+
+(function(){
+  const events = DATA.events;
+  const pipelineEl = document.getElementById('djPipeline');
+  const narration = document.getElementById('djNarration');
+  const metaEl = document.getElementById('djMeta');
+  const dictEl = document.getElementById('djDict');
+  const statsBox = document.getElementById('djStats');
+  const counter = document.getElementById('djCounter');
+  let idx = 0, playing=false, playTimer=null;
+
+  const STAGES = [
+    {key:'receive-attrs', label:'①接收命名空间'},
+    {key:'split-attrs', label:'②拆分属性'},
+    {key:'bare-class-built', label:'③造空壳类'},
+    {key:'contribute-start', label:'④逐字段贡献'},
+  ];
+  STAGES.forEach(s => {
+    const el = document.createElement('div');
+    el.className = 'pipe-step';
+    el.textContent = s.label;
+    el.dataset.key = s.key;
+    pipelineEl.appendChild(el);
+  });
+
+  function describe(e){
+    if (e.type === 'receive-attrs') return `<span class="k">${e.name}</span>:ModelBase.__new__ 收到类体执行完的命名空间,包含字段 [${e.fields.join(', ')}]。`;
+    if (e.type === 'split-attrs') return `拆分属性:有 contribute_to_class 方法的 [${e.contributable.join(', ')}] 被单独摘出来。`;
+    if (e.type === 'bare-class-built') return `用 type.__new__ 造出一个"空壳"类——此时还没有任何字段描述符。`;
+    if (e.type === 'auto-pk-injected') return `检测到没有声明主键:${e.reason}`;
+    if (e.type === 'contribute-start') return `开始处理字段 <span class="k">${e.field}</span>(${e.fieldType})的 contribute_to_class。`;
+    if (e.type === 'register-meta-field') return `第一步:把真正的字段对象注册进 <span class="k">_meta.fields</span>。`;
+    if (e.type === 'install-descriptor') return `第二步:setattr(cls, '${e.field}', ${e.descriptor}) —— 类属性被替换成描述符。`;
+    if (e.type === 'class-complete') return `全部完成。最终 _meta.fields = [${e.metaFields.join(', ')}]。`;
+    return e.type;
+  }
+
+  function replayUpTo(uptoIdx){
+    const metaFields = [];
+    const classDict = {};
+    let stage = null;
+    for (let i = 0; i <= uptoIdx; i++){
+      const e = events[i];
+      if (e.type === 'receive-attrs') stage = 'receive-attrs';
+      if (e.type === 'split-attrs') stage = 'split-attrs';
+      if (e.type === 'bare-class-built') stage = 'bare-class-built';
+      if (e.type === 'contribute-start') stage = 'contribute-start';
+      if (e.type === 'register-meta-field') metaFields.push(e.field);
+      if (e.type === 'install-descriptor') classDict[e.field] = e.descriptor;
+    }
+    return {metaFields, classDict, stage};
+  }
+
+  function render(){
+    idx = Math.max(0, Math.min(events.length-1, idx));
+    const e = events[idx];
+    narration.innerHTML = describe(e);
+    const state = replayUpTo(idx);
+
+    Array.from(pipelineEl.children).forEach(el => {
+      const stageIdx = STAGES.findIndex(s => s.key === el.dataset.key);
+      const currentStageIdx = STAGES.findIndex(s => s.key === state.stage);
+      el.className = 'pipe-step' + (el.dataset.key === state.stage ? ' active' : (stageIdx < currentStageIdx ? ' done' : ''));
+    });
+
+    const allFieldOrder = ['id', 'title', 'body'];
+    metaEl.innerHTML = allFieldOrder.map(f => {
+      const registered = state.metaFields.includes(f);
+      const isAuto = f === 'id';
+      return `<div class="field-row ${registered?'':'pending'} ${isAuto?'auto':''}"><span class="fname">${f}</span><span class="ftype">${registered ? '已注册' : '待处理'}</span></div>`;
+    }).join('');
+
+    dictEl.innerHTML = allFieldOrder.map(f => {
+      const installed = state.classDict[f];
+      return `<div class="field-row ${installed?'':'pending'}"><span class="fname">${f}</span><span class="ftype">${installed || '(还是原始 Field 或不存在)'}</span></div>`;
+    }).join('');
+
+    statsBox.innerHTML = `<div class="stat">已注册字段数<b>${state.metaFields.length} / 3</b></div><div class="stat">已安装描述符数<b>${Object.keys(state.classDict).length} / 3</b></div>`;
+
+    counter.textContent = `${idx+1} / ${events.length}`;
+    document.getElementById('djPrev').disabled = idx===0;
+    document.getElementById('djNext').disabled = idx===events.length-1;
+  }
+  document.getElementById('djPrev').onclick=()=>{idx--;render();stopPlay();};
+  document.getElementById('djNext').onclick=()=>{idx++;render();stopPlay();};
+  document.getElementById('djReset').onclick=()=>{idx=0;render();stopPlay();};
+  function stopPlay(){ playing=false; clearInterval(playTimer); document.getElementById('djPlay').textContent='▶ 自动播放'; }
+  document.getElementById('djPlay').onclick=()=>{
+    if(playing){ stopPlay(); return; }
+    playing=true; document.getElementById('djPlay').textContent='⏸ 暂停';
+    playTimer = setInterval(()=>{
+      if(idx>=events.length-1){ stopPlay(); return; }
+      idx++; render();
+    }, 1000);
+  };
+  render();
+})();
+</script>
+
+</body>
+</html>

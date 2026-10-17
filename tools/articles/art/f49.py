@@ -1,0 +1,17 @@
+from lib import *
+S = SS('f49')
+R = J('f49'); rows = R['rows']
+steps = [
+    step("send_file 的 Range 支持(文件 10240 字节,gunicorn):无 Range → 200,Accept-Ranges: bytes。bytes=0-99 → 206,Content-Range: bytes 0-99/10240,100 字节;bytes=-50(最后 50 字节)→ 206,Content-Range: bytes 10190-10239/10240;bytes=10000-(从 10000 到结尾)→ 206,240 字节;bytes=0-0 与 bytes=10239-10239 → 各 1 字节;bytes=0-999999(超过文件长度)→ 206 且截断到结尾(0-10239);片段内容与文件对应部分一致。", t=tl(S(1)), done=lidx(S(1), '无 Range', 'bytes=0-99', 'bytes=100-199'), mark=lidx(S(1), 'bytes=-50', 'bytes=10000-', 'bytes=0-999999'), kv=KV([['bytes=0-99', '206 + Content-Range: 0-99/10240'], ['bytes=-50', '最后 50 字节'], ['bytes=10000-', '到结尾 240 字节'], ['超出长度', '截断到结尾']], ['bytes=-50'])),
+    step("不合法或不支持的 Range 全部得到 416:起点超出文件(bytes=10240-、bytes=20000-30000)、起点大于终点(bytes=5-2)、多段范围(bytes=0-9,20-29)、不是 bytes 单位(items=0-5)、写成 bytes=abc,响应都带 Content-Range: bytes */10240,正文 177 字节的错误页。注意 HTTP 规范允许服务器忽略不支持的 Range 并返回 200 完整内容,这里 Werkzeug 选择返回 416。", t=tl(S(1)), mark=lidx(S(1), 'bytes=10240-', 'bytes=5-2', 'bytes=0-9,20-29', 'items=0-5', 'bytes=abc'), kv=KV([['越界 / 反向 / 多段 / 非 bytes / 乱写', '416 + Content-Range: bytes */10240']], ['越界 / 反向 / 多段 / 非 bytes / 乱写'])),
+    step("If-Range:条件 Range。Range: bytes=0-9 加 If-Range = 当前 ETag → 206 收到 10 字节;If-Range = 过期的 ETag → 200 收到完整 10240 字节(文件变了,不能续传,整份重发);If-Range = 当前 Last-Modified → 206。", t=tl(S(2)), done=lidx(S(2), 'If-Range = 当前 ETag', 'If-Range = 当前 Last-Modified'), mark=lidx(S(2), '过期的 ETag'), kv=KV([['If-Range 匹配', '206 片段'], ['If-Range 不匹配', '200 完整内容']], ['If-Range 不匹配'])),
+    step(f"断点续传:curl -r 0-2999 先下载前 3000 字节,再用 curl -C -(从已有文件大小处继续)得到 206,本次传输 7240 字节,最终文件 10240 字节,SHA-256 与原文件相同({R['resume'][2]})。", t=tl(S(3)), done=lidx(S(3), '第一次', 'curl -C - 续传'), mark=lidx(S(3), 'SHA-256'), kv=KV([['第一次', '3000 字节'], ['续传', '206,7240 字节'], ['SHA-256', '与原文件一致']], ['SHA-256'])),
+    step("生成器响应不支持 Range:/gen 带 Range: bytes=0-99 → 200,没有 Accept-Ranges,收到完整的 1000 字节(Range 被忽略)。自己实现的 /custom(解析 request.range,用 range_for_length 算出起止,读片段,设 206 与 Content-Range)可以:bytes=100-199 → 206、Content-Range: bytes 100-199/10240、100 字节且内容正确;起点越界 bytes=99999- → 416。", t=tl(S(4)), done=lidx(S(4), '/gen', '/custom Range: bytes=100-199'), mark=lidx(S(4), 'bytes=99999-'), kv=KV([['生成器响应', '忽略 Range,200 完整'], ['自己实现', '206 / 416']], ['生成器响应'])),
+    step("HEAD 与 Range:HEAD 请求带 Range: bytes=0-9 → 206,Content-Range: bytes 0-9/10240,Content-Length: 10,正文 0 字节。", t=tl(S(5)), done=lidx(S(5), 'HEAD + Range'), kv=KV([['HEAD + Range', '206,有头无正文']], ['HEAD + Range'])),
+]
+A = mkartf('f49', 49, 'Flask,Range,断点续传,206,真实验证,动画演示',
+    '用真实 gunicorn 与 curl 验证 Range 请求:send_file 的 206 与 Content-Range(起止、后缀、开放区间、超出长度截断);越界、反向、多段、非 bytes 单位都是 416;If-Range;curl -C - 断点续传 SHA-256 一致;生成器响应不支持 Range;自己实现的 206;HEAD + Range。',
+    '大文件下载中断了,怎么接着下?服务器怎么回应 Range?哪些写法会得到 416?流式响应能不能支持断点续传?这篇用真实的 curl 续传和 13 种 Range 写法验证。',
+    [('206', 'Range 合法时的状态码'), ('416', '越界、反向、多段、非 bytes 单位的 Range 得到的状态码'), ('7240', '续传时 curl 实际传输的字节数(总共 10240,已有 3000)')],
+    [('Range 与 206,不合法的 Range', '<p>上一篇:<a href="flask-session-cookie-structure.html">Session Cookie 的数据结构</a>;下一篇:<a href="flask-content-negotiation.html">Content Negotiation</a>;send_file 的更多细节:<a href="flask-send-file.html">send_file() 与 send_from_directory()</a>。</p>'), ('If-Range', None), ('断点续传', None), ('生成器与自己实现', None), ('HEAD', None)],
+    steps, [ENV_F, '没有验证:多段 Range(multipart/byteranges)的完整实现、Nginx 或 CDN 对 Range 的缓存行为、浏览器视频播放时发出的 Range 序列、大文件的并行分段下载'], 'Range 请求')

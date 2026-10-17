@@ -1,0 +1,20 @@
+from lib import *
+S = SS('c76')
+steps = [
+    step("Engine API 就是 unix socket 上的 HTTP(Mac 上的 socket 是 ~/.docker/run/docker.sock)。GET /_ping → 200,正文 OK,响应头 Api-Version = 1.56、Docker-Experimental = false、Ostype = linux;GET /version → Version=29.8.2、ApiVersion=1.56、MinAPIVersion=1.40、Os=linux、Arch=arm64;GET /info → 200,59 个顶层字段,NCPU=10、Driver=overlayfs、CgroupVersion=2。", t=tl(S(1)), done=lidx(S(1), 'GET /_ping', 'GET /version', 'GET /info'), kv=KV([['/_ping', 'OK,Api-Version 1.56'], ['/version', 'ApiVersion 1.56,MinAPIVersion 1.40'], ['/info', '59 个字段,Driver overlayfs']], ['/version'])),
+    step("用 API 跑一个容器:POST /containers/create?name=… 带 JSON(Image、Cmd、Labels)→ 201,返回 64 位的 Id;POST /containers/<id>/start → 204 无正文;POST …/wait → 200 {\"StatusCode\":0};GET …/logs?stdout=1&stderr=1 → 200,Content-Type 是 application/vnd.docker.multiplexed-stream,正文 44 字节,每帧前有 8 字节头(第 1 字节 1 表示 stdout、2 表示 stderr,最后 4 字节是长度),拆开是 stderr “err-from-api”和 stdout “hello-from-api”;GET …/json 里 State.Status=exited、ExitCode=0;DELETE → 204;之后再 GET 返回 404 {\"message\":\"No such container: …\"}。", t=tl(S(2)), done=lidx(S(2), 'POST /containers/create', 'DELETE'), mark=lidx(S(2), '8 字节帧头', 'Content-Type'), kv=KV([['create', '201 + Id'], ['start', '204'], ['wait', '200 {"StatusCode":0}'], ['logs', '多路复用流:8 字节头 + 数据']], ['logs'])),
+    step("API 版本写在路径里:/v1.40/containers/json → 200;/v1.54/… → 200;/v1.24/… 和 /v1.12/… → 400,“client version 1.24 is too old. Minimum supported API version is 1.40”;/v9.99/… → 400,“client version 9.99 is too new. Maximum supported API version is 1.56”。服务端支持 1.40 到 1.56。", t=tl(S(3)), done=lidx(S(3), '/v1.40/', '/v1.54/'), mark=lidx(S(3), '/v1.24/', '/v1.12/', '/v9.99/'), b=bars([['MinAPIVersion', 1.40, '1.40'], ['ApiVersion(当前)', 1.56, '1.56']], 1.56, done=[1], mark=[0]), kv=KV([['路径里的版本在 1.40~1.56', '200'], ['低于 1.40', '400 too old'], ['高于 1.56', '400 too new']], ['路径里的版本在 1.40~1.56'])),
+    step("docker CLI 发出的就是这些请求:用一个转发到真 socket 的代理记录 docker -H unix://<代理> run --rm alpine echo via-proxy,输出 via-proxy;一共 3 个连接、6 个请求:HEAD /_ping(两次)、POST /v1.56/containers/create、POST …/wait?condition=removed、POST …/attach?stderr=1&stdout=1&stream=1、POST …/start。CLI 就是用 API 版本 v1.56 把 run 拆成 create、attach、start,另外用 wait 等待容器被删除。", t=tl(S(4)), done=lidx(S(4), '代理记录到'), mark=lidx(S(4), 'POST /v1.56/containers/create', 'start HTTP'), kv=KV([['docker run --rm', 'create + attach + start + wait?condition=removed'], ['前置', 'HEAD /_ping 探测版本']], ['docker run --rm'])),
+]
+A = mkartc('c76', 76, 'Docker,Engine API,unix socket,docker.sock,HTTP,API版本,真实验证,动画演示',
+    '直接对 Docker Desktop 的 unix socket 发 HTTP 请求:/_ping、/version(ApiVersion 1.56,MinAPIVersion 1.40)、/info;用 API 创建、启动、等待、读日志(多路复用流,8 字节帧头)、删除一个容器;API 版本写在路径里,低于 1.40 或高于 1.56 都返回 400;用代理记录 docker run --rm 发出的 6 个请求。',
+    'docker 命令背后到底发了什么?Engine API 是什么样的?这篇不用 docker 命令,直接用 Python 对 Docker 的 unix socket 发 HTTP,完整地走一遍容器的生命周期,并用一个代理看 docker run 在背后发出的请求。',
+    [('1.40 ~ 1.56', '这个 Docker 支持的 API 版本范围,路径里写了超出范围的版本会得到 400'), ('8 字节头', 'GET /containers/&lt;id&gt;/logs 返回的多路复用流,每一帧前的头(类型 + 长度)'), ('6 个请求', 'docker run --rm alpine echo 在代理上被记录到的 HTTP 请求数')],
+    [('是 HTTP', '<p>Docker 守护进程监听一个 unix socket(Mac 上是 <code>~/.docker/run/docker.sock</code>),说的就是普通 HTTP/1.1 加 JSON。<code>/_ping</code> 探测版本,<code>/version</code> 和 <code>/info</code> 返回守护进程信息。</p>'),
+     ('生命周期', '<p>创建(POST create,JSON 描述容器)、启动(POST start 返回 204)、等待、读日志、删除,都是单独的接口。日志接口返回多路复用流:每帧 8 字节头(类型 1 是 stdout、2 是 stderr,后 4 字节是大端长度)加数据,没有 TTY 时用这种格式区分两个流。</p>'),
+     ('版本', '<p>API 版本写在路径前缀 <code>/v1.xx/</code>;服务端支持一个范围,超出就 400 并说明范围。不带版本前缀会怎样,我没有测。</p>'),
+     ('docker CLI', '<p>docker run 在 API 层面就是 create + attach + start,加上 <code>wait?condition=removed</code> 等待 --rm 的容器被删除;它也先用 HEAD /_ping 探测。按我的理解,能访问这个 socket 就等于能控制整个 Docker,所以不要随便挂载到容器里(本文没有演示)。</p>')],
+    steps,
+    [ENV_C + '。API 请求用 Python 的 http.client 经 unix socket 发出;代理是一个 Python 线程,把 CLI 的连接转发到真 socket 并记录请求行;容器 ID 在输出中缩写;实验后已删除容器',
+     '没有验证:TLS / TCP 方式的 API、认证与授权插件、流式接口(events、attach 的 hijack)的完整协议、把 socket 挂载进容器的风险、Windows 命名管道'],
+    'Engine API')

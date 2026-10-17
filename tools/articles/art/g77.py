@@ -1,0 +1,22 @@
+from lib import *
+S = SS('g77')
+steps = [
+    step("响应体不读完、不关闭,连接就回不了池(20 个串行请求,服务端用 ConnState 数新建的连接)。响应体 1000 字节:读完并关闭 → 新建 1 个连接;只关闭不读 → 1 个;既不读也不关 → 20 个,客户端 goroutine 增加 60(每个连接 3 个)。响应体 1 MiB:读完并关闭 → 1 个;只关闭不读 → 20 个(连接被关掉,goroutine 增加 0);既不读也不关 → 20 个,goroutine 增加 63。", t=tl(S(1)), done=lidx(S(1), '1000 字节,读完并关闭', '1000 字节,只关闭不读', '1048576 字节,读完并关闭'), mark=lidx(S(1), '既不读也不关', '1048576 字节,只关闭不读'), b=bars([['小响应读完关闭:新建连接', 1, '1'], ['小响应只关闭不读', 1, '1'], ['1 MiB 只关闭不读', 20, '20'], ['既不读也不关', 20, '20']], 20, done=[0, 1], mark=[2, 3]), kv=KV([['读完并关闭', '1 个连接复用 20 次'], ['小响应只 Close', '也能复用(1 个)'], ['大响应只 Close', '连接被关,20 个'], ['不读不关', '20 个连接 + 60 个 goroutine 泄漏']], ['不读不关'])),
+    step("MaxIdleConnsPerHost 默认只留 2 个空闲连接:默认值下,第一波 20 个并发请求新建 20 个连接;间隔 100 ms 后第二波 20 个并发请求,又新建 18 个(只有 2 个空闲连接可复用)。设 MaxIdleConnsPerHost = 20:第二波新建 0 个。http.DefaultMaxIdleConnsPerHost = 2。", t=tl(S(2)), done=lidx(S(2), 'MaxIdleConnsPerHost = 20'), mark=lidx(S(2), '默认(0'), b=bars([['默认:第二波新建连接', 18, '18'], ['MaxIdleConnsPerHost=20', 0, '0']], 18, mark=[0], done=[1]), kv=KV([['默认', '空闲连接只留 2 个,第二波又新建 18 个'], ['调到 20', '第二波 0 个新连接'], ['DefaultMaxIdleConnsPerHost', '2']], ['默认'])),
+    step("每个请求新建一个 Transport(并且不 CloseIdleConnections):50 个请求之后,服务端新建连接 50 个、仍未关闭 50 个;客户端 goroutine 增加 150。共用一个 Transport:50 个请求之后,服务端新建连接 1 个、仍未关闭 1 个(这是空闲的那个);客户端 goroutine 增加 3。", t=tl(S(3)), mark=lidx(S(3), '每个请求新建一个 Transport'), done=lidx(S(3), '共用一个 Transport'), b=bars([['每次新建 Transport:goroutine 增加', 150, '150'], ['共用一个 Transport', 3, '3']], 150, mark=[0], done=[1]), kv=KV([['每次新建', '50 个连接、150 个 goroutine,不会自己消失(空闲超时前)'], ['共用', '1 个连接、3 个 goroutine']], ['每次新建'])),
+    step("没有超时的客户端:Client.Timeout = 300 ms,服务器接受连接后不回应:301 ms 后返回错误 context deadline exceeded (Client.Timeout exceeded while awaiting headers)。http.DefaultClient.Timeout = 0s,即没有超时。", t=tl(S(4)), mark=lidx(S(4), 'Client.Timeout = 300 ms'), done=lidx(S(4), 'DefaultClient.Timeout = 0s'), kv=KV([['设了 Client.Timeout', '301 ms 返回错误'], ['DefaultClient', 'Timeout = 0,不超时']], ['DefaultClient'])),
+    step("DefaultTransport 的默认值:MaxIdleConns=100,MaxIdleConnsPerHost=0(0 表示用默认值 2),IdleConnTimeout=1m30s,TLSHandshakeTimeout=10s,ExpectContinueTimeout=1s,ForceAttemptHTTP2=true,MaxConnsPerHost=0(不限制)。", t=tl(S(5)), mark=lidx(S(5), 'DefaultTransport'), kv=KV([['MaxIdleConns', '100'], ['MaxIdleConnsPerHost', '0 → 实际 2'], ['IdleConnTimeout', '90 秒'], ['MaxConnsPerHost', '0(不限制)']], ['MaxIdleConnsPerHost'])),
+]
+A = mkartg('g77', 77, 'Go,http.Client,Transport,连接池,泄漏,真实验证,动画演示',
+    '在 Go 1.27.1 里实测 http.Client 连接池:读完并关闭响应体时 20 个请求只用 1 个连接,不读也不关会新建 20 个连接并多出 60 个 goroutine;MaxIdleConnsPerHost 默认 2,20 个并发请求后第二波又新建 18 个连接;每个请求新建一个 Transport 会累积 50 个连接和 150 个 goroutine;DefaultClient 没有超时。',
+    'http.Client 的连接池藏着几个常见的坑:响应体没读完、MaxIdleConnsPerHost 默认只有 2、每次新建 Transport、默认客户端没有超时。这篇用服务端的 ConnState 回调数连接,用 goroutine 数量看泄漏,把每个坑量出来。',
+    [('1 vs 20', '20 个串行请求用的连接数:读完并关闭 vs 既不读也不关'), ('18', 'MaxIdleConnsPerHost 默认值下,第二波 20 个并发请求新建的连接数'), ('150 个', '每个请求新建一个 Transport 时,50 个请求后多出的 goroutine')],
+    [('响应体必须读完并关闭', '<p>读完并 <code>Close</code>,20 个请求用 1 个连接。响应体很小(1000 字节)时只 <code>Close</code> 也能复用;响应体大(1 MiB)只 <code>Close</code> 就会关掉连接,20 个请求新建 20 个连接。既不读也不 <code>Close</code> 最糟:20 个连接各占 3 个 goroutine,一直留着。习惯是 <code>io.Copy(io.Discard, resp.Body)</code> 再 <code>Close</code>。</p>'),
+     ('空闲连接的数量', '<p><code>MaxIdleConnsPerHost</code> 的默认值是 2(<code>DefaultMaxIdleConnsPerHost</code>),所以一波 20 个并发请求结束后只留 2 个空闲连接,下一波又新建 18 个;调到 20 就全部复用。对同一个主机并发较高的服务,这个值值得调。</p>'),
+     ('Transport 要共用', '<p>每个请求新建一个 <code>Transport</code>,每个都有自己的连接池,50 个请求后服务端有 50 个未关闭的连接、客户端多了 150 个 goroutine。共用一个 Transport,50 个请求只用 1 个连接。</p>'),
+     ('超时', '<p><code>http.DefaultClient</code> 的 <code>Timeout</code> 是 0,没有超时;服务器接受连接后不回应,请求会一直挂着。自己建 Client 并设 <code>Timeout</code>,实验里 301 ms 后返回 “Client.Timeout exceeded while awaiting headers”。</p>'),
+     ('默认值', '<p><code>DefaultTransport</code>:<code>MaxIdleConns</code> 100,<code>IdleConnTimeout</code> 90 秒,<code>TLSHandshakeTimeout</code> 10 秒,<code>ForceAttemptHTTP2</code> 为真,<code>MaxConnsPerHost</code> 不限制。</p>')],
+    steps,
+    [ENV_G + '。服务端和客户端在同一进程里,服务端用 http.Server.ConnState 数 StateNew 与 StateClosed;客户端 goroutine 增量用 runtime.NumGoroutine 前后差;每个设置单独跑一遍;“既不读也不关”“每次新建 Transport”的 goroutine 数量依赖实现,只代表 Go 1.27.1',
+     '没有验证:HTTPS/HTTP2 下的连接复用(HTTP/2 多路复用时 MaxIdleConnsPerHost 的意义不同)、IdleConnTimeout 到期后的回收、MaxConnsPerHost 限制的行为、代理、请求取消时连接的处理、Linux 上的差别'],
+    'http.Client 连接池')

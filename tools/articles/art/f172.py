@@ -1,0 +1,16 @@
+from lib import *
+S = SS('f172')
+R = J('f172'); pr = R['prio']; sg = R['sig']; kp = list(pr)
+steps = [
+    step("入口写法:gunicorn app:app 加载模块级的 app 变量(应用名是 module-level);\"app:create_app()\" 在启动时调用工厂函数(默认参数,名字是 default);\"app:create_app('prod')\" 可以带参数(名字是 prod)。写错时:模块不存在 → ModuleNotFoundError: No module named 'nosuch';变量不存在 → 「Reason: App failed to load.」后退出。引号要加,否则 shell 会吃掉括号。", t=tl(S(1)), done=lidx(S(1), 'app:app', 'create_app()', "create_app('prod')"), mark=lidx(S(1), '模块不存在', '变量不存在'), kv=KV([['模块:变量', '直接用 app 对象'], ['模块:工厂(...)', '启动时调用,可传参数']], ['模块:工厂(...)'])),
+    step(f"配置来源的优先级:配置文件 gunicorn.conf.py 里写了 workers = 3,只有配置文件时 worker 进程数是 {pr[kp[0]]};再加环境变量 GUNICORN_CMD_ARGS='--workers 2' 变成 {pr[kp[1]]};再在命令行加 -w 1,变成 {pr[kp[2]]}。命令行最优先,其次是 GUNICORN_CMD_ARGS,最后才是配置文件。排查「为什么 worker 数不对」时,三处都要看。", b=bars([['只有配置文件', pr[kp[0]], str(pr[kp[0]])], ['+ GUNICORN_CMD_ARGS', pr[kp[1]], str(pr[kp[1]])], ['+ 命令行 -w 1', pr[kp[2]], str(pr[kp[2]])]], 3, done=[0, 1, 2]), t=tl(S(2)), done=lidx(S(2), '只有配置文件', 'GUNICORN_CMD_ARGS', '命令行'), kv=KV([['配置文件', 'workers = 3'], ['+ 环境变量', '2'], ['+ 命令行', '1(最优先)']], ['+ 命令行'])),
+    step("监听 unix socket:-b unix:/tmp/g172.sock 启动后,curl --unix-socket /tmp/g172.sock http://localhost/ 得到 {\"name\":\"module-level\",...};socket 文件的权限是 0o777(任何本机用户都能连)。给 nginx 用 unix socket 比 TCP 端口少一层网络栈,且不占端口。(第一次我把 socket 放在很深的临时目录下,路径超过 unix socket 路径长度上限,没有创建出来,换成 /tmp 下的短路径才行。)", t=tl(S(3)), done=lidx(S(3), 'curl --unix-socket'), kv=KV([['unix socket', '不占端口,权限在文件上'], ['路径长度', '有上限(macOS 约 104 字节)']], ['unix socket'])),
+    step(f"运行时用信号管理:启动 {sg['start']} 个 worker;给 master 发 SIGTTIN 后变成 {sg['ttin']} 个(加一个);SIGTTOU 后回到 {sg['ttou']} 个(减一个);SIGHUP 后还是 {sg['hup'][0]} 个,但与 HUP 之前相同的 pid 有 {sg['hup'][1]} 个——旧 worker 被优雅地换成了新 worker(重新读配置与应用代码)。不用重启整个服务就能调整进程数、滚动换新(见第 180 篇)。", b=bars([['启动', sg['start'], str(sg['start'])], ['TTIN 后', sg['ttin'], str(sg['ttin'])], ['TTOU 后', sg['ttou'], str(sg['ttou'])]], 3, done=[0, 1, 2]), t=tl(S(4)), done=lidx(S(4), '启动', 'SIGTTIN', 'SIGTTOU', 'SIGHUP'), kv=KV([['TTIN / TTOU', 'worker +1 / -1'], ['HUP', '换成新 worker,pid 全变']], ['HUP'])),
+    step("--check-config 只检查配置与应用能不能加载、不启动:合法时退出码 0;应用里变量写错时退出码 1,并报「gunicorn.errors.AppImportError: Failed to find attribute 'nosuch' in 'app'.」。适合放进部署流水线,在切流量之前先验一遍。", t=tl(S(5)), done=lidx(S(5), '合法', '变量不存在'), kv=KV([['--check-config', '加载但不启动,退出码表示结果']], ['--check-config'])),
+]
+A = mkartf('f172', 172, 'Flask,gunicorn,启动,配置,信号,真实验证,动画演示',
+    '实测用 gunicorn 启动 Flask:app:app 与带参数的工厂写法与写错时的报错、命令行大于 GUNICORN_CMD_ARGS 大于配置文件的优先级、unix socket 监听、用 SIGTTIN 与 SIGTTOU 与 SIGHUP 在运行时调整 worker、--check-config 做部署前检查。',
+    'gunicorn 命令该怎么写?工厂函数怎么传?配置有几个来源、谁覆盖谁?不重启服务怎么调 worker 数?这篇用真实的 gunicorn 把每种写法与信号的结果跑一遍。',
+    [('命令行 > 环境变量 > 配置文件', 'gunicorn 配置来源的优先级,实测 worker 数 1、2、3'), ('SIGTTIN / SIGTTOU', '给 master 发信号运行时加或减一个 worker'), ('--check-config', '部署前检查配置与应用能否加载的选项')],
+    [('入口写法', '<p>上一篇:<a href="flask-dev-server-vs-production.html">Flask Development Server 与生产服务器</a>;下一篇:<a href="flask-uwsgi-flask.html">uWSGI 与 Flask</a>。</p>'), ('配置的优先级', None), ('unix socket', None), ('用信号管理', None), ('部署前检查', None)],
+    steps, [ENV_F + '。gunicorn', '没有验证:SIGUSR2 的二进制热升级、配置文件里的钩子函数(on_starting、post_fork 等)、systemd 下的 Type=notify 与 socket activation、--reload 在开发时的行为、绑定多个地址'], 'Gunicorn 启动 Flask')

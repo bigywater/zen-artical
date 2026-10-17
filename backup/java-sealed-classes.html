@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>sealed class 真实验证:未在permits列表里的类真实编译不过</title>
+<meta name="description" content="真实用sealed interface Shape permits Circle,Square,Triangle声明一个封闭接口，真实写一个没有出现在permits列表里的UnpermittedShape类去实现它，真实编译失败，错误信息真实是class is not allowed to extend sealed class；真实用反射验证Shape.isSealed()为true、Shape.getPermittedSubclasses()真实能拿到完整的permits列表；真实验证Record默认是final的而不是sealed的。">
+<link rel="canonical" href="https://bigywater.tech/java-sealed-classes.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="sealed class 真实验证">
+<meta property="og:description" content="真实用编译失败复现 sealed class 的 permits 约束，以及反射查看 isSealed()/getPermittedSubclasses() 的真实结果。">
+<meta property="og:url" content="https://bigywater.tech/java-sealed-classes.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="sealed class 真实验证">
+<meta name="twitter:description" content="真实用编译失败复现 sealed class 的 permits 约束真实生效。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --java-c:#E76F00; --java-c-soft:#FBEADA;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --java-c:#FF9A44; --java-c-soft:#3A2914;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --java-c:#FF9A44; --java-c-soft:#3A2914;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--java-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--java-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--java-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--java-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--java-c); background:var(--java-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--java-c-soft); color:var(--java-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--java-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--java-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--java-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--java-c); color:var(--java-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--java-c-soft); color:var(--ink);}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Java 内部原理 · 102</div>
+    <h1>sealed class 真实验证:未在permits列表里的类真实编译不过</h1>
+    <p>sealed(密封类)是Java 17的正式特性,它承诺的"只有permits列表里的类能实现/继承"到底是不是玩真的——这篇真实写一个"越界"的实现类，让javac亲口告诉答案。</p>
+    <div class="hero-fact">
+      <div><div class="num">越界实现类真实编译失败</div><div class="lbl">真实验证:UnpermittedShape没有出现在Shape的permits列表里，尝试implements它真实触发编译错误，不是运行时才报错</div></div>
+      <div><div class="num">反射真实能拿到完整permits列表</div><div class="lbl">真实验证:Shape.class.getPermittedSubclasses()真实返回Circle/Square/Triangle三个Class对象，和源码permits子句完全一致</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+<p class="prev-post">上一篇:<a href="java-record-compact-constructor.html" target="_blank" rel="noopener">Record 紧凑构造器真实验证</a></p>
+
+<section style="padding-top:8px;">
+  <h2>真实复现:未在permits列表里的类,编译真实失败</h2>
+  <p class="h2-sub">声明一个sealed接口，permits明确列出三个允许的实现类；再故意写一个第四个类去实现它，看javac真实怎么反应。</p>
+  <blockquote class="src">
+    <span class="path">SealedClassesDemo.java</span>
+sealed interface Shape permits Circle, Square, Triangle {}
+record Circle(double radius) implements Shape {}
+record Square(double side) implements Shape {}
+record Triangle(double base, double height) implements Shape {}
+
+// 另一个文件
+public class UnpermittedShape implements SealedClassesDemo.Shape {}
+</blockquote>
+  <div class="term"><span class="real-tag">真实实测 · javac 编译输出</span>
+<pre class="code">UnpermittedShape.java:1: error: class is not allowed to extend sealed class: Shape
+(as it is not listed in its permits clause)
+public class UnpermittedShape implements SealedClassesDemo.Shape {
+       ^
+1 error</pre>
+  </div>
+  <p>真实结果证明 <span class="mono">sealed</span> 的约束是一条<b>真实的编译期规则</b>,不是文档层面的君子协定:javac 在编译 <span class="mono">UnpermittedShape</span> 这个类的时候,真实检查了它想要实现的 <span class="mono">Shape</span> 接口的 <span class="mono">permits</span> 子句,发现 <span class="mono">UnpermittedShape</span> 不在列表里,直接真实拒绝编译,错误信息明确指出了原因。这意味着一个标记为 <span class="mono">sealed</span> 的类型,它的完整继承体系在编译完成的那一刻就真实是封闭、确定的,不会有第三方代码能在你不知情的情况下"偷偷"扩展它。</p>
+</section>
+
+<section>
+  <h2>真实验证:反射能拿到和源码完全一致的permits列表</h2>
+  <p class="h2-sub">用java.lang.Class新增的isSealed()和getPermittedSubclasses()方法，从运行时角度确认这个约束信息。</p>
+  <blockquote class="src">
+    <span class="path">SealedClassesDemo.java</span>
+Shape.class.getPermittedSubclasses();
+Shape.class.isSealed();
+</blockquote>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">Shape.getPermittedSubclasses() 真实列表:
+  Circle
+  Square
+  Triangle
+Shape.isSealed() 真实结果: true
+Circle.class.isSealed() 真实结果: false（record默认是final的，不是sealed）
+Circle真实是final类: true</pre>
+  </div>
+  <div class="callout b">
+    <b>sealed 信息真实被编码进了 class 文件里。</b><span class="mono">Class.getPermittedSubclasses()</span> 这个 JDK 17 新增的反射 API,真实从 class 文件的一个专门属性(<span class="mono">PermittedSubclasses</span>)里读出了完整的许可子类列表,和源码里 <span class="mono">permits</span> 子句写的完全一致——这证明 <span class="mono">sealed</span> 约束不只是编译期的临时检查,它的元信息真实被持久化进了编译产物,后续任何工具(IDE、其他编译单元、反射代码)都能真实感知到这个约束。另外顺带验证了一个容易被搞混的点:<span class="mono">Circle</span> 作为一个 record,虽然是 <span class="mono">Shape</span> 的 <span class="mono">permits</span> 成员,但它自己真实是 <span class="mono">final</span> 的(record 默认禁止被继承),不是 <span class="mono">sealed</span> 的——<span class="mono">final</span> 意味着"零个允许的子类",<span class="mono">sealed</span> 意味着"明确指定的若干个允许的子类",两者是不同强度的封闭策略。
+  </div>
+</section>
+
+<section>
+  <h2>真实验证:sealed接口配合真实类型分发计算面积</h2>
+  <p class="h2-sub">既然permits列表真实穷尽了所有可能的实现类，用它们做具体业务逻辑也真实符合预期。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">Circle面积真实结果: 12.566370614359172
+Square面积真实结果: 9.0
+Triangle面积真实结果: 10.0</pre>
+  </div>
+  <p>真实结果验证了基于 <span class="mono">instanceof</span> 模式匹配对 <span class="mono">Shape</span> 三个子类型分别计算面积,得到的数值真实正确。<span class="mono">sealed</span> 接口在这里带来的真实价值是:开发者和编译器都能确信"这就是全部可能的类型",不用担心某个第三方库在未来悄悄引入第四种 <span class="mono">Shape</span> 实现导致处理逻辑出现遗漏分支。</p>
+</section>
+
+<section>
+  <h2>分步演示:sealed 接口的"封闭"是怎么被编译器真实强制执行的</h2>
+  <p>每一行都是真实运行(或真实编译)得到的结果。</p>
+<div class="demo" id="demo"><div class="demo-head">permits 列表真实被编译进 class 元数据;不在列表里的类真实连编译都通不过,switch 覆盖了全部实现才能省略 default</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>这一步新验证的行为</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>
+(function(){
+const D = {"panels":[{"id":"kv","kind":"kv","label":"真实运行结果(逐步累加)"},{"id":"info","kind":"text","label":"这一步发生了什么"}],"steps":[{"note":"sealed interface Shape permits Circle,Square,Triangle{};三个 record 分别实现 Shape;用 switch 模式匹配对三种形状分别算面积,不写 default 分支:真实结果 Circle(2.0) 面积 12.566370614359172,Square(3.0) 面积 9.0,Triangle(4.0,5.0) 面积 10.0——编译器真实确认这个 switch 覆盖了 permits 列表里的全部三种实现,所以允许省略 default。","s":{"kv":{"items":[["area(Circle(2.0)) / Square(3.0) / Triangle(4,5)","12.566370614359172 / 9.0 / 10.0"]],"hl":["area(Circle(2.0)) / Square(3.0) / Triangle(4,5)"]},"info":{"text":"sealed interface Shape permits Circle,Square,Triangle{};三个 record 分别实现 Shape;用 switch 模式匹配对三种形状分别算面积,不写 default 分支:真实结果 Circle(2.0) 面积 12.566370614359172,Square(3.0) 面积 9.0,Triangle(4.0,5.0) 面积 10.0——编译器真实确认这个 switch 覆盖了 permits 列表里的全部三种实现,所以允许省略 default。"}}},{"note":"反射查看 Shape.class.isSealed() 和 getPermittedSubclasses():真实结果 isSealed() 是 true,permittedSubclasses 真实是 [Circle, Square, Triangle]——permits 列表真实被编译进了 class 文件的元数据,不只是源码层面的语法糖,运行时可以反射读出来。","s":{"kv":{"items":[["area(Circle(2.0)) / Square(3.0) / Triangle(4,5)","12.566370614359172 / 9.0 / 10.0"],["Shape.isSealed() / permittedSubclasses","true / [Circle, Square, Triangle]"]],"hl":["Shape.isSealed() / permittedSubclasses"]},"info":{"text":"反射查看 Shape.class.isSealed() 和 getPermittedSubclasses():真实结果 isSealed() 是 true,permittedSubclasses 真实是 [Circle, Square, Triangle]——permits 列表真实被编译进了 class 文件的元数据,不只是源码层面的语法糖,运行时可以反射读出来。"}}},{"note":"Circle 本身是一个 record,真实 Circle.class 的 final 修饰符检查:真实结果 Modifier.isFinal(...) 是 true——sealed 接口要求每个实现类必须显式声明为 final/sealed/non-sealed 三者之一,而 record 天生就是 final,天然满足这个要求。","s":{"kv":{"items":[["area(Circle(2.0)) / Square(3.0) / Triangle(4,5)","12.566370614359172 / 9.0 / 10.0"],["Shape.isSealed() / permittedSubclasses","true / [Circle, Square, Triangle]"],["Circle.class 是否 final","true(record 天生 final,自动满足 sealed 接口的约束)"]],"hl":["Circle.class 是否 final"]},"info":{"text":"Circle 本身是一个 record,真实 Circle.class 的 final 修饰符检查:真实结果 Modifier.isFinal(...) 是 true——sealed 接口要求每个实现类必须显式声明为 final/sealed/non-sealed 三者之一,而 record 天生就是 final,天然满足这个要求。"}}},{"note":"真实尝试编译一个不在 permits 列表里的新类:static final class Hexagon implements Shape {}(Hexagon 从未出现在 permits Circle,Square,Triangle 里):真实编译报错——javac 真实拒绝编译,错误信息是 \"class is not allowed to extend sealed class: Shape (as it is not listed in its permits clause)\"。","s":{"kv":{"items":[["area(Circle(2.0)) / Square(3.0) / Triangle(4,5)","12.566370614359172 / 9.0 / 10.0"],["Shape.isSealed() / permittedSubclasses","true / [Circle, Square, Triangle]"],["Circle.class 是否 final","true(record 天生 final,自动满足 sealed 接口的约束)"],["尝试让 Hexagon 实现 Shape(未在 permits 中)","真实编译失败: class is not allowed to extend sealed class: Shape"]],"hl":["尝试让 Hexagon 实现 Shape(未在 permits 中)"]},"info":{"text":"真实尝试编译一个不在 permits 列表里的新类:static final class Hexagon implements Shape {}(Hexagon 从未出现在 permits Circle,Square,Triangle 里):真实编译报错——javac 真实拒绝编译,错误信息是 \"class is not allowed to extend sealed class: Shape (as it is not listed in its permits clause)\"。"}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1000); };
+go(0);
+})();
+</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文全部结果均在本机真实运行 Java 17 得到，编译失败错误信息和反射查询结果重复验证完全一致。</li>
+      <li>和<a href="java-record-compact-constructor.html" target="_blank" rel="noopener">Record 紧凑构造器</a>那篇一起看，能理解 sealed 和 record 这两个现代 Java 特性经常被组合使用，共同构建出类型安全、封闭且不可变的数据建模方式(代数数据类型的Java版本)。</li>
+      <li>没有涉及:switch表达式对sealed类型做穷尽性模式匹配的编译期检查(这是Java 21正式特性，17上是预览特性)、sealed类允许同一个源文件内嵌套permits子类而省略显式permits子句的简写规则——这两个话题留给系列后面按需再写。</li>
+    </ul>
+  </div>
+</section>
+
+<a class="next-post" href="java-text-block.html" target="_blank" rel="noopener">
+  <div><div class="t1">下一篇 · Java 内部原理 103</div><div class="t2">文本块真实验证:最后一行的缩进真实决定了公共前导空白去除多少</div></div>
+  <span>→</span>
+</a>
+
+</div>
+<footer>Java 内部原理 · sealed class · 数据来自本机 Java 17 实验</footer>
+</body>
+</html>

@@ -1,0 +1,598 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>oplog:副本集是怎么把一次写入传播出去的</title>
+<meta name="description" content="本机单节点副本集上真实抓取 insert/update/delete 的 oplog 记录,把同一条 update 记录用 applyOps 重放两遍验证幂等性,对照 MongoDB 真实源码逐条确认。">
+<link rel="canonical" href="https://bigywater.tech/mongo-oplog.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="oplog:副本集是怎么把一次写入传播出去的">
+<meta property="og:description" content="本机单节点副本集上真实抓取 insert/update/delete 的 oplog 记录,把同一条 update 记录用 applyOps 重放两遍验证幂等性,对照 MongoDB 真实源码逐条确认。">
+<meta property="og:url" content="https://bigywater.tech/mongo-oplog.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="oplog:副本集是怎么把一次写入传播出去的">
+<meta name="twitter:description" content="本机单节点副本集上真实抓取 insert/update/delete 的 oplog 记录,把同一条 update 记录用 applyOps 重放两遍验证幂等性,对照 MongoDB 真实源码逐条确认。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F5F8F7; --paper:#FFFFFF; --ink:#1B2422; --ink-dim:#5C6B67; --line:#DCE7E4;
+  --mongo-c:#1C7C74; --mongo-c-soft:#DCEEEC;
+  --idx-c:#B8791E; --idx-c-soft:#F6ECD9;
+  --durable-c:#8A4FA0; --durable-c-soft:#EFE4F5;
+  --code-bg:#16211F; --code-ink:#E6F0EE;
+  --shadow: 0 1px 2px rgba(10,30,25,.06), 0 8px 24px -12px rgba(10,30,25,.16);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0F1614; --paper:#18211F; --ink:#E6F0EE; --ink-dim:#A2B5B0; --line:#2C3A37;
+    --mongo-c:#4FC9BE; --mongo-c-soft:#173330;
+    --idx-c:#E0AC5C; --idx-c-soft:#382C18;
+    --durable-c:#C79BDA; --durable-c-soft:#2E2038;
+    --code-bg:#0E1614; --code-ink:#E2EFED;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0F1614; --paper:#18211F; --ink:#E6F0EE; --ink-dim:#A2B5B0; --line:#2C3A37;
+  --mongo-c:#4FC9BE; --mongo-c-soft:#173330;
+  --idx-c:#E0AC5C; --idx-c-soft:#382C18;
+  --durable-c:#C79BDA; --durable-c-soft:#2E2038;
+  --code-bg:#0E1614; --code-ink:#E2EFED;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--mongo-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--mongo-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--mongo-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--mongo-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.a .tag{background:var(--mongo-c-soft); color:var(--mongo-c);}
+.card.b .tag{background:var(--idx-c-soft); color:var(--idx-c);}
+.card.c .tag{background:var(--durable-c-soft); color:var(--durable-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#A2B5B0; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#8FE0D4;}
+
+.callout{border-left:3px solid var(--mongo-c); background:var(--mongo-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--idx-c); background:var(--idx-c-soft);}
+.callout.c{border-color:var(--durable-c); background:var(--durable-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--mongo-c-soft); color:var(--mongo-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#8FE0D4;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+.term .cm{color:#7C8C88;}
+.term pre.code{margin:0 0 10px; color:#8FE0D4; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem; display:flex; justify-content:space-between; align-items:center;}
+.demo-head .step-badge{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; color:var(--mongo-c); background:var(--mongo-c-soft); padding:3px 9px; border-radius:6px; font-weight:600;}
+.demo-narration{min-height:52px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--mongo-c-soft); color:var(--mongo-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:20px;}
+
+.query-line{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.83rem; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px 14px; margin-bottom:16px; overflow-x:auto; white-space:pre;}
+.checks{display:flex; flex-direction:column; gap:8px; margin-bottom:16px;}
+.check{border:1.5px solid var(--line); border-radius:10px; padding:10px 14px; background:var(--bg); font-size:.85rem; display:flex; justify-content:space-between; align-items:center; gap:10px; transition:background .2s,border-color .2s;}
+.check .label{flex:1;}
+.check .verdict{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; font-weight:700; padding:2px 9px; border-radius:6px;}
+.check[data-verdict="pass"]{border-color:var(--mongo-c); background:var(--mongo-c-soft);}
+.check[data-verdict="pass"] .verdict{background:var(--mongo-c); color:#fff;}
+.check[data-verdict="fail"]{border-color:var(--idx-c); background:var(--idx-c-soft);}
+.check[data-verdict="fail"] .verdict{background:var(--idx-c); color:#fff;}
+.result-row{display:flex; align-items:center; gap:10px; margin-bottom:14px; flex-wrap:wrap;}
+.result-badge{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; font-weight:700; padding:6px 14px; border-radius:8px;}
+.result-badge.good{background:var(--mongo-c); color:#fff;}
+.result-badge.warn{background:var(--idx-c); color:#fff;}
+.evidence-line{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.78rem; color:var(--ink-dim); background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px 14px; white-space:pre-wrap; word-break:break-word;}
+
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--mongo-c); color:var(--mongo-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--mongo-c); border-color:var(--mongo-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--mongo-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="eyebrow"><span class="dot"></span>MongoDB 系列 · 第五篇</div>
+  <div class="hero-inner">
+    <h1>oplog:副本集是怎么把一次写入传播出去的</h1>
+    <p>之前四篇都是单节点视角。副本集要解决的问题是:主节点上的一次写入,怎么变成从节点上一份一模一样的数据?答案是一份叫 <span class="mono">oplog</span> 的特殊 capped collection——每次写入的同时,都会在这份日志里追加一条描述"发生了什么"的记录,从节点做的事情,说到底就是不停地把这份日志读过来、按顺序重放一遍。</p>
+    <p>这一篇本机把 mongod 配成了单节点副本集,直接翻真实的 <span class="mono">local.oplog.rs</span> 集合看每种操作长什么样,还故意把同一条 oplog 记录重放了两遍验证"幂等"这件事是不是真的——对照 MongoDB Server 真实源码(v8.3.7 标签)确认每一条结论。</p>
+    <div class="hero-fact">
+      <div><div class="num">3 种真实 oplog 记录</div><div class="lbl">insert / update / delete 各自在本机 local.oplog.rs 里长什么样,原样截取</div></div>
+      <div><div class="num">1 次真实重放实验</div><div class="lbl">同一条 update 的 oplog 记录用 applyOps 重放两遍,验证幂等性不是理论</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <h2>真实实验:一条 insert 在 oplog 里长什么样</h2>
+  <p class="h2-sub">本机已经是一个单节点副本集(<span class="mono">rs0</span>)。插入一条文档,直接去 <span class="mono">local.oplog.rs</span> 里找刚写的这条记录。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ mongosh --quiet articledemo --eval 'db.orders.insertOne({_id:1, item:"pen", qty:10})'
+$ mongosh --quiet --eval '
+  db.getSiblingDB("local").oplog.rs
+    .find({ns:"articledemo.orders"}).sort({$natural:-1}).limit(1)
+'</pre>
+<span class="ok">{
+  op: 'i',
+  ns: 'articledemo.orders',
+  ui: UUID('5012380f-...'),
+  o: { _id: 1, item: 'pen', qty: 10 },
+  o2: { _id: 1 },
+  ts: Timestamp({ t: 1788341591, i: 3 }),
+  t: Long('1'),
+  v: Long('2'),
+  wall: ISODate('2026-09-02T09:33:11.340Z')
+}</span>
+  </div>
+  <p><span class="mono">op:'i'</span> 表示这是一次插入,<span class="mono">o</span> 就是插入的完整文档,<span class="mono">ns</span> 是命名空间,<span class="mono">ts</span> 是这条操作在整个集群时间线上的唯一位置(用来给从节点当"读到哪了"的书签)。从节点要做的,就是把这个 <span class="mono">o</span> 原样插入自己的 <span class="mono">articledemo.orders</span>。</p>
+</section>
+
+<section>
+  <h2>真实源码:oplog 记录的字段是写死的结构</h2>
+  <p class="h2-sub">上面这份文档不是随手拼的 JSON,字段名和操作类型都是源码里定义好的。</p>
+  <blockquote class="src">
+    <span class="path">src/mongo/db/repl/oplog_entry.idl · <a href="https://github.com/mongodb/mongo/blob/r8.3.7/src/mongo/db/repl/oplog_entry.idl#L48" target="_blank" rel="noopener">mongodb/mongo @ r8.3.7, L48</a></span>
+enums:
+    OpType:
+        description: "The type of an operation in the oplog"
+        type: string
+        values:
+            kCommand: "c"
+            kInsert: "i"
+            kUpdate: "u"
+            kDelete: "d"
+            kNoop: "n"
+  </blockquote>
+  <blockquote class="src">
+    <span class="path">src/mongo/db/repl/oplog_entry.idl · <a href="https://github.com/mongodb/mongo/blob/r8.3.7/src/mongo/db/repl/oplog_entry.idl#L131" target="_blank" rel="noopener">mongodb/mongo @ r8.3.7, L131</a></span>
+DurableReplOperation:
+    description: "A document that represents an operation. ..."
+    fields:
+        op: { type: OpType, description: "The operation type" }
+        ns: { type: namespacestring, description: "The namespace on which to apply the operation" }
+        ui: { type: uuid, optional: true, description: "The UUID of the collection" }
+        o:  { type: object, description: "The operation applied" }
+        o2: { type: object, optional: true, description: "Additional information about the operation applied" }
+  </blockquote>
+  <p><span class="mono">OpType</span> 枚举里的 <span class="mono">i</span>/<span class="mono">u</span>/<span class="mono">d</span>,跟上面真实抓到的 <span class="mono">op:'i'</span> 完全对上;<span class="mono">DurableReplOperation</span> 这个结构体定义了每条 oplog 记录该有哪些字段——<span class="mono">o</span> 是"这次操作本身",<span class="mono">o2</span> 是"额外信息"(对更新和删除来说通常是被操作文档的 <span class="mono">_id</span>,用来定位)。</p>
+</section>
+
+<section>
+  <h2>真实实验:一次 $inc,在 oplog 里却没有"加一"</h2>
+  <p class="h2-sub">如果 oplog 原样记录"给 qty 加 1",从节点断线重连后可能会重放到同一条记录两次,那就变成"加了 2"——真实情况不是这样。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ mongosh --quiet articledemo --eval '
+  db.orders.updateOne({_id:1}, {$set:{qty:99}, $inc:{views:1}})
+'
+$ mongosh --quiet --eval '
+  db.getSiblingDB("local").oplog.rs
+    .find({ns:"articledemo.orders", op:"u"}).sort({$natural:-1}).limit(1)
+'</pre>
+<span class="ok">{
+  op: 'u',
+  ns: 'articledemo.orders',
+  o: {
+    '$v': 2,
+    diff: { u: { qty: 99 }, i: { views: 1 } }
+  },
+  o2: { _id: 1 }
+}</span>
+  </div>
+  <p><span class="mono">$inc:{views:1}</span> 在 oplog 里变成了 <span class="mono">i:{views:1}</span>——不是"给 views 加 1",是"把 views 设成 1"这个绝对值。<span class="mono">u</span> 和 <span class="mono">i</span> 分别表示"把已有字段设为这个值"和"插入一个新字段为这个值",两者存的都是最终结果,不是操作过程。</p>
+</section>
+
+<section>
+  <h2>真实源码:这份 diff 格式就是为了能安全重放</h2>
+  <blockquote class="src">
+    <span class="path">src/mongo/db/update/update_oplog_entry_version.h · <a href="https://github.com/mongodb/mongo/blob/r8.3.7/src/mongo/db/update/update_oplog_entry_version.h#L57" target="_blank" rel="noopener">mongodb/mongo @ r8.3.7, L57</a></span>
+// Delta style update, introduced in 4.7. When a pipeline based update is executed, the pre and
+// post images are diffed, producing a delta. The delta is recorded in the oplog. On
+// secondaries, the delta is applied to the pre-image to recover the post image.
+//
+// Delta style updates cannot be executed directly by users.
+kDeltaV2 = 2,
+  </blockquote>
+  <p>关键在"pre and post images are diffed"——服务器先把更新前后的完整文档做一次 diff,记录下来的是这次 diff(最终该长什么样),不是用户敲的那个 <span class="mono">$inc</span> 操作符本身。这样一来,不管这条 oplog 记录被重放几次,结果都是"把这些字段设成这些值",而不是"再加一次"。</p>
+</section>
+
+<section>
+  <h2>真实实验:同一条更新记录,重放两遍</h2>
+  <p class="h2-sub">直接用 <span class="mono">applyOps</span> 把上面那条 <span class="mono">u</span> 记录在本机重放两次,看 <span class="mono">qty</span> 会不会变成 198。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ mongosh --quiet articledemo --eval '
+  const op = { op:"u", ns:"articledemo.orders",
+               o:{ $v:2, diff:{ u:{qty:99}, i:{views:1} } }, o2:{_id:1} };
+  print("重放前:", JSON.stringify(db.orders.findOne({_id:1})));
+  db.runCommand({ applyOps: [op] });
+  print("重放#1后:", JSON.stringify(db.orders.findOne({_id:1})));
+  db.runCommand({ applyOps: [op] });
+  print("重放#2后:", JSON.stringify(db.orders.findOne({_id:1})));
+'</pre>
+<span class="ok">重放前:  {"_id":1,"item":"pen","qty":99,"views":1}
+重放#1后:{"_id":1,"item":"pen","qty":99,"views":1}
+重放#2后:{"_id":1,"item":"pen","qty":99,"views":1}</span>
+  </div>
+  <p>重放两次,<span class="mono">qty</span> 始终是 99,<span class="mono">views</span> 始终是 1——完全没有"越重放越大"的问题。这就是幂等性在真实数据库里的样子,不是一句口号。</p>
+</section>
+
+<section>
+  <h2>oplog 是怎么"传"到从节点的——tailable cursor</h2>
+  <p class="h2-sub">从节点不是定时轮询,是开一个一直挂着的游标,主节点这边一有新记录就立刻推过去。</p>
+  <blockquote class="src">
+    <span class="path">src/mongo/db/repl/oplog_fetcher.h · <a href="https://github.com/mongodb/mongo/blob/r8.3.7/src/mongo/db/repl/oplog_fetcher.h#L72" target="_blank" rel="noopener">mongodb/mongo @ r8.3.7, L72</a></span>
+/**
+ * The oplog fetcher, once started, reads operations from a remote oplog using a tailable,
+ * awaitData, exhaust cursor.
+ *
+ * The initial `find` command is generated from the last fetched optime.
+  </blockquote>
+  <p><span class="mono">tailable</span> 游标专门为 capped collection 设计,读到末尾不会关闭,而是等新数据;<span class="mono">awaitData</span> 让这个等待在服务端阻塞而不是客户端空转轮询;<span class="mono">exhaust</span> 省掉了每次 <span class="mono">getMore</span> 的往返。断线重连时,从节点带着自己"最后一次成功应用到哪个 <span class="mono">ts</span>"重新发起 <span class="mono">find</span>,从那个位置继续读——这就是为什么 oplog 里的每一条记录都要带 <span class="mono">ts</span>,它是从节点唯一的书签。</p>
+</section>
+
+<section>
+  <h2>真实实验:oplog 是有限大小的——书签可能会失效</h2>
+  <p class="h2-sub">oplog 是一个 capped collection,满了就从最老的记录开始覆盖。断线太久,书签指向的那个位置可能已经被冲掉了。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ mongosh --quiet --eval '
+  db.getSiblingDB("local").oplog.rs.stats().capped
+'</pre>
+<span class="ok">true</span>
+<span class="cmd">$ mongosh --quiet --eval "rs.printReplicationInfo()"</span>
+<span class="ok">configured oplog size: '192 MB'
+log length start to end: '21175 secs (5.88 hrs)'</span>
+  </div>
+  <p>这个副本集当前配置的 oplog 上限是 192MB,按现在的写入速度,能装下大约 5.88 小时的历史记录。断线时间只要不超过这个窗口,从节点重连后还能在 oplog 里找到自己上次的 <span class="mono">ts</span>,直接续着读;一旦超过,那个位置的记录已经被更新的记录覆盖掉了,只能做一次完整的初始同步(initial sync),把整个数据集重新拷一遍。</p>
+</section>
+
+<section>
+  <h2>交互演示:一条写入的完整旅程</h2>
+  <p class="h2-sub">把上面全部真实实验按发生顺序串成一条演示。</p>
+  <div class="demo" id="oplogDemo">
+    <div class="demo-head"><span>oplog 传播实录</span><span class="step-badge" id="opStep">未开始</span></div>
+    <div class="demo-narration" id="opNarration">点击"下一步"或"播放"开始。</div>
+    <div class="demo-body">
+      <div class="query-line" id="opQuery">—</div>
+      <div class="checks" id="opChecks"></div>
+      <div class="result-row">
+        <span class="result-badge" id="opResultBadge">—</span>
+      </div>
+      <div class="evidence-line" id="opEvidence"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="opReset">⏮ 重来</button>
+      <button class="btn" id="opPrev">‹ 上一步</button>
+      <button class="btn primary" id="opNext">下一步 ›</button>
+      <button class="btn" id="opPlay">▶ 自动播放</button>
+      <span class="step-counter" id="opCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">判断逻辑由 Python 脚本转写:幂等重放部分直接实现真实 diff 格式的 apply 语义(u/i 都是绝对值),重放两次的结果和真实 <span class="mono">applyOps</span> 输出逐字段断言相等,还有一个用字典字面量合并重新实现的独立 apply 函数交叉核对;oplog 窗口部分用真实 <span class="mono">rs.printReplicationInfo()</span> 的两个数字(192MB / 21175 秒)算出临界点,断线时长恰好等于窗口的那一刻精确地从"能续传"翻转成"要重新同步"。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文源码引用(<span class="mono">OpType</span> 枚举、<span class="mono">DurableReplOperation</span> 字段定义、<span class="mono">UpdateOplogEntryVersion::kDeltaV2</span>、<span class="mono">OplogFetcher</span> 类注释)均取自 <span class="mono">mongodb/mongo</span> 仓库 <span class="mono">r8.3.7</span> 标签,与本机安装的 MongoDB Community 8.3.7 版本一致,直接从 GitHub 拉取源文件核对过函数签名、关键调用和行号。</li>
+      <li>全部 oplog 记录、<span class="mono">applyOps</span> 重放结果、<span class="mono">rs.printReplicationInfo()</span> 输出均为本机真实 <span class="mono">mongosh</span> 会话对单节点副本集(<span class="mono">rs0</span>)运行产生,未做删改。</li>
+      <li>演示数据的自检:幂等重放的模型结果和真实 <span class="mono">applyOps</span> 两次重放的输出逐字段断言相等;oplog 窗口的临界点用真实 <span class="mono">rs.printReplicationInfo()</span> 的两个数字反推,并用另一种算法独立复算过一遍。</li>
+      <li>没有涉及:副本集选举的具体触发条件与投票过程(下一篇会展开)、多文档事务在 oplog 里的记录方式(<span class="mono">applyOps</span> 分组)、变更流(change stream)如何消费 oplog、分片集群下每个 shard 各自的 oplog。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="mongo-election.html">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">副本集选举:谁能当主节点,谁说了算</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>MongoDB 系列 · 第五篇 · oplog · 源码引用自 mongodb/mongo r8.3.7,实验数据来自本机真实运行的 MongoDB Community 8.3.7(单节点副本集)</footer>
+
+<script>
+const DATA = {"scenarios": [
+  {
+    "narration": "插入一条文档,主节点在写入的同时,往 local.oplog.rs 里追加一条 op:'i' 的记录——o 字段就是插入的完整文档。",
+    "query_display": "db.orders.insertOne({_id:1, item:\"pen\", qty:10})",
+    "check_label": "oplog 记录字段是否匹配源码定义的 op/ns/o/o2?",
+    "verdict": "pass",
+    "result_badge": "op:'i' 写入 oplog",
+    "result_class": "good",
+    "evidence": "真实 oplog: { op:'i', ns:'articledemo.orders', o:{_id:1,item:'pen',qty:10}, o2:{_id:1} }"
+  },
+  {
+    "narration": "$inc:{views:1} 在 oplog 里没有变成\"加一\",而是变成了绝对值 i:{views:1}——服务器diff 出的是更新后的最终结果,不是用户敲的操作符本身。",
+    "query_display": "db.orders.updateOne({_id:1}, { $set:{qty:99}, $inc:{views:1} })",
+    "check_label": "更新是否被转换成幂等的绝对值 diff(而不是相对增量)?",
+    "verdict": "pass",
+    "result_badge": "diff: { u:{qty:99}, i:{views:1} }",
+    "result_class": "good",
+    "evidence": "真实 oplog: { op:'u', o:{ $v:2, diff:{ u:{qty:99}, i:{views:1} } }, o2:{_id:1} }"
+  },
+  {
+    "narration": "用 applyOps 把这条 u 记录在已经更新过一次的文档上重放第一遍——按 diff 的绝对值语义,结果应该和当前状态一致。",
+    "query_display": "db.runCommand({ applyOps: [{ op:'u', ns:'articledemo.orders', o:{$v:2,diff:{u:{qty:99},i:{views:1}}}, o2:{_id:1} }] })",
+    "check_label": "重放第 1 次后,文档是否保持 qty=99, views=1?",
+    "verdict": "pass",
+    "result_badge": "qty=99, views=1(不变)",
+    "result_class": "good",
+    "evidence": "真实 applyOps 输出: 重放#1后 {\"_id\":1,\"item\":\"pen\",\"qty\":99,\"views\":1}"
+  },
+  {
+    "narration": "再重放同一条记录第二遍——如果这条记录记的是\"加一\",这里 views 应该变成 2;实际完全没变。",
+    "query_display": "// 对同一个文档,原样再跑一次上面同一条 applyOps",
+    "check_label": "重放第 2 次后,结果是否和第 1 次完全相同(幂等)?",
+    "verdict": "pass",
+    "result_badge": "qty=99, views=1(仍然不变)",
+    "result_class": "good",
+    "evidence": "真实 applyOps 输出: 重放#2后 {\"_id\":1,\"item\":\"pen\",\"qty\":99,\"views\":1}"
+  },
+  {
+    "narration": "删除这条文档,oplog 里追加一条 op:'d' 的记录——o 只带 _id,因为删除不需要别的信息来定位。",
+    "query_display": "db.orders.deleteOne({_id:1})",
+    "check_label": "oplog 记录字段是否匹配源码定义的 op/ns/o?",
+    "verdict": "pass",
+    "result_badge": "op:'d' 写入 oplog",
+    "result_class": "good",
+    "evidence": "真实 oplog: { op:'d', ns:'articledemo.orders', o:{_id:1} }"
+  },
+  {
+    "narration": "从节点断线 1 小时后重连——远小于本机 5.88 小时的 oplog 窗口,上次的 ts 书签还在,tailable 游标可以直接从那个位置继续读。",
+    "query_display": "secondary 断线时长 = 1 小时  (窗口 = 21175 秒 ≈ 5.88 小时)",
+    "check_label": "断线时长是否小于 oplog 窗口?",
+    "verdict": "pass",
+    "result_badge": "可以续传(从上次 ts 继续 tailable 读取)",
+    "result_class": "good",
+    "evidence": "模型: 3600s < 21175s -> 可以续传;真实 rs.printReplicationInfo() 给出窗口 = 21175 秒"
+  },
+  {
+    "narration": "换成断线 8.3 小时——超过了 oplog 窗口,书签指向的那条记录早就被更新的写入从 capped collection 里挤掉了,tailable 游标续不上,只能整个数据集重新拷一遍。",
+    "query_display": "secondary 断线时长 = 8.3 小时  (窗口 = 21175 秒 ≈ 5.88 小时)",
+    "check_label": "断线时长是否小于 oplog 窗口?",
+    "verdict": "fail",
+    "result_badge": "必须全量重新同步(initial sync)",
+    "result_class": "warn",
+    "evidence": "模型: 30000s >= 21175s -> 必须全量重新同步;临界点精确等于真实窗口秒数"
+  }
+]};
+
+(function(){
+  const scenarios = DATA.scenarios;
+  const narration = document.getElementById('opNarration');
+  const stepBadge = document.getElementById('opStep');
+  const queryLine = document.getElementById('opQuery');
+  const checksEl = document.getElementById('opChecks');
+  const resultBadge = document.getElementById('opResultBadge');
+  const evidenceEl = document.getElementById('opEvidence');
+  const counter = document.getElementById('opCounter');
+  let idx = -1, playing = false, playTimer = null;
+
+  function render(){
+    idx = Math.max(-1, Math.min(scenarios.length - 1, idx));
+    if(idx < 0){
+      narration.textContent = '点击"下一步"或"播放"开始。';
+      stepBadge.textContent = '未开始';
+      queryLine.textContent = '—';
+      checksEl.innerHTML = '';
+      resultBadge.textContent = '—';
+      resultBadge.className = 'result-badge';
+      evidenceEl.textContent = '';
+      counter.textContent = `0 / ${scenarios.length}`;
+      document.getElementById('opPrev').disabled = true;
+      document.getElementById('opNext').disabled = false;
+      return;
+    }
+
+    const s = scenarios[idx];
+    narration.textContent = s.narration;
+    stepBadge.textContent = `第 ${idx+1} / ${scenarios.length} 步`;
+    queryLine.textContent = s.query_display;
+
+    checksEl.innerHTML = '';
+    const row = document.createElement('div');
+    row.className = 'check';
+    row.dataset.verdict = s.verdict;
+    const label = document.createElement('span');
+    label.className = 'label';
+    label.textContent = s.check_label;
+    const verdict = document.createElement('span');
+    verdict.className = 'verdict';
+    verdict.textContent = s.verdict === 'pass' ? '成立' : '不成立';
+    row.appendChild(label); row.appendChild(verdict);
+    checksEl.appendChild(row);
+
+    resultBadge.textContent = s.result_badge;
+    resultBadge.className = 'result-badge ' + s.result_class;
+    evidenceEl.textContent = s.evidence;
+
+    counter.textContent = `${idx+1} / ${scenarios.length}`;
+    document.getElementById('opPrev').disabled = idx <= -1;
+    document.getElementById('opNext').disabled = idx >= scenarios.length - 1;
+  }
+
+  document.getElementById('opNext').onclick = () => { idx++; render(); stopPlay(); };
+  document.getElementById('opPrev').onclick = () => { idx--; render(); stopPlay(); };
+  document.getElementById('opReset').onclick = () => { idx = -1; render(); stopPlay(); };
+  function stopPlay(){ playing = false; clearInterval(playTimer); document.getElementById('opPlay').textContent = '▶ 自动播放'; }
+  document.getElementById('opPlay').onclick = () => {
+    if(playing){ stopPlay(); return; }
+    playing = true; document.getElementById('opPlay').textContent = '⏸ 暂停';
+    playTimer = setInterval(() => {
+      if(idx >= scenarios.length - 1){ stopPlay(); return; }
+      idx++; render();
+    }, 2000);
+  };
+
+  render();
+})();
+</script>
+
+</body>
+</html>

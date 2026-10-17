@@ -1,0 +1,502 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>KeyPairGenerator:生成公钥和私钥</title>
+<meta name="description" content="在 JDK 17 / 21 / 27 上实测 KeyPairGenerator:不 initialize 时 RSA 默认从 2048 位升到 3072 位、EC 从 256 升到 384;RSA 512–16384 位都可生成(1023 与 4097 也可以)、公钥指数必须是奇数;EC 只支持 P-256 / 384 / 521;RSA 2048 生成耗时 28–294 ms 波动 4.5 倍而 EC 几乎固定;SHA1PRNG + setSeed 可重现密钥;输出可被 OpenSSL 直接读取。">
+<link rel="canonical" href="https://bigywater.tech/java-keypair-generator.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="KeyPairGenerator:生成公钥和私钥">
+<meta property="og:description" content="在 JDK 17 / 21 / 27 上实测 KeyPairGenerator:不 initialize 时 RSA 默认从 2048 位升到 3072 位、EC 从 256 升到 384;RSA 512–16384 位都可生成(1023 与 4097 也可以)、公钥指数必须是奇数;EC 只支持 P-256 / 384 / 521;RSA 2048 生成耗时 28–294 ms 波动 4.5 倍而 EC 几乎固定;SHA1PRNG + setSeed 可重现密钥;输出可被 OpenSSL 直接读取。">
+<meta property="og:url" content="https://bigywater.tech/java-keypair-generator.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="KeyPairGenerator:生成公钥和私钥">
+<meta name="twitter:description" content="在 JDK 17 / 21 / 27 上实测 KeyPairGenerator:不 initialize 时 RSA 默认从 2048 位升到 3072 位、EC 从 256 升到 384;RSA 512–16384 位都可生成(1023 与 4097 也可以)、公钥指数必须是奇数;EC 只支持 P-256 / 384 / 521;RSA 2048 生成耗时 28–294 ms 波动 4.5 倍而 EC 几乎固定;SHA1PRNG + setSeed 可重现密钥;输出可被 OpenSSL 直接读取。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">1937</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#B85C00; --series-c-soft:#FBE7D1;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#F29A4A; --series-c-soft:#3B2208;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#F29A4A; --series-c-soft:#3B2208;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Java · 411</div>
+  <h1>KeyPairGenerator:生成公钥和私钥</h1>
+  <p>生成密钥对只有两行代码,但默认值、边界和耗时都有细节。这篇用多个 JDK 版本和 OpenSSL 量出:默认参数怎么随版本变化,RSA 与 EC 能接受什么参数,生成耗时的波动,以及固定种子能不能重现密钥。</p>
+  <div class="hero-fact">
+<div><div class="num">2048 → 3072</div><div class="lbl">RSA 不 initialize 时的默认模数位数:JDK 17 与 JDK 21 / 27</div></div><div><div class="num">28.5–294.1 ms</div><div class="lbl">RSA 2048 生成 30 次的最快与最慢(中位数 65.2 ms);EC P-256 为 0.12–0.25 ms</div></div><div><div class="num">相同 vs 不同</div><div class="lbl">用 setSeed(12345) 的 SHA1PRNG 与 DRBG 各生成两把 RSA 1024 密钥,模数是否相同</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="java-cipher-input-stream.html">CipherInputStream:加密流的结束和认证边界</a></div>
+<section>
+  <h2>默认参数</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [JDK 17]
+      RSA         不 initialize 直接 generateKeyPair():2048 位模数;公钥编码 294 字节、私钥编码 1217 字节;提供者 SunRsaSign
+      DSA         不 initialize 直接 generateKeyPair():2048 位素数 p;公钥编码 838 字节、私钥编码 608 字节;提供者 SUN
+      EC          不 initialize 直接 generateKeyPair():曲线阶 256 位;公钥编码 91 字节、私钥编码 67 字节;提供者 SunEC
+      DH          不 initialize 直接 generateKeyPair():2048 位素数 p;公钥编码 556 字节、私钥编码 327 字节;提供者 SunJCE
+      Ed25519     不 initialize 直接 generateKeyPair():EdDSA;公钥编码 44 字节、私钥编码 48 字节;提供者 SunEC
+      X25519      不 initialize 直接 generateKeyPair():XDH;公钥编码 44 字节、私钥编码 48 字节;提供者 SunEC
+      RSASSA-PSS  不 initialize 直接 generateKeyPair():2048 位模数;公钥编码 292 字节、私钥编码 1217 字节;提供者 SunRsaSign
+  [JDK 21]
+      RSA         不 initialize 直接 generateKeyPair():3072 位模数;公钥编码 422 字节、私钥编码 1794 字节;提供者 SunRsaSign
+      DSA         不 initialize 直接 generateKeyPair():2048 位素数 p;公钥编码 838 字节、私钥编码 608 字节;提供者 SUN
+      EC          不 initialize 直接 generateKeyPair():曲线阶 384 位;公钥编码 120 字节、私钥编码 80 字节;提供者 SunEC
+      DH          不 initialize 直接 generateKeyPair():3072 位素数 p;公钥编码 813 字节、私钥编码 459 字节;提供者 SunJCE
+      Ed25519     不 initialize 直接 generateKeyPair():EdDSA;公钥编码 44 字节、私钥编码 48 字节;提供者 SunEC
+      X25519      不 initialize 直接 generateKeyPair():XDH;公钥编码 44 字节、私钥编码 48 字节;提供者 SunEC
+      RSASSA-PSS  不 initialize 直接 generateKeyPair():3072 位模数;公钥编码 420 字节、私钥编码 1791 字节;提供者 SunRsaSign
+  [JDK 27]
+      RSA         不 initialize 直接 generateKeyPair():3072 位模数;公钥编码 422 字节、私钥编码 1793 字节;提供者 SunRsaSign
+      DSA         不 initialize 直接 generateKeyPair():2048 位素数 p;公钥编码 838 字节、私钥编码 609 字节;提供者 SUN
+      EC          不 initialize 直接 generateKeyPair():曲线阶 384 位;公钥编码 120 字节、私钥编码 80 字节;提供者 SunEC
+      DH          不 initialize 直接 generateKeyPair():3072 位素数 p;公钥编码 812 字节、私钥编码 459 字节;提供者 SunJCE
+      Ed25519     不 initialize 直接 generateKeyPair():EdDSA;公钥编码 44 字节、私钥编码 48 字节;提供者 SunEC
+      X25519      不 initialize 直接 generateKeyPair():XDH;公钥编码 44 字节、私钥编码 48 字节;提供者 SunEC
+      RSASSA-PSS  不 initialize 直接 generateKeyPair():3072 位模数;公钥编码 420 字节、私钥编码 1792 字节;提供者 SunRsaSign</pre></div>
+</section>
+<section>
+  <h2>RSA 的边界</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  RSA initialize(511):InvalidParameterException:java.security.InvalidAlgorithmParameterException: Invalid key sizes
+  RSA initialize(512):成功,模数 512 位
+  RSA initialize(1023):成功,模数 1023 位
+  RSA initialize(1024):成功,模数 1024 位
+  RSA initialize(2048):成功,模数 2048 位
+  RSA initialize(4097):成功,模数 4097 位
+  RSA initialize(16384):成功(未实际生成,只检查参数)
+  RSA initialize(16385):InvalidParameterException:java.security.InvalidAlgorithmParameterException: Invalid key sizes
+  默认公钥指数 e = 65537
+  RSAKeyGenParameterSpec(2048, e = 3):成功,公钥指数 3
+  RSAKeyGenParameterSpec(2048, e = 17):成功,公钥指数 17
+  RSAKeyGenParameterSpec(2048, e = 65537):成功,公钥指数 65537
+  RSAKeyGenParameterSpec(2048, e = 65539):成功,公钥指数 65539
+  RSAKeyGenParameterSpec(2048, e = 2):InvalidAlgorithmParameterException:Public exponent must be an odd number
+  RSAKeyGenParameterSpec(2048, e = 4):InvalidAlgorithmParameterException:Public exponent must be an odd number
+  RSAKeyGenParameterSpec(2048, e = 1):InvalidAlgorithmParameterException:Public exponent must be 3 or larger
+  私钥是 RSAPrivateCrtKey:p 1024 位,q 1024 位,p×q = n true,d 2045 位,保存了 CRT 参数 dP、dQ、qInv
+  生成 200 把 initialize(2048) 的 RSA 密钥:模数恰好 2048 位的有 200 把</pre></div>
+</section>
+<section>
+  <h2>EC 的曲线</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  EC initialize(192):ProviderException:Curve not supported: secp192r1 [NIST P-192,X9.62 prime192v1] (1.2.840.10045.3.1.1)
+  EC initialize(224):ProviderException:Curve not supported: secp224r1 [NIST P-224] (1.3.132.0.33)
+  EC initialize(255):InvalidParameterException:No EC parameters available for key size 255 bits
+  EC initialize(256):成功,曲线 secp256r1 [NIST P-256,阶 256 位
+  EC initialize(384):成功,曲线 secp384r1 [NIST P-384] (1.3.132.0.34),阶 384 位
+  EC initialize(521):成功,曲线 secp521r1 [NIST P-521] (1.3.132.0.35),阶 521 位
+  EC initialize(522):InvalidParameterException:No EC parameters available for key size 522 bits
+  ECGenParameterSpec("secp256r1"):成功,阶 256 位
+  ECGenParameterSpec("secp384r1"):成功,阶 384 位
+  ECGenParameterSpec("secp521r1"):成功,阶 521 位
+  ECGenParameterSpec("secp256k1"):InvalidAlgorithmParameterException:Curve not supported: secp256k1 (1.3.132.0.10)
+  ECGenParameterSpec("secp224r1"):InvalidAlgorithmParameterException:Curve not supported: secp224r1 [NIST P-224] (1.3.132.0.33)
+  ECGenParameterSpec("brainpoolP256r1"):InvalidAlgorithmParameterException:Curve not supported: brainpoolP256r1 (1.3.36.3.3.2.8.1.1.7)
+  ECGenParameterSpec("prime256v1"):InvalidAlgorithmParameterException:Unknown curve name: prime256v1
+  ECGenParameterSpec("NIST P-256"):成功,阶 256 位
+  ECGenParameterSpec("X9.62 prime256v1"):成功,阶 256 位
+  ECGenParameterSpec("1.2.840.10045.3.1.7"):成功,阶 256 位
+  所有提供者里注册的 KeyPairGenerator 算法:[DSA, DiffieHellman, EC, Ed25519, Ed448, EdDSA, RSA, RSASSA-PSS, X25519, X448, XDH]</pre></div>
+</section>
+<section>
+  <h2>生成耗时</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  RSA      2048  30 次:最快 28.51 ms,中位数 65.21 ms,最慢 294.14 ms(最慢 / 中位数 = 4.5)
+  RSA      3072  30 次:最快 99.32 ms,中位数 275.19 ms,最慢 786.68 ms(最慢 / 中位数 = 2.9)
+  RSA      4096  12 次:最快 724.95 ms,中位数 1226.56 ms,最慢 2275.17 ms(最慢 / 中位数 = 1.9)
+  EC       256   200 次:最快 0.12 ms,中位数 0.14 ms,最慢 0.25 ms(最慢 / 中位数 = 1.8)
+  EC       384   200 次:最快 0.66 ms,中位数 0.73 ms,最慢 1.58 ms(最慢 / 中位数 = 2.2)
+  EC       521   200 次:最快 1.17 ms,中位数 1.48 ms,最慢 2.19 ms(最慢 / 中位数 = 1.5)
+  Ed25519        200 次:最快 0.22 ms,中位数 0.27 ms,最慢 0.80 ms(最慢 / 中位数 = 2.9)
+  X25519         200 次:最快 0.11 ms,中位数 0.18 ms,最慢 0.29 ms(最慢 / 中位数 = 1.6)
+  DH       2048  6 次:最快 0.31 ms,中位数 0.34 ms,最慢 0.38 ms(最慢 / 中位数 = 1.1)
+  DSA      2048  6 次:最快 0.33 ms,中位数 0.34 ms,最慢 0.36 ms(最慢 / 中位数 = 1.1)</pre></div>
+</section>
+<section>
+  <h2>固定种子</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  SHA1PRNG:用 setSeed(12345) 的 SecureRandom 各生成一把 RSA 1024 密钥,两次的模数完全相同(密钥可重现):[88e453ac7d8e84fdc67b82c9, 88e453ac7d8e84fdc67b82c9]
+  DRBG:用 setSeed(12345) 的 SecureRandom 各生成一把 RSA 1024 密钥,两次的模数不同:[801b409b5ada23633e8839c4, c017bb169cff4ac17c038a51]
+  NativePRNG:用 setSeed(12345) 的 SecureRandom 各生成一把 RSA 1024 密钥,两次的模数不同:[9368ab1444a2ffc035dd3588, 8ac7ef1e04d9fb29d4ea3cb4]
+  SHA1PRNG + setSeed(1):EC P-256 私钥相同 = true
+  默认 new SecureRandom() 的算法 NativePRNG,提供者 SUN;KeyPairGenerator 不传 SecureRandom 时使用 JDK 内部的默认实例(与它相同类型)
+  SHA1PRNG:先 setSeed(42) 再取字节 d50ac288b90ede2e;先取字节再 setSeed(42)(补充种子而不是替换)得到 986aadeb165af734(两者不同:setSeed 在第一次取字节之后只是追加熵)</pre></div>
+</section>
+<section>
+  <h2>编码与 OpenSSL</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  RSA:私钥 getFormat() = PKCS#8,公钥 getFormat() = X.509,私钥 1217 字节
+  EC:私钥 getFormat() = PKCS#8,公钥 getFormat() = X.509,私钥 67 字节
+  Ed25519:私钥 getFormat() = PKCS#8,公钥 getFormat() = X.509,私钥 48 字节
+  openssl pkey 读取 RSA.priv.der:Private-Key: (2048 bit, 2 primes);读取 RSA.pub.der:Public-Key: (2048 bit)
+  openssl pkey 读取 EC.priv.der:Private-Key: (256 bit field, 128 bit security level);读取 EC.pub.der:Public-Key: (256 bit field, 128 bit security level)
+  openssl pkey 读取 Ed25519.priv.der:ED25519 Private-Key:;读取 Ed25519.pub.der:ED25519 Public-Key:</pre></div>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">KeyPairGenerator</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "不调用 initialize、直接 generateKeyPair() 得到的默认参数随 JDK 版本变化:RSA 在 JDK 17 是 2048 位(公钥编码 294 字节、私钥 1217 字节),在 JDK 21 与 27 是 3072 位(422 / 1794 字节);EC 在 JDK 17 是 256 位曲线(公钥 91 字节),在 JDK 21 与 27 是 384 位(120 字节);DH 从 2048 位变成 3072 位素数;DSA 一直是 2048 位;Ed25519 与 X25519 不变(44 / 48 字节);RSASSA-PSS 与 RSA 同步变化。依赖默认值的代码在升级 JDK 之后密钥大小会悄悄改变。", "s": {"t": {"lines": ["  [JDK 17]", "      RSA         不 initialize 直接 generateKeyPair():2048 位模数;公钥编码 294 字节、私钥编码 1217 字节;提供者 SunRsaSign", "      DSA         不 initialize 直接 generateKeyPair():2048 位素数 p;公钥编码 838 字节、私钥编码 608 字节;提供者 SUN", "      EC          不 initialize 直接 generateKeyPair():曲线阶 256 位;公钥编码 91 字节、私钥编码 67 字节;提供者 SunEC", "      DH          不 initialize 直接 generateKeyPair():2048 位素数 p;公钥编码 556 字节、私钥编码 327 字节;提供者 SunJCE", "      Ed25519     不 initialize 直接 generateKeyPair():EdDSA;公钥编码 44 字节、私钥编码 48 字节;提供者 SunEC", "      X25519      不 initialize 直接 generateKeyPair():XDH;公钥编码 44 字节、私钥编码 48 字节;提供者 SunEC", "      RSASSA-PSS  不 initialize 直接 generateKeyPair():2048 位模数;公钥编码 292 字节、私钥编码 1217 字节;提供者 SunRsaSign", "  [JDK 21]", "      RSA         不 initialize 直接 generateKeyPair():3072 位模数;公钥编码 422 字节、私钥编码 1794 字节;提供者 SunRsaSign", "      DSA         不 initialize 直接 generateKeyPair():2048 位素数 p;公钥编码 838 字节、私钥编码 608 字节;提供者 SUN", "      EC          不 initialize 直接 generateKeyPair():曲线阶 384 位;公钥编码 120 字节、私钥编码 80 字节;提供者 SunEC", "      DH          不 initialize 直接 generateKeyPair():3072 位素数 p;公钥编码 813 字节、私钥编码 459 字节;提供者 SunJCE", "      Ed25519     不 initialize 直接 generateKeyPair():EdDSA;公钥编码 44 字节、私钥编码 48 字节;提供者 SunEC", "      X25519      不 initialize 直接 generateKeyPair():XDH;公钥编码 44 字节、私钥编码 48 字节;提供者 SunEC", "      RSASSA-PSS  不 initialize 直接 generateKeyPair():3072 位模数;公钥编码 420 字节、私钥编码 1791 字节;提供者 SunRsaSign", "  [JDK 27]", "      RSA         不 initialize 直接 generateKeyPair():3072 位模数;公钥编码 422 字节、私钥编码 1793 字节;提供者 SunRsaSign", "      DSA         不 initialize 直接 generateKeyPair():2048 位素数 p;公钥编码 838 字节、私钥编码 609 字节;提供者 SUN", "      EC          不 initialize 直接 generateKeyPair():曲线阶 384 位;公钥编码 120 字节、私钥编码 80 字节;提供者 SunEC", "      DH          不 initialize 直接 generateKeyPair():3072 位素数 p;公钥编码 812 字节、私钥编码 459 字节;提供者 SunJCE", "      Ed25519     不 initialize 直接 generateKeyPair():EdDSA;公钥编码 44 字节、私钥编码 48 字节;提供者 SunEC", "      X25519      不 initialize 直接 generateKeyPair():XDH;公钥编码 44 字节、私钥编码 48 字节;提供者 SunEC", "      RSASSA-PSS  不 initialize 直接 generateKeyPair():3072 位模数;公钥编码 420 字节、私钥编码 1792 字节;提供者 SunRsaSign"], "cur": [], "mark": [], "done": []}, "done": [0, 1], "mark": [8, 9, 11, 15, 16, 17, 19, 23], "b": {"items": [["JDK 17 RSA 默认", 2048, "2048 位"], ["JDK 21 RSA 默认", 3072, "3072 位"], ["JDK 17 EC 默认", 256, "256 位"], ["JDK 21 EC 默认", 384, "384 位"]], "max": 3072, "cur": [], "mark": [], "done": [0, 1, 2, 3]}, "kv": {"items": [["RSA 默认", "JDK 17:2048 位 → JDK 21 / 27:3072 位"], ["EC 默认", "JDK 17:256 位 → JDK 21 / 27:384 位"], ["Ed25519 / X25519", "不变"]], "hl": ["RSA 默认"]}}}, {"note": "RSA(JDK 21):initialize(511) 抛 InvalidParameterException(Invalid key sizes);512、1023、1024、2048、4097 都成功(模数位数与指定值完全一致,包括 1023 与 4097);16384 参数检查通过,16385 抛异常。默认公钥指数 65537;RSAKeyGenParameterSpec 指定 e = 3、17、65537、65539 都成功,e = 2 或 4 抛 “Public exponent must be an odd number”,e = 1 抛 “must be 3 or larger”。私钥是 RSAPrivateCrtKey,p 与 q 各 1024 位,p×q = n,d 2045 位,保存 CRT 参数。生成 200 把 initialize(2048) 的密钥,模数恰好 2048 位的有 200 把。", "s": {"t": {"lines": ["  RSA initialize(511):InvalidParameterException:java.security.InvalidAlgorithmParameterException: Invalid key sizes", "  RSA initialize(512):成功,模数 512 位", "  RSA initialize(1023):成功,模数 1023 位", "  RSA initialize(1024):成功,模数 1024 位", "  RSA initialize(2048):成功,模数 2048 位", "  RSA initialize(4097):成功,模数 4097 位", "  RSA initialize(16384):成功(未实际生成,只检查参数)", "  RSA initialize(16385):InvalidParameterException:java.security.InvalidAlgorithmParameterException: Invalid key sizes", "  默认公钥指数 e = 65537", "  RSAKeyGenParameterSpec(2048, e = 3):成功,公钥指数 3", "  RSAKeyGenParameterSpec(2048, e = 17):成功,公钥指数 17", "  RSAKeyGenParameterSpec(2048, e = 65537):成功,公钥指数 65537", "  RSAKeyGenParameterSpec(2048, e = 65539):成功,公钥指数 65539", "  RSAKeyGenParameterSpec(2048, e = 2):InvalidAlgorithmParameterException:Public exponent must be an odd number", "  RSAKeyGenParameterSpec(2048, e = 4):InvalidAlgorithmParameterException:Public exponent must be an odd number", "  RSAKeyGenParameterSpec(2048, e = 1):InvalidAlgorithmParameterException:Public exponent must be 3 or larger", "  私钥是 RSAPrivateCrtKey:p 1024 位,q 1024 位,p×q = n true,d 2045 位,保存了 CRT 参数 dP、dQ、qInv", "  生成 200 把 initialize(2048) 的 RSA 密钥:模数恰好 2048 位的有 200 把"], "cur": [], "mark": [], "done": []}, "done": [0, 1, 2], "mark": [7, 8, 13, 16, 17], "kv": {"items": [["密钥长度", "512 到 16384 位(1023 与 4097 也可以),511 与 16385 拒绝"], ["公钥指数", "默认 65537;3、17、65539 可用;偶数与 1 拒绝"], ["模数", "200 把 2048 位的密钥都恰好 2048 位"]], "hl": ["密钥长度"]}}}, {"note": "EC(JDK 21):initialize(256) 得到 secp256r1,384 得到 secp384r1,521 得到 secp521r1;192 与 224 抛 ProviderException: Curve not supported(P-192、P-224 不可用);255 与 522 抛 InvalidParameterException: No EC parameters available for key size。按名字初始化:secp256r1 / secp384r1 / secp521r1 成功,“NIST P-256”“X9.62 prime256v1”“1.2.840.10045.3.1.7” 都成功,但 “prime256v1”(OpenSSL 的名字)抛 Unknown curve name,secp256k1、secp224r1、brainpoolP256r1 抛 Curve not supported。所有提供者里注册的 KeyPairGenerator 算法只有 11 个:DSA、DiffieHellman、EC、Ed25519、Ed448、EdDSA、RSA、RSASSA-PSS、X25519、X448、XDH。", "s": {"t": {"lines": ["  EC initialize(192):ProviderException:Curve not supported: secp192r1 [NIST P-192,X9.62 prime192v1] (1.2.840.10045.3.1.1)", "  EC initialize(224):ProviderException:Curve not supported: secp224r1 [NIST P-224] (1.3.132.0.33)", "  EC initialize(255):InvalidParameterException:No EC parameters available for key size 255 bits", "  EC initialize(256):成功,曲线 secp256r1 [NIST P-256,阶 256 位", "  EC initialize(384):成功,曲线 secp384r1 [NIST P-384] (1.3.132.0.34),阶 384 位", "  EC initialize(521):成功,曲线 secp521r1 [NIST P-521] (1.3.132.0.35),阶 521 位", "  EC initialize(522):InvalidParameterException:No EC parameters available for key size 522 bits", "  ECGenParameterSpec(\"secp256r1\"):成功,阶 256 位", "  ECGenParameterSpec(\"secp384r1\"):成功,阶 384 位", "  ECGenParameterSpec(\"secp521r1\"):成功,阶 521 位", "  ECGenParameterSpec(\"secp256k1\"):InvalidAlgorithmParameterException:Curve not supported: secp256k1 (1.3.132.0.10)", "  ECGenParameterSpec(\"secp224r1\"):InvalidAlgorithmParameterException:Curve not supported: secp224r1 [NIST P-224] (1.3.132.0.33)", "  ECGenParameterSpec(\"brainpoolP256r1\"):InvalidAlgorithmParameterException:Curve not supported: brainpoolP256r1 (1.3.36.3.3.2.8.1.1.7)", "  ECGenParameterSpec(\"prime256v1\"):InvalidAlgorithmParameterException:Unknown curve name: prime256v1", "  ECGenParameterSpec(\"NIST P-256\"):成功,阶 256 位", "  ECGenParameterSpec(\"X9.62 prime256v1\"):成功,阶 256 位", "  ECGenParameterSpec(\"1.2.840.10045.3.1.7\"):成功,阶 256 位", "  所有提供者里注册的 KeyPairGenerator 算法:[DSA, DiffieHellman, EC, Ed25519, Ed448, EdDSA, RSA, RSASSA-PSS, X25519, X448, XDH]"], "cur": [], "mark": [], "done": []}, "done": [0, 1, 3], "mark": [3, 6, 10, 13, 14, 15, 17], "kv": {"items": [["可用曲线", "secp256r1 / secp384r1 / secp521r1"], ["不可用", "P-192、P-224、secp256k1、brainpool 抛 Curve not supported"], ["名字", "“prime256v1” 不认识,“NIST P-256” 与 OID 认识"]], "hl": ["不可用"]}}}, {"note": "生成耗时(JDK 21,最快 / 中位数 / 最慢):RSA 2048 30 次 28.5 / 65.2 / 294.1 ms(最慢是中位数的 4.5 倍);RSA 3072 30 次 99.3 / 275.2 / 786.7 ms;RSA 4096 12 次 725 / 1227 / 2275 ms;EC 256 0.12 / 0.14 / 0.25 ms,384 0.66 / 0.73 / 1.58 ms,521 1.17 / 1.48 / 2.19 ms;Ed25519 0.22 / 0.27 / 0.80 ms;X25519 0.11 / 0.18 / 0.29 ms;DH 2048 与 DSA 2048(使用预置参数)约 0.34 ms。RSA 要搜索素数,耗时波动大(几倍),EC 与 Edwards 曲线几乎固定。", "s": {"t": {"lines": ["  RSA      2048  30 次:最快 28.51 ms,中位数 65.21 ms,最慢 294.14 ms(最慢 / 中位数 = 4.5)", "  RSA      3072  30 次:最快 99.32 ms,中位数 275.19 ms,最慢 786.68 ms(最慢 / 中位数 = 2.9)", "  RSA      4096  12 次:最快 724.95 ms,中位数 1226.56 ms,最慢 2275.17 ms(最慢 / 中位数 = 1.9)", "  EC       256   200 次:最快 0.12 ms,中位数 0.14 ms,最慢 0.25 ms(最慢 / 中位数 = 1.8)", "  EC       384   200 次:最快 0.66 ms,中位数 0.73 ms,最慢 1.58 ms(最慢 / 中位数 = 2.2)", "  EC       521   200 次:最快 1.17 ms,中位数 1.48 ms,最慢 2.19 ms(最慢 / 中位数 = 1.5)", "  Ed25519        200 次:最快 0.22 ms,中位数 0.27 ms,最慢 0.80 ms(最慢 / 中位数 = 2.9)", "  X25519         200 次:最快 0.11 ms,中位数 0.18 ms,最慢 0.29 ms(最慢 / 中位数 = 1.6)", "  DH       2048  6 次:最快 0.31 ms,中位数 0.34 ms,最慢 0.38 ms(最慢 / 中位数 = 1.1)", "  DSA      2048  6 次:最快 0.33 ms,中位数 0.34 ms,最慢 0.36 ms(最慢 / 中位数 = 1.1)"], "cur": [], "mark": [], "done": []}, "done": [0, 1, 2], "mark": [3, 5, 6, 8], "b": {"items": [["RSA 2048 中位数", 65.21, "65.2 ms"], ["RSA 3072 中位数", 275.19, "275.2 ms"], ["RSA 4096 中位数", 1226.56, "1227 ms"], ["EC 256 中位数", 0.14, "0.14 ms"], ["Ed25519 中位数", 0.27, "0.27 ms"]], "max": 1230, "cur": [], "mark": [], "done": [0, 1, 2, 3, 4]}, "kv": {"items": [["RSA 2048", "最快 28.5 / 中位数 65.2 / 最慢 294.1 ms"], ["EC P-256", "0.12 / 0.14 / 0.25 ms"]], "hl": ["RSA 2048"]}}}, {"note": "固定种子的 SecureRandom:用 setSeed(12345) 的 SHA1PRNG 各生成一把 RSA 1024 密钥,两次的模数完全相同(88e453ac…),EC P-256 的私钥相同;DRBG 与 NativePRNG 两次的模数不同(setSeed 只是补充熵)。默认 new SecureRandom() 是 NativePRNG(SUN 提供者)。SHA1PRNG 先 setSeed(42) 再取字节得到 d50ac288…,先取字节再 setSeed(42) 得到 986aadeb…——第一次取字节之后 setSeed 只是追加熵,不再让输出可重现。测试里想要可重现的密钥可以用 SHA1PRNG,但这样生成的密钥永远不能用于生产。", "s": {"t": {"lines": ["  SHA1PRNG:用 setSeed(12345) 的 SecureRandom 各生成一把 RSA 1024 密钥,两次的模数完全相同(密钥可重现):[88e453ac7d8e84fdc67b82c9, 88e453ac7d8e84fdc67b82c9]", "  DRBG:用 setSeed(12345) 的 SecureRandom 各生成一把 RSA 1024 密钥,两次的模数不同:[801b409b5ada23633e8839c4, c017bb169cff4ac17c038a51]", "  NativePRNG:用 setSeed(12345) 的 SecureRandom 各生成一把 RSA 1024 密钥,两次的模数不同:[9368ab1444a2ffc035dd3588, 8ac7ef1e04d9fb29d4ea3cb4]", "  SHA1PRNG + setSeed(1):EC P-256 私钥相同 = true", "  默认 new SecureRandom() 的算法 NativePRNG,提供者 SUN;KeyPairGenerator 不传 SecureRandom 时使用 JDK 内部的默认实例(与它相同类型)", "  SHA1PRNG:先 setSeed(42) 再取字节 d50ac288b90ede2e;先取字节再 setSeed(42)(补充种子而不是替换)得到 986aadeb165af734(两者不同:setSeed 在第一次取字节之后只是追加熵)"], "cur": [], "mark": [], "done": []}, "done": [0, 1], "mark": [2, 3, 4, 5], "kv": {"items": [["SHA1PRNG + setSeed", "两次生成的 RSA 模数 / EC 私钥完全相同"], ["DRBG / NativePRNG + setSeed", "不同,不可重现"]], "hl": ["SHA1PRNG + setSeed"]}}}, {"note": "编码与互通:RSA、EC、Ed25519 的私钥 getFormat() 都是 PKCS#8,公钥都是 X.509(私钥 1217 / 67 / 48 字节)。OpenSSL(4.0.3)用 pkey 直接读取 DER:RSA 私钥 “Private-Key: (2048 bit, 2 primes)”、公钥 “Public-Key: (2048 bit)”;EC 私钥 “(256 bit field, 128 bit security level)”;Ed25519 “ED25519 Private-Key”。Java 的 KeyPairGenerator 输出不需要转换就能被 OpenSSL 解析。", "s": {"t": {"lines": ["  RSA:私钥 getFormat() = PKCS#8,公钥 getFormat() = X.509,私钥 1217 字节", "  EC:私钥 getFormat() = PKCS#8,公钥 getFormat() = X.509,私钥 67 字节", "  Ed25519:私钥 getFormat() = PKCS#8,公钥 getFormat() = X.509,私钥 48 字节", "  openssl pkey 读取 RSA.priv.der:Private-Key: (2048 bit, 2 primes);读取 RSA.pub.der:Public-Key: (2048 bit)", "  openssl pkey 读取 EC.priv.der:Private-Key: (256 bit field, 128 bit security level);读取 EC.pub.der:Public-Key: (256 bit field, 128 bit security level)", "  openssl pkey 读取 Ed25519.priv.der:ED25519 Private-Key:;读取 Ed25519.pub.der:ED25519 Public-Key:"], "cur": [], "mark": [], "done": []}, "done": [0, 1], "mark": [2, 3, 4, 5], "kv": {"items": [["私钥格式", "PKCS#8(RSA 1217 / EC 67 / Ed25519 48 字节)"], ["公钥格式", "X.509"], ["OpenSSL", "pkey -inform DER 直接读取"]], "hl": ["OpenSSL"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / OpenJDK(Temurin 17.0.20、Homebrew 21.0.12 与 27,每篇注明实际用的版本);用 javac 编译、java 直接运行,需要第三方库时用 Maven 解析依赖;计时用 System.nanoTime,数字每次运行会有小幅抖动。JDK 17.0.20(默认值)、21.0.12(其余)、27(默认值);OpenSSL 4.0.3;耗时是自写的 nanoTime 循环,次数见各行</li><li>没有验证:Windows 与 Linux 上 NativePRNG 的差异、PKCS#11 与 HSM 提供者、BouncyCastle 的 KeyPairGenerator、RSA 超过 8192 位的实际生成、FIPS 模式、JDK 22–26 的默认值变化的具体版本</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="java-certificate-transparency.html">
+    <div>
+      <div class="t1">下一篇 · JAVA 412</div>
+      <div class="t2">证书透明度:如何验证证书发布记录</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Java · KeyPairGenerator:生成公钥和私钥 · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

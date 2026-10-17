@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>CRL 与 OCSP:证书撤销状态</title>
+<meta name="description" content="在 JDK 21 上用 openssl 现场建 CA、签发与吊销证书,并起真实的 CRL HTTP 服务器与 openssl ocsp 响应器:CRL 过期被当作没有(UNDETERMINED);PKIXRevocationChecker 不需要 enableCRLDP,默认 PKIXParameters 需要;OCSP 每次验证发一次请求;响应器停掉时默认回退到 CRL、NO_FALLBACK 报 UNDETERMINED、SOFT_FAIL 会放行已吊销的证书;2 万条的 CRL 为 707986 字节。">
+<link rel="canonical" href="https://bigywater.tech/java-crl-ocsp.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="CRL 与 OCSP:证书撤销状态">
+<meta property="og:description" content="在 JDK 21 上用 openssl 现场建 CA、签发与吊销证书,并起真实的 CRL HTTP 服务器与 openssl ocsp 响应器:CRL 过期被当作没有(UNDETERMINED);PKIXRevocationChecker 不需要 enableCRLDP,默认 PKIXParameters 需要;OCSP 每次验证发一次请求;响应器停掉时默认回退到 CRL、NO_FALLBACK 报 UNDETERMINED、SOFT_FAIL 会放行已吊销的证书;2 万条的 CRL 为 707986 字节。">
+<meta property="og:url" content="https://bigywater.tech/java-crl-ocsp.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="CRL 与 OCSP:证书撤销状态">
+<meta name="twitter:description" content="在 JDK 21 上用 openssl 现场建 CA、签发与吊销证书,并起真实的 CRL HTTP 服务器与 openssl ocsp 响应器:CRL 过期被当作没有(UNDETERMINED);PKIXRevocationChecker 不需要 enableCRLDP,默认 PKIXParameters 需要;OCSP 每次验证发一次请求;响应器停掉时默认回退到 CRL、NO_FALLBACK 报 UNDETERMINED、SOFT_FAIL 会放行已吊销的证书;2 万条的 CRL 为 707986 字节。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">1861</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">358</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#B85C00; --series-c-soft:#FBE7D1;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#F29A4A; --series-c-soft:#3B2208;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#F29A4A; --series-c-soft:#3B2208;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Java · 358</div>
+  <h1>CRL 与 OCSP:证书撤销状态</h1>
+  <p>证书吊销检查的结果不只是「好」与「坏」,还有「查不到」。这篇在本机搭起真实的 CRL 与 OCSP 服务,把各种选项在服务正常、过期、停掉时的行为逐个跑出来。</p>
+  <div class="hero-fact">
+<div><div class="num">SOFT_FAIL 放行</div><div class="lbl">响应器停掉时,SOFT_FAIL 让已吊销的 leaf2 也通过验证(记录 1 条软失败)</div></div><div><div class="num">0 → 1 次</div><div class="lbl">默认 PKIXParameters 不加 enableCRLDP 时 CRL 服务器收到的请求(0),与加上之后(1)</div></div><div><div class="num">268 → 707986 字节</div><div class="lbl">2 条与 20002 条吊销记录的 CRL 大小</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="java-certificate-factory.html">CertificateFactory:从字节流读取证书链</a></div>
+<section>
+  <h2>CRL 文件本身</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [crl]
+    CRL:发布者 O=Demo,CN=Revoke Test CA;thisUpdate 2026-10-03T19:21:59Z;nextUpdate 2026-10-10T19:21:59Z;签名算法 SHA256withECDSA;版本 2;DER 长度 268
+    已吊销条目数 2
+        序列号 1001;吊销时间 2026-10-03T19:21:59Z;原因 KEY_COMPROMISE;扩展 OID [2.5.29.21]
+        序列号 1004;吊销时间 2026-10-03T19:21:59Z;原因 CESSATION_OF_OPERATION;扩展 OID [2.5.29.21]
+    用 CA 公钥验证 CRL 签名:通过
+        c.isRevoked(leaf1,    序列号 1000) = false
+        c.isRevoked(leaf2,    序列号 1001) = true
+        c.isRevoked(leaf3,    序列号 1002) = false
+        c.isRevoked(leafplain, 序列号 1003) = false
+    用错误的公钥验证 CRL 签名 → SignatureException: Signature does not match.
+    leaf1 的 CRL 分发点扩展:true;AIA(1.3.6.1.5.5.7.1.1)扩展:true;leafplain 两者:false/false
+    过期 CRL:thisUpdate 2026-09-01T00:00:00Z;nextUpdate 2026-09-02T00:00:00Z
+    → 本次运行里:CRL 服务器收到 GET /ca.crl 0 次,OCSP 响应器收到请求 0 次(JVM 总耗时 0.1 s)</pre></div>
+</section>
+<section>
+  <h2>只用本地 CRL</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [local2]
+    (leafplain / leafrev 没有 CRL 分发点与 AIA 扩展,leafrev 已被吊销,原因 cessationOfOperation)
+        本地有效 CRL:leafplain → 通过(41 ms)
+        本地有效 CRL:leafrev   → 失败:REVOKED ← CertificateRevokedException: Certificate has been revoked, reason: CESSATION_OF_OPERATION, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo, CN=Revoke Test CA, extension OIDs: [2.5.29.21];消息:Certificate has been revoked, reason: CESSATION_OF_OPERATION, revocation date: Sun Oct 04 03:
+        本地 CRL 已过期:leafplain → 失败:UNDETERMINED_REVOCATION_STATUS ← CertPathValidatorException: Could not determine revocation status;消息:Could not determine revocation status
+        本地 CRL 已过期:leafrev   → 失败:UNDETERMINED_REVOCATION_STATUS ← CertPathValidatorException: Could not determine revocation status;消息:Could not determine revocation status
+        本地没有 CRL:leafplain → 失败:UNDETERMINED_REVOCATION_STATUS ← CertPathValidatorException: Could not determine revocation status;消息:Could not determine revocation status
+        本地没有 CRL:leafrev   → 失败:UNDETERMINED_REVOCATION_STATUS ← CertPathValidatorException: Could not determine revocation status;消息:Could not determine revocation status
+        本地没有 CRL + SOFT_FAIL:leafplain → 通过(0 ms);软失败 1 条:[Could not determine revocation status]
+        本地没有 CRL + SOFT_FAIL:leafrev   → 通过(0 ms);软失败 1 条:[Could not determine revocation status]
+        本地 CRL 已过期 + SOFT_FAIL:leafplain → 通过(0 ms);软失败 1 条:[Could not determine revocation status]
+        本地 CRL 已过期 + SOFT_FAIL:leafrev   → 通过(0 ms);软失败 1 条:[Could not determine revocation status]
+    本地有效 CRL + 验证时间设为 CRL 签发之前一天(2026-10-02):leafrev → 失败:NOT_YET_VALID ← CertificateNotYetValidException: NotBefore: Sun Oct 04 03:21:59 CST 2026;消息:validity check failed
+    → 本次运行里:CRL 服务器收到 GET /ca.crl 0 次,OCSP 响应器收到请求 0 次(JVM 总耗时 0.2 s)</pre></div>
+</section>
+<section>
+  <h2>CRL 分发点</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [PKIXRevocationChecker(PREFER_CRLS + NO_FALLBACK),不加 JVM 参数]
+        leaf1     → 通过(55 ms)
+        leaf2     → 失败:REVOKED ← CertificateRevokedException: Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo, CN=Revoke Test CA, extension OIDs: [2.5.29.21];消息:Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority
+        leaf3     → 通过(1 ms)
+        leafplain → 失败:UNDETERMINED_REVOCATION_STATUS ← CertPathValidatorException: Could not determine revocation status;消息:Could not determine revocation status
+    → 本次运行里:CRL 服务器收到 GET /ca.crl 1 次,OCSP 响应器收到请求 0 次(JVM 总耗时 0.2 s)
+  [同上 + -Dcom.sun.security.enableCRLDP=true](JVM 参数 -Dcom.sun.security.enableCRLDP=true)
+        leaf1     → 通过(52 ms)
+        leaf2     → 失败:REVOKED ← CertificateRevokedException: Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo, CN=Revoke Test CA, extension OIDs: [2.5.29.21];消息:Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority
+        leaf3     → 通过(1 ms)
+        leafplain → 失败:UNDETERMINED_REVOCATION_STATUS ← CertPathValidatorException: Could not determine revocation status;消息:Could not determine revocation status
+    → 本次运行里:CRL 服务器收到 GET /ca.crl 1 次,OCSP 响应器收到请求 0 次(JVM 总耗时 0.2 s)
+  [同一 JVM 内验证两遍]
+        leaf1     → 通过(50 ms)
+        leaf2     → 失败:REVOKED ← CertificateRevokedException: Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo, CN=Revoke Test CA, extension OIDs: [2.5.29.21];消息:Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority
+        (同一 JVM 内第 2 次)leaf1     → 通过(0 ms)
+        (同一 JVM 内第 2 次)leaf2     → 失败:REVOKED ← CertificateRevokedException: Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo, CN=Revoke Test CA, extension OIDs: [2.5.29.21];消息:Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 
+    → 本次运行里:CRL 服务器收到 GET /ca.crl 1 次,OCSP 响应器收到请求 0 次(JVM 总耗时 0.2 s)
+  [默认 PKIXParameters(无 checker),不加 JVM 参数]
+        默认 PKIXParameters leaf1     → 失败:UNDETERMINED_REVOCATION_STATUS ← CertPathValidatorException: Could not determine revocation status
+        默认 PKIXParameters leaf2     → 失败:UNDETERMINED_REVOCATION_STATUS ← CertPathValidatorException: Could not determine revocation status
+        默认 PKIXParameters leafplain → 失败:UNDETERMINED_REVOCATION_STATUS ← CertPathValidatorException: Could not determine revocation status
+    → 本次运行里:CRL 服务器收到 GET /ca.crl 0 次,OCSP 响应器收到请求 0 次(JVM 总耗时 0.2 s)
+  [默认 PKIXParameters(无 checker)+ enableCRLDP=true](JVM 参数 -Dcom.sun.security.enableCRLDP=true)
+        默认 PKIXParameters(revocationEnabled = true,没有自定义 checker)leaf1     → 通过(51 ms)
+        默认 PKIXParameters leaf2     → 失败:REVOKED ← CertificateRevokedException: Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo, CN=Revoke Test CA, extension OIDs: [2.5.29.21]
+        默认 PKIXParameters leafplain → 失败:UNDETERMINED_REVOCATION_STATUS ← CertPathValidatorException: Could not determine revocation status
+    → 本次运行里:CRL 服务器收到 GET /ca.crl 1 次,OCSP 响应器收到请求 0 次(JVM 总耗时 0.2 s)</pre></div>
+</section>
+<section>
+  <h2>OCSP</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [ocsp(NO_FALLBACK,只用 OCSP)]
+        leaf1     → 通过(53 ms)
+        leaf2     → 失败:REVOKED ← CertificateRevokedException: Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo, CN=Revoke Test CA, extension OIDs: [];消息:Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo,
+        leaf3     → 通过(3 ms)
+        leafplain → 失败:UNSPECIFIED ← CertPathValidatorException: Certificate does not specify OCSP responder;消息:Certificate does not specify OCSP responder
+    → 本次运行里:CRL 服务器收到 GET /ca.crl 0 次,OCSP 响应器收到请求 3 次(JVM 总耗时 0.2 s)
+  [ocsp,同一 JVM 内再验证一遍]
+        leaf1     → 通过(49 ms)
+        leaf2     → 失败:REVOKED ← CertificateRevokedException: Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo, CN=Revoke Test CA, extension OIDs: [];消息:Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo,
+        (同一 JVM 内第 2 次)leaf1     → 通过(2 ms)
+        (同一 JVM 内第 2 次)leaf2     → 失败:REVOKED ← CertificateRevokedException: Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo, CN=Revoke Test CA, extension OIDs: [];消息:Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, aut
+    → 本次运行里:CRL 服务器收到 GET /ca.crl 0 次,OCSP 响应器收到请求 4 次(JVM 总耗时 0.2 s)
+  [默认选项(OCSP 优先,失败回退 CRL)]
+        leaf1     → 通过(49 ms)
+        leaf2     → 失败:REVOKED ← CertificateRevokedException: Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo, CN=Revoke Test CA, extension OIDs: [];消息:Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo,
+        leaf3     → 通过(3 ms)
+        leafplain → 失败:UNSPECIFIED ← CertPathValidatorException: Certificate does not specify OCSP responder;消息:Certificate does not specify OCSP responder
+    → 本次运行里:CRL 服务器收到 GET /ca.crl 0 次,OCSP 响应器收到请求 3 次(JVM 总耗时 0.2 s)</pre></div>
+</section>
+<section>
+  <h2>OCSP 响应器停掉之后</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [OCSP 响应器已停,NO_FALLBACK]
+        leaf1     → 失败:UNDETERMINED_REVOCATION_STATUS ← ConnectException: Connection refused;消息:Unable to determine revocation status due to network error
+        leaf2     → 失败:UNDETERMINED_REVOCATION_STATUS ← ConnectException: Connection refused;消息:Unable to determine revocation status due to network error
+    → 本次运行里:CRL 服务器收到 GET /ca.crl 0 次,OCSP 响应器收到请求 0 次(JVM 总耗时 0.2 s)
+  [OCSP 响应器已停,默认选项]
+        leaf1     → 通过(52 ms)
+        leaf2     → 失败:REVOKED ← CertificateRevokedException: Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo, CN=Revoke Test CA, extension OIDs: [2.5.29.21];消息:Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority
+    → 本次运行里:CRL 服务器收到 GET /ca.crl 1 次,OCSP 响应器收到请求 0 次(JVM 总耗时 0.2 s)
+  [OCSP 响应器已停,NO_FALLBACK + SOFT_FAIL]
+        leaf1     → 通过(44 ms);软失败 1 条:[Unable to determine revocation status due to network error]
+        leaf2     → 通过(4 ms);软失败 1 条:[Unable to determine revocation status due to network error]
+        leafrev   → 失败:UNSPECIFIED ← CertPathValidatorException: Certificate does not specify OCSP responder;消息:Certificate does not specify OCSP responder
+    → 本次运行里:CRL 服务器收到 GET /ca.crl 0 次,OCSP 响应器收到请求 0 次(JVM 总耗时 0.2 s)</pre></div>
+</section>
+<section>
+  <h2>CRL 的体积</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [小 CRL(2 条)]
+    CRL 文件 ca.crl.der:DER 长度 268 字节;已吊销条目 2;解析耗时 2 ms
+    10000 次 isRevoked(leaf1) 总耗时 6 ms(结果 false)
+    getRevokedCertificate(leaf1 序列号) = null;一次耗时 0.01 ms
+        第 1 次(本地 CertStore)验证 leaf1 → 通过(9 ms)
+        第 2 次(本地 CertStore)验证 leaf1 → 通过(0 ms)
+        第 3 次(本地 CertStore)验证 leaf1 → 通过(0 ms)
+    → 本次运行里:CRL 服务器收到 GET /ca.crl 0 次,OCSP 响应器收到请求 0 次(JVM 总耗时 0.1 s)
+  [大 CRL(20002 条)]
+    CRL 文件 big.crl:DER 长度 707986 字节;已吊销条目 20002;解析耗时 61 ms
+    10000 次 isRevoked(leaf1) 总耗时 5 ms(结果 false)
+    getRevokedCertificate(leaf1 序列号) = null;一次耗时 0.01 ms
+        第 1 次(本地 CertStore)验证 leaf1 → 通过(13 ms)
+        第 2 次(本地 CertStore)验证 leaf1 → 通过(1 ms)
+        第 3 次(本地 CertStore)验证 leaf1 → 通过(1 ms)
+    → 本次运行里:CRL 服务器收到 GET /ca.crl 0 次,OCSP 响应器收到请求 0 次(JVM 总耗时 0.3 s)
+  [CRL 分发点改为 20002 条的大 CRL 之后再验证]
+        leaf1     → 通过(128 ms)
+        leaf2     → 失败:REVOKED ← CertificateRevokedException: Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo, CN=Revoke Test CA, extension OIDs: [2.5.29.21];消息:Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority
+    → 本次运行里:CRL 服务器收到 GET /ca.crl 1 次,OCSP 响应器收到请求 0 次(JVM 总耗时 0.2 s)
+  收尾:CRL 与 OCSP 服务已停止</pre></div>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">CRL 与 OCSP</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "用 openssl 建一个 EC P-256 的 CA,签发 leaf1(有 CRL 分发点与 AIA/OCSP 扩展)、leaf2(同样有,随后以 keyCompromise 吊销)、leaf3、leafplain(没有这两个扩展)、leafrev(没有扩展,以 cessationOfOperation 吊销),再生成 CRL。Java 读到的 CRL:DER 268 字节,版本 2,SHA256withECDSA,thisUpdate 2026-10-03T19:21:59Z,nextUpdate 2026-10-10T19:21:59Z(默认 7 天);已吊销 2 条:序列号 1001(KEY_COMPROMISE)与 1004(CESSATION_OF_OPERATION),扩展 OID 2.5.29.21(原因码)。用 CA 公钥 verify 通过;用 leaf1 的公钥 verify → SignatureException: Signature does not match。isRevoked:leaf2 为 true,leaf1、leaf3、leafplain 为 false。", "s": {"t": {"lines": ["  [crl]", "    CRL:发布者 O=Demo,CN=Revoke Test CA;thisUpdate 2026-10-03T19:21:59Z;nextUpdate 2026-10-10T19:21:59Z;签名算法 SHA256withECDSA;版本 2;DER 长度 268", "    已吊销条目数 2", "        序列号 1001;吊销时间 2026-10-03T19:21:59Z;原因 KEY_COMPROMISE;扩展 OID [2.5.29.21]", "        序列号 1004;吊销时间 2026-10-03T19:21:59Z;原因 CESSATION_OF_OPERATION;扩展 OID [2.5.29.21]", "    用 CA 公钥验证 CRL 签名:通过", "        c.isRevoked(leaf1,    序列号 1000) = false", "        c.isRevoked(leaf2,    序列号 1001) = true", "        c.isRevoked(leaf3,    序列号 1002) = false", "        c.isRevoked(leafplain, 序列号 1003) = false", "    用错误的公钥验证 CRL 签名 → SignatureException: Signature does not match.", "    leaf1 的 CRL 分发点扩展:true;AIA(1.3.6.1.5.5.7.1.1)扩展:true;leafplain 两者:false/false", "    过期 CRL:thisUpdate 2026-09-01T00:00:00Z;nextUpdate 2026-09-02T00:00:00Z", "    → 本次运行里:CRL 服务器收到 GET /ca.crl 0 次,OCSP 响应器收到请求 0 次(JVM 总耗时 0.1 s)"], "cur": [], "mark": [], "done": []}, "done": [1, 2, 5], "mark": [3, 4, 7, 10], "kv": {"items": [["CRL 大小", "268 字节,2 条"], ["有效期", "nextUpdate = thisUpdate + 7 天"], ["错误公钥验证", "SignatureException"]], "hl": ["CRL 大小"]}}}, {"note": "证书里的扩展:leaf1 有 CRL 分发点扩展(2.5.29.31)与 AIA 扩展(1.3.6.1.5.5.7.1.1)——都为 true;leafplain 两者都是 false。另外生成了一份已过期的 CRL(thisUpdate 2026-09-01、nextUpdate 2026-09-02),用来测试过期处理。", "s": {"t": {"lines": ["  [crl]", "    CRL:发布者 O=Demo,CN=Revoke Test CA;thisUpdate 2026-10-03T19:21:59Z;nextUpdate 2026-10-10T19:21:59Z;签名算法 SHA256withECDSA;版本 2;DER 长度 268", "    已吊销条目数 2", "        序列号 1001;吊销时间 2026-10-03T19:21:59Z;原因 KEY_COMPROMISE;扩展 OID [2.5.29.21]", "        序列号 1004;吊销时间 2026-10-03T19:21:59Z;原因 CESSATION_OF_OPERATION;扩展 OID [2.5.29.21]", "    用 CA 公钥验证 CRL 签名:通过", "        c.isRevoked(leaf1,    序列号 1000) = false", "        c.isRevoked(leaf2,    序列号 1001) = true", "        c.isRevoked(leaf3,    序列号 1002) = false", "        c.isRevoked(leafplain, 序列号 1003) = false", "    用错误的公钥验证 CRL 签名 → SignatureException: Signature does not match.", "    leaf1 的 CRL 分发点扩展:true;AIA(1.3.6.1.5.5.7.1.1)扩展:true;leafplain 两者:false/false", "    过期 CRL:thisUpdate 2026-09-01T00:00:00Z;nextUpdate 2026-09-02T00:00:00Z", "    → 本次运行里:CRL 服务器收到 GET /ca.crl 0 次,OCSP 响应器收到请求 0 次(JVM 总耗时 0.1 s)"], "cur": [], "mark": [], "done": []}, "done": [11], "mark": [11, 12], "kv": {"items": [["leaf1", "有 CDP + AIA"], ["leafplain / leafrev", "没有 CDP,没有 AIA"]], "hl": ["leaf1"]}}}, {"note": "只靠本地 CRL(通过 CertStore 提供,验证对象 leafplain 与 leafrev 都没有 CRL 分发点):有效 CRL → leafplain 通过,leafrev 失败 REVOKED(reason: CESSATION_OF_OPERATION);本地 CRL 已过期 → 两者都是 UNDETERMINED_REVOCATION_STATUS(“Could not determine revocation status”)——过期的 CRL 被当作没有;本地没有 CRL → 同样 UNDETERMINED;加上 SOFT_FAIL:没有 CRL 时 leafplain 与 leafrev 都通过,各记录 1 条软失败(Could not determine revocation status)——已吊销的 leafrev 也通过了。验证时间设为 CRL 签发之前一天:NOT_YET_VALID(证书本身还没生效)。", "s": {"t": {"lines": ["  [local2]", "    (leafplain / leafrev 没有 CRL 分发点与 AIA 扩展,leafrev 已被吊销,原因 cessationOfOperation)", "        本地有效 CRL:leafplain → 通过(41 ms)", "        本地有效 CRL:leafrev   → 失败:REVOKED ← CertificateRevokedException: Certificate has been revoked, reason: CESSATION_OF_OPERATION, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo, CN=Revoke Test CA, extension OIDs: [2.5.29.21];消息:Certificate has been revoked, reason: CESSATION_OF_OPERATION, revocation date: Sun Oct 04 03:", "        本地 CRL 已过期:leafplain → 失败:UNDETERMINED_REVOCATION_STATUS ← CertPathValidatorException: Could not determine revocation status;消息:Could not determine revocation status", "        本地 CRL 已过期:leafrev   → 失败:UNDETERMINED_REVOCATION_STATUS ← CertPathValidatorException: Could not determine revocation status;消息:Could not determine revocation status", "        本地没有 CRL:leafplain → 失败:UNDETERMINED_REVOCATION_STATUS ← CertPathValidatorException: Could not determine revocation status;消息:Could not determine revocation status", "        本地没有 CRL:leafrev   → 失败:UNDETERMINED_REVOCATION_STATUS ← CertPathValidatorException: Could not determine revocation status;消息:Could not determine revocation status", "        本地没有 CRL + SOFT_FAIL:leafplain → 通过(0 ms);软失败 1 条:[Could not determine revocation status]", "        本地没有 CRL + SOFT_FAIL:leafrev   → 通过(0 ms);软失败 1 条:[Could not determine revocation status]", "        本地 CRL 已过期 + SOFT_FAIL:leafplain → 通过(0 ms);软失败 1 条:[Could not determine revocation status]", "        本地 CRL 已过期 + SOFT_FAIL:leafrev   → 通过(0 ms);软失败 1 条:[Could not determine revocation status]", "    本地有效 CRL + 验证时间设为 CRL 签发之前一天(2026-10-02):leafrev → 失败:NOT_YET_VALID ← CertificateNotYetValidException: NotBefore: Sun Oct 04 03:21:59 CST 2026;消息:validity check failed", "    → 本次运行里:CRL 服务器收到 GET /ca.crl 0 次,OCSP 响应器收到请求 0 次(JVM 总耗时 0.2 s)"], "cur": [], "mark": [], "done": []}, "done": [2, 3, 4, 6], "mark": [9, 11, 12], "kv": {"items": [["CRL 过期", "当作没有 → UNDETERMINED"], ["没有 CRL + SOFT_FAIL", "已吊销的 leafrev 也通过(1 条软失败)"]], "hl": ["没有 CRL + SOFT_FAIL"]}}}, {"note": "CRL 分发点(证书里的 URL 指向本机 http.server 提供的 ca.crl):用 PKIXRevocationChecker(PREFER_CRLS + NO_FALLBACK)验证,不需要任何 JVM 参数:leaf1 通过(55 ms,含首次类加载),leaf2 REVOKED,leaf3 通过,leafplain UNDETERMINED(没有分发点);CRL 服务器日志里 4 次验证只收到 1 次 GET /ca.crl;加 -Dcom.sun.security.enableCRLDP=true 结果与取回次数不变(1 次)。同一个 JVM 里再验证一遍:leaf1 0 ms,CRL 服务器仍只收到 1 次——CRL 在 JVM 里被缓存。", "s": {"t": {"lines": ["  [PKIXRevocationChecker(PREFER_CRLS + NO_FALLBACK),不加 JVM 参数]", "        leaf1     → 通过(55 ms)", "        leaf2     → 失败:REVOKED ← CertificateRevokedException: Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo, CN=Revoke Test CA, extension OIDs: [2.5.29.21];消息:Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority", "        leaf3     → 通过(1 ms)", "        leafplain → 失败:UNDETERMINED_REVOCATION_STATUS ← CertPathValidatorException: Could not determine revocation status;消息:Could not determine revocation status", "    → 本次运行里:CRL 服务器收到 GET /ca.crl 1 次,OCSP 响应器收到请求 0 次(JVM 总耗时 0.2 s)", "  [同上 + -Dcom.sun.security.enableCRLDP=true](JVM 参数 -Dcom.sun.security.enableCRLDP=true)", "        leaf1     → 通过(52 ms)", "        leaf2     → 失败:REVOKED ← CertificateRevokedException: Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo, CN=Revoke Test CA, extension OIDs: [2.5.29.21];消息:Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority", "        leaf3     → 通过(1 ms)", "        leafplain → 失败:UNDETERMINED_REVOCATION_STATUS ← CertPathValidatorException: Could not determine revocation status;消息:Could not determine revocation status", "    → 本次运行里:CRL 服务器收到 GET /ca.crl 1 次,OCSP 响应器收到请求 0 次(JVM 总耗时 0.2 s)", "  [同一 JVM 内验证两遍]", "        leaf1     → 通过(50 ms)", "        leaf2     → 失败:REVOKED ← CertificateRevokedException: Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo, CN=Revoke Test CA, extension OIDs: [2.5.29.21];消息:Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority", "        (同一 JVM 内第 2 次)leaf1     → 通过(0 ms)", "        (同一 JVM 内第 2 次)leaf2     → 失败:REVOKED ← CertificateRevokedException: Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo, CN=Revoke Test CA, extension OIDs: [2.5.29.21];消息:Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST ", "    → 本次运行里:CRL 服务器收到 GET /ca.crl 1 次,OCSP 响应器收到请求 0 次(JVM 总耗时 0.2 s)", "  [默认 PKIXParameters(无 checker),不加 JVM 参数]", "        默认 PKIXParameters leaf1     → 失败:UNDETERMINED_REVOCATION_STATUS ← CertPathValidatorException: Could not determine revocation status", "        默认 PKIXParameters leaf2     → 失败:UNDETERMINED_REVOCATION_STATUS ← CertPathValidatorException: Could not determine revocation status", "        默认 PKIXParameters leafplain → 失败:UNDETERMINED_REVOCATION_STATUS ← CertPathValidatorException: Could not determine revocation status", "    → 本次运行里:CRL 服务器收到 GET /ca.crl 0 次,OCSP 响应器收到请求 0 次(JVM 总耗时 0.2 s)", "  [默认 PKIXParameters(无 checker)+ enableCRLDP=true](JVM 参数 -Dcom.sun.security.enableCRLDP=true)", "        默认 PKIXParameters(revocationEnabled = true,没有自定义 checker)leaf1     → 通过(51 ms)", "        默认 PKIXParameters leaf2     → 失败:REVOKED ← CertificateRevokedException: Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo, CN=Revoke Test CA, extension OIDs: [2.5.29.21]", "        默认 PKIXParameters leafplain → 失败:UNDETERMINED_REVOCATION_STATUS ← CertPathValidatorException: Could not determine revocation status", "    → 本次运行里:CRL 服务器收到 GET /ca.crl 1 次,OCSP 响应器收到请求 0 次(JVM 总耗时 0.2 s)"], "cur": [], "mark": [], "done": []}, "done": [0, 1, 4, 7, 10, 13, 15, 21, 24, 26], "mark": [6, 12, 15], "kv": {"items": [["checker + 分发点", "不需要 enableCRLDP,CRL 服务器收到 1 次"], ["同一 JVM 再验证", "不再请求(缓存)"]], "hl": ["checker + 分发点"]}}}, {"note": "同样的证书,但用默认的 PKIXParameters(revocationEnabled = true,没有自定义 checker):不加 JVM 参数,leaf1、leaf2、leafplain 全部 UNDETERMINED_REVOCATION_STATUS,CRL 服务器收到 0 次;加 -Dcom.sun.security.enableCRLDP=true 后 leaf1 通过(51 ms)、leaf2 REVOKED、leafplain 仍 UNDETERMINED,CRL 服务器收到 1 次。所以 com.sun.security.enableCRLDP 只影响默认的修订检查,PKIXRevocationChecker 不需要它。", "s": {"t": {"lines": ["  [PKIXRevocationChecker(PREFER_CRLS + NO_FALLBACK),不加 JVM 参数]", "        leaf1     → 通过(55 ms)", "        leaf2     → 失败:REVOKED ← CertificateRevokedException: Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo, CN=Revoke Test CA, extension OIDs: [2.5.29.21];消息:Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority", "        leaf3     → 通过(1 ms)", "        leafplain → 失败:UNDETERMINED_REVOCATION_STATUS ← CertPathValidatorException: Could not determine revocation status;消息:Could not determine revocation status", "    → 本次运行里:CRL 服务器收到 GET /ca.crl 1 次,OCSP 响应器收到请求 0 次(JVM 总耗时 0.2 s)", "  [同上 + -Dcom.sun.security.enableCRLDP=true](JVM 参数 -Dcom.sun.security.enableCRLDP=true)", "        leaf1     → 通过(52 ms)", "        leaf2     → 失败:REVOKED ← CertificateRevokedException: Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo, CN=Revoke Test CA, extension OIDs: [2.5.29.21];消息:Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority", "        leaf3     → 通过(1 ms)", "        leafplain → 失败:UNDETERMINED_REVOCATION_STATUS ← CertPathValidatorException: Could not determine revocation status;消息:Could not determine revocation status", "    → 本次运行里:CRL 服务器收到 GET /ca.crl 1 次,OCSP 响应器收到请求 0 次(JVM 总耗时 0.2 s)", "  [同一 JVM 内验证两遍]", "        leaf1     → 通过(50 ms)", "        leaf2     → 失败:REVOKED ← CertificateRevokedException: Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo, CN=Revoke Test CA, extension OIDs: [2.5.29.21];消息:Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority", "        (同一 JVM 内第 2 次)leaf1     → 通过(0 ms)", "        (同一 JVM 内第 2 次)leaf2     → 失败:REVOKED ← CertificateRevokedException: Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo, CN=Revoke Test CA, extension OIDs: [2.5.29.21];消息:Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST ", "    → 本次运行里:CRL 服务器收到 GET /ca.crl 1 次,OCSP 响应器收到请求 0 次(JVM 总耗时 0.2 s)", "  [默认 PKIXParameters(无 checker),不加 JVM 参数]", "        默认 PKIXParameters leaf1     → 失败:UNDETERMINED_REVOCATION_STATUS ← CertPathValidatorException: Could not determine revocation status", "        默认 PKIXParameters leaf2     → 失败:UNDETERMINED_REVOCATION_STATUS ← CertPathValidatorException: Could not determine revocation status", "        默认 PKIXParameters leafplain → 失败:UNDETERMINED_REVOCATION_STATUS ← CertPathValidatorException: Could not determine revocation status", "    → 本次运行里:CRL 服务器收到 GET /ca.crl 0 次,OCSP 响应器收到请求 0 次(JVM 总耗时 0.2 s)", "  [默认 PKIXParameters(无 checker)+ enableCRLDP=true](JVM 参数 -Dcom.sun.security.enableCRLDP=true)", "        默认 PKIXParameters(revocationEnabled = true,没有自定义 checker)leaf1     → 通过(51 ms)", "        默认 PKIXParameters leaf2     → 失败:REVOKED ← CertificateRevokedException: Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo, CN=Revoke Test CA, extension OIDs: [2.5.29.21]", "        默认 PKIXParameters leafplain → 失败:UNDETERMINED_REVOCATION_STATUS ← CertPathValidatorException: Could not determine revocation status", "    → 本次运行里:CRL 服务器收到 GET /ca.crl 1 次,OCSP 响应器收到请求 0 次(JVM 总耗时 0.2 s)"], "cur": [], "mark": [], "done": []}, "done": [18, 19], "mark": [20, 23, 25], "kv": {"items": [["默认 PKIXParameters,无参数", "全部 UNDETERMINED,0 次请求"], ["加 enableCRLDP=true", "leaf1 通过,leaf2 REVOKED,1 次请求"]], "hl": ["默认 PKIXParameters,无参数"]}}}, {"note": "OCSP(AIA 指向本机的 openssl ocsp -index 响应器,NO_FALLBACK 只用 OCSP):leaf1 通过(53 ms,首次含类加载)、leaf2 REVOKED(reason: KEY_COMPROMISE,异常里没有 CRL 的扩展 OID)、leaf3 通过、leafplain 失败 UNSPECIFIED(“Certificate does not specify OCSP responder”);响应器收到 3 次请求(leafplain 没有发请求),CRL 服务器 0 次。同一个 JVM 内连续验证两遍(leaf1、leaf2 各两次):响应器共收到 4 次请求——没有缓存,每次验证都发一次。默认选项的结果与 NO_FALLBACK 一样(leafplain 同样 UNSPECIFIED)。", "s": {"t": {"lines": ["  [ocsp(NO_FALLBACK,只用 OCSP)]", "        leaf1     → 通过(53 ms)", "        leaf2     → 失败:REVOKED ← CertificateRevokedException: Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo, CN=Revoke Test CA, extension OIDs: [];消息:Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo,", "        leaf3     → 通过(3 ms)", "        leafplain → 失败:UNSPECIFIED ← CertPathValidatorException: Certificate does not specify OCSP responder;消息:Certificate does not specify OCSP responder", "    → 本次运行里:CRL 服务器收到 GET /ca.crl 0 次,OCSP 响应器收到请求 3 次(JVM 总耗时 0.2 s)", "  [ocsp,同一 JVM 内再验证一遍]", "        leaf1     → 通过(49 ms)", "        leaf2     → 失败:REVOKED ← CertificateRevokedException: Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo, CN=Revoke Test CA, extension OIDs: [];消息:Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo,", "        (同一 JVM 内第 2 次)leaf1     → 通过(2 ms)", "        (同一 JVM 内第 2 次)leaf2     → 失败:REVOKED ← CertificateRevokedException: Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo, CN=Revoke Test CA, extension OIDs: [];消息:Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, aut", "    → 本次运行里:CRL 服务器收到 GET /ca.crl 0 次,OCSP 响应器收到请求 4 次(JVM 总耗时 0.2 s)", "  [默认选项(OCSP 优先,失败回退 CRL)]", "        leaf1     → 通过(49 ms)", "        leaf2     → 失败:REVOKED ← CertificateRevokedException: Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo, CN=Revoke Test CA, extension OIDs: [];消息:Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo,", "        leaf3     → 通过(3 ms)", "        leafplain → 失败:UNSPECIFIED ← CertPathValidatorException: Certificate does not specify OCSP responder;消息:Certificate does not specify OCSP responder", "    → 本次运行里:CRL 服务器收到 GET /ca.crl 0 次,OCSP 响应器收到请求 3 次(JVM 总耗时 0.2 s)"], "cur": [], "mark": [], "done": []}, "done": [0, 1, 3, 7, 9, 13, 15], "mark": [4, 6, 10, 12, 16], "b": {"items": [["单次运行验证 leaf1/2/3:OCSP 请求", 3, "3"], ["同一 JVM 验证 leaf1/2 各两次:OCSP 请求", 4, "4"]], "max": 4, "cur": [], "mark": [], "done": [0, 1]}, "kv": {"items": [["leaf2(已吊销)", "REVOKED,reason: KEY_COMPROMISE"], ["leafplain(无 AIA)", "UNSPECIFIED: Certificate does not specify OCSP responder"], ["请求次数", "每次验证 1 次,不缓存"]], "hl": ["请求次数"]}}}, {"note": "停掉 OCSP 响应器:NO_FALLBACK → leaf1、leaf2 都是 UNDETERMINED_REVOCATION_STATUS(ConnectException: Connection refused;“Unable to determine revocation status due to network error”),CRL 服务器 0 次;默认选项 → 回退到 CRL:CRL 服务器收到 1 次 GET /ca.crl,leaf1 通过(52 ms)、leaf2 REVOKED(这次的 reason 附带 CRL 扩展 OID 2.5.29.21)。", "s": {"t": {"lines": ["  [OCSP 响应器已停,NO_FALLBACK]", "        leaf1     → 失败:UNDETERMINED_REVOCATION_STATUS ← ConnectException: Connection refused;消息:Unable to determine revocation status due to network error", "        leaf2     → 失败:UNDETERMINED_REVOCATION_STATUS ← ConnectException: Connection refused;消息:Unable to determine revocation status due to network error", "    → 本次运行里:CRL 服务器收到 GET /ca.crl 0 次,OCSP 响应器收到请求 0 次(JVM 总耗时 0.2 s)", "  [OCSP 响应器已停,默认选项]", "        leaf1     → 通过(52 ms)", "        leaf2     → 失败:REVOKED ← CertificateRevokedException: Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo, CN=Revoke Test CA, extension OIDs: [2.5.29.21];消息:Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority", "    → 本次运行里:CRL 服务器收到 GET /ca.crl 1 次,OCSP 响应器收到请求 0 次(JVM 总耗时 0.2 s)", "  [OCSP 响应器已停,NO_FALLBACK + SOFT_FAIL]", "        leaf1     → 通过(44 ms);软失败 1 条:[Unable to determine revocation status due to network error]", "        leaf2     → 通过(4 ms);软失败 1 条:[Unable to determine revocation status due to network error]", "        leafrev   → 失败:UNSPECIFIED ← CertPathValidatorException: Certificate does not specify OCSP responder;消息:Certificate does not specify OCSP responder", "    → 本次运行里:CRL 服务器收到 GET /ca.crl 0 次,OCSP 响应器收到请求 0 次(JVM 总耗时 0.2 s)"], "cur": [], "mark": [], "done": []}, "done": [0, 4], "mark": [1, 2, 9, 10], "kv": {"items": [["NO_FALLBACK", "UNDETERMINED(Connection refused)"], ["默认选项", "回退到 CRL,leaf2 仍 REVOKED"]], "hl": ["默认选项"]}}}, {"note": "响应器已停 + NO_FALLBACK + SOFT_FAIL:leaf1 通过并记录 1 条软失败(“Unable to determine revocation status due to network error”);已被吊销的 leaf2 同样通过(4 ms,1 条软失败)——网络一出问题,吊销检查就被跳过;leafrev(没有 AIA)则仍失败,UNSPECIFIED(“Certificate does not specify OCSP responder”)。SOFT_FAIL 把「查不到」当成「没问题」,只有在能接受这个风险时才开。", "s": {"t": {"lines": ["  [OCSP 响应器已停,NO_FALLBACK]", "        leaf1     → 失败:UNDETERMINED_REVOCATION_STATUS ← ConnectException: Connection refused;消息:Unable to determine revocation status due to network error", "        leaf2     → 失败:UNDETERMINED_REVOCATION_STATUS ← ConnectException: Connection refused;消息:Unable to determine revocation status due to network error", "    → 本次运行里:CRL 服务器收到 GET /ca.crl 0 次,OCSP 响应器收到请求 0 次(JVM 总耗时 0.2 s)", "  [OCSP 响应器已停,默认选项]", "        leaf1     → 通过(52 ms)", "        leaf2     → 失败:REVOKED ← CertificateRevokedException: Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo, CN=Revoke Test CA, extension OIDs: [2.5.29.21];消息:Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority", "    → 本次运行里:CRL 服务器收到 GET /ca.crl 1 次,OCSP 响应器收到请求 0 次(JVM 总耗时 0.2 s)", "  [OCSP 响应器已停,NO_FALLBACK + SOFT_FAIL]", "        leaf1     → 通过(44 ms);软失败 1 条:[Unable to determine revocation status due to network error]", "        leaf2     → 通过(4 ms);软失败 1 条:[Unable to determine revocation status due to network error]", "        leafrev   → 失败:UNSPECIFIED ← CertPathValidatorException: Certificate does not specify OCSP responder;消息:Certificate does not specify OCSP responder", "    → 本次运行里:CRL 服务器收到 GET /ca.crl 0 次,OCSP 响应器收到请求 0 次(JVM 总耗时 0.2 s)"], "cur": [], "mark": [], "done": []}, "done": [8], "mark": [10, 11], "kv": {"items": [["leaf1(好证书)", "通过,1 条软失败"], ["leaf2(已吊销)", "也通过,1 条软失败"], ["leafrev(无 AIA)", "仍失败 UNSPECIFIED"]], "hl": ["leaf2(已吊销)"]}}}, {"note": "CRL 的体积:小 CRL(2 条)DER 268 字节,解析 2 ms;在 index.txt 里追加 2 万条伪造的吊销记录重新签发,CRL 变成 707986 字节、20002 条,解析 61 ms;单条 isRevoked 与 getRevokedCertificate 仍是亚毫秒(10000 次 isRevoked 约 5–6 ms)。通过 CRL 分发点实际下载并验证 leaf1:小 CRL 约 52 ms,大 CRL 约 128 ms(含 HTTP 下载与解析),leaf2 仍 REVOKED。差别主要在传输与解析,不在查找。", "s": {"t": {"lines": ["  [小 CRL(2 条)]", "    CRL 文件 ca.crl.der:DER 长度 268 字节;已吊销条目 2;解析耗时 2 ms", "    10000 次 isRevoked(leaf1) 总耗时 6 ms(结果 false)", "    getRevokedCertificate(leaf1 序列号) = null;一次耗时 0.01 ms", "        第 1 次(本地 CertStore)验证 leaf1 → 通过(9 ms)", "        第 2 次(本地 CertStore)验证 leaf1 → 通过(0 ms)", "        第 3 次(本地 CertStore)验证 leaf1 → 通过(0 ms)", "    → 本次运行里:CRL 服务器收到 GET /ca.crl 0 次,OCSP 响应器收到请求 0 次(JVM 总耗时 0.1 s)", "  [大 CRL(20002 条)]", "    CRL 文件 big.crl:DER 长度 707986 字节;已吊销条目 20002;解析耗时 61 ms", "    10000 次 isRevoked(leaf1) 总耗时 5 ms(结果 false)", "    getRevokedCertificate(leaf1 序列号) = null;一次耗时 0.01 ms", "        第 1 次(本地 CertStore)验证 leaf1 → 通过(13 ms)", "        第 2 次(本地 CertStore)验证 leaf1 → 通过(1 ms)", "        第 3 次(本地 CertStore)验证 leaf1 → 通过(1 ms)", "    → 本次运行里:CRL 服务器收到 GET /ca.crl 0 次,OCSP 响应器收到请求 0 次(JVM 总耗时 0.3 s)", "  [CRL 分发点改为 20002 条的大 CRL 之后再验证]", "        leaf1     → 通过(128 ms)", "        leaf2     → 失败:REVOKED ← CertificateRevokedException: Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority: O=Demo, CN=Revoke Test CA, extension OIDs: [2.5.29.21];消息:Certificate has been revoked, reason: KEY_COMPROMISE, revocation date: Sun Oct 04 03:21:59 CST 2026, authority", "    → 本次运行里:CRL 服务器收到 GET /ca.crl 1 次,OCSP 响应器收到请求 0 次(JVM 总耗时 0.2 s)", "  收尾:CRL 与 OCSP 服务已停止"], "cur": [], "mark": [], "done": []}, "done": [0, 8], "mark": [9, 16, 17], "b": {"items": [["小 CRL 文件(字节)", 268, "268"], ["大 CRL 解析", 61, "61 ms"], ["经 CDP 验证:小 CRL", 52, "≈52 ms"], ["经 CDP 验证:大 CRL", 128, "≈128 ms"]], "max": 280, "cur": [], "mark": [], "done": [0, 1, 2, 3]}, "kv": {"items": [["小 CRL", "268 字节,2 条,解析 2 ms"], ["大 CRL", "707986 字节,20002 条,解析 61 ms"], ["isRevoked 查找", "10000 次约 5–6 ms"]], "hl": ["大 CRL"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / OpenJDK(Temurin 17.0.20、Homebrew 21.0.12 与 27,每篇注明实际用的版本);用 javac 编译、java 直接运行,需要第三方库时用 Maven 解析依赖;计时用 System.nanoTime,数字每次运行会有小幅抖动。JDK 21.0.12;证书与 CRL 由 OpenSSL 3.6.4 现场生成(EC P-256),CRL 服务器是 python3 http.server(127.0.0.1:9710),OCSP 响应器是 openssl ocsp -index(127.0.0.1:9711),实验结束后已停止;CRL 与 OCSP 的耗时包含 JVM 首次类加载,不应当作网络延迟</li><li>没有验证:真实互联网 CA 的 OCSP 响应器(含 nonce、stapling)、OCSP Must-Staple、TLS 握手里的 OCSP stapling(见 SSLSession 相关篇)、间接 CRL 与 delta CRL、CRL 条目的 certificateHold / removeFromCRL 语义、PKIXRevocationChecker 的 ONLY_END_ENTITY 与 jdk.security.certpath.ocspNonce 选项、响应器返回 unknown 或签名无效时的行为、大规模并发验证</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="java-ssl-session-context.html">
+    <div>
+      <div class="t1">下一篇 · JAVA 359</div>
+      <div class="t2">SSLSessionContext:管理 TLS 会话缓存</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Java · CRL 与 OCSP:证书撤销状态 · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

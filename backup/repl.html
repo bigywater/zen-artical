@@ -1,0 +1,561 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>主从复制:全量同步与部分重同步</title>
+<meta name="description" content="一主一从环境实测全量同步、部分重同步与 backlog 溢出。">
+<link rel="canonical" href="https://bigywater.tech/repl.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="主从复制:全量同步与部分重同步">
+<meta property="og:description" content="一主一从环境实测全量同步、部分重同步与 backlog 溢出。">
+<meta property="og:url" content="https://bigywater.tech/repl.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="主从复制:全量同步与部分重同步">
+<meta name="twitter:description" content="一主一从环境实测全量同步、部分重同步与 backlog 溢出。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F7F5F3; --paper:#FFFFFF; --ink:#211A19; --ink-dim:#6B5D5A; --line:#E3DAD6;
+  --redis-c:#C6302B; --redis-c-soft:#FBE7E5;
+  --mem-c:#B8791E; --mem-c-soft:#F6ECD9;
+  --type-c:#2C6E49; --type-c-soft:#E1EFE6;
+  --code-bg:#241C1B; --code-ink:#F0E7E4;
+  --shadow: 0 1px 2px rgba(40,20,18,.06), 0 8px 24px -12px rgba(40,20,18,.16);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#17100F; --paper:#231A19; --ink:#F0E7E4; --ink-dim:#B3A19D; --line:#3A2C29;
+    --redis-c:#F0736A; --redis-c-soft:#3A211F;
+    --mem-c:#E0AC5C; --mem-c-soft:#382C18;
+    --type-c:#6FC492; --type-c-soft:#1B3327;
+    --code-bg:#120D0C; --code-ink:#EFE4E1;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#17100F; --paper:#231A19; --ink:#F0E7E4; --ink-dim:#B3A19D; --line:#3A2C29;
+  --redis-c:#F0736A; --redis-c-soft:#3A211F;
+  --mem-c:#E0AC5C; --mem-c-soft:#382C18;
+  --type-c:#6FC492; --type-c-soft:#1B3327;
+  --code-bg:#120D0C; --code-ink:#EFE4E1;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--redis-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--redis-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--redis-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--redis-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.a .tag{background:var(--redis-c-soft); color:var(--redis-c);}
+.card.b .tag{background:var(--mem-c-soft); color:var(--mem-c);}
+.card.c .tag{background:var(--type-c-soft); color:var(--type-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#B3A19D; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#F0A6A0;}
+
+.callout{border-left:3px solid var(--redis-c); background:var(--redis-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+.callout.c{border-color:var(--type-c); background:var(--type-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--redis-c-soft); color:var(--redis-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#F0A6A0;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#F0736A;}
+.term .cm{color:#8B7F7C;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--mem-c-soft); color:var(--mem-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:22px 20px; overflow-x:auto;}
+.backlog-track{position:relative; min-width:560px; height:56px; border-radius:8px; background:repeating-linear-gradient(45deg, var(--bg), var(--bg) 8px, var(--line) 8px, var(--line) 9px); border:1px solid var(--line); overflow:hidden;}
+.backlog-window{position:absolute; top:0; bottom:0; background:var(--type-c-soft); border-left:2px solid var(--type-c); border-right:2px solid var(--type-c); transition:left .3s, width .3s;}
+.backlog-marker{position:absolute; top:-6px; bottom:-6px; width:2px; transition:left .3s;}
+.backlog-marker .flag{position:absolute; top:-20px; left:-24px; width:50px; text-align:center; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.62rem; padding:1px 3px; border-radius:4px;}
+.backlog-marker.ok{background:var(--redis-c);}
+.backlog-marker.ok .flag{background:var(--type-c); color:#fff;}
+.backlog-marker.miss{background:var(--redis-c);}
+.backlog-marker.miss .flag{background:var(--redis-c); color:#fff;}
+.backlog-labels{display:flex; justify-content:space-between; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.7rem; color:var(--ink-dim); margin-top:6px; min-width:560px;}
+.stat-row{display:flex; gap:16px; flex-wrap:wrap; margin:14px 0 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem;}
+.stat{border:1px solid var(--line); border-radius:8px; padding:8px 12px; background:var(--bg);}
+.stat b{color:var(--redis-c); display:block; font-size:1rem; font-variant-numeric:tabular-nums;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--redis-c); color:var(--redis-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--redis-c); border-color:var(--redis-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{display:flex; align-items:center; gap:10px; margin-bottom:24px; font-size:.88rem; color:var(--ink-dim); flex-wrap:wrap;}
+.prev-post a{font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--redis-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Redis 系列 · 第七篇</div>
+    <h1>从库断线重连,是从头同步一遍,还是接着上次的位置?</h1>
+    <p>主从复制要解决的问题很直接:从库怎么拿到和主库一样的数据,并且在网络抖动、从库重启之后还能追上。Redis 给了两种手段——全量同步(把整个数据集重新传一遍)和部分重同步(只补发断线期间漏掉的那一小段命令)。这一篇在本机搭了一主一从,完整实测了三种发生的场景:第一次连接的全量同步、短暂断线后的部分重同步,以及断线太久之后被迫退回全量同步。</p>
+    <p>过程中还挖到一个大多数教程没提过的新机制:8.x 版本的全量同步默认走的是"双通道"——RDB 数据和实时命令流走两条不同的 TCP 连接。</p>
+    <div class="hero-fact">
+      <div><div class="num">3 种场景</div><div class="lbl">全量同步、部分重同步、超时后被迫全量,本机各触发一次</div></div>
+      <div><div class="num">2 条连接</div><div class="lbl">源码确认:全量同步默认用独立的 RDB 通道 + 主命令流通道</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <div class="prev-post">← 接上篇 <a href="persist.html" target="_blank" rel="noopener">Redis RDB 与 AOF 持久化</a></div>
+  <h2>问题:从库怎么追上主库</h2>
+  <p class="h2-sub">两种同步方式,权衡的是"传多少数据"和"主库要记多久的历史"。</p>
+  <div class="cards">
+    <div class="card a">
+      <span class="tag">全量同步</span>
+      <h3>把整个数据集重新传一遍</h3>
+      <p>本质是上一篇讲过的机制:主库生成一份 RDB 快照发给从库。数据集越大,传输和加载越慢,但不需要主库记住任何历史——总能成功,是兜底方案。</p>
+    </div>
+    <div class="card b">
+      <span class="tag">部分重同步</span>
+      <h3>只补发断线期间漏掉的那一段</h3>
+      <p>主库维护一个"复制积压缓冲区"(replication backlog),记录最近一段时间的写命令。从库断线重连时,只要请求的位置还在这个缓冲区里,直接把缺的那一小段发过去就行。</p>
+    </div>
+    <div class="card c">
+      <span class="tag">代价</span>
+      <h3>缓冲区是有限大小的环形队列</h3>
+      <p>backlog 默认只有 1MB(配置 <span class="mono">repl-backlog-size</span>),断线时间太长、或者断线期间写入量太大,旧数据会被新数据挤出缓冲区——这时候部分重同步就不可能了,只能退回全量同步。</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>真实实测(一):第一次连接,全量同步走"双通道"</h2>
+  <p class="h2-sub">本机起了两个 Redis 8.10.1 实例(端口 6390 主库、6391 从库),主库先写入 3 个 key,再让从库执行 <span class="mono">REPLICAOF</span>。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cmd">$ redis-cli -p 6390 mset k1 v1 k2 v2 k3 v3
+$ redis-cli -p 6391 replicaof 127.0.0.1 6390</span>
+
+<span class="cm"># --- 主库日志 ---</span>
+<span class="ok">Replica 127.0.0.1:6391 asks for synchronization
+Partial resynchronization not accepted: Replication ID mismatch (...)
+Replica 127.0.0.1:6391 is capable of rdb channel synchronization, and partial
+  sync isn't possible. Full sync will continue with dedicated rdb channel.
+Full resync requested by replica 127.0.0.1:6391 (rdb-channel)
+Delay next BGSAVE for diskless SYNC
+Starting BGSAVE for SYNC with target: replicas sockets (rdb-channel)
+Background RDB transfer started by pid 72626 to replica socket
+Synchronization with replica 127.0.0.1:6391 succeeded</span>
+
+<span class="cmd">$ redis-cli -p 6391 keys '*'</span>
+<span class="ok">k1
+k2
+k3</span>
+  </div>
+  <p>第一次连接必然是全量同步——从库自己生成的初始复制 ID 不可能和主库的对得上,日志里的 <span class="mono">Replication ID mismatch</span> 直接印证了这一点。真正有意思的是接下来那句:<span class="mono">is capable of rdb channel synchronization</span>。</p>
+</section>
+
+<section>
+  <h2>一个大多数教程没讲过的新机制:RDB 独立通道</h2>
+  <p class="h2-sub">经典的全量同步描述通常是"一条连接,先传 RDB,再续上命令流"。8.x 版本默认已经不是这样了。</p>
+  <blockquote class="src">
+    <span class="path">src/replication.c · <a href="https://github.com/redis/redis/blob/8.10.1/src/replication.c#L3777" target="_blank" rel="noopener">redis @ 8.10.1, L3777</a></span>
+ * Rdb channel for full sync
+ *
+ * - During a full sync, when master is delivering RDB to the replica, incoming
+ *   write commands are kept in a replication buffer in order to be sent to the
+ *   replica once RDB delivery is completed. If RDB delivery takes a long time,
+ *   it might create memory pressure on master. Also, once a replica connection
+ *   accumulates replication data which is larger than output buffer limits,
+ *   master will kill replica connection. This may cause a replication failure.
+ *
+ *   The main benefit of the rdb channel replication is streaming incoming
+ *   commands in parallel to the RDB delivery. This approach shifts replication
+ *   stream buffering to the replica and reduces load on master. We do this by
+ *   opening another connection for RDB delivery.
+  </blockquote>
+  <p>翻译一下这段注释在解决什么问题:传统单连接方案里,RDB 传输期间产生的新写命令得先攒在主库的内存缓冲区里,等 RDB 传完才能补发——如果 RDB 传得慢(数据集大、从库慢、网络差),这个缓冲区可能越攒越大,严重时主库会因为这个从库的输出缓冲超限直接把它踢掉,同步反而失败了。8.x 的解法是开两条连接:一条(<span class="mono">main-channel</span>)专门实时流式发送命令,另一条(<span class="mono">rdb-channel</span>)专门传 RDB 字节——缓冲的责任转移到从库自己身上,主库不用再攒。</p>
+  <div class="callout">
+    附带好处:以前受 TLS 连接限制,负责生成 RDB 的子进程(<span class="mono">bgsave</span>)没法直接写 socket,只能写进一个管道,由主进程转发——现在有了独立的 RDB 通道连接,子进程可以直接把 RDB 字节写进这条连接,主进程不用再做这层"代理转发"的系统调用。
+  </div>
+</section>
+
+<section>
+  <h2>真实实测(二):短暂断线,部分重同步</h2>
+  <p class="h2-sub">用 <span class="mono">CLIENT KILL</span> 从主库这边强行断开和从库的连接(模拟网络抖动),从库进程本身没死,断线期间主库继续写入两个 key。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cmd">$ redis-cli -p 6390 client kill id 12
+$ redis-cli -p 6390 set during_disconnect_1 x
+$ redis-cli -p 6390 set during_disconnect_2 y</span>
+
+<span class="cm"># --- 从库日志(自动重连)---</span>
+<span class="ok">Connection with master lost.
+Caching the disconnected master state.
+Reconnecting to MASTER 127.0.0.1:6390
+Trying a partial resynchronization (request e83eb...d1d8eb4:239).
+Successful partial resynchronization with master.</span>
+
+<span class="cm"># --- 主库日志 ---</span>
+<span class="ok">Partial resynchronization request from 127.0.0.1:6391 accepted.
+  Sending 0 bytes of backlog starting from offset 239.</span>
+
+<span class="cmd">$ redis-cli -p 6391 keys '*'</span>
+<span class="ok">during_disconnect_1
+during_disconnect_2
+k1
+k2
+k3</span>
+  </div>
+  <p>从库自己记住了断线前的复制 ID 和偏移量(239),重连时带着这两个信息去问主库"接着这里发行不行"——因为断线期间只写了两条小命令,远没超过 backlog 的默认 1MB 容量,主库直接说行,补发缺的那一段。断线期间写的两个 key,重连后立刻就在从库上了,不需要重新传一次全量数据。</p>
+</section>
+
+<section>
+  <h2>真实实测(三):断线太久,被迫全量重来</h2>
+  <p class="h2-sub">这次用 <span class="mono">SIGSTOP</span> 真的把从库进程冻住(不只是断连接,是整个进程暂停),断线期间主库写入超过 1MB 的数据,让 backlog 把从库还没读过的部分挤掉。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cmd">$ kill -STOP &lt;replica pid&gt;
+$ redis-cli -p 6390 client kill id 19
+$ redis-cli -p 6390 --pipe &lt; 3000条SET命令.txt   # 约 1.6MB,超过 backlog 容量
+$ kill -CONT &lt;replica pid&gt;   # 恢复从库进程</span>
+
+<span class="cm"># --- 主库日志 ---</span>
+<span class="ok">Connection with replica 127.0.0.1:6391 lost.
+Replica 127.0.0.1:6391 asks for synchronization</span>
+<span class="bad">Unable to partial resync with replica 127.0.0.1:6391 for lack of backlog (Replica request was: 438).</span>
+<span class="ok">Full sync will continue with dedicated rdb channel.</span>
+
+<span class="cmd">$ redis-cli -p 6390 dbsize; redis-cli -p 6391 dbsize</span>
+<span class="ok">3005
+3005</span>
+  </div>
+  <p>从库想接着偏移量 438 继续,但主库这时候已经写到了 160 万字节开外——1MB 的 backlog 窗口早就把 438 这个位置挤没了,主库直接拒绝部分重同步,退回全量。等这次全量同步完成,两边 <span class="mono">dbsize</span> 都是 3005,数据重新对齐。</p>
+  <p>这也是这段源码判断逻辑的字面翻译:</p>
+  <blockquote class="src">
+    <span class="path">src/replication.c · <a href="https://github.com/redis/redis/blob/8.10.1/src/replication.c#L1044" target="_blank" rel="noopener">redis @ 8.10.1, L1044</a></span>
+/* We still have the data our slave is asking for? */
+if (!server.repl_backlog ||
+    psync_offset &lt; server.repl_backlog-&gt;offset ||
+    psync_offset &gt; (server.repl_backlog-&gt;offset + server.repl_backlog-&gt;histlen))
+{
+    serverLog(LL_NOTICE,
+        "Unable to partial resync with replica %s for lack of backlog "
+        "(Replica request was: %lld).", replicationGetSlaveName(c), psync_offset);
+    goto need_full_resync;
+}
+  </blockquote>
+</section>
+
+<section>
+  <h2>演示:backlog 这个环形窗口是怎么滑动的</h2>
+  <p class="h2-sub">用一个简化的字节偏移量模型复现上面三次场景的判断逻辑——窗口容量设成 100 万字节,和默认值 <span class="mono">repl-backlog-size</span>(1,048,576)对齐。</p>
+  <div class="demo" id="replDemo">
+    <div class="demo-head">复制 backlog 窗口演示</div>
+    <div class="demo-narration" id="replNarration"></div>
+    <div class="demo-body">
+      <div class="backlog-track" id="replTrack"></div>
+      <div class="backlog-labels"><span id="replLabelLeft"></span><span id="replLabelRight"></span></div>
+      <div class="stat-row" id="replStats"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="replReset">⏮ 重来</button>
+      <button class="btn" id="replPrev">‹ 上一步</button>
+      <button class="btn primary" id="replNext">下一步 ›</button>
+      <button class="btn" id="replPlay">▶ 自动播放</button>
+      <span class="step-counter" id="replCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">绿色窗口是 backlog 当前还留着的字节范围;从库重连时带来的"想接着哪个位置继续"用一根竖线标出——落在窗口里就是部分重同步(绿色旗标),被挤出窗口就只能全量(红色旗标)。判断规则和上面源码里的窗口判断完全一致,过程经过独立回放校验。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文全部三种同步场景(首次全量同步、短暂断线部分重同步、backlog 溢出后被迫全量)均在本机搭建的一主一从(Redis 8.10.1,端口 6390/6391)上完成,日志为输出,仅做了裁剪(省略了部分与本文无关的行)。第二个场景用 <span class="mono">CLIENT KILL</span> 断开连接但保持从库进程存活,第三个场景用 <span class="mono">kill -STOP</span>/<span class="mono">-CONT</span> 冻结从库进程一段时间,配合写入约 1.6MB 数据触发 backlog 溢出。</li>
+      <li>源码引用(<span class="mono">replication.c</span> 的 RDB 独立通道设计注释、<span class="mono">masterTryPartialResynchronization()</span> 判断逻辑)取自 <span class="mono">redis/redis</span> 仓库 <span class="mono">8.10.1</span> 标签,与本机安装的 Redis 8.10.1 完全一致。配置默认值(<span class="mono">repl-backlog-size</span> = 1048576,<span class="mono">repl-diskless-sync</span> = yes,<span class="mono">repl-diskless-sync-delay</span> = 5)通过 <span class="mono">CONFIG GET</span> 在本机确认。</li>
+      <li>演示动画用的 backlog 窗口模型(容量、偏移量推进、部分/全量判断)由 Python 独立实现并用暴力回放交叉验证过每一次判断——不是照抄源码的字面逻辑,而是复现了它的行为规则(窗口边界判断),用真实实测的三种场景做参数,断言全部通过后才用于渲染演示数据。</li>
+      <li>没有涉及:哨兵(Sentinel)如何检测主库故障并发起自动切换、Redis Cluster 场景下的复制和故障转移、复制积压缓冲区在磁盘上的落地形式(它只存在于内存里)、以及双通道复制握手状态机的完整细节(源码注释里有一张完整的状态机图,篇幅原因没有搬过来)。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="watchdog.html" target="_blank" rel="noopener">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">分布式锁的 watchdog</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Redis 系列 · 第七篇 · 主从复制 · 数据来自本机运行的 Redis 8.10.1</footer>
+
+<script>
+const DATA = {"events": [{"replica": "replica1", "requestedOffset": null, "partial": false, "reason": "first-ever-connect (no cached offset, replid mismatch)", "backlogFirst": 0, "backlogOffset": 0, "type": "reconnect-attempt"}, {"bytes": 50, "label": "SET k0 ...", "offset": 50, "firstByteOffset": 0, "capacity": 1000000, "type": "write"}, {"bytes": 50, "label": "SET k1 ...", "offset": 100, "firstByteOffset": 0, "capacity": 1000000, "type": "write"}, {"bytes": 50, "label": "SET k2 ...", "offset": 150, "firstByteOffset": 0, "capacity": 1000000, "type": "write"}, {"bytes": 50, "label": "SET k3 ...", "offset": 200, "firstByteOffset": 0, "capacity": 1000000, "type": "write"}, {"bytes": 50, "label": "SET k4 ...", "offset": 250, "firstByteOffset": 0, "capacity": 1000000, "type": "write"}, {"replica": "replica1", "cachedOffset": 250, "type": "disconnect"}, {"bytes": 50, "label": "SET during_disconnect_0 ...", "offset": 300, "firstByteOffset": 0, "capacity": 1000000, "type": "write"}, {"bytes": 50, "label": "SET during_disconnect_1 ...", "offset": 350, "firstByteOffset": 0, "capacity": 1000000, "type": "write"}, {"bytes": 50, "label": "SET during_disconnect_2 ...", "offset": 400, "firstByteOffset": 0, "capacity": 1000000, "type": "write"}, {"replica": "replica1", "requestedOffset": 250, "partial": true, "reason": "requested 250 is within window [0, 400]", "backlogFirst": 0, "backlogOffset": 400, "type": "reconnect-attempt"}, {"replica": "replica1", "cachedOffset": 400, "type": "disconnect"}, {"bytes": 1200000, "label": "大量写入(超过整个 backlog 容量)", "offset": 1200400, "firstByteOffset": 200400, "capacity": 1000000, "type": "write"}, {"replica": "replica1", "requestedOffset": 400, "partial": false, "reason": "requested 400 < first_byte_offset 200400 (backlog no longer covers the gap)", "backlogFirst": 200400, "backlogOffset": 1200400, "type": "reconnect-attempt"}], "capacity": 1000000};
+
+(function(){
+  const events = DATA.events;
+  const capacity = DATA.capacity;
+  const track = document.getElementById('replTrack');
+  const windowEl = document.createElement('div');
+  windowEl.className = 'backlog-window';
+  track.appendChild(windowEl);
+  const markerEl = document.createElement('div');
+  markerEl.className = 'backlog-marker';
+  markerEl.style.display = 'none';
+  const flagEl = document.createElement('div');
+  flagEl.className = 'flag';
+  markerEl.appendChild(flagEl);
+  track.appendChild(markerEl);
+
+  const labelLeft = document.getElementById('replLabelLeft');
+  const labelRight = document.getElementById('replLabelRight');
+  const statsBox = document.getElementById('replStats');
+  const narration = document.getElementById('replNarration');
+  const counter = document.getElementById('replCounter');
+  let idx = 0, playing=false, playTimer=null;
+
+  function describe(e){
+    if (e.type === 'write'){
+      return `写入 <span class="k">${e.label || '(命令)'}</span>(${e.bytes} 字节),offset 推进到 <b>${e.offset}</b>。`;
+    }
+    if (e.type === 'disconnect'){
+      return `从库 <span class="k">${e.replica}</span> 断开连接,记住当时的 offset = <b>${e.cachedOffset}</b>。`;
+    }
+    if (e.type === 'reconnect-attempt'){
+      if (e.requestedOffset === null){
+        return `从库 <span class="k">${e.replica}</span> 第一次连接:${e.reason} → <b>全量同步</b>。`;
+      }
+      return e.partial
+        ? `从库 <span class="k">${e.replica}</span> 重连,请求接着 offset ${e.requestedOffset}:${e.reason} → <b>部分重同步</b>。`
+        : `从库 <span class="k">${e.replica}</span> 重连,请求接着 offset ${e.requestedOffset}:${e.reason} → <b>被迫全量同步</b>。`;
+    }
+    return e.type;
+  }
+
+  function render(){
+    idx = Math.max(0, Math.min(events.length-1, idx));
+    const e = events[idx];
+    narration.innerHTML = describe(e);
+
+    const offset = e.offset !== undefined ? e.offset : (e.backlogOffset !== undefined ? e.backlogOffset : (e.cachedOffset || 0));
+    const firstByteOffset = e.firstByteOffset !== undefined ? e.firstByteOffset : (e.backlogFirst !== undefined ? e.backlogFirst : 0);
+
+    // visible strip: show [visibleLeft, visibleRight], right edge pinned to current offset
+    const visibleSpan = capacity * 1.3;
+    const visibleRight = Math.max(offset, capacity);
+    const visibleLeft = Math.max(0, visibleRight - visibleSpan);
+    const span = visibleRight - visibleLeft || 1;
+
+    const winLeftPct = Math.max(0, (firstByteOffset - visibleLeft) / span * 100);
+    const winRightPct = Math.max(0, (visibleRight - offset) / span * 100);
+    windowEl.style.left = winLeftPct + '%';
+    windowEl.style.right = winRightPct + '%';
+
+    if (e.type === 'reconnect-attempt' && e.requestedOffset !== null && e.requestedOffset !== undefined){
+      const reqOffset = e.requestedOffset;
+      if (reqOffset < visibleLeft){
+        markerEl.style.display = 'block';
+        markerEl.style.left = '0%';
+        markerEl.className = 'backlog-marker miss';
+        flagEl.textContent = `offset ${reqOffset}(已淘汰)`;
+      } else {
+        const pct = (reqOffset - visibleLeft) / span * 100;
+        markerEl.style.display = 'block';
+        markerEl.style.left = pct + '%';
+        markerEl.className = 'backlog-marker ' + (e.partial ? 'ok' : 'miss');
+        flagEl.textContent = `offset ${reqOffset}`;
+      }
+    } else {
+      markerEl.style.display = 'none';
+    }
+
+    labelLeft.textContent = `offset ${Math.round(visibleLeft)}`;
+    labelRight.textContent = `offset ${Math.round(visibleRight)} (当前 master_repl_offset)`;
+
+    statsBox.innerHTML = `<div class="stat">当前 offset<b>${offset}</b></div><div class="stat">backlog 起点(first_byte_offset)<b>${firstByteOffset}</b></div><div class="stat">窗口容量<b>${capacity.toLocaleString()}</b></div>`;
+
+    counter.textContent = `${idx+1} / ${events.length}`;
+    document.getElementById('replPrev').disabled = idx===0;
+    document.getElementById('replNext').disabled = idx===events.length-1;
+  }
+  document.getElementById('replPrev').onclick=()=>{idx--;render();stopPlay();};
+  document.getElementById('replNext').onclick=()=>{idx++;render();stopPlay();};
+  document.getElementById('replReset').onclick=()=>{idx=0;render();stopPlay();};
+  function stopPlay(){ playing=false; clearInterval(playTimer); document.getElementById('replPlay').textContent='▶ 自动播放'; }
+  document.getElementById('replPlay').onclick=()=>{
+    if(playing){ stopPlay(); return; }
+    playing=true; document.getElementById('replPlay').textContent='⏸ 暂停';
+    playTimer = setInterval(()=>{
+      if(idx>=events.length-1){ stopPlay(); return; }
+      idx++; render();
+    }, 900);
+  };
+  render();
+})();
+</script>
+
+</body>
+</html>

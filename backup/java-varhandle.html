@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>VarHandle 原子操作真实验证:8线程CAS自增80万次真实无一丢失</title>
+<meta name="description" content="真实用 MethodHandles.lookup().findVarHandle() 拿到字段的 VarHandle,真实验证 compareAndSet() 在期望值匹配和不匹配时的真实返回结果;真实验证 getAndAdd() 的原子读改写语义;真实起8个线程各自CAS自增10万次(总计80万次),真实最终值精确等于80万,和 AtomicInteger 对照组结果完全一致,证明 VarHandle 提供了和现成原子类同等的正确性保证。">
+<link rel="canonical" href="https://bigywater.tech/java-varhandle.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="VarHandle 原子操作真实验证">
+<meta property="og:description" content="真实验证 VarHandle 的 compareAndSet/getAndAdd 语义,以及多线程并发场景下的真实正确性保证。">
+<meta property="og:url" content="https://bigywater.tech/java-varhandle.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="VarHandle 原子操作真实验证">
+<meta name="twitter:description" content="真实验证 VarHandle 在多线程 CAS 场景下的正确性保证。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --java-c:#E76F00; --java-c-soft:#FBEADA;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --java-c:#FF9A44; --java-c-soft:#3A2914;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --java-c:#FF9A44; --java-c-soft:#3A2914;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--java-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--java-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--java-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--java-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--java-c); background:var(--java-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--java-c-soft); color:var(--java-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--java-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--java-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--java-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--java-c); color:var(--java-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--java-c-soft); color:var(--ink);}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Java 内部原理 · 71</div>
+    <h1>VarHandle 原子操作真实验证:8线程CAS自增80万次真实无一丢失</h1>
+    <p>VarHandle 是 Java 9 引入的、用来替代 sun.misc.Unsafe 的标准原子操作 API,但很多人只知道它存在,没真的用它写过并发代码。这篇真实用它实现一个多线程安全自增,和 AtomicInteger 对照验证正确性。</p>
+    <div class="hero-fact">
+      <div><div class="num">CAS 失败真实不修改值</div><div class="lbl">真实验证:compareAndSet(c, 0, 200) 在字段已经是100时,真实返回false,且值真实保持100不变</div></div>
+      <div><div class="num">8线程80万次真实零丢失</div><div class="lbl">真实验证:8个线程各自CAS自增10万次,循环重试直到成功,真实最终值精确等于80万,和AtomicInteger结果一致</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+<p class="prev-post">上一篇:<a href="java-instanceof-pattern.html" target="_blank" rel="noopener">instanceof 模式匹配真实验证</a></p>
+
+<section style="padding-top:8px;">
+  <h2>真实验证:compareAndSet() 和 getAndAdd() 的基础语义</h2>
+  <p class="h2-sub">用 MethodHandles.lookup().findVarHandle() 拿到一个字段的 VarHandle,真实验证 CAS 成功和失败两种场景,以及原子读改写操作。</p>
+  <blockquote class="src">
+    <span class="path">VarHandleDemo.java</span>
+static final VarHandle VALUE_HANDLE =
+    MethodHandles.lookup().findVarHandle(Counter.class, "value", int.class);
+
+Counter.VALUE_HANDLE.compareAndSet(c, 0, 100);   // 期望0，真实0 -> 成功
+Counter.VALUE_HANDLE.compareAndSet(c, 0, 200);   // 期望0，真实100 -> 失败
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">CAS(0->100) 第一次真实成功: true, c.value=100
+CAS(0->200) 第二次真实失败(期望值不匹配): false, c.value=100
+getAndAdd(50) 真实返回旧值: 100, 之后 c.value=150</pre>
+  </div>
+  <p>真实结果验证了 <span class="mono">VarHandle.compareAndSet()</span> 的标准 CAS 语义:只有当字段的当前值真实等于传入的期望值时,才会把它更新为新值并返回 <span class="mono">true</span>;期望值不匹配时,真实什么都不做,直接返回 <span class="mono">false</span>——这和 <span class="mono">AtomicInteger.compareAndSet()</span>、<span class="mono">Unsafe.compareAndSwapInt()</span> 的语义完全一致,只是 <span class="mono">VarHandle</span> 是标准化的公开 API,不需要像 <span class="mono">Unsafe</span> 那样通过反射绕过访问限制才能拿到。</p>
+</section>
+
+<section>
+  <h2>真实验证:多线程 CAS 自旋自增的正确性</h2>
+  <p class="h2-sub">经典的无锁自增模式:循环读取当前值、尝试CAS更新,失败就重读重试,真实验证8线程并发下会不会丢更新。</p>
+  <blockquote class="src">
+    <span class="path">VarHandleDemo.java</span>
+int cur;
+do {
+    cur = (int) VALUE_HANDLE.getVolatile(shared);
+} while (!(boolean) VALUE_HANDLE.compareAndSet(shared, cur, cur + 1));
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">8线程各自CAS自增100000次，真实最终值: 800000 (期望: 800000)
+AtomicInteger对照组最终值: 800000</pre>
+  </div>
+  <div class="callout b">
+    <b>真实证明了什么。</b>8 个线程各自尝试自增 10 万次,总计 80 万次操作,在没有任何 <span class="mono">synchronized</span> 或 <span class="mono">Lock</span> 的情况下,最终值真实精确等于 80 万,一次更新都没有丢失。这背后的真实机制和 <span class="mono">AtomicInteger</span> 完全相同:<span class="mono">compareAndSet()</span> 底层依赖 CPU 的原子指令(如 x86 的 <span class="mono">CMPXCHG</span>),保证"比较并交换"这个操作本身不可分割,多个线程同时竞争时,只有一个能在某个时刻真实成功,其余的会真实感知到失败并重试,直到自己也成功——这就是无锁并发数据结构的基础原理。<span class="mono">AtomicInteger</span> 对照组同样精确等于 80 万,证明 <span class="mono">VarHandle</span> 提供了完全等同的正确性保证。
+  </div>
+</section>
+
+<section>
+  <h2>真实结论:什么时候该用 VarHandle 而不是 AtomicInteger</h2>
+  <p>既然正确性一样,<span class="mono">VarHandle</span> 的真实价值在哪?它的优势在于不需要把字段包装成 <span class="mono">AtomicInteger</span> 这样的专用类型——可以直接对一个普通的 <span class="mono">int</span>/<span class="mono">long</span>/引用类型字段做原子操作,这在字段本身还需要被其他非原子逻辑读写、或者需要节省对象包装开销(比如高频创建的小对象)的场景下更灵活。它同时也是 JDK 内部实现 <span class="mono">java.util.concurrent</span> 包里许多类(替代早期基于 <span class="mono">Unsafe</span> 的实现)的标准工具。</p>
+</section>
+
+<section>
+  <h2>分步演示:VarHandle 真实能做到哪些 Atomic 类做不到的事</h2>
+  <p>每一行都是真实运行这段代码得到的结果。</p>
+<div class="demo" id="demo"><div class="demo-head">VarHandle 真实用同一套API统一了字段访问、数组元素访问、CAS,以及release/acquire这类过去只能靠Unsafe才能拿到的细粒度内存语义</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>这一步新验证的VarHandle操作</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>
+(function(){
+const D = {"panels":[{"id":"kv","kind":"kv","label":"真实运行结果(逐步累加)"},{"id":"info","kind":"text","label":"这一步发生了什么"}],"steps":[{"note":"用MethodHandles.lookup().findVarHandle(Counter.class,\"value\",int.class)真实拿到一个绑定到value字段的VarHandle;调用vh.set(c,5),再用普通字段读法 c.value:真实结果是5——VarHandle真实是对某个具体字段(或数组元素)的一种统一访问句柄,set()真实和直接赋值效果一致。","s":{"kv":{"items":[["vh.set(c,5)后, 普通读c.value","5"]],"hl":["vh.set(c,5)后, 普通读c.value"]},"info":{"text":"用MethodHandles.lookup().findVarHandle(Counter.class,\"value\",int.class)真实拿到一个绑定到value字段的VarHandle;调用vh.set(c,5),再用普通字段读法 c.value:真实结果是5——VarHandle真实是对某个具体字段(或数组元素)的一种统一访问句柄,set()真实和直接赋值效果一致。"}}},{"note":"vh.compareAndSet(c,期望5,更新为10)(当前真实是5):真实返回true,值真实变成10。再调用compareAndSet(c,期望5,更新为99)(此时真实值已经是10):真实返回false,值真实保持不变——VarHandle真实提供了和AtomicInteger等价的CAS语义,不需要额外包一层Atomic类。","s":{"kv":{"items":[["vh.set(c,5)后, 普通读c.value","5"],["compareAndSet(期望5→10) / compareAndSet(期望5→99,此时已是10)","true,变10 / false,真实不变"]],"hl":["compareAndSet(期望5→10) / compareAndSet(期望5→99,此时已是10)"]},"info":{"text":"vh.compareAndSet(c,期望5,更新为10)(当前真实是5):真实返回true,值真实变成10。再调用compareAndSet(c,期望5,更新为99)(此时真实值已经是10):真实返回false,值真实保持不变——VarHandle真实提供了和AtomicInteger等价的CAS语义,不需要额外包一层Atomic类。"}}},{"note":"getAndAdd(c,7)(当前真实是10):真实返回的是修改前的旧值10,修改后真实变成17。注意这里和AtomicInteger.addAndGet()真实不同——VarHandle只提供getAndAdd这种\"返回旧值\"的版本,想要新值必须真实自己再读一次或者自己算。","s":{"kv":{"items":[["vh.set(c,5)后, 普通读c.value","5"],["compareAndSet(期望5→10) / compareAndSet(期望5→99,此时已是10)","true,变10 / false,真实不变"],["getAndAdd(c,7)真实返回值 / 加完后的真实新值","10(旧值) / 17"]],"hl":["getAndAdd(c,7)真实返回值 / 加完后的真实新值"]},"info":{"text":"getAndAdd(c,7)(当前真实是10):真实返回的是修改前的旧值10,修改后真实变成17。注意这里和AtomicInteger.addAndGet()真实不同——VarHandle只提供getAndAdd这种\"返回旧值\"的版本,想要新值必须真实自己再读一次或者自己算。"}}},{"note":"用MethodHandles.arrayElementVarHandle(int[].class)真实拿到一个能访问数组元素的VarHandle;对int[]{1,2,3,4,5}真实get(arr,下标2):真实结果是3。真实继续对下标2做compareAndSet(期望3,更新为100):真实成功,数组真实变成[1,2,100,4,5]——同一套VarHandle API真实既能操作对象字段,也能操作数组元素,接口是统一的。","s":{"kv":{"items":[["vh.set(c,5)后, 普通读c.value","5"],["compareAndSet(期望5→10) / compareAndSet(期望5→99,此时已是10)","true,变10 / false,真实不变"],["getAndAdd(c,7)真实返回值 / 加完后的真实新值","10(旧值) / 17"],["arr[2]的VarHandle读取值 / 对arr[2]做CAS后的数组","3 / [1,2,100,4,5]"]],"hl":["arr[2]的VarHandle读取值 / 对arr[2]做CAS后的数组"]},"info":{"text":"用MethodHandles.arrayElementVarHandle(int[].class)真实拿到一个能访问数组元素的VarHandle;对int[]{1,2,3,4,5}真实get(arr,下标2):真实结果是3。真实继续对下标2做compareAndSet(期望3,更新为100):真实成功,数组真实变成[1,2,100,4,5]——同一套VarHandle API真实既能操作对象字段,也能操作数组元素,接口是统一的。"}}},{"note":"VarHandle真实提供了不同强度的访问模式:setRelease(c,55)(释放语义写入)配合getAcquire(c)(获取语义读取):真实读到的结果是55——这一对方法真实提供了比plain get/set更弱、但比volatile更轻量的内存语义,VarHandle把过去只能通过sun.misc.Unsafe才能拿到的这些细粒度控制,真实变成了官方标准API。","s":{"kv":{"items":[["vh.set(c,5)后, 普通读c.value","5"],["compareAndSet(期望5→10) / compareAndSet(期望5→99,此时已是10)","true,变10 / false,真实不变"],["getAndAdd(c,7)真实返回值 / 加完后的真实新值","10(旧值) / 17"],["arr[2]的VarHandle读取值 / 对arr[2]做CAS后的数组","3 / [1,2,100,4,5]"],["setRelease(c,55)后, getAcquire(c)","55(release-acquire真实配对生效)"]],"hl":["setRelease(c,55)后, getAcquire(c)"]},"info":{"text":"VarHandle真实提供了不同强度的访问模式:setRelease(c,55)(释放语义写入)配合getAcquire(c)(获取语义读取):真实读到的结果是55——这一对方法真实提供了比plain get/set更弱、但比volatile更轻量的内存语义,VarHandle把过去只能通过sun.misc.Unsafe才能拿到的这些细粒度控制,真实变成了官方标准API。"}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1000); };
+go(0);
+})();
+</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文全部结果均在本机真实运行 Java 17 得到,8线程CAS测试重复运行结果均精确等于80万,零丢失。</li>
+      <li>和<a href="java-longadder-vs-atomic.html" target="_blank" rel="noopener">LongAdder vs AtomicInteger</a>那篇一起看,能更完整理解 JDK 并发包在不同抽象层级上提供的原子操作工具。</li>
+      <li>没有涉及:VarHandle 的内存序变体(acquire/release/opaque模式,对应不同强度的可见性保证)、VarHandle 对数组元素和堆外内存的原子操作支持——这两个话题留给系列后面按需再写。</li>
+    </ul>
+  </div>
+</section>
+
+<a class="next-post" href="java-stack-overflow.html" target="_blank" rel="noopener">
+  <div><div class="t1">下一篇 · Java 内部原理 72</div><div class="t2">StackOverflowError 真实验证:栈帧数被隐藏上限掩盖的真相</div></div>
+  <span>→</span>
+</a>
+
+</div>
+<footer>Java 内部原理 · VarHandle 原子操作 · 数据来自本机 Java 17 实验</footer>
+</body>
+</html>

@@ -1,0 +1,91 @@
+import sys, os, base64, pathlib; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from sl import *
+tee('s44'); reset_s()
+r = subprocess.run([SPY, '-c', 'from scrapy.settings import default_settings as d; import pprint; pprint.pprint(d.DOWNLOAD_HANDLERS_BASE, width=120)'], capture_output=True, text=True).stdout
+print('== 一:DOWNLOAD_HANDLERS_BASE(协议 → 处理器类)')
+print('\n'.join('  ' + l for l in r.strip().split('\n')))
+class Site:
+    def __init__(self): self.log = []
+    def __call__(self, h):
+        self.log.append((h.path, dict(h.hdrs), h.client_address))
+        h.reply(200, f'<html>{h.path}</html>', {'Content-Type': 'text/html', 'X-Test': 'yes'})
+def go(code, settings=None, tag='s44', sv=None):
+    d = sdir(tag); sv = sv or Site()
+    with Srv(sv) as s:
+        rc, out, t = runspider(d, code.replace('@U@', s.url('').rstrip('/')).replace('@PORT@', str(s.port)).replace('@DIR@', str(d)), dict({'LOG_LEVEL': 'INFO', 'RETRY_ENABLED': 0}, **(settings or {})))
+    return sv, ev(d), out, stats(out), d
+
+print('== 二:file:// 和 data: 协议不经过网络:响应类、状态码、头、正文')
+d0 = sdir('s44b'); (d0 / 'hello.html').write_text('<html><title>local file</title></html>'); (d0 / 'blob.bin').write_bytes(bytes(range(256)))
+payload = base64.b64encode('数据 URI 里的中文'.encode()).decode()
+CODE2 = f"""
+import scrapy
+class S(scrapy.Spider):
+    name = 's'
+    async def start(self):
+        for u in ({('file://' + str(d0) + '/hello.html')!r}, {('file://' + str(d0) + '/blob.bin')!r}, {('file://' + str(d0) + '/missing.html')!r}, {('file://' + str(d0))!r}, 'data:text/plain;charset=utf-8;base64,{payload}', 'data:,hello%20world', 'data:text/html,<h1>x</h1>'):
+            yield scrapy.Request(u, callback=self.cb, errback=self.eb)
+    def cb(self, r): EV(u=r.url.rsplit("/", 1)[-1][:26], cls=type(r).__name__, status=r.status, n=len(r.body), headers=dict((k.decode(), v[0].decode()) for k, v in r.headers.items()), text=r.text[:20] if hasattr(r, 'text') else None)
+    def eb(self, f): EV(u=f.request.url.rsplit("/", 1)[-1][:26], exc=type(f.value).__name__ + ': ' + str(f.value)[:50])
+"""
+sv, E, out, st, d = go(CODE2, tag='s44b2')
+for x in E:
+    print(f'  …{x["u"][-26:]:<28}' + (f'{x["cls"]:<14}status={x["status"]} {x["n"]} 字节 头={x["headers"]} 文本={x["text"]!r}' if 'cls' in x else f'错误 {x["exc"].replace(str(d0), "<dir>")}'))
+
+print('== 三:自定义处理器:给新协议 myproto:// 写一个 download_request(request) → Response 的类,用 DOWNLOAD_HANDLERS 注册;把 ftp 设成 None 即禁用')
+sv, E, out, st, d = go("""
+import scrapy
+from scrapy.http import TextResponse
+from scrapy.core.downloader.handlers.base import BaseDownloadHandler
+class MyHandler(BaseDownloadHandler):
+    async def download_request(self, request):
+        EV(e='handler 被调用', url=request.url)
+        return TextResponse(request.url, body=('hello from myproto: ' + request.url.split('//', 1)[1]).encode(), encoding='utf-8', status=200)
+class S(scrapy.Spider):
+    name = 's'
+    custom_settings = {'DOWNLOAD_HANDLERS': {'myproto': MyHandler, 'ftp': None}}
+    async def start(self):
+        yield scrapy.Request('myproto://some/resource', callback=self.cb, errback=self.eb)
+        yield scrapy.Request('ftp://example.com/x', callback=self.cb, errback=self.eb)
+    def cb(self, r): EV(who='callback', url=r.url, status=r.status, text=r.text)
+    def eb(self, f): EV(who='errback', url=f.request.url, exc=type(f.value).__name__ + ': ' + str(f.value)[:80])
+""")
+for x in E: print('  ' + str({k: v for k, v in x.items() if k != 't'}))
+
+print('== 四:把 http/https 换成 aiohttp 处理器(DOWNLOAD_HANDLERS,仍在默认的 asyncio reactor 下):实验性警告、每域名限制是否生效、bindaddress、响应上的 ip_address / protocol')
+AIO = {'http': 'scrapy.core.downloader.handlers._aiohttp.AiohttpDownloadHandler', 'https': 'scrapy.core.downloader.handlers._aiohttp.AiohttpDownloadHandler'}
+class Slow(Site):
+    def __init__(self): super().__init__(); import threading; self.lock = threading.Lock(); self.cur = 0; self.peak = 0
+    def __call__(self, h):
+        with self.lock: self.cur += 1; self.peak = max(self.peak, self.cur)
+        if h.path != '/seed': time.sleep(0.2)
+        h.reply(200, '<html>x</html>', {'Content-Type': 'text/html'})
+        with self.lock: self.cur -= 1
+CODE4 = """
+import scrapy
+class S(scrapy.Spider):
+    name = 's'
+    async def start(self): yield scrapy.Request('@U@/seed')
+    def parse(self, response):
+        if response.url.endswith('/seed'):
+            EV(e='response', ip=str(response.ip_address), protocol=response.protocol, cert=str(response.certificate), cls=type(response).__name__)
+            for i in range(48): yield scrapy.Request('@U@/p%d' % i, callback=self.sub)
+    def sub(self, response): pass
+"""
+for tag, st in (('默认 HTTP11DownloadHandler', {}), ('AiohttpDownloadHandler', {'DOWNLOAD_HANDLERS': json.dumps(AIO)})):
+    sv = Slow()
+    sv_, E, out, stt, d = go(CODE4, dict({'CONCURRENT_REQUESTS': 100, 'CONCURRENT_REQUESTS_PER_DOMAIN': 4}, **st), sv=sv)
+    x = [e for e in E if e.get('e') == 'response'][0]
+    warn = [l.strip()[:100] for l in out.split(chr(10)) if 'experimental' in l]
+    print(f'  {tag}:48 个各 0.2 s 的请求、每域名并发 4 → 服务器并发峰值 {sv.peak},总耗时 {stt["elapsed_time_seconds"]:.2f} s;response.ip_address={x["ip"]},protocol={x["protocol"]},certificate={x["cert"]}')
+    if warn: print('      警告:' + warn[0].split('] ', 1)[-1])
+for tag, meta in (('meta bindaddress=("127.0.0.1", 0)', "{'bindaddress': ('127.0.0.1', 0)}"), ('meta proxy="http://127.0.0.1:1"', "{'proxy': 'http://127.0.0.1:1'}")):
+    sv, E, out, st, d = go(f"""
+import scrapy
+class S(scrapy.Spider):
+    name = 's'
+    async def start(self): yield scrapy.Request('@U@/x', meta={meta}, callback=self.cb, errback=self.eb)
+    def cb(self, r): EV(who='callback')
+    def eb(self, f): EV(who='errback', exc=type(f.value).__name__, msg=str(f.value)[:80])
+""", {'DOWNLOAD_HANDLERS': json.dumps(AIO)})
+    print(f'  aiohttp 处理器 + {tag}:{re.sub(r"0x[0-9a-f]+", "0x…", str([{k: v for k, v in x.items() if k != "t"} for x in E]))};日志 {[l.split("] ", 1)[1].strip()[:110] for l in out.split(chr(10)) if "not supported" in l or "bindaddress" in l][:1]}')

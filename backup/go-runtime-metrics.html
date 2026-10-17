@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>runtime/metrics:读运行时指标的稳定接口</title>
+<meta name="description" content="在 Go 1.27.1 里实测 runtime/metrics:共 107 个指标(75 个累计型);分配字节数、GC 次数、Sys 与 MemStats 逐字节一致,goroutine 数 66 对 NumGoroutine 的 51(指标包含系统 goroutine);读 1 个指标 188 ns,读全部 1934 ns,ReadMemStats 22760 ns;读不存在的指标名返回 KindBad;并读 /sched/latencies 直方图。">
+<link rel="canonical" href="https://bigywater.tech/go-runtime-metrics.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="runtime/metrics:读运行时指标的稳定接口">
+<meta property="og:description" content="在 Go 1.27.1 里实测 runtime/metrics:共 107 个指标(75 个累计型);分配字节数、GC 次数、Sys 与 MemStats 逐字节一致,goroutine 数 66 对 NumGoroutine 的 51(指标包含系统 goroutine);读 1 个指标 188 ns,读全部 1934 ns,ReadMemStats 22760 ns;读不存在的指标名返回 KindBad;并读 /sched/latencies 直方图。">
+<meta property="og:url" content="https://bigywater.tech/go-runtime-metrics.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="runtime/metrics:读运行时指标的稳定接口">
+<meta name="twitter:description" content="在 Go 1.27.1 里实测 runtime/metrics:共 107 个指标(75 个累计型);分配字节数、GC 次数、Sys 与 MemStats 逐字节一致,goroutine 数 66 对 NumGoroutine 的 51(指标包含系统 goroutine);读 1 个指标 188 ns,读全部 1934 ns,ReadMemStats 22760 ns;读不存在的指标名返回 KindBad;并读 /sched/latencies 直方图。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">1990</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">64</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#00799A; --series-c-soft:#D9F1F8;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#4FC3E8; --series-c-soft:#0B2A33;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#4FC3E8; --series-c-soft:#0B2A33;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Go · 65</div>
+  <h1>runtime/metrics:读运行时指标的稳定接口</h1>
+  <p>runtime.ReadMemStats 能读的东西有限,而且读一次要 2 万多纳秒。runtime/metrics 是更稳定的替代:每个指标一个字符串键,可以只读你要的。这篇列出全部指标,和 MemStats 对账,量读取成本,并读了一个调度等待的直方图。</p>
+  <div class="hero-fact">
+<div><div class="num">107</div><div class="lbl">Go 1.27.1 里 metrics.All() 返回的指标数</div></div><div><div class="num">188 ns vs 22760 ns</div><div class="lbl">读 1 个指标与 runtime.ReadMemStats 的单次耗时</div></div><div><div class="num">66 vs 51</div><div class="lbl">/sched/goroutines 指标与 NumGoroutine 的差:前者包含系统 goroutine</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="go-sysmon.html">sysmon:后台监控线程在检查什么</a></div>
+<section>
+  <h2>指标清单</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  metrics.All() 共 107 个指标;累计型(Cumulative)75 个;按取值类型:uint64 87 / float64 12 / 直方图 8
+  按第一段路径分组:/cgo/…:1  /cpu/…:11  /gc/…:26  /godebug/…:41  /memory/…:14  /sched/…:13  /sync/…:1
+    /gc/heap/live:bytes                          uint64  累计=false
+    /memory/classes/total:bytes                  uint64  累计=false
+    /sched/gomaxprocs:threads                    uint64  累计=false
+    /sched/goroutines-created:goroutines         uint64  累计=true
+    /sched/goroutines/not-in-go:goroutines       uint64  累计=false
+    /sched/goroutines/runnable:goroutines        uint64  累计=false
+    /sched/goroutines/running:goroutines         uint64  累计=false
+    /sched/goroutines/waiting:goroutines         uint64  累计=false
+    /sched/goroutines:goroutines                 uint64  累计=false
+    /sched/latencies:seconds                     直方图     累计=true
+    /sched/pauses/stopping/gc:seconds            直方图     累计=true
+    /sched/pauses/stopping/other:seconds         直方图     累计=true
+    /sched/pauses/total/gc:seconds               直方图     累计=true
+    /sched/pauses/total/other:seconds            直方图     累计=true
+    /sched/threads/total:threads                 uint64  累计=false</pre></div>
+  <p>107 个指标里 /godebug 占 41 个(每个 GODEBUG 设置一个计数器),/gc 26 个,/memory 14 个,/sched 13 个。值类型只有三种:uint64、float64 和直方图。指标名里带单位(冒号后面),单位变了就是新的键。</p>
+</section>
+<section>
+  <h2>读错名字不会崩</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  读不存在的指标名:Kind=0(KindBad=0);同一次 Read 里存在的指标 Kind=1 值=0</pre></div>
+  <p>读一个不存在的指标得到 <code>KindBad</code>,同一次 <code>Read</code> 里其它指标正常。所以升级 Go 版本后某个指标被删了,你的程序不会 panic,但如果不检查 <code>Kind</code>,就会读到 0。</p>
+</section>
+<section>
+  <h2>和 MemStats 对得上,除了 goroutine 数</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  分配 100 个 1MiB 切片并 GC 一次之后:
+    /gc/heap/allocs:bytes 增加 104913992  ←→  MemStats.TotalAlloc 增加 104913992
+    /gc/heap/allocs:objects 增加 331  ←→  MemStats.Mallocs 增加 331
+    /gc/cycles/total:gc-cycles = 7  ←→  MemStats.NumGC = 7
+    /sched/goroutines:goroutines = 66  ←→  runtime.NumGoroutine() = 51
+    /memory/classes/total:bytes = 118708504  ←→  MemStats.Sys = 118708504</pre></div>
+  <p>分配字节数、对象数、GC 次数、Sys 都与 <code>MemStats</code> 完全一致。goroutine 数不一致不是 bug:源码里 <code>NumGoroutine</code> 调的是 <code>gcount(false)</code>(不含系统 goroutine),指标用的是 <code>gcount(true)</code>。这 15 个差值是系统 goroutine,我是从两处源码推出来的,没有逐个列举它们。</p>
+</section>
+<section>
+  <h2>读起来便宜</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  metrics.Read(1 个指标,复用切片):188 ns/次,0 次分配
+  metrics.Read(全部 107 个指标,复用切片):1934 ns/次,0 次分配
+  runtime.ReadMemStats:22760 ns/次,0 次分配</pre></div>
+  <p>复用同一个 <code>[]Sample</code>,读 1 个指标 188 ns,读全部 107 个 1934 ns,都没有分配;<code>ReadMemStats</code> 要 22760 ns。需要周期性采样时更适合 metrics。(这里只比较了耗时,没有测它们对其它 goroutine 的影响。)</p>
+</section>
+<section>
+  <h2>直方图</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  GOMAXPROCS=1,200 个各自计算约 3 毫秒的 goroutine 同时就绪:/sched/latencies:seconds 直方图共 162 个桶、记录 23 次调度等待
+    p50:落在桶 [0.0838861 s, 0.100663 s)
+    p90:落在桶 [0.134218 s, 0.167772 s)
+    p99:落在桶 [0.167772 s, 0.201327 s)
+    最大:落在桶 [0.167772 s, 0.201327 s)</pre></div>
+  <p>调度等待的直方图有 162 个桶,累计型。在只有一个 P、200 个 goroutine 同时就绪的场景下,等待时间从几十毫秒到约 200 毫秒。只记录了 23 次,而不是 200 次;为什么我没有查,可能是采样,没有验证。要用它算百分位,需要自己遍历桶,上面是我的做法。</p>
+</section>
+<section>
+  <h2>文档里的约定</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  Thus, users of this API are encouraged to sample supported metrics defined by
+  the slice returned by All to remain compatible across Go versions. Of course,
+  situations arise where reading specific metrics is critical. For these cases,
+  ---
+  the "kind" for a given metric is guaranteed not to change. If it must change,
+  then a new metric will be introduced with a new key and a new "kind."
+  
+  ---
+  In order to improve ease-of-use, this package promises to never produce the
+  following classes of floating-point values: NaN, infinity.
+  
+  ---
+  
+  /sched/latencies:seconds
+  Distribution of the time goroutines have spent in the scheduler
+  in a runnable state before actually running. Bucket counts
+  ---
+  源码对照:
+    runtime/debug.go:180: return int(gcount(false))
+    runtime/metrics.go:864: a.gTotal = uint64(gcount(true))</pre></div>
+  <p>指标的 kind 保证不变、浮点值不会出现 NaN 和无穷大;但指标本身可能被弃用和删除,文档建议对 <code>All</code> 返回的全部指标采样以保持兼容。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">runtime/metrics</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "b", "kind": "bars", "label": "数字对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "metrics.All() 在 Go 1.27.1(arm64 macOS)上共 107 个指标:累计型 75 个;按取值类型 uint64 87 个、float64 12 个、直方图 8 个。按第一段路径分:/cgo 1 个、/cpu 11 个、/gc 26 个、/godebug 41 个、/memory 14 个、/sched 13 个、/sync 1 个。/sched 下有 goroutines、goroutines/runnable、goroutines/waiting、goroutines-created、threads/total,以及 latencies 和四个 pauses 直方图。", "s": {"t": {"lines": ["  metrics.All() 共 107 个指标;累计型(Cumulative)75 个;按取值类型:uint64 87 / float64 12 / 直方图 8", "  按第一段路径分组:/cgo/…:1  /cpu/…:11  /gc/…:26  /godebug/…:41  /memory/…:14  /sched/…:13  /sync/…:1", "    /gc/heap/live:bytes                          uint64  累计=false", "    /memory/classes/total:bytes                  uint64  累计=false", "    /sched/gomaxprocs:threads                    uint64  累计=false", "    /sched/goroutines-created:goroutines         uint64  累计=true", "    /sched/goroutines/not-in-go:goroutines       uint64  累计=false", "    /sched/goroutines/runnable:goroutines        uint64  累计=false", "    /sched/goroutines/running:goroutines         uint64  累计=false", "    /sched/goroutines/waiting:goroutines         uint64  累计=false", "    /sched/goroutines:goroutines                 uint64  累计=false", "    /sched/latencies:seconds                     直方图     累计=true", "    /sched/pauses/stopping/gc:seconds            直方图     累计=true", "    /sched/pauses/stopping/other:seconds         直方图     累计=true", "    /sched/pauses/total/gc:seconds               直方图     累计=true", "    /sched/pauses/total/other:seconds            直方图     累计=true", "    /sched/threads/total:threads                 uint64  累计=false"], "cur": [], "mark": [], "done": []}, "done": [0, 1], "mark": [5, 11], "b": {"items": [["/godebug", 41, "41"], ["/gc", 26, "26"], ["/memory", 14, "14"], ["/sched", 13, "13"], ["/cpu", 11, "11"]], "max": 41, "cur": [], "mark": [3], "done": [0, 1]}, "kv": {"items": [["指标总数", "107(累计型 75)"], ["类型", "uint64 87 / float64 12 / 直方图 8"], ["最多的一组", "/godebug 41 个"]], "hl": ["最多的一组"]}}}, {"note": "读一个不存在的指标名不会报错也不会 panic:Kind=0,正是 KindBad;同一次 Read 里存在的指标(/gc/cycles/total:gc-cycles)Kind=1(uint64),值为 0。", "s": {"t": {"lines": ["  读不存在的指标名:Kind=0(KindBad=0);同一次 Read 里存在的指标 Kind=1 值=0"], "cur": [], "mark": [], "done": []}, "mark": [0], "kv": {"items": [["不存在的指标", "Kind=0 = KindBad"], ["同一次 Read 的其它指标", "照常读到"], ["用法", "读完先检查 Kind"]], "hl": ["用法"]}}}, {"note": "对账:分配 100 个 1MiB 切片并 GC 一次之后,/gc/heap/allocs:bytes 增加 104913992,与 MemStats.TotalAlloc 增加量相同;/gc/heap/allocs:objects 增加 331,与 Mallocs 相同;/gc/cycles/total:gc-cycles = 7 = NumGC;/memory/classes/total:bytes = 118708504 = MemStats.Sys。唯一对不上的是 /sched/goroutines:goroutines = 66,而 runtime.NumGoroutine() = 51。", "s": {"t": {"lines": ["  分配 100 个 1MiB 切片并 GC 一次之后:", "    /gc/heap/allocs:bytes 增加 104913992  ←→  MemStats.TotalAlloc 增加 104913992", "    /gc/heap/allocs:objects 增加 331  ←→  MemStats.Mallocs 增加 331", "    /gc/cycles/total:gc-cycles = 7  ←→  MemStats.NumGC = 7", "    /sched/goroutines:goroutines = 66  ←→  runtime.NumGoroutine() = 51", "    /memory/classes/total:bytes = 118708504  ←→  MemStats.Sys = 118708504"], "cur": [], "mark": [], "done": []}, "done": [1, 2, 3, 5], "mark": [4], "kv": {"items": [["allocs / Mallocs / NumGC / Sys", "和 MemStats 逐字节一致"], ["goroutines", "66 对 51,差 15"], ["原因(见第六节源码)", "指标按 gcount(true),NumGoroutine 按 gcount(false)"]], "hl": ["goroutines"]}}}, {"note": "读一次指标的成本(复用切片):metrics.Read 读 1 个指标 188 ns,0 次分配;读全部 107 个指标 1934 ns,0 次分配;runtime.ReadMemStats 22760 ns,0 次分配。", "s": {"t": {"lines": ["  metrics.Read(1 个指标,复用切片):188 ns/次,0 次分配", "  metrics.Read(全部 107 个指标,复用切片):1934 ns/次,0 次分配", "  runtime.ReadMemStats:22760 ns/次,0 次分配"], "cur": [], "mark": [], "done": []}, "mark": [0, 1, 2], "b": {"items": [["Read 1 个指标(ns)", 188, "188"], ["Read 全部 107 个指标", 1934, "1934"], ["ReadMemStats", 22760, "22760"]], "max": 22760, "cur": [], "mark": [2], "done": [0, 1]}, "kv": {"items": [["读 1 个", "188 ns"], ["读全部 107 个", "1934 ns"], ["ReadMemStats", "22760 ns"]], "hl": ["读全部 107 个"]}}}, {"note": "直方图指标:GOMAXPROCS=1,200 个各自计算约 3 毫秒的 goroutine 同时就绪。/sched/latencies:seconds(goroutine 在可运行状态等待上 CPU 的时间)共 162 个桶、一共只记录了 23 次(为什么不是 200 次我没有查)。p50 落在 [0.0838861 s, 0.100663 s),p90 落在 [0.134218 s, 0.167772 s),p99 和最大落在 [0.167772 s, 0.201327 s)。", "s": {"t": {"lines": ["  GOMAXPROCS=1,200 个各自计算约 3 毫秒的 goroutine 同时就绪:/sched/latencies:seconds 直方图共 162 个桶、记录 23 次调度等待", "    p50:落在桶 [0.0838861 s, 0.100663 s)", "    p90:落在桶 [0.134218 s, 0.167772 s)", "    p99:落在桶 [0.167772 s, 0.201327 s)", "    最大:落在桶 [0.167772 s, 0.201327 s)"], "cur": [], "mark": [], "done": []}, "done": [1, 2], "mark": [0, 3, 4], "b": {"items": [["p50 桶下界(ms)", 83.9, "≈84"], ["p90 桶下界", 134.2, "≈134"], ["p99/最大 桶下界", 167.8, "≈168"]], "max": 167.8, "cur": [], "mark": [1, 2], "done": [0]}, "kv": {"items": [["桶数", "162"], ["记录次数", "23(原因未查)"], ["p99 / 最大", "约 168–201 ms"]], "hl": ["p99 / 最大"]}}}, {"note": "文档与源码:go doc runtime/metrics 说,鼓励用户对 All 返回的指标采样,以便跨版本兼容;指标的 kind “is guaranteed not to change”;包承诺 never produce NaN 或无穷大的浮点值。/sched/latencies:seconds 的说明是“goroutine 在调度器里处于可运行状态、真正开始运行之前的时间分布”。源码:runtime.NumGoroutine 是 gcount(false),/sched/goroutines 指标的 gTotal 是 gcount(true)——所以指标多出的 15 个是系统 goroutine。", "s": {"t": {"lines": ["  Thus, users of this API are encouraged to sample supported metrics defined by", "  the slice returned by All to remain compatible across Go versions. Of course,", "  situations arise where reading specific metrics is critical. For these cases,", "  ---", "  the \"kind\" for a given metric is guaranteed not to change. If it must change,", "  then a new metric will be introduced with a new key and a new \"kind.\"", "  ---", "  In order to improve ease-of-use, this package promises to never produce the", "  following classes of floating-point values: NaN, infinity.", "  ---", "  /sched/latencies:seconds", "  Distribution of the time goroutines have spent in the scheduler", "  in a runnable state before actually running. Bucket counts", "  ---", "  源码对照:", "    runtime/debug.go:180: return int(gcount(false))", "    runtime/metrics.go:864: a.gTotal = uint64(gcount(true))"], "cur": [], "mark": [], "done": []}, "done": [0, 4, 7], "mark": [11, 15, 16], "kv": {"items": [["兼容性", "kind 保证不变;指标可能被弃用"], ["浮点值", "不会出现 NaN 与无穷大"], ["66 对 51", "gcount(true) 对 gcount(false)"]], "hl": ["66 对 51"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / Go 1.27.1(brew);用 go run / go build / go test 直接编译运行,需要第三方库时经代理从 proxy.golang.org 下载;计时用 time.Now / testing.B,数字每次运行会有小幅抖动。指标个数与分类来自 metrics.All();对账用同一个进程里连续读 MemStats 与 metrics(分配 100 个 1MiB 切片并 GC);成本用 testing.Benchmark;直方图实验用 GOMAXPROCS=1;读过的文档与源码:go doc runtime/metrics,runtime/debug.go 的 NumGoroutine,runtime/metrics.go 里 gTotal 的计算</li><li>没有验证:系统 goroutine 具体是哪些、直方图只记录 23 次的原因、各指标在 Linux 上的取值差异、读指标对应用的干扰、/godebug 计数器的实际用法、长时间采样的开销</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="go-pprof-cpu.html">
+    <div>
+      <div class="t1">下一篇 · GO 66</div>
+      <div class="t2">CPU profile:采样是怎么做的,火焰图怎么读</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Go · runtime/metrics:读运行时指标的稳定接口 · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

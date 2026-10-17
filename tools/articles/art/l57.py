@@ -1,0 +1,20 @@
+from lib import *
+S = SS('l57')
+steps = [
+    step("协议 v0 的 git clone(-c protocol.version=0)用 GIT_TRACE_PACKET 看到的交互(共 23 行):先是服务端 upload-pack> 报出每个 ref:<sha> HEAD\\0multi_ack thin-pack side-band side-band-64k ofs-delta … 这一行把能力(capabilities)用 \\0 接在第一个 ref 后面,再是 refs/heads/dev、refs/heads/main,以 0000(flush-pkt)结束。客户端 clone> 回 want <sha> multi_ack_detailed side-band-64k thin-pack no-progress ofs-delta … agent=git/2.54.0-Darwin(第一条 want 带上客户端选择的能力),又 want 两个 ref,0000,done。服务端回 NAK(没有共同的提交,因为是新克隆),然后在 side-band 里发 PACK 数据,最后 0000。", t=tl(S(1)), mark=lidx(S(1), 'clone> want', 'clone> done', 'upload-pack> NAK', 'sideband< PACK'), done=lidx(S(1), 'upload-pack> <sha> HEAD', 'refs/heads/dev', 'refs/heads/main', 'clone< 0000'), kv=KV([['服务端先说话', '列出所有 ref + capabilities'], ['客户端', 'want(要什么)… 0000 … done'], ['服务端', 'NAK/ACK,然后发 pack(side-band)']], ['服务端先说话'])),
+    step("pkt-line 的格式:直接调用 git upload-pack --stateless-rpc --advertise-refs 拿原始字节,每行前面是 4 位十六进制的长度(含这 4 个字符):偏移 0 处长度 0112(= 274 字节)是 HEAD 那一行,后面用 \\0 接着一大串 capabilities;偏移 274 处 003c(60)是 refs/heads/dev;偏移 334 处 003d(61)是 refs/heads/main;偏移 395 处 0000 是 flush-pkt(没有长度的特殊包)。三行加结尾 4 字节:274 + 60 + 61 + 4 = 399,正好是总字节数。", t=tl(S(2)), mark=lidx(S(2), '偏移 0', '偏移 395', '399'), done=lidx(S(2), '偏移 274', '偏移 334', '总共 3 个非空'), kv=KV([['4 位十六进制长度', '含自己这 4 个字符'], ['0000', 'flush-pkt,一段结束'], ['第一行', 'ref 后面 \\0 接 capabilities']], ['4 位十六进制长度'])),
+    step("增量 fetch:客户端已经有 S1、S2,源仓库推了新的 S3 之后 git fetch:跟踪里只有 fetch> want <sha>(要新的那个)加 0000、fetch> have <sha>(我已经有这个)和 done;服务端回 ACK <sha> common(这是我们共同有的)和 ACK <sha>,然后只发缺的对象。fetch 之前客户端有 6 个对象,之后 10 个,新增 4 个(1 个 commit、1 个 tree、2 个 blob)。have 就是让服务端知道从哪里算起。", t=tl(S(3)), mark=lidx(S(3), 'fetch> want', 'fetch> have', 'ACK <sha> common'), done=lidx(S(3), 'fetch> done', '新增 4 个对象'), b=bars([['fetch 之前', 6, '6 个对象'], ['fetch 之后', 10, '10 个对象']], 10, mark=[1], done=[0]), kv=KV([['want', '我要这个提交'], ['have', '我已经有这个提交'], ['ACK common', '服务端确认这是共同点'], ['只发缺的', '新增 4 个对象']], ['have'])),
+    step("已经是最新时再 fetch:跟踪只有 10 行,是服务端列出的 ref(HEAD、dev、main)和客户端读到的同样内容,want 行 0 条、have 行 0 条、done 0 条——客户端看到所有 ref 的值都和本地一样,就不发起任何 want,协议到此结束。fetch 的“空操作”只是读一遍 ref 列表。", t=tl(S(4)), mark=lidx(S(4), 'want 行 0 条'), done=lidx(S(4), 'upload-pack> <sha> HEAD', 'refs/heads/dev'), kv=KV([['没有变化', '不发 want'], ['代价', '只是传一遍 ref 列表'], ['ref 很多时', 'v0 的 ref 列表很长(v2 改进了)']], ['没有变化'])),
+]
+A = mkarti('l57', 57, 'Git,upload-pack,GIT_TRACE_PACKET,want,have,协议,真实验证,动画演示',
+    '用 GIT_TRACE_PACKET 和 git upload-pack --advertise-refs 看 v0 协议的交互:服务端先列 ref 并把 capabilities 用 \\0 接在第一个 ref 后,客户端 want … done,服务端 NAK/ACK 后在 side-band 里发 PACK;pkt-line 是 4 位十六进制长度(含自身)加内容,0000 是 flush;增量 fetch 靠 have 只传缺的 4 个对象;已是最新时不发 want。',
+    'git clone 和 git fetch 时客户端与服务端到底说了什么?want 和 have 是什么意思?这篇用 GIT_TRACE_PACKET 把 v0 协议的交互全部打出来,再用 upload-pack --advertise-refs 解析原始的 pkt-line 字节。',
+    [('4 位十六进制', 'pkt-line 的长度前缀,含自己这 4 个字符;0000 是 flush-pkt'), ('want / have / done', '客户端“要什么、已有什么、说完了”的三个动词'), ('399 字节', '三个 ref 的 v0 广告(274 + 60 + 61 + 4)总字节数')],
+    [('一次 clone 的交互', '<p>服务端先开口:每个 ref 一个 pkt-line(<code>&lt;sha&gt; 名字</code>),第一个 ref 后面用 <code>\\0</code> 接上 capabilities,最后一个 flush-pkt <code>0000</code>。客户端用 <code>want &lt;sha&gt;</code> 列出要的提交(第一条带上它选择的 capabilities),<code>0000</code> 结束,<code>done</code> 表示没有更多要说的。新克隆没有共同点,服务端回 <code>NAK</code>,然后在 side-band 里发 pack。</p>'),
+     ('pkt-line', '<p>每个包前面是 4 位十六进制的长度(包括这 4 个字符本身),<code>0000</code> 是没有内容的特殊包 flush-pkt,表示一段结束。直接调用 <code>upload-pack --advertise-refs</code> 解析原始字节,长度之和正好等于总字节数。</p>'),
+     ('have', '<p>增量 fetch 时客户端用 <code>have</code> 告诉服务端自己已有的提交,服务端回 <code>ACK … common</code>,找到共同点后只打包缺失的对象(本例新增 4 个)。</p>'),
+     ('无需传输', '<p>如果所有 ref 本地都已是最新,客户端不发 want,协议在广告之后结束。</p>')],
+    steps,
+    [ENV_I_GIT + '。用 -c protocol.version=0 强制 v0 协议(本机 git 默认 v2,见下一篇);服务端是本机裸仓库(file://);跟踪输出里的 hash 做了替换;pkt-line 解析是我写的 Python,对账对象是总字节数',
+     '没有验证:multi_ack_detailed 的 ready 流程在大量 have 时的多轮协商(见 fetch 协商一篇);shallow/deepen;side-band 内部的包格式(1/2/3 字节标识);smart HTTP 上同样的交互(stateless-rpc);服务端 hook(pre-receive 等)在 push 中的位置'],
+    'upload-pack 的交互')

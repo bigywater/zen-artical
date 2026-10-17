@@ -1,0 +1,21 @@
+from lib import *
+S = SS('u86')
+R = J('u86'); M = {r[0]: (r[1], r[2]) for r in R['matrix']}
+def ss(names): return KV([[n, ('Send ' + ('✓' if M[n][0] else '✗') + '  Sync ' + ('✓' if M[n][1] else '✗'))] for n in names], [names[-1]])
+steps = [
+    step("用 fn assert<T: Send>() / assert<T: Sync>() 逐个试编译 22 个类型。基础类型(i32、String、Vec<u8>、&str、&mut i32)都是 Send + Sync。", t=tl(S(1)), done=lidx(S(1), 'i32 ', 'String ', 'Vec<u8>', '&str', '&mut i32'), kv=ss(['i32', 'String', 'Vec<u8>', '&mut i32'])),
+    step("Rc<i32> 两个都不是(引用计数不是原子的);Arc<i32> 两个都是。Weak<i32>(Rc 的 Weak)也都不是。", t=tl(S(1)), done=lidx(S(1), 'Arc<i32>'), mark=lidx(S(1), 'Rc<i32>', 'Weak<i32>'), kv=ss(['Rc<i32>', 'Weak<i32>(Rc)', 'Arc<i32>'])),
+    step("Send 与 Sync 是两回事:Cell<i32>、RefCell<i32> 是 Send 但不是 Sync(可以搬到别的线程,但不能让多个线程同时引用);mpsc::Receiver<i32> 同样 Send 不 Sync;MutexGuard<i32> 反过来,Sync 但不是 Send。", t=tl(S(1)), mark=lidx(S(1), 'Cell<i32>', 'RefCell<i32>', 'Receiver', 'MutexGuard'), kv=ss(['Cell<i32>', 'RefCell<i32>', 'mpsc::Receiver<i32>', 'MutexGuard<i32>'])),
+    step("带锁与原子的类型都是 Send + Sync:Mutex<i32>、RwLock<i32>、AtomicUsize;Arc<Mutex<i32>> 也是。但组合会传染:Mutex<Rc<i32>> 与 Arc<RefCell<i32>> 都不是 Send 也不是 Sync;*const i32 两个都不是。", t=tl(S(1)), done=lidx(S(1), 'Mutex<i32>', 'RwLock<i32>', 'AtomicUsize', 'Arc<Mutex<i32>>'), mark=lidx(S(1), 'Mutex<Rc<i32>>', 'Arc<RefCell<i32>>', '*const i32'), kv=ss(['Mutex<i32>', 'Arc<Mutex<i32>>', 'Mutex<Rc<i32>>', 'Arc<RefCell<i32>>', '*const i32'])),
+    step("trait object 要显式写:Box<dyn Fn()> 不是 Send 也不是 Sync;Box<dyn Fn() + Send> 是 Send,但仍不是 Sync(要 + Sync 才行)。", t=tl(S(1)), mark=lidx(S(1), 'Box<dyn Fn()>', 'Box<dyn Fn() + Send>'), kv=ss(['Box<dyn Fn()>', 'Box<dyn Fn() + Send>'])),
+    step("Rc 放进 thread::spawn:error[E0277]: `Rc<i32>` cannot be sent between threads safely,help 写着 within `{closure}`, the trait `Send` is not implemented for `Rc<i32>`,note 指出 required by a bound in `spawn`。", t=tl(S(2)), mark=lidx(S(2), 'error[E0277]', 'not implemented for `Rc<i32>`', 'bound in `spawn`'), kv=KV([['spawn 的闭包', '要求 Send'], ['Rc<i32>', '不是 Send']], ['Rc<i32>'])),
+    step("&RefCell 共享给多个线程:error[E0277]: `RefCell<i32>` cannot be shared between threads safely,note 说「required for `&RefCell<i32>` to implement `Send`」—— &T 是 Send 当且仅当 T 是 Sync。换成 Mutex,4 个线程各加 1,结果是 5。", t=tl(S(3)), mark=lidx(S(3), 'error[E0277]', '&RefCell<i32>'), done=lidx(S(3), '5'), kv=KV([['&T: Send', '当且仅当 T: Sync'], ['Mutex 版本', '4 个线程各 +1 → 5']], ['&T: Send'])),
+    step("裸指针包装 P(*mut i32) 放进线程:error[E0277]: `*mut i32` cannot be sent between threads safely,note 指出 appears within the type `P`。加上 unsafe impl Send for P {} 之后编译通过,子线程通过指针得到 42 —— 这是程序员向编译器承诺「我保证安全」,编译器不再检查。", t=tl(S(4)), mark=lidx(S(4), 'error[E0277]', 'appears within the type `P`'), done=lidx(S(4), '42'), kv=KV([['*mut i32', '不是 Send'], ['unsafe impl Send', '编译器信任你']], ['unsafe impl Send'])),
+    step("Send / Sync 是自动 trait:Ok1 { i32, String } 自动是 Send;Bad1 { i32, Rc<i32> } 只因为含一个 Rc 字段就不是,报错写「within `Bad1`, the trait `Send` is not implemented for `Rc<i32>`」,note「required because it appears within the type `Bad1`」。", t=tl(S(5)), mark=lidx(S(5), 'error[E0277]', 'within `Bad1`', 'appears within the type `Bad1`'), kv=KV([['结构体', '所有字段都是 Send 才是 Send']], ['结构体'])),
+]
+A = mkart('u86', 86, 'Rust,Send,Sync,线程安全,真实验证,动画演示',
+    '用 22 个类型的真实编译验证 Send 与 Sync:Rc 两者皆非、Cell/RefCell/Receiver 是 Send 不 Sync、MutexGuard 是 Sync 不 Send、Mutex/RwLock/Atomic/Arc<Mutex> 两者皆是;跨线程错误 E0277 的真实措辞;裸指针要 unsafe impl Send;自动 trait 沿字段传染。',
+    'Send 和 Sync 是 Rust 并发安全的基石,但名字容易混。这篇不背定义,而是对 22 个常见类型逐个编译验证,再看 Rc、RefCell、裸指针在线程里到底怎么报错,以及为什么一个字段能拖垮整个结构体。',
+    [('22 个', '被逐个编译验证 Send / Sync 的类型数'), ('Send ≠ Sync', 'Cell/RefCell/Receiver 是 Send 不 Sync;MutexGuard 反过来'), ('E0277', '把非 Send / 非 Sync 的值放进线程时的错误码')],
+    [('类型矩阵', '<p>Rc 与 Arc 的区别见<a href="rust-arc-thread-sharing.html">Arc&lt;T&gt; 与跨线程共享所有权</a>。</p>'), ('Rc 跨线程', None), ('Sync 与引用', '<p>Mutex 见<a href="rust-mutex-interior-mutability.html">Mutex&lt;T&gt; 与内部可变性</a>。</p>'), ('裸指针与 unsafe impl', '<p>unsafe 的边界见<a href="rust-unsafe-boundary.html">unsafe 的安全边界</a>。</p>'), ('自动 trait', None)],
+    steps, [ENV_U + '。矩阵用 rustc --emit=metadata 试编译 assert 函数得到', '没有验证:负向 impl(!Send,不稳定)、PhantomData 对 Send/Sync 的影响、unsafe impl Sync 的使用、async 函数返回的 Future 是否 Send(放在异步部分)、其它平台上 Send/Sync 实现是否不同'], 'Send 与 Sync')

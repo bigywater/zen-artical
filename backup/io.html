@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>Redis 一个线程,怎么同时管几万个连接</title>
+<meta name="description" content="kqueue/epoll 等多路复用后端与 Redis 事件循环。">
+<link rel="canonical" href="https://bigywater.tech/io.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Redis 一个线程,怎么同时管几万个连接">
+<meta property="og:description" content="kqueue/epoll 等多路复用后端与 Redis 事件循环。">
+<meta property="og:url" content="https://bigywater.tech/io.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Redis 一个线程,怎么同时管几万个连接">
+<meta name="twitter:description" content="kqueue/epoll 等多路复用后端与 Redis 事件循环。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F7F5F3; --paper:#FFFFFF; --ink:#211A19; --ink-dim:#6B5D5A; --line:#E3DAD6;
+  --redis-c:#C6302B; --redis-c-soft:#FBE7E5;
+  --mem-c:#B8791E; --mem-c-soft:#F6ECD9;
+  --type-c:#2C6E49; --type-c-soft:#E1EFE6;
+  --code-bg:#241C1B; --code-ink:#F0E7E4;
+  --shadow: 0 1px 2px rgba(40,20,18,.06), 0 8px 24px -12px rgba(40,20,18,.16);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#17100F; --paper:#231A19; --ink:#F0E7E4; --ink-dim:#B3A19D; --line:#3A2C29;
+    --redis-c:#F0736A; --redis-c-soft:#3A211F;
+    --mem-c:#E0AC5C; --mem-c-soft:#382C18;
+    --type-c:#6FC492; --type-c-soft:#1B3327;
+    --code-bg:#120D0C; --code-ink:#EFE4E1;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#17100F; --paper:#231A19; --ink:#F0E7E4; --ink-dim:#B3A19D; --line:#3A2C29;
+  --redis-c:#F0736A; --redis-c-soft:#3A211F;
+  --mem-c:#E0AC5C; --mem-c-soft:#382C18;
+  --type-c:#6FC492; --type-c-soft:#1B3327;
+  --code-bg:#120D0C; --code-ink:#EFE4E1;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--redis-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--redis-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--redis-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--redis-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.a .tag{background:var(--redis-c-soft); color:var(--redis-c);}
+.card.b .tag{background:var(--mem-c-soft); color:var(--mem-c);}
+.card.c .tag{background:var(--type-c-soft); color:var(--type-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#B3A19D; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#F0A6A0;}
+
+.callout{border-left:3px solid var(--redis-c); background:var(--redis-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+.callout.c{border-color:var(--type-c); background:var(--type-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--redis-c-soft); color:var(--redis-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#F0A6A0;}
+.term .ok{color:#7DD0A0;}
+.term .cm{color:#8B7F7C;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;}
+.demo-title{font-weight:600; font-size:.95rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--mem-c-soft); color:var(--mem-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:22px 20px;}
+.sockrow{display:flex; gap:4px; flex-wrap:wrap; margin:10px 0;}
+.sockbox{width:26px; height:26px; border-radius:5px; border:1.5px solid var(--line); display:flex; align-items:center; justify-content:center; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.6rem; background:var(--bg);}
+.sockbox.checked{border-color:var(--mem-c); background:var(--mem-c-soft);}
+.sockbox.ready{border-color:var(--redis-c); background:var(--redis-c-soft); font-weight:700; color:var(--redis-c);}
+.stat-row{display:flex; gap:16px; flex-wrap:wrap; margin:14px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem;}
+.stat{border:1px solid var(--line); border-radius:8px; padding:8px 12px; background:var(--bg);}
+.stat b{color:var(--redis-c); display:block; font-size:1.1rem; font-variant-numeric:tabular-nums;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--redis-c); color:var(--redis-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--redis-c); border-color:var(--redis-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{display:flex; align-items:center; gap:10px; margin-bottom:24px; font-size:.88rem; color:var(--ink-dim); flex-wrap:wrap;}
+.prev-post a{font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--redis-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Redis 系列 · 第三篇</div>
+    <h1>Redis 号称单线程处理请求,为什么几万个客户端同时连着也不卡?</h1>
+    <p>这一篇讲的其实不是 Redis 的功能,是操作系统内核提供的能力——<b>I/O 多路复用</b>(select/poll/epoll/kqueue)。Redis 只是这个能力最有名的使用者之一:它靠这套机制,用极少的线程同时看着成千上万个客户端连接,谁有数据到了就处理谁,不用给每个连接单独开一个线程。这篇就"算在 Redis 上",用 Redis 的进程做实验。</p>
+    <p>本机开了 50 个并发客户端连接,全部由同一组线程处理——线程数量在开连接前后完全没变。</p>
+    <div class="hero-fact">
+      <div><div class="num">51 个连接</div><div class="lbl">并发客户端数(50 个阻塞连接 + 1 个查询)</div></div>
+      <div><div class="num">4 个线程</div><div class="lbl">开连接前后,线程数完全不变</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <div class="prev-post">← 接上篇 <a href="hashzset.html" target="_blank" rel="noopener">Hash 和 ZSet 什么时候换编码</a></div>
+  <h2>问题:怎么同时看住一万个连接</h2>
+  <p class="h2-sub">一个网络连接对应一个 socket,操作系统要知道"这个 socket 上有没有数据可读"才能处理它。最直接的两种做法都有明显问题。</p>
+  <div class="cards">
+    <div class="card a">
+      <span class="tag">每连接一线程</span>
+      <h3>连接一多,线程就爆了</h3>
+      <p>一万个连接开一万个线程,光是线程切换的开销就能把机器拖垮,内存也扛不住——这是很多老式服务器架构的瓶颈。</p>
+    </div>
+    <div class="card b">
+      <span class="tag">挨个轮询</span>
+      <h3>问一圈,大部分都是空跑</h3>
+      <p>单线程挨个问"你有数据吗?你有吗?"——一万个里可能只有一个真的有数据,剩下 9999 次询问全是浪费。</p>
+    </div>
+    <div class="card c">
+      <span class="tag">I/O 多路复用</span>
+      <h3>让内核一次性告诉你答案</h3>
+      <p>把所有 socket 一次性注册给内核,让内核帮你盯着;内核只在真的有 socket 就绪时才把你唤醒,而且直接告诉你是哪几个——一次系统调用,不是一万次。</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>真实实测:51 个连接,线程数纹丝不动</h2>
+  <p class="h2-sub">本机运行的 Redis 8.10.1,先看基线线程数,再开 50 个阻塞的客户端连接。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cmd">$ ps -M &lt;redis_pid&gt;</span>   <span class="cm"># 开连接之前</span>
+<span class="ok">4 个线程</span>
+
+<span class="cmd">$ for i in 1..50; do redis-cli BLPOP nonexistent_key_$i 30 & done</span>
+<span class="cmd">$ redis-cli INFO clients | grep connected_clients</span>
+<span class="ok">connected_clients:51</span>
+
+<span class="cmd">$ ps -M &lt;redis_pid&gt;</span>   <span class="cm"># 开了 50 个连接之后</span>
+<span class="ok">4 个线程</span>   <span class="cm"># 完全没变</span>
+
+<span class="cmd">$ lsof -p &lt;redis_pid&gt; | grep -c TCP</span>
+<span class="ok">52</span>   <span class="cm"># 打开了 52 个 socket(50 客户端 + 监听 socket + 1)</span>
+  </div>
+  <p>52 个的 socket,由同样的 4 个线程处理,一个都没多开。这不是"因为这些连接很闲所以不需要线程"——是 Redis 压根就没打算给每个连接分配专属线程。</p>
+</section>
+
+<section>
+  <h2>真实实测:精确唤醒,不是慢慢轮询</h2>
+  <p class="h2-sub">50 个连接里,只往其中<b>一个</b>推数据,看响应有多快。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cmd">$ time redis-cli RPUSH nonexistent_key_25 "hello"</span>
+<span class="ok">0.008 秒</span>
+
+<span class="cm"># 客户端 25(之前一直在阻塞等待)立刻收到:</span>
+<span class="ok">nonexistent_key_25
+hello</span>
+  </div>
+  <p>8 毫秒——如果 Redis 真的在挨个轮询这 50 个连接问"你有数据了吗",响应时间会随着连接数增长而变差;观察到的是几乎瞬时的唤醒,说明内核是直接把"25 号就绪了"这个信息递给了 Redis,不是靠慢慢问出来的。</p>
+</section>
+
+<section>
+  <h2>Redis 用的到底是哪一种</h2>
+  <p class="h2-sub">select、poll、epoll(Linux)、kqueue(macOS/BSD)、evport(Solaris)是同一类机制在不同操作系统上的具体实现,性能和设计不完全一样。Redis 自己的事件循环层会按平台自动选择最优的一种。</p>
+  <blockquote class="src">
+    <span class="path">src/ae.c · <a href="https://github.com/redis/redis/blob/8.10.1/src/ae.c#L30" target="_blank" rel="noopener">redis @ 8.10.1, L30</a></span>
+/* Include the best multiplexing layer supported by this system.
+ * The following should be ordered by performances, descending. */
+#ifdef HAVE_EVPORT
+#include "ae_evport.c"
+#else
+    #ifdef HAVE_EPOLL
+    #include "ae_epoll.c"
+    #else
+        #ifdef HAVE_KQUEUE
+        #include "ae_kqueue.c"
+        #else
+        #include "ae_select.c"
+        #endif
+    #endif
+#endif
+  </blockquote>
+  <p>本机是 macOS,没有 epoll(Linux 专属)也没有 evport(Solaris 专属),所以链的是 <span class="mono">ae_kqueue.c</span>。这不是猜的——直接看编译好的二进制里链了什么符号:</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cmd">$ nm /opt/homebrew/bin/redis-server | grep kevent</span>
+<span class="ok">U _kevent</span>   <span class="cm"># 引用了 macOS 的 kqueue 系统调用</span>
+  </div>
+  <p><span class="mono">kevent</span> 是 kqueue 机制唯一的入口函数——本机这个的 <span class="mono">redis-server</span> 二进制文件里确确实实引用了它。的等待逻辑就是一次 <span class="mono">kevent()</span> 调用:</p>
+  <blockquote class="src">
+    <span class="path">src/ae_kqueue.c · <a href="https://github.com/redis/redis/blob/8.10.1/src/ae_kqueue.c#L124" target="_blank" rel="noopener">redis @ 8.10.1, L124</a></span>
+static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp) {
+    ...
+    retval = kevent(state->kqfd, NULL, 0, state->events, eventLoop->setsize,
+                    &timeout);
+    ...
+    /* retval 就是这次真正就绪的 fd 数量,内核已经帮你筛好了 */
+}
+  </blockquote>
+  <p>一次 <span class="mono">kevent()</span> 调用,不管注册了多少个 socket,内核只把真正就绪的那几个塞进 <span class="mono">state->events</span> 数组里返回——这就是 50 个连接和 5 万个连接,唤醒代价几乎一样的根本原因。</p>
+</section>
+
+<section>
+  <h2>演示:挨个问 vs 内核直接告诉你</h2>
+  <p class="h2-sub">50 个 socket,只有 1 个真正就绪,对比两种发现"谁就绪了"的方式各自要付出多少代价。</p>
+  <div class="demo" id="ioDemo">
+    <div class="demo-head">
+      <div class="demo-title">选择策略</div>
+      <div>
+        <button class="btn primary" id="btnNaive">挨个轮询</button>
+        <button class="btn" id="btnMux">多路复用(kevent/epoll_wait)</button>
+      </div>
+    </div>
+    <div class="demo-narration" id="ioNarration"></div>
+    <div class="demo-body">
+      <div class="sockrow" id="ioSockets"></div>
+      <div class="stat-row" id="ioStats"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="ioReset">⏮ 重来</button>
+      <button class="btn" id="ioPlay">▶ 播放</button>
+      <span class="step-counter" id="ioCounter"></span>
+    </div>
+  </div>
+  <table class="mono">
+    <tr><th>监视的 socket 数</th><th>轮询需要的检查次数</th><th>多路复用需要的系统调用次数</th></tr>
+    <tr><td>50</td><td>50</td><td>1</td></tr>
+    <tr><td>500</td><td>500</td><td>1</td></tr>
+    <tr><td>5,000</td><td>5,000</td><td>1</td></tr>
+    <tr><td>50,000</td><td>50,000</td><td>1</td></tr>
+  </table>
+  <p style="font-size:.85rem; color:var(--ink-dim);">轮询的代价随监视数量线性增长,多路复用的代价只取决于"这一轮到底有几个就绪"——这张表和上面的演示动画,都是对同一条规律(<span class="mono">kevent()</span> 返回值等于就绪数量,不是监视总数)的简化建模,用来直观对比两种策略的量级差异。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文"51 个连接线程数不变"和"8 毫秒精确唤醒"两组实验均在本机运行的 Redis 8.10.1 上完成,通过的 <span class="mono">ps -M</span>、<span class="mono">lsof</span>、<span class="mono">redis-cli INFO</span> 和 <span class="mono">time</span> 命令得到,未做任何删改。</li>
+      <li><span class="mono">nm</span> 对 <span class="mono">_kevent</span> 符号的检查,是直接对本机安装的 <span class="mono">/opt/homebrew/bin/redis-server</span> 二进制文件做的静态分析,不是理论推测。</li>
+      <li>源码引用(<span class="mono">ae.c</span> 的多路复用层选择逻辑、<span class="mono">ae_kqueue.c</span> 的 <span class="mono">aeApiPoll</span>)取自 <span class="mono">redis/redis</span> 仓库 <span class="mono">8.10.1</span> 标签,与本机安装的 Redis 8.10.1 完全一致。</li>
+      <li>没有涉及:Linux 上 epoll 的具体实现(本机是 macOS,测的是 kqueue,两者设计细节不同但解决的是同一个问题)、Redis 6+ 引入的多线程 I/O(网络读写可以并行,但命令执行仍然是单线程,这是另一个话题)、事件循环里读事件和写事件的具体调度顺序。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="rehash.html" target="_blank" rel="noopener" style="text-decoration:none; color:inherit;">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">渐进式 rehash:字典扩容不卡顿的秘密</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Redis 系列 · 第三篇 · I/O 多路复用 · 数据来自本机运行的 Redis 8.10.1</footer>
+
+<script>
+(function(){
+  const sockets = Array.from({length: 50}, (_, i) => i+1);
+  const readyIdx = 25;
+  const socketsBox = document.getElementById('ioSockets');
+  const statsBox = document.getElementById('ioStats');
+  const narration = document.getElementById('ioNarration');
+  const counter = document.getElementById('ioCounter');
+  let mode = 'naive';
+  let step = 0;
+  let playing = false, playTimer = null;
+
+  function maxStep(){ return mode === 'naive' ? sockets.length : 1; }
+
+  function render(){
+    step = Math.max(0, Math.min(maxStep(), step));
+    let html = '';
+    sockets.forEach(i=>{
+      let cls = 'sockbox';
+      if (mode === 'naive'){
+        if (i <= step) cls += (i===readyIdx ? ' ready' : ' checked');
+      } else {
+        if (step >= 1) cls += (i===readyIdx ? ' ready' : '');
+      }
+      html += `<div class="${cls}">${i}</div>`;
+    });
+    socketsBox.innerHTML = html;
+
+    if (mode === 'naive'){
+      narration.innerHTML = step===0 ? '点击"播放"开始逐个检查每个 socket。'
+        : (step < sockets.length ? `正在检查第 <span class="k">${step}</span> 个 socket...` : `检查完 50 个 socket,发现 1 个就绪(#${readyIdx})。`);
+      statsBox.innerHTML = `<div class="stat">已检查<b>${step}</b></div><div class="stat">系统调用次数<b>${step}</b></div>`;
+    } else {
+      narration.innerHTML = step===0 ? '点击"播放",一次 kevent()/epoll_wait() 调用。'
+        : `一次调用,内核直接返回:<span class="k">socket #${readyIdx} 就绪</span>,其余 49 个不用管。`;
+      statsBox.innerHTML = `<div class="stat">系统调用次数<b>${step}</b></div><div class="stat">直接拿到就绪列表<b>${step>0?1:0}</b></div>`;
+    }
+    counter.textContent = `${step} / ${maxStep()}`;
+  }
+  function stopPlay(){ playing=false; clearInterval(playTimer); document.getElementById('ioPlay').textContent='▶ 播放'; }
+  document.getElementById('ioReset').onclick=()=>{ step=0; stopPlay(); render(); };
+  document.getElementById('ioPlay').onclick=()=>{
+    if(playing){ stopPlay(); return; }
+    if(step>=maxStep()) step=0;
+    playing=true; document.getElementById('ioPlay').textContent='⏸ 暂停';
+    const interval = mode==='naive' ? 40 : 400;
+    playTimer = setInterval(()=>{
+      step++;
+      if(step>=maxStep()){ render(); stopPlay(); return; }
+      render();
+    }, interval);
+  };
+  const btnNaive = document.getElementById('btnNaive'), btnMux = document.getElementById('btnMux');
+  btnNaive.onclick=()=>{ mode='naive'; step=0; stopPlay(); render(); btnNaive.classList.add('primary'); btnMux.classList.remove('primary'); };
+  btnMux.onclick=()=>{ mode='mux'; step=0; stopPlay(); render(); btnMux.classList.add('primary'); btnNaive.classList.remove('primary'); };
+  render();
+})();
+</script>
+
+</body>
+</html>

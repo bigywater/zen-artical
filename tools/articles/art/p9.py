@@ -1,0 +1,20 @@
+from lib import *
+S = SS('p9')
+steps = [
+    step("HTTP 地址经代理:代理收到的第一行是 GET http://plain.example.test:<端口>/secret/path?token=abc123 HTTP/1.1——完整 URL,而不是只有路径;头里有 Host、User-Agent、Cookie: sid=SESSION42、X-Api-Key: KEY99。代理看得到路径、查询串、Cookie 和自定义头的全部内容。我写的代理转发给源站时改成了 /secret/path?token=abc123 的普通形式,所以源站看到的是正常请求。", t=tl(S(1)), done=lidx(S(1), '代理收到的第一行', '代理收到的头'), mark=lidx(S(1), 'token=abc123'), kv=KV([['代理看到', '完整 URL、查询串、全部请求头'], ['Cookie', '明文可见'], ['适用', 'http:// 地址']], ['代理看到'])),
+    step("HTTPS 地址经代理:代理收到的是 CONNECT secure.example.test:<端口> HTTP/1.1,头里只有 Host;回 200 后它只负责搬运字节(客户端→源站 1867 字节,源站→客户端 2511 字节)。客户端发来的第一个字节是 0x16(TLS 握手记录),明文里能找到主机名 secure.example.test(SNI);但 /secret/path、token=abc123、SESSION42、KEY99 在代理看到的字节里都没有出现(False)。源站里的 TLS 服务器收到的路径是完整的 /secret/path?token=abc123。", t=tl(S(2)), done=lidx(S(2), '源站(TLS 服务器)收到的路径'), mark=lidx(S(2), 'secure.example.test(SNI', '/secret/path', 'token=abc123', 'SESSION42', 'KEY99'), b=bars([['客户端→源站字节', 1867, '1867'], ['源站→客户端字节', 2511, '2511']], 2600, done=[0, 1]), kv=KV([['代理看到', 'CONNECT 主机:端口 + SNI 主机名'], ['看不到', '路径、查询串、Cookie、头'], ['原因', 'TLS 在代理两侧之间端到端加密']], ['看不到'])),
+    step("代理要求认证(407)时,两种地址的表现不同。HTTP 地址、代理 URL 里没有账号:requests 不抛异常,r.status_code 就是 407;HTTPS 地址:抛 ProxyError(Tunnel connection failed: 407 Proxy Authentication Required)。代理 URL 带 alice:pw 之后两种都是 200,代理收到的 Proxy-Authorization 是 Basic YWxpY2U6cHc=——HTTPS 时它出现在 CONNECT 请求里。", t=tl(S(3)), done=lidx(S(3), '代理 URL 带 alice:pw'), mark=lidx(S(3), '没有账号'), kv=KV([['HTTP 地址 + 无账号', '返回 407,不抛异常'], ['HTTPS 地址 + 无账号', 'ProxyError(隧道失败)'], ['带 alice:pw', '都是 200']], ['HTTPS 地址 + 无账号'])),
+    step("代理设置的来源:环境变量 HTTP_PROXY 生效(1 个请求经过代理),小写 http_proxy 也生效;加上 NO_PROXY=.example.test 或 NO_PROXY=plain.example.test 后绕过代理(0 个);Session.trust_env=False 也不读环境变量(0 个)。只在代码里传 proxies= 时一定经过代理(1 个);而且 proxies= 传了代理、目标是 127.0.0.1 时,即使本进程的 NO_PROXY 含 127.0.0.1,请求还是经过了代理(1 个)——NO_PROXY 只对来自环境变量的代理起作用。每种情形源站都收到 1 个请求。", t=tl(S(4)), done=lidx(S(4), 'NO_PROXY=.example.test', 'NO_PROXY=plain.example.test', 'trust_env=False'), mark=lidx(S(4), '目标是 127.0.0.1', '只在代码里传 proxies='), kv=KV([['HTTP_PROXY / http_proxy', '都生效'], ['NO_PROXY', '只管环境变量里的代理'], ['trust_env=False', '不读环境变量']], ['NO_PROXY'])),
+]
+A = mkartp('p9', 9, '爬虫,requests,代理,HTTP代理,CONNECT,HTTPS,NO_PROXY,Proxy-Authorization,Python,真实验证,动画演示',
+    '用自己写的本地代理实测 HTTP 代理的可见范围:HTTP 地址经代理时代理看到完整 URL、查询串和 Cookie;HTTPS 地址只有 CONNECT 主机:端口和明文 SNI,路径与头看不到;407 时 HTTP 地址返回 407 而 HTTPS 抛 ProxyError;NO_PROXY 只管环境变量里的代理,proxies= 参数不受它影响。',
+    '爬虫经常要走代理,但代理“能看到什么”常被说错。这篇写一个会记录自己所见的最小代理,让同一个客户端分别请求 HTTP 和 HTTPS 地址,再看看代理认证、环境变量和 NO_PROXY 各自怎么起作用。',
+    [('CONNECT', 'HTTPS 地址经代理时,代理收到的第一行是 CONNECT 主机:端口,不含路径'), ('False', '代理看到的字节里是否出现 /secret/path、token、Cookie 值——全都没有'), ('407', 'HTTP 地址遇到代理要求认证,requests 不抛异常,只返回 407')],
+    [('HTTP 地址:代理全看见', '<p>代理收到的请求行是完整 URL,头也是原样的。所以走明文 HTTP 经过一个代理,路径、查询串里的 token、Cookie 都对代理可见。</p>'),
+     ('HTTPS 地址:CONNECT 隧道', '<p>HTTPS 通过 <code>CONNECT host:port</code> 让代理在两端之间转发字节,握手之后的内容在代理这边是密文。实测代理能看到的是目标主机和端口、以及 ClientHello 里明文的主机名(SNI),看不到路径、查询串、Cookie。这里的 TLS 终点是源站,代理不参与加密;中间人式的代理(会重新签发证书)不在本文范围内。</p>'),
+     ('代理认证', '<p>代理返回 407 时,requests 对 HTTP 地址只是把 407 当成普通响应返回(<code>r.status_code == 407</code>),对 HTTPS 地址则在建立隧道失败时抛 <code>ProxyError</code>。账号写在代理 URL 里(<code>http://alice:pw@host:port</code>),requests 会发 <code>Proxy-Authorization: Basic …</code>,HTTPS 时它在 CONNECT 请求里。这里的 Basic 只是 Base64 编码,不是加密。</p>'),
+     ('代理设置从哪来', '<p>环境变量 <code>HTTP_PROXY</code>(大小写都行)会被读取,<code>NO_PROXY</code> 能排除主机,<code>trust_env=False</code> 让 Session 不读环境变量。直接传 <code>proxies=</code> 则一定用,不看 <code>NO_PROXY</code>。排查“为什么请求被发到了代理 / 没发到代理”时,先看这几处。</p>')],
+    steps,
+    [ENV_P + '。代理是我用 Python 套接字写的最小转发代理(支持 HTTP 绝对 URI 请求与 CONNECT,可要求 Proxy-Authorization),记录收到的请求行、头和转发的字节;HTTPS 源站用本机自签名证书(SAN 含 secure.example.test);*.test 主机名通过替换本进程的 getaddrinfo 解析到回环;环境变量实验在子进程里做(清掉原有代理变量后再设置)',
+     '没有验证:真实商业代理(住宅代理、隧道代理)的行为;SOCKS 代理;HTTPS 代理(代理本身也走 TLS);重新签发证书的中间人代理;HTTP/2 经代理;代理对 Connection、Proxy-Connection 头的处理差异(我的代理只做了最小实现);ECH(加密 ClientHello)下 SNI 是否仍可见'],
+    'HTTP 代理与 CONNECT')

@@ -1,0 +1,492 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>Linux 命名空间:同一个进程,为什么宿主机和容器内部看到的 PID 不一样</title>
+<meta name="description" content="真实构建 FROM scratch 容器镜像(本机交叉编译静态二进制,不依赖任何网络拉取),本机真实实测 PID/UTS/网络命名空间隔离:两个并发容器拿到不同的真实 IP,同一个操作系统进程在宿主机视角和容器内部视角报告完全不同的 PID,--pid=host 关闭隔离后立刻现出真实 PID,对照 runc 真实源码里命名空间类型到内核 clone 标志位的映射。">
+<link rel="canonical" href="https://bigywater.tech/docker-namespaces.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Linux 命名空间:同一个进程,为什么宿主机和容器内部看到的 PID 不一样">
+<meta property="og:description" content="真实构建 FROM scratch 容器镜像(本机交叉编译静态二进制,不依赖任何网络拉取),本机真实实测 PID/UTS/网络命名空间隔离:两个并发容器拿到不同的真实 IP,同一个操作系统进程在宿主机视角和容器内部视角报告完全不同的 PID,--pid=host 关闭隔离后立刻现出真实 PID,对照 runc 真实源码里命名空间类型到内核 clone 标志位的映射。">
+<meta property="og:url" content="https://bigywater.tech/docker-namespaces.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Linux 命名空间:同一个进程,为什么宿主机和容器内部看到的 PID 不一样">
+<meta name="twitter:description" content="真实构建 FROM scratch 容器镜像(本机交叉编译静态二进制,不依赖任何网络拉取),本机真实实测 PID/UTS/网络命名空间隔离:两个并发容器拿到不同的真实 IP,同一个操作系统进程在宿主机视角和容器内部视角报告完全不同的 PID,--pid=host 关闭隔离后立刻现出真实 PID,对照 runc 真实源码里命名空间类型到内核 clone 标志位的映射。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F2F6FA; --paper:#FFFFFF; --ink:#132029; --ink-dim:#5C6B75; --line:#DCE6EC;
+  --dk-c:#2496ED; --dk-c-soft:#DEEEFC;
+  --mem-c:#B8791E; --mem-c-soft:#F6ECD9;
+  --meta-c:#7B4FA8; --meta-c-soft:#EFE6F7;
+  --err-c:#B23B3B; --err-c-soft:#F7E3E1;
+  --code-bg:#0F1E2B; --code-ink:#E6EEF5;
+  --shadow: 0 1px 2px rgba(15,25,35,.06), 0 8px 24px -12px rgba(15,25,35,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0C1620; --paper:#16232F; --ink:#E6EEF5; --ink-dim:#96A8B5; --line:#2A3A46;
+    --dk-c:#5FB7F5; --dk-c-soft:#183246;
+    --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+    --meta-c:#B08AE0; --meta-c-soft:#332545;
+    --err-c:#E08585; --err-c-soft:#3A1F1F;
+    --code-bg:#09131B; --code-ink:#DCE7EE;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0C1620; --paper:#16232F; --ink:#E6EEF5; --ink-dim:#96A8B5; --line:#2A3A46;
+  --dk-c:#5FB7F5; --dk-c-soft:#183246;
+  --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+  --meta-c:#B08AE0; --meta-c-soft:#332545;
+  --err-c:#E08585; --err-c-soft:#3A1F1F;
+  --code-bg:#09131B; --code-ink:#DCE7EE;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--dk-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--dk-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--dk-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--dk-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#8FC4E8; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#9FD4F0;}
+
+.callout{border-left:3px solid var(--dk-c); background:var(--dk-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--dk-c-soft); color:var(--dk-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#8FD4F0;}
+.term pre.code{margin:0 0 10px; color:#8FD4F0; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+.term .cm{color:#7C93A0;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--mem-c-soft); color:var(--mem-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:22px 20px;}
+.view-table{width:100%; border-collapse:collapse; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem;}
+.view-table th{text-align:left; padding:6px 10px; color:var(--ink-dim); font-size:.7rem; text-transform:uppercase; letter-spacing:.04em; border-bottom:1px solid var(--line);}
+.view-table td{padding:6px 10px; border-bottom:1px solid var(--line);}
+.view-table tr.current td{background:var(--dk-c-soft);}
+.stage-tag{padding:2px 8px; border-radius:5px; font-size:.76rem;}
+.stage-tag.host{background:var(--mem-c-soft); color:var(--mem-c);}
+.stage-tag.container{background:var(--dk-c-soft); color:var(--dk-c);}
+.stat-row{display:flex; gap:16px; flex-wrap:wrap; margin:14px 0 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem;}
+.stat{border:1px solid var(--line); border-radius:8px; padding:8px 12px; background:var(--bg);}
+.stat b{color:var(--dk-c); display:block; font-size:1rem; font-variant-numeric:tabular-nums;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--dk-c); color:var(--dk-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--dk-c); border-color:var(--dk-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{display:flex; align-items:center; gap:10px; margin-bottom:24px; font-size:.88rem; color:var(--ink-dim); flex-wrap:wrap;}
+.prev-post a{font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--dk-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Docker 系列 · 第一篇</div>
+    <h1>同一个进程,宿主机看到的 PID 和容器里看到的 PID,为什么完全不是一个数?</h1>
+    <p>本机出网流量被一个本地代理接管,而 Docker Desktop 的 VM 是独立网络命名空间、连不到这个代理,索性用本机交叉编译的静态 Go 二进制打包成 <span class="mono">FROM scratch</span> 镜像——完全不需要拉取任何基础镜像,一样能真实起容器、真实验证命名空间隔离。这一篇本机真实验证了 PID / UTS / 网络三种命名空间,压轴的一组实验直接拿 <span class="mono">docker inspect</span> 和容器自己打印的 <span class="mono">os.Getpid()</span> 对照,证明了"同一个 OS 进程,从不同命名空间视角看到的是两个完全不同的数字"这件事。</p>
+    <div class="hero-fact">
+      <div><div class="num">608 vs 1</div><div class="lbl">本机真实实测:同一个容器进程,宿主机(Docker VM)视角是 608,容器内部自己看是 1</div></div>
+      <div><div class="num">.2 / .3</div><div class="lbl">本机真实实测:两个同时运行的容器,各自拿到不同的真实 IP,网络命名空间互不共享</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <h2>怎么绕开这台机器拉不了镜像的限制</h2>
+  <p class="h2-sub">本机出网流量被一个本地代理接管,Docker Desktop 的 Linux VM 是独立网络命名空间,连不到这个代理——<span class="mono">docker pull</span> 会直接卡死在 DNS 解析上。这不是 Docker 本身的限制:不走这个代理、直接联网的话 <span class="mono">docker pull</span> 完全正常。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ docker pull alpine:3.20</pre>
+<span class="bad">Error response from daemon: failed to resolve reference
+"docker.io/library/alpine:3.20": failed to do request: Head
+"https://registry-1.docker.io/v2/library/alpine/manifests/3.20":
+context deadline exceeded</span>
+  </div>
+  <p>解决办法很简单:<span class="mono">FROM scratch</span> 是 Docker 内置的一个特殊镜像,代表"完全空白的文件系统",不需要从任何地方拉取。用本机 <span class="mono">CGO_ENABLED=0 GOOS=linux</span> 交叉编译出一个静态链接的 Go 二进制(不依赖任何动态库,单文件就能在 Linux 容器里跑),<span class="mono">COPY</span> 进 <span class="mono">scratch</span> 镜像,<span class="mono">docker build</span> 全程只在本机磁盘上操作,一次网络请求都不用发:</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o app main.go
+$ cat Dockerfile
+FROM scratch
+COPY app /app
+ENTRYPOINT ["/app"]
+$ docker build -t nsdemo:scratch .
+$ docker run --rm nsdemo:scratch</pre>
+<span class="ok">hello from inside a container, pid = 1</span>
+  </div>
+  <p>下面全部实验都是照这个套路来的:程序想验证什么(PID、hostname、网络接口),就在 Go 程序里直接调用标准库打印出来,重新编译、重新起容器,看真实输出。</p>
+</section>
+
+<section>
+  <h2>真实源码:runc 认识的 8 种命名空间,和它们对应的真实内核标志位</h2>
+  <p class="h2-sub">OCI 运行时规范定义了 8 种命名空间类型,Docker 实际调用的 runc 把每一种都翻译成 Linux 内核认识的 <span class="mono">CLONE_NEW*</span> 标志位。</p>
+  <blockquote class="src">
+    <span class="path">runc · libcontainer/specconv/spec_linux.go · <a href="https://github.com/opencontainers/runc/blob/v1.5.1/libcontainer/specconv/spec_linux.go#L45" target="_blank" rel="noopener">runc @ v1.5.1, L45</a></span>
+namespaceMapping = map[specs.LinuxNamespaceType]configs.NamespaceType{
+    specs.PIDNamespace:     configs.NEWPID,
+    specs.NetworkNamespace: configs.NEWNET,
+    specs.MountNamespace:   configs.NEWNS,
+    specs.UserNamespace:    configs.NEWUSER,
+    specs.IPCNamespace:     configs.NEWIPC,
+    specs.UTSNamespace:     configs.NEWUTS,
+    specs.CgroupNamespace:  configs.NEWCGROUP,
+    specs.TimeNamespace:    configs.NEWTIME,
+}
+  </blockquote>
+  <blockquote class="src">
+    <span class="path">runc · libcontainer/configs/namespaces_syscall.go · <a href="https://github.com/opencontainers/runc/blob/v1.5.1/libcontainer/configs/namespaces_syscall.go#L8" target="_blank" rel="noopener">runc @ v1.5.1, L8</a></span>
+var namespaceInfo = map[NamespaceType]int{
+    NEWNET:    unix.CLONE_NEWNET,
+    NEWNS:     unix.CLONE_NEWNS,
+    NEWUSER:   unix.CLONE_NEWUSER,
+    NEWIPC:    unix.CLONE_NEWIPC,
+    NEWUTS:    unix.CLONE_NEWUTS,
+    NEWPID:    unix.CLONE_NEWPID,
+    NEWCGROUP: unix.CLONE_NEWCGROUP,
+    NEWTIME:   unix.CLONE_NEWTIME,
+}
+// CloneFlags 把所有需要新建(非共享)的命名空间的标志位合并成一个 uintptr,
+// 最终交给 clone(2)/unshare(2) 这两个真正的系统调用。
+  </blockquote>
+  <p>链路很直接:Docker 把容器配置翻译成 OCI 运行时规范里的 <span class="mono">"pid"</span>/<span class="mono">"network"</span> 这些字符串,runc 的 <span class="mono">namespaceMapping</span> 把字符串转成内部的 <span class="mono">NamespaceType</span>,<span class="mono">namespaceInfo</span> 再把 <span class="mono">NamespaceType</span> 转成真实的 <span class="mono">CLONE_NEWPID</span>/<span class="mono">CLONE_NEWNET</span> 等内核常量,最后拼成一个标志位传给 <span class="mono">clone(2)</span>——容器进程从被创建的那一刻起,就活在一套全新的命名空间里,不是启动之后再"搬"进去的。</p>
+</section>
+
+<section>
+  <h2>真实实测:默认情况下,容器有自己的 PID / hostname / 网络,但 rootfs 不是纯空的</h2>
+  <p class="h2-sub"><span class="mono">FROM scratch</span> 镜像里只有我们自己的二进制,但容器真跑起来之后,根目录下平白多出了几样东西。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">// Go 程序:打印 pid、hostname、根目录列表、网络接口
+fmt.Println("pid =", os.Getpid())
+fmt.Println("hostname =", hostname)
+fmt.Println("root dir entries =", ...)
+fmt.Println("network interfaces =", ...)</pre>
+<span class="ok">pid = 1
+hostname = 3840fe1a7333
+root dir entries = [.dockerenv app dev etc proc sys]
+network interfaces = [lo(127.0.0.1/8) eth0(172.17.0.2/16) ...]</span>
+  </div>
+  <p><span class="mono">pid = 1</span>:容器里的第一个进程,天然就是 1 号进程(PID 命名空间从 1 开始重新计数)。<span class="mono">hostname</span> 默认就是容器 ID 的前 12 位(UTS 命名空间让每个容器可以有自己的主机名,不用跟宿主机同名)。但镜像里明明只 <span class="mono">COPY</span> 了一个 <span class="mono">app</span>,<span class="mono">dev</span>/<span class="mono">etc</span>/<span class="mono">proc</span>/<span class="mono">sys</span> 和 <span class="mono">.dockerenv</span> 是运行时(runc)强制挂载/创建进去的——<span class="mono">/proc</span>、<span class="mono">/sys</span> 是容器要正常工作离不开的伪文件系统,<span class="mono">/etc/hosts</span>/<span class="mono">/etc/resolv.conf</span>/<span class="mono">/etc/hostname</span> 是 Docker 专门生成、绑定挂进来的,负责让容器不用自带任何网络配置文件也能解析域名、找到自己的 IP:</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ docker run --rm nsdemo2:scratch   # 打印 /etc 目录 + /etc/resolv.conf</pre>
+<span class="ok">- hostname
+- hosts
+- mtab
+- resolv.conf
+--- /etc/resolv.conf ---
+# Generated by Docker Engine.
+nameserver 192.168.65.7</span>
+  </div>
+  <p>命名空间隔离的是"视角",不代表容器是彻底孤立、什么都没有的黑箱——为了让容器出厂就能联网、能解析域名,运行时会主动塞进来这几个最基本的文件。</p>
+</section>
+
+<section>
+  <h2>真实实测:两个同时运行的容器,网络命名空间互不共享</h2>
+  <p class="h2-sub">串行跑两次同一个镜像,两次都会拿到 <span class="mono">172.17.0.2</span>(旧的容器退出后 IP 被回收复用)——要证明"互相独立"必须让两个容器<b>同时活着</b>。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ docker run -d --name ns_c1 nsdemo3:scratch
+$ docker run -d --name ns_c2 nsdemo3:scratch
+$ docker inspect -f '{{.Name}}: {{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' ns_c1 ns_c2</pre>
+<span class="ok">/ns_c1: 172.17.0.2
+/ns_c2: 172.17.0.3</span>
+  </div>
+  <p>两个容器一直并发存活,各自拿到 <span class="mono">.2</span>/<span class="mono">.3</span> 两个不同的 IP——默认 bridge 网络下,每个容器的网络命名空间里都有一块独立的 <span class="mono">eth0</span>,地址从同一个子网池里分配,互不冲突也互不可见。</p>
+</section>
+
+<section>
+  <h2>真实实测(压轴):同一个进程,两个命名空间给出两个不同的 PID</h2>
+  <p class="h2-sub">这是整篇最直接的证据——不是"理论上应该隔离",而是同一个真实操作系统进程,从宿主机(这里是 Docker Desktop 的 Linux VM)和容器内部两个视角看,报告的 PID 数字完全不一样。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ docker inspect -f '{{.State.Pid}}' ns_c1     # 宿主机视角的真实 PID
+$ docker inspect -f '{{.State.Pid}}' ns_c2
+$ docker logs ns_c1                              # 容器自己打印的 pid
+$ docker logs ns_c2
+$ docker top ns_c1                                # 交叉验证宿主机视角的 PID</pre>
+<span class="ok">ns_c1 host 真实 PID: 608          ns_c2 host 真实 PID: 658
+容器内部打印: pid = 1              容器内部打印: pid = 1
+
+docker top ns_c1:
+UID    PID   PPID   ...   CMD
+root   608   583    ...   /app3</span>
+  </div>
+  <p><span class="mono">ns_c1</span> 这个进程,<span class="mono">docker inspect</span> 和 <span class="mono">docker top</span> 两个独立命令都确认它在宿主机的 PID 命名空间里编号是 <span class="mono">608</span>,但它自己调用 <span class="mono">os.Getpid()</span> 拿到的是 <span class="mono">1</span>——这不是两个进程,是<b>同一个</b> <span class="mono">/app3</span> 进程,只是 <span class="mono">/proc</span> 文件系统按"你是从哪个 PID 命名空间在问"给出不同的编号。<span class="mono">ns_c2</span> 同理是 <span class="mono">658</span> 对 <span class="mono">1</span>。</p>
+</section>
+
+<section>
+  <h2>真实实测:--pid=host 关掉隔离,真实 PID 立刻现形</h2>
+  <p class="h2-sub">如果容器共享宿主机的 PID 命名空间(不新建自己的),就不会再有"1 号进程"这层包装了。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ docker run --rm --pid=host nsdemo:scratch</pre>
+<span class="ok">pid = 715</span>
+  </div>
+  <p><span class="mono">--pid=host</span> 让 runc 在创建这个容器进程时,不再传 <span class="mono">CLONE_NEWPID</span> 这个标志位——容器进程直接加入宿主机既有的 PID 命名空间,<span class="mono">os.Getpid()</span> 看到的就是它在宿主机里真实的编号(<span class="mono">715</span>),不再是 <span class="mono">1</span>。这也是为什么 <span class="mono">--pid=host</span> 被认为是有安全风险的选项——容器里的进程能直接看到、甚至(权限够的话)操作宿主机上的其它进程。</p>
+</section>
+
+<section>
+  <h2>演示:同一个进程,两种命名空间视角</h2>
+  <p class="h2-sub">对应上面 <span class="mono">ns_c1</span>/<span class="mono">ns_c2</span> 的真实数据,切换"宿主机视角"和"容器内部视角",看同一个进程报告的 PID 怎么变。</p>
+  <div class="demo" id="nsDemo">
+    <div class="demo-head">PID 命名空间 · 双视角对照</div>
+    <div class="demo-narration" id="nsNarration"></div>
+    <div class="demo-body">
+      <table class="view-table" id="nsTable">
+        <thead><tr><th>容器</th><th>视角</th><th>看到的 PID</th></tr></thead>
+        <tbody id="nsTableBody"></tbody>
+      </table>
+      <div class="stat-row" id="nsStats"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="nsReset">⏮ 重来</button>
+      <button class="btn" id="nsPrev">‹ 上一步</button>
+      <button class="btn primary" id="nsNext">下一步 ›</button>
+      <button class="btn" id="nsPlay">▶ 自动播放</button>
+      <span class="step-counter" id="nsCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">数据直接取自上面真实实测的 <span class="mono">ns_c1</span>(host 608 / 容器内 1)和 <span class="mono">ns_c2</span>(host 658 / 容器内 1),演示动画只是把"同一个进程、不同命名空间视角报告不同 PID"这件事逐步呈现出来。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文全部真实实验(<span class="mono">FROM scratch</span> + 本机交叉编译静态二进制构建镜像、默认命名空间隔离下的 PID/hostname/网络接口、<span class="mono">/etc</span> 下被运行时注入的文件、两个并发容器的独立 IP、宿主机与容器内部视角下同一进程的不同 PID、<span class="mono">--pid=host</span> 关闭隔离后的真实效果)均在本机真实运行的 Docker Desktop 29.7.2(Linux VM,containerd/runc 作为底层运行时)上完成,过程中没有任何一次成功的镜像拉取,数据未做删改。</li>
+      <li>源码引用(<span class="mono">libcontainer/specconv/spec_linux.go</span> 的 <span class="mono">namespaceMapping</span>、<span class="mono">libcontainer/configs/namespaces_syscall.go</span> 的 <span class="mono">namespaceInfo</span>/<span class="mono">CloneFlags</span>)取自 <span class="mono">opencontainers/runc</span> 仓库 <span class="mono">v1.5.1</span> 标签。</li>
+      <li>演示动画的双视角对照数据直接取自真实实测的 <span class="mono">docker inspect</span>/<span class="mono">docker top</span>/容器日志输出,没有额外模拟或编造的数字。</li>
+      <li>没有涉及:Mount 命名空间配合 <span class="mono">pivot_root</span> 怎么把镜像的每一层联合挂载成容器根文件系统(下一篇镜像分层会展开)、User 命名空间的 UID/GID 映射、Cgroup 命名空间怎么让容器内部看到的 <span class="mono">/sys/fs/cgroup</span> 路径也是"从 0 开始"的(下一篇 cgroups 展开)、runc 实际调用 <span class="mono">clone(2)</span> 之前那段用 C 写的 <span class="mono">nsenter</span> 引导代码的细节。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="docker-cgroups.html" target="_blank" rel="noopener">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">Cgroups:--memory 限制是不是真的生效,真实吃内存到被 OOM Kill</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Docker 系列 · 第一篇 · Linux 命名空间 · 数据来自本机真实运行的 Docker Desktop</footer>
+
+<script>
+const DATA = {"rows": [
+  {"container": "ns_c1", "view": "host", "pid": 608},
+  {"container": "ns_c1", "view": "container", "pid": 1},
+  {"container": "ns_c2", "view": "host", "pid": 658},
+  {"container": "ns_c2", "view": "container", "pid": 1}
+]};
+
+(function(){
+  const rows = DATA.rows;
+  const totalSteps = rows.length;
+  const tbody = document.getElementById('nsTableBody');
+  const narration = document.getElementById('nsNarration');
+  const statsBox = document.getElementById('nsStats');
+  const counter = document.getElementById('nsCounter');
+  let idx = 0, playing=false, playTimer=null;
+
+  function describe(i){
+    const r = rows[i];
+    if (r.view === 'host') return `从<b>宿主机视角</b>看 <span class="k">${r.container}</span> 这个进程:PID = <span class="k">${r.pid}</span>(docker inspect / docker top 看到的真实编号)。`;
+    return `同一个进程,切到<b>容器内部视角</b>:<span class="k">${r.container}</span> 自己调用 os.Getpid() 看到的是 <span class="k">${r.pid}</span>。`;
+  }
+
+  function render(){
+    idx = Math.max(0, Math.min(totalSteps-1, idx));
+    narration.innerHTML = describe(idx);
+
+    tbody.innerHTML = rows.map((r, i) => {
+      const shown = i <= idx;
+      const label = r.view === 'host' ? '宿主机(Docker VM)' : '容器内部';
+      return `<tr class="${i===idx ? 'current' : ''}"><td>${r.container}</td><td>${shown ? `<span class="stage-tag ${r.view}">${label}</span>` : ''}</td><td>${shown ? r.pid : ''}</td></tr>`;
+    }).join('');
+
+    statsBox.innerHTML = `<div class="stat">已展示<b>${idx+1} / ${totalSteps}</b></div>`;
+
+    counter.textContent = `${idx+1} / ${totalSteps}`;
+    document.getElementById('nsPrev').disabled = idx===0;
+    document.getElementById('nsNext').disabled = idx===totalSteps-1;
+  }
+  document.getElementById('nsPrev').onclick=()=>{idx--;render();stopPlay();};
+  document.getElementById('nsNext').onclick=()=>{idx++;render();stopPlay();};
+  document.getElementById('nsReset').onclick=()=>{idx=0;render();stopPlay();};
+  function stopPlay(){ playing=false; clearInterval(playTimer); document.getElementById('nsPlay').textContent='▶ 自动播放'; }
+  document.getElementById('nsPlay').onclick=()=>{
+    if(playing){ stopPlay(); return; }
+    playing=true; document.getElementById('nsPlay').textContent='⏸ 暂停';
+    playTimer = setInterval(()=>{
+      if(idx>=totalSteps-1){ stopPlay(); return; }
+      idx++; render();
+    }, 1100);
+  };
+  render();
+})();
+</script>
+
+</body>
+</html>

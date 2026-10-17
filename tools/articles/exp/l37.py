@@ -1,0 +1,41 @@
+import sys, os, random; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from ll import *
+tee('l37')
+D, F = 60, 500
+d = lab('l37'); rnd = random.Random(37)
+W(d, {'README.md': '根目录的文件\n', 'Makefile': 'all:\n'}); W(d, {f'mod{m:02d}/sub{i // 100}/f{i:04d}.txt': f'模块 {m} 文件 {i} ' + 'x' * rnd.randint(50, 150) + '\n' for m in range(D) for i in range(F)})
+run(d, 'git add -A && git commit -q -m x', 0)
+def tm(cmd='git status --short', n=5):
+    ts = []
+    for _ in range(n):
+        t0 = time.perf_counter(); run(d, cmd); ts.append((time.perf_counter() - t0) * 1000)
+    return median(ts)
+def du(): return int(out1(d, "du -sk --exclude=.git . 2>/dev/null | cut -f1 || true") or 0)
+def idxsz(): return (d / '.git' / 'index').stat().st_size
+def nfiles(): return int(out1(d, "find . -path ./.git -prune -o -type f -print | wc -l"))
+print(f'== 一:完整检出:{D} 个模块目录 × {F} 个文件 + 根目录 2 个文件')
+time.sleep(1.1); run(d, 'git status --short'); time.sleep(1.1); run(d, 'git status --short')
+print(f'  工作区文件数 {nfiles():,};index {idxsz():,} 字节;git status {tm():.1f} ms')
+print('== 二:git sparse-checkout set --cone mod05 mod06:工作区只剩根目录文件和这两个模块')
+sh(d, 'git sparse-checkout init --cone 2>&1; git sparse-checkout set mod05 mod06 2>&1; ls; echo "---"; git sparse-checkout list; echo "---"; cat .git/info/sparse-checkout; echo "---"; git config --get-regexp "sparse|index"')
+print(f'  工作区文件数 {nfiles():,}(原来 {D * F + 2:,})')
+print('== 三:没检出的文件还在 index 里,只是带了 skip-worktree 标记(git ls-files -t 里 S 开头)')
+sh(d, 'git ls-files -t | cut -c1 | sort | uniq -c; git ls-files -t | grep -E "^S" | head -2')
+time.sleep(1.1); run(d, 'git status --short')
+print(f'  index {idxsz():,} 字节(仍包含全部 {D * F + 2:,} 个条目);git status {tm():.1f} ms')
+print('== 四:稀疏索引(--sparse-index):没检出的目录在 index 里合成一个“目录条目”')
+sh(d, 'git sparse-checkout init --cone --sparse-index 2>&1; git config --get index.sparse')
+time.sleep(1.1); run(d, 'git status --short'); time.sleep(1.1); run(d, 'git status --short')
+ver, ents, exts = parse_index(d / '.git' / 'index') if True else None
+print(f'  index {idxsz():,} 字节,{len(ents):,} 个条目(原来 {D * F + 2:,});扩展块 {[x[0] for x in exts]}')
+print(f'  其中目录条目(mode 040000): {sum(1 for e in ents if e["mode"] == 0o40000)} 个;例: {next(e["path"] for e in ents if e["mode"] == 0o40000)}')
+sh(d, 'git ls-files --sparse | wc -l; git ls-files | wc -l; echo "(第一行是稀疏索引里的条目数,第二行是展开后的文件数)"')
+print(f'  git status {tm():.1f} ms')
+print('== 五:越出稀疏范围的操作')
+sh(d, 'git add mod20 2>&1 | head -4')
+sh(d, 'mkdir -p mod20 && echo x > mod20/outside.txt; git status --short; echo "(在稀疏范围外手工创建的文件,仍然被当作未跟踪文件报告;同时 git 提示要展开稀疏索引)"; rm -r mod20')
+sh(d, 'git sparse-checkout add mod20; ls | tr "\\n" " "; echo; git sparse-checkout list')
+print('== 六:git sparse-checkout disable 恢复全部')
+sh(d, 'git sparse-checkout disable; ls | wc -l')
+time.sleep(1.1); run(d, 'git status --short'); time.sleep(1.1); run(d, 'git status --short')
+print(f'  工作区文件数 {nfiles():,};index {idxsz():,} 字节;git status {tm():.1f} ms')

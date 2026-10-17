@@ -1,0 +1,24 @@
+from lib import *
+S = SS('l11')
+steps = [
+    step("默认(core.autocrlf 与 core.eol 都没设置,macOS 上 eol 的默认 native 就是 LF):CRLF 的 win.txt 和 LF 的 unix.txt 原样存。git ls-files --eol 的 i/ 是暂存区(index)里的换行、w/ 是工作区里的:win.txt 是 i/crlf w/crlf,blob 原始字节里就是 line1\\r\\nline2\\r\\n。git 本身不管换行,字节是什么就存什么。", t=tl(S(1)), mark=lidx(S(1), 'i/crlf  w/crlf', "b'line1\\r\\nline2\\r\\n'"), done=lidx(S(1), '(未设置)', 'i/lf    w/lf'), kv=KV([['默认', '不转换,原样存'], ['i/ 与 w/', '暂存区里的换行 / 工作区里的换行'], ['blob', '含 \\r\\n 的字节']], ['默认'])),
+    step("core.autocrlf=true:add 时 win.txt 的 CRLF 被转成 LF(i/lf w/crlf),blob 原始字节是 line1\\nline2\\n;unix.txt 本来就是 LF,git 提示 LF will be replaced by CRLF the next time Git touches it。删掉文件再 git checkout 之后,两个文件在工作区里都是 CRLF(line1\\r\\nline2\\r\\n),而暂存区仍是 lf。git status 是空的:工作区的 CRLF 与 blob 的 LF 被视为相同。", t=tl(S(2)), mark=lidx(S(2), 'LF will be replaced by CRLF', "检出后工作区文件的字节"), done=lidx(S(2), 'i/lf    w/crlf  attr/                 \twin.txt', "b'line1\\nline2\\n' b'line1\\nline2\\n'", '(status 为空'), kv=KV([['add', 'CRLF → LF'], ['checkout', 'LF → CRLF'], ['status', '两边视为相同,不报改动']], ['checkout'])),
+    step("core.autocrlf=input:add 时 CRLF 转成 LF(blob 里是 line1\\nline2\\n,和 true 一样),git 提示 CRLF will be replaced by LF;但检出时不做反向转换。适合 Linux / macOS:从别处带来的 CRLF 文件提交时被规范成 LF,检出始终是 LF。", t=tl(S(3)), mark=lidx(S(3), 'CRLF will be replaced by LF'), done=lidx(S(3), 'i/lf    w/crlf', "b'line1\\nline2\\n' b'line1\\nline2\\n'"), kv=KV([['input', '只在 add 时 CRLF → LF'], ['检出', '不转换'], ['适合', 'Linux / macOS']], ['input'])),
+    step(".gitattributes 优先于 autocrlf(此时 core.autocrlf=false)。*.txt text:a.txt 的 CRLF 被规范成 LF;*.bat text eol=crlf:b.bat 存 LF,检出写成 CRLF(w/crlf);*.sh text eol=lf:c.sh 的 CRLF 存成 LF,检出是 LF;*.bin binary:d.bin 的 attr 是 -text,CRLF 原样保留;没有属性的 e.dat 在 autocrlf=false 下也原样保留。属性文件随仓库提交,团队里每个人行为一致。", t=tl(S(4)), mark=lidx(S(4), 'attr/text eol=crlf', 'attr/text eol=lf', 'attr/-text'), done=lidx(S(4), 'a.txt: ', 'b.bat: ', 'c.sh: ', 'd.bin: ', 'e.dat: '), kv=KV([['text', '启用规范化(暂存区存 LF)'], ['eol=crlf / eol=lf', '检出时写成什么'], ['binary', '-text,不做任何转换'], ['优势', '随仓库提交,不依赖每人的 autocrlf']], ['优势'])),
+    step("先提交了 CRLF 的 old.txt(i/crlf),后来才加上 *.txt text:git status 显示 M old.txt(内容字节没变,但按新属性它应该被规范化);git add --renormalize . 之后暂存区里变成 i/lf,git diff --cached --stat 显示 old.txt 4 行变动(2 行删除、2 行增加)——这个提交会把所有行都改一遍,历史里留下一个只改换行的大提交。", t=tl(S(5)), mark=lidx(S(5), 'M  old.txt', '4 ++--'), done=lidx(S(5), 'i/crlf  w/crlf', ' M old.txt', 'i/lf    w/lf'), kv=KV([['加属性之后', '已提交的内容不会自动变'], ['--renormalize', '按当前属性重新规范暂存区'], ['代价', '一个改动所有行的提交']], ['--renormalize'])),
+    step("core.autocrlf=true 加 core.safecrlf=true:混合换行的 mix.txt(a CRLF、b LF、c CRLF)add 被拒绝,fatal: LF would be replaced by CRLF in mix.txt,暂存区里没有这个文件。把 safecrlf 降为 warn 之后 add 成功,只给出警告,i/lf w/mixed。含 NUL 字节的 bin.dat 被自动识别为二进制(i/-text w/-text),不做转换。", t=tl(S(6)), mark=lidx(S(6), 'fatal: LF would be replaced', 'w/mixed'), done=lidx(S(6), 'core.safecrlf warn', 'i/-text w/-text'), kv=KV([['safecrlf=true', '转换不可逆就拒绝'], ['warn', '只警告'], ['二进制', '含 NUL 字节自动识别,不转换']], ['safecrlf=true'])),
+]
+A = mkarti('l11', 11, 'Git,换行符,CRLF,autocrlf,gitattributes,真实验证,动画演示',
+    '在真实仓库里对比换行符设置:默认原样存;core.autocrlf=true 添加时 CRLF→LF、检出时 LF→CRLF;input 只在添加时转换;.gitattributes 的 text / eol / binary 优先于 autocrlf;已提交的 CRLF 要 git add --renormalize 才会按新属性规范;safecrlf 在混合换行时拒绝添加。',
+    '换行符问题到底怎么回事?这篇用 git ls-files --eol 看暂存区(i/)和工作区(w/)的换行,对照 autocrlf 的 true、input、false 以及 .gitattributes 的 text、eol、binary,再看 --renormalize 和 safecrlf。',
+    [('i/ 与 w/', 'git ls-files --eol 同时显示暂存区和工作区的换行,是排查换行问题的主要工具'), ('属性优先', '.gitattributes 的 text / eol / binary 比每个人的 autocrlf 设置优先,而且随仓库走'), ('--renormalize', '给已提交的 CRLF 文件补上 text 属性后,重新规范会产生一个改动每一行的提交')],
+    [('默认不管', '<p>没有任何设置时,git 不转换换行,字节怎么存怎么取。<code>git ls-files --eol</code> 的 <code>i/</code> 是暂存区里的换行风格,<code>w/</code> 是工作区里的,<code>attr/</code> 是生效的属性。</p>'),
+     ('autocrlf=true', '<p>添加时把 CRLF 转成 LF,检出时再把 LF 转成 CRLF,工作区是 CRLF、仓库里是 LF。<code>git status</code> 认为两者相同,不会报改动。适合 Windows。</p>'),
+     ('autocrlf=input', '<p>只做添加时的转换,检出时保持 LF。适合 Linux / macOS,防止别人带来的 CRLF 进入仓库。</p>'),
+     ('.gitattributes', '<p><code>text</code> 启用规范化,<code>eol=crlf</code> / <code>eol=lf</code> 指定检出时的换行,<code>binary</code>(即 <code>-text</code>)禁止任何转换。因为随仓库提交,它比每个开发者自己的 <code>autocrlf</code> 更可靠。</p>'),
+     ('改属性之后', '<p>给已经提交了 CRLF 的文件补 <code>text</code> 属性,不会自动改历史;<code>git add --renormalize .</code> 把暂存区按新属性重写,会产生一个几乎每一行都改的提交,最好单独提交并写清楚。</p>'),
+     ('safecrlf', '<p>混合换行的文件无法无损往返转换。<code>core.safecrlf=true</code> 直接拒绝添加,<code>warn</code> 只警告。含 NUL 字节的文件会被识别成二进制,不转换。</p>')],
+    steps,
+    [ENV_I_GIT + '。macOS 上 core.eol 默认 native 即 LF;文件用 printf 写入 \\r\\n;i/ w/ 来自 git ls-files --eol',
+     '没有验证:Windows 上 core.eol 的 native 取值与实际表现;编辑器自己的换行设置(.editorconfig)与 git 的交互;大文件、非 UTF-8 编码(core.autocrlf 对 UTF-16 的影响);git diff 中 ^M 的显示(core.whitespace);ident、filter 等其它属性与 text 的组合'],
+    '换行符')

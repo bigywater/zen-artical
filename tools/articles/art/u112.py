@@ -1,0 +1,16 @@
+from lib import *
+S = SS('u112')
+steps = [
+    step("同样三个字段 (u8, u32, u16):repr(Rust) 的 size 是 8、align 4,字段偏移 a=6、b=0、c=4 —— 编译器把 u32 放最前、u16 其次、u8 最后;repr(C) 严格按声明顺序:size 12、align 4,偏移 a=0、b=4、c=8,字段合计 7 字节,多出的 5 字节是填充(padding)。", t=tl(S(1)), done=lidx(S(1), 'repr(Rust)', 'repr(C)'), mark=lidx(S(1), '填充'), b=bars([['字段合计', 7, '7 B'], ['repr(Rust)', 8, '8 B'], ['repr(C)', 12, '12 B']], 12, done=[0, 1], cur=[2]), kv=KV([['repr(Rust)', 'size 8,偏移 a=6 b=0 c=4'], ['repr(C)', 'size 12,偏移 a=0 b=4 c=8']], ['repr(C)'])),
+    step("repr(C) 严格按声明顺序排列,所以声明顺序决定填充:u8,u64,u8,u32 这个顺序是 24 字节;按大小降序 u64,u32,u8,u8 只要 16 字节;repr(Rust) 的同样四个字段无论怎么声明,编译器自己重排,也是 16 字节。", t=tl(S(2)), done=lidx(S(2), 'u8,u64,u8,u32', 'u64,u32,u8,u8', 'repr(Rust)'), b=bars([['repr(C) u8,u64,u8,u32', 24, '24 B'], ['repr(C) u64,u32,u8,u8', 16, '16 B'], ['repr(Rust)', 16, '16 B']], 24, done=[1, 2], cur=[0]), kv=KV([['声明顺序差', '24 字节'], ['按大小降序', '16 字节'], ['repr(Rust)', '16 字节(自动重排)']], ['声明顺序差'])),
+    step("repr(C, packed) 去掉填充:同样的 (u8, u32, u16) 只有 7 字节,align 1;repr(C, align(16)) 提高对齐:只含一个 u32 的结构体 size 16、align 16(大小补到对齐的倍数)。按值读 packed 字段是安全的(b = 2)。", t=tl(S(3)), done=lidx(S(3), 'packed:', 'align(16)', '按值读'), kv=KV([['packed', 'size 7,align 1'], ['align(16)', 'size 16,align 16']], ['packed'])),
+    step("但引用 packed 结构体的字段是错误:let r = &p.b 报 error[E0793]: reference to field of packed struct is unaligned,note 说「creating a misaligned reference is undefined behavior (even if that reference is never dereferenced)」,help 建议复制到局部变量或用 read_unaligned。", t=tl(S(3)), mark=lidx(S(3), 'error[E0793]', 'misaligned reference'), kv=KV([['&packed.field', 'E0793:未对齐引用是 UB']], ['&packed.field'])),
+    step("枚举:默认的无数据枚举 {A,B,C} 是 1 字节,repr(u8) 也是 1 字节,repr(C) 与 repr(u32) 是 4 字节;E1::C as u8 = 200(repr(u8) 的判别值可读)。带数据的 enum {A(u8), B(u32), C} 默认与 repr(C) 都是 8 字节。", t=tl(S(4)), done=lidx(S(4), '默认 enum', '带数据 enum', 'E1::C'), kv=KV([['默认 / repr(u8)', '1 字节'], ['repr(C) / repr(u32)', '4 字节'], ['带数据', '8 字节']], ['repr(C) / repr(u32)'])),
+    step("transmute 成字节数组直接看内存:H { tag: 0xAA, len: 0x11223344, flags: 0xBEEF } 的 12 个字节是 aa 00 00 00 44 33 22 11 ef be 00 00 —— tag 在字节 0,3 字节填充,len 从字节 4 起(小端 44 33 22 11),flags 从字节 8 起(小端 ef be),末尾 2 字节填充。", t=tl(S(5)), done=lidx(S(5), '12 个字节', 'tag 在字节 0'), kv=KV([['字节 0', 'tag = aa'], ['字节 4–7', 'len 小端 44 33 22 11'], ['字节 8–9', 'flags 小端 ef be']], ['字节 4–7'])),
+]
+A = mkart('u112', 112, 'Rust,repr(C),内存布局,对齐,真实验证,动画演示',
+    '用 size_of、offset_of 与 transmute 验证 repr(C):(u8, u32, u16) repr(Rust) 8 字节(自动重排)对 repr(C) 12 字节(填充 5);声明顺序决定 24 对 16 字节;packed 7 字节但引用字段 E0793,align(16) 补到 16;枚举的 repr 大小;12 个真实字节的排布。',
+    '为什么同样的字段,repr(C) 和默认布局大小不同?填充在哪里?怎么用声明顺序省空间?packed 为什么不能取引用?这篇用 offset_of 与字节转储直接把布局看出来。',
+    [('8 对 12 字节', '同样 (u8, u32, u16) 的 repr(Rust) 与 repr(C) 大小'), ('24 对 16 字节', 'repr(C) 里字段声明顺序不同造成的大小差'), ('E0793', '引用 packed 结构体字段的错误码')],
+    [('repr(Rust) 与 repr(C)', '<p>对齐与填充的更多细节见<a href="rust-struct-alignment-padding.html">Struct 对齐与 Padding</a>。repr(Rust) 的布局没有稳定保证,这里观察到的是 rustc 1.98.1 在 aarch64 上的结果。</p>'), ('声明顺序与填充', None), ('packed 与 align', None), ('枚举的 repr', '<p>枚举布局见<a href="rust-enum-layout.html">Enum 的内存布局</a>。</p>'), ('字节转储', None)],
+    steps, [ENV_U + '。repr(Rust) 的字段重排是编译器当前的实现细节,不是语言保证', '没有验证:与 C 编译器实际生成布局的一致性(没有链接 C 代码)、repr(transparent)、big-endian 目标上的字节序、union 的布局、位域'], 'repr(C)')

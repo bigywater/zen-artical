@@ -1,0 +1,597 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>Elasticsearch 为什么是"近实时"</title>
+<meta name="description" content="refresh/flush/translog 如何共同决定数据可见的延迟。">
+<link rel="canonical" href="https://bigywater.tech/es-nrt.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Elasticsearch 为什么是&quot;近实时&quot;">
+<meta property="og:description" content="refresh/flush/translog 如何共同决定数据可见的延迟。">
+<meta property="og:url" content="https://bigywater.tech/es-nrt.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Elasticsearch 为什么是&quot;近实时&quot;">
+<meta name="twitter:description" content="refresh/flush/translog 如何共同决定数据可见的延迟。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F6F7F9; --surface:#FFFFFF; --surface-2:#EEF0F4; --surface-3:#E4E7ED;
+  --ink:#1D2130; --ink-soft:#52586B; --ink-faint:#868DA3;
+  --line:#DDE1E8; --line-soft:#E9ECF1;
+  --seg-c:#6B4C9E; --seg-soft:#EDE4F7;
+  --log-c:#1E8F5F; --log-soft:#DCF3E7;
+  --tempo-c:#C2701A; --tempo-soft:#F8E7D2;
+  --danger:#B4483A; --danger-soft:#F7E2DE;
+  --code-bg:#1B1E2A; --code-ink:#E7E9F5; --code-comment:#7C8199;
+  --shadow:0 1px 2px rgba(20,22,35,.06),0 10px 28px -14px rgba(20,22,35,.16);
+  --radius:12px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#12141C; --surface:#191C27; --surface-2:#212533; --surface-3:#292E3F;
+    --ink:#E7E9F0; --ink-soft:#ABB1C4; --ink-faint:#6D7389;
+    --line:#2C3141; --line-soft:#232734;
+    --seg-c:#B79CEE; --seg-soft:#2A2247;
+    --log-c:#4FD190; --log-soft:#15382A;
+    --tempo-c:#E8975C; --tempo-soft:#3A2618;
+    --danger:#E08272; --danger-soft:#3B241F;
+    --code-bg:#0F111A; --code-ink:#E7E9F5; --code-comment:#6B7089;
+    --shadow:0 1px 2px rgba(0,0,0,.35),0 14px 32px -16px rgba(0,0,0,.55);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#12141C; --surface:#191C27; --surface-2:#212533; --surface-3:#292E3F;
+  --ink:#E7E9F0; --ink-soft:#ABB1C4; --ink-faint:#6D7389;
+  --line:#2C3141; --line-soft:#232734;
+  --seg-c:#B79CEE; --seg-soft:#2A2247;
+  --log-c:#4FD190; --log-soft:#15382A;
+  --tempo-c:#E8975C; --tempo-soft:#3A2618;
+  --danger:#E08272; --danger-soft:#3B241F;
+  --code-bg:#0F111A; --code-ink:#E7E9F5; --code-comment:#6B7089;
+  --shadow:0 1px 2px rgba(0,0,0,.35),0 14px 32px -16px rgba(0,0,0,.55);
+}
+*{box-sizing:border-box;}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.7;}
+.mono{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;}
+.wide{max-width:1040px;margin:0 auto;padding:0 22px;}
+.prose{max-width:1040px;margin:0 auto;padding:0 22px;}
+h1,h2{letter-spacing:-.01em;text-wrap:balance;}
+
+header.hero{padding:60px 0 28px;}
+.eyebrow{font-size:12.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);margin:0 0 14px;}
+h1{font-size:clamp(28px,4.6vw,40px);margin:0 0 16px;line-height:1.18;font-weight:800;}
+.hero-sub{font-size:17px;color:var(--ink-soft);margin:0 0 20px;}
+.legend-row{display:flex;gap:10px;flex-wrap:wrap;margin:24px 0 4px;}
+.legend-chip{display:inline-flex;align-items:center;gap:8px;padding:7px 13px;border-radius:999px;border:1px solid var(--line);background:var(--surface);font-size:13px;font-weight:600;}
+.legend-dot{width:11px;height:11px;border-radius:50%;flex:none;}
+.legend-chip .seg-dot{background:var(--seg-c);} .legend-chip .log-dot{background:var(--log-c);} .legend-chip .tempo-dot{background:var(--tempo-c);}
+
+section{padding:36px 0;}
+section.divider-top{border-top:1px solid var(--line);}
+h2{font-size:21px;margin:0 0 4px;font-weight:800;}
+.section-kicker{font-size:12.5px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.07em;font-weight:700;margin:0 0 8px;}
+p{font-size:15.5px;color:var(--ink-soft);margin:0 0 16px;}
+.prose p b, .prose li b{color:var(--ink);font-weight:700;}
+.prose ul,.prose ol{padding-left:22px;font-size:15.5px;color:var(--ink-soft);}
+.prose li{margin-bottom:8px;}
+.seg-tag{color:var(--seg-c);font-weight:700;}
+.log-tag{color:var(--log-c);font-weight:700;}
+.tempo-tag{color:var(--tempo-c);font-weight:700;}
+
+.entity-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:22px 0;}
+@media (max-width:760px){.entity-cards{grid-template-columns:1fr;}}
+.ecard{border:1px solid var(--line);border-radius:var(--radius);padding:18px;background:var(--surface);box-shadow:var(--shadow);}
+.ecard .etitle{font-size:16.5px;font-weight:800;display:flex;align-items:center;gap:9px;margin-bottom:8px;}
+.ecard.seg .etitle{color:var(--seg-c);} .ecard.log .etitle{color:var(--log-c);} .ecard.tempo .etitle{color:var(--tempo-c);}
+.ecard p{font-size:14px;margin:0;}
+.edot{width:13px;height:13px;border-radius:50%;flex:none;}
+.ecard.seg .edot{background:var(--seg-c);} .ecard.log .edot{background:var(--log-c);} .ecard.tempo .edot{background:var(--tempo-c);}
+
+.code-quote{background:var(--code-bg);border-radius:var(--radius);overflow:hidden;margin:20px 0;box-shadow:var(--shadow);}
+.code-head{display:flex;justify-content:space-between;align-items:center;padding:9px 16px;background:rgba(255,255,255,.04);border-bottom:1px solid rgba(255,255,255,.08);}
+.code-path{font-family:ui-monospace,monospace;font-size:12px;color:var(--code-comment);}
+.code-quote pre{margin:0;padding:16px;overflow-x:auto;}
+.code-quote code{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;font-size:12.8px;line-height:1.6;color:var(--code-ink);white-space:pre;}
+
+.callout{border-left:3px solid var(--tempo-c);background:var(--tempo-soft);border-radius:0 8px 8px 0;padding:12px 16px;font-size:14px;color:var(--ink);margin:18px 0;}
+.callout b{color:var(--tempo-c);}
+.callout.info{border-left-color:var(--seg-c);background:var(--seg-soft);}
+.callout.info b{color:var(--seg-c);}
+
+/* ---- simulator ---- */
+.sim-panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px;margin:22px 0;}
+.sim-controls{display:flex;align-items:center;gap:8px;margin-bottom:18px;flex-wrap:wrap;}
+button.ctrl{appearance:none;border:1px solid var(--line);background:var(--surface-2);color:var(--ink);padding:8px 14px;border-radius:8px;font-size:14px;cursor:pointer;font-weight:600;transition:background .15s,border-color .15s;}
+button.ctrl:hover:not(:disabled){background:var(--surface-3);}
+button.ctrl:disabled{opacity:.4;cursor:not-allowed;}
+button.ctrl.primary{background:var(--ink);color:var(--bg);border-color:var(--ink);}
+button.ctrl:focus-visible{outline:2px solid var(--seg-c);outline-offset:2px;}
+.sim-progress{font-size:12.5px;color:var(--ink-faint);margin-left:2px;font-family:ui-monospace,monospace;}
+.spacer{flex:1;}
+select.ctrl{padding:6px 10px;}
+
+.searchable-banner{border:2px solid var(--log-c);background:var(--log-soft);border-radius:10px;padding:10px 14px;margin-bottom:16px;}
+.searchable-label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--log-c);font-weight:800;margin-bottom:6px;}
+.searchable-chips{display:flex;gap:6px;flex-wrap:wrap;min-height:28px;}
+.doc-chip{border:1.5px solid var(--line);background:var(--surface);color:var(--ink);border-radius:7px;padding:5px 10px;font-size:13px;font-family:ui-monospace,monospace;font-weight:700;}
+.doc-chip.searchable{border-color:var(--log-c);background:var(--surface);}
+
+.block-label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-faint);font-weight:700;margin-bottom:6px;}
+.buffer-block,.translog-block{margin-bottom:14px;}
+.buffer-row,.translog-row{display:flex;gap:6px;flex-wrap:wrap;min-height:34px;padding:8px;border:1.5px dashed var(--line);border-radius:8px;}
+.buf-chip{border:1.5px solid var(--tempo-c);background:var(--tempo-soft);color:var(--ink);border-radius:6px;padding:4px 9px;font-size:12.5px;font-family:ui-monospace,monospace;font-weight:700;}
+.tlog-chip{border:1.5px solid var(--log-c);background:var(--log-soft);color:var(--ink);border-radius:6px;padding:3px 8px;font-size:11.5px;font-family:ui-monospace,monospace;}
+.empty-note{font-size:12px;color:var(--ink-faint);font-style:italic;}
+
+.segments-block{margin-bottom:14px;}
+.segments-row{display:flex;gap:10px;flex-wrap:wrap;}
+.segment-card{border:2px solid var(--seg-c);border-radius:10px;padding:10px 12px;background:var(--seg-soft);min-width:150px;transition:border-color .25s,background .25s,opacity .3s;}
+.segment-card[data-fresh="true"]{box-shadow:0 0 0 3px var(--tempo-soft);}
+.segment-card[data-removed="true"]{opacity:.3;}
+.segment-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;font-family:ui-monospace,monospace;font-size:12.5px;font-weight:700;color:var(--seg-c);}
+.durable-badge{font-size:10px;padding:2px 6px;border-radius:5px;font-weight:800;font-family:ui-monospace,monospace;}
+.durable-badge.yes{background:var(--log-soft);color:var(--log-c);}
+.durable-badge.no{background:var(--tempo-soft);color:var(--tempo-c);}
+.segment-docs{display:flex;gap:4px;flex-wrap:wrap;}
+.seg-doc-chip{font-family:ui-monospace,monospace;font-size:11.5px;font-weight:700;padding:2px 6px;border-radius:5px;background:var(--surface);border:1px solid var(--line);}
+.seg-doc-chip.tombstoned{text-decoration:line-through;opacity:.4;border-style:dashed;}
+
+.sim-desc{background:var(--surface-2);border-radius:8px;padding:12px 14px;font-size:13.5px;color:var(--ink-soft);margin-bottom:14px;min-height:44px;border:1px solid var(--line-soft);}
+.sim-desc b{color:var(--ink);}
+.sim-formula{font-family:ui-monospace,monospace;font-size:13px;color:var(--ink-faint);margin-bottom:8px;}
+
+.sim-log{max-height:170px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:8px;}
+.log-item{padding:6px 9px;border-radius:6px;font-size:12.5px;color:var(--ink-faint);cursor:pointer;font-family:ui-monospace,monospace;display:flex;gap:8px;}
+.log-item:hover{background:var(--surface-2);}
+.log-item[data-active="true"]{background:var(--seg-soft);color:var(--ink);font-weight:600;}
+.log-idx{min-width:22px;color:var(--ink-faint);}
+
+.refs{font-size:14px;color:var(--ink-soft);}
+.refs li{margin-bottom:10px;}
+.refs a{color:var(--seg-c);}
+footer.endnote{border-top:1px solid var(--line);padding:24px 0 56px;font-size:13px;color:var(--ink-faint);}
+
+@media (prefers-reduced-motion:reduce){*{transition:none !important;}}
+</style>
+
+<article>
+<header class="hero prose">
+  <p class="eyebrow">Elasticsearch 系列 · 延续倒排索引一篇</p>
+  <h1>Elasticsearch 为什么是"近实时"</h1>
+  <p class="hero-sub">写一条数据进 Elasticsearch,为什么<b>不是立刻</b>就能被搜到,而是要等大概 1 秒?这篇拆开这背后的完整流程:内存缓冲区、事务日志(translog)、段(segment)、以及 refresh / flush / merge 这三个经常被搞混的动作,配一个可以逐步播放、每一步都验证过内部状态一致性的动画演示。</p>
+  <div class="legend-row">
+    <span class="legend-chip"><span class="legend-dot seg-dot"></span>段(segment) · 一旦生成就不可变的最小索引单元</span>
+    <span class="legend-chip"><span class="legend-dot log-dot"></span>translog · 不是为了搜索,是为了"进程崩了也不丢数据"</span>
+    <span class="legend-chip"><span class="legend-dot tempo-dot"></span>三个不同节奏 · 能搜到 / 落盘安全 / 存储整理,是三件独立的事</span>
+  </div>
+</header>
+
+<section class="prose">
+  <p class="section-kicker">01 · 一个违反直觉的现象</p>
+  <h2>刚写完,搜不到,是 bug 吗</h2>
+  <p>很多人第一次用 Elasticsearch 都会踩到这个"坑":调用接口插入一条数据,接口返回成功,紧接着立刻搜索,却发现搜不到——过一小会儿(通常不到 1 秒)再搜,就有了。这不是 bug,是设计如此,官方文档管这个特性叫 <b>near real-time(近实时)</b>,"近"这个字就是特意标注给你看的。要理解为什么,得先知道写入的数据经过了哪几层。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">02 · 三个核心概念</p>
+  <h2>段 / translog / 三种不同节奏</h2>
+  <div class="entity-cards">
+    <div class="ecard seg"><div class="etitle"><span class="edot"></span>Segment(段)</div><p>Elasticsearch 底层的 Lucene 索引不是一整块,而是很多个小的"段"拼起来的。每个段一旦写出来就<b>不可变</b>——不能往里加文档,也不能真的删掉一个文档,只能整体拿去和别的段合并。这个"不可变"的约束,是接下来一切设计的起点。</p></div>
+    <div class="ecard log"><div class="etitle"><span class="edot"></span>Translog(事务日志)</div><p>每次写入,除了进内存缓冲区,还会追加写一行到磁盘上的日志文件里。它不是拿来搜索用的,唯一的作用是"万一进程这时候崩了,内存里的数据丢了,重启后能靠重放这份日志把数据找回来"——一份专门为故障恢复准备的安全网。</p></div>
+    <div class="ecard tempo"><div class="etitle"><span class="edot"></span>三种不同节奏</div><p><b>refresh</b>(默认约 1 秒一次)决定"什么时候能被搜到";<b>flush</b>决定"什么时候真正安全落盘、translog 可以清空";<b>merge</b>决定"什么时候把小段拼成大段、腾出被删文档占的空间"。三件事各管各的,互不等待。</p></div>
+  </div>
+</section>
+
+<section class="prose divider-top" id="sim-section">
+  <p class="section-kicker">03 · 现场直播</p>
+  <h2>一条数据从写入到"可以被搜到"的完整旅程</h2>
+  <p>下面的演示依次做了:写入两条数据、refresh、再写一条、删除最早那条、refresh、再写一条、refresh、flush、最后 merge。每一步都记录了当时"如果现在发起一次搜索,能搜到哪些文档"——这份状态还<b>用一份完全独立的第二种算法重新推导过一遍,两边逐条比对一致</b>,不是随手画的动画。</p>
+</section>
+
+<section class="wide">
+  <div class="sim-panel">
+    <div class="searchable-banner">
+      <div class="searchable-label">🔍 此刻发起搜索,能搜到</div>
+      <div class="searchable-chips" id="searchableChips"></div>
+    </div>
+
+    <div class="buffer-block">
+      <div class="block-label">内存缓冲区(还没 refresh,搜不到)</div>
+      <div class="buffer-row" id="bufferRow"></div>
+    </div>
+
+    <div class="translog-block">
+      <div class="block-label" id="translogLabel">Translog(自上次 flush 以来的操作记录)</div>
+      <div class="translog-row" id="translogRow"></div>
+    </div>
+
+    <div class="segments-block">
+      <div class="block-label">磁盘上的段(segments)</div>
+      <div class="segments-row" id="segmentsRow"></div>
+    </div>
+
+    <div class="sim-desc">
+      <div class="sim-formula" id="simFormula">&mdash;</div>
+      <div id="simDesc">点击"下一步"或"播放"开始。</div>
+    </div>
+
+    <div class="sim-controls">
+      <button class="ctrl" id="btnReset">重置</button>
+      <button class="ctrl" id="btnPrev">上一步</button>
+      <button class="ctrl primary" id="btnPlay">播放</button>
+      <button class="ctrl" id="btnNext">下一步</button>
+      <span class="sim-progress" id="simProgress">0 / 0</span>
+      <div class="spacer"></div>
+      <label class="sim-progress" for="simSpeed">速度</label>
+      <select class="ctrl" id="simSpeed">
+        <option value="2000">慢</option>
+        <option value="1200" selected>中</option>
+        <option value="550">快</option>
+      </select>
+    </div>
+
+    <div class="sim-log" id="simLog"></div>
+  </div>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">04 · refresh 到底做了什么</p>
+  <h2>把内存缓冲区"冻"成一个新段</h2>
+  <p>演示第 3 步(第一次 refresh)发生的事:内存缓冲区里的 A、B 两条数据,被写成一个新的、不可变的段,这个段立刻对搜索可见——缓冲区随之清空。这就是"能被搜到"这件事发生的唯一时刻。Elasticsearch 默认每 <code class="mono">index.refresh_interval</code>(默认 1 秒)自动做一次这个动作,这也是"近实时"里那个大约 1 秒延迟的来源。</p>
+  <p class="callout info"><b>注意:</b>refresh 生成的新段,此刻很可能只存在于操作系统的文件系统缓存里,并没有真正 <code class="mono">fsync</code> 到磁盘——"能搜到"不等于"已经安全持久化",这是两件独立的事,分别由 refresh 和接下来要讲的 flush 负责。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">05 · 删除是"打个标记",不是真的删</p>
+  <h2>Tombstone(墓碑)</h2>
+  <p>演示第 5 步删除文档 A 时,A 并没有从它所在的段里消失——那个段已经不可变了,做不到。真正发生的是:这个段内部多了一条"A 已删除"的标记(墓碑,tombstone)。搜索的时候,凡是命中了带墓碑标记的文档,会被直接跳过、当作不存在;但它占用的磁盘空间要一直等到这个段被 merge,才会被真正回收。<b>这和我们在 Go map 那篇讲的 tombstone 是同一个思路</b>——不同的系统,同一个"不能就地删除时该怎么办"的解法。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">06 · flush:什么时候才真正"安全"</p>
+  <h2>落盘,并且清空 translog</h2>
+  <p>演示第 9 步(flush)做了两件事:把所有还没 <code class="mono">fsync</code> 的段真正写到磁盘上;把 translog 清空(准确说是新开一个空的)。第二件事的逻辑是:既然这些操作现在已经安全地体现在磁盘上的段里了,就不再需要靠重放 translog 来恢复它们,继续留着只会让 translog 文件越滚越大。</p>
+  <p>观察这一步的 <b>可搜索文档集合完全没有变化</b>——flush 不影响"能搜到什么",它只影响"崩溃后能不能恢复、还需不需要重放多少数据"。这正是本文最想讲清楚的一点:<b>refresh 管可见性,flush 管持久性,是两条互不干扰的时间线</b>,现实里 flush 的频率通常比 refresh 低得多。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">07 · merge:把碎片拼起来,顺便扫墓</p>
+  <h2>为什么段不能无限增多</h2>
+  <p>Elasticsearch 默认每秒就可能产生一个新段(如果这段时间内有写入的话)。段一多,一次搜索就要挨个查完所有段再合并结果,还会占用大量文件句柄和内存——merge 就是后台安静地把几个小段拼成一个大段。演示最后一步:三个段(其中一个带着 A 的墓碑)被合并成一个新段,合并过程中,带墓碑的文档被彻底清除,磁盘空间才真正被回收。</p>
+  <p class="callout"><b>三者的关系,一句话总结:</b>refresh 决定<b>你多久能看到新数据</b>;flush 决定<b>数据多久变得"扛得住宕机"</b>;merge 决定<b>存储多久被真正清理干净</b>。三件事默认节奏都不一样,互相独立触发,不要把它们当成同一件事的三个名字。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">08 · 一个实际的取舍</p>
+  <h2>能不能让它更"实时"</h2>
+  <p>把 <code class="mono">refresh_interval</code> 调小(甚至设成写入时立即触发)确实能让数据更快可搜,但代价是:每次 refresh 都会生成一个新段,频率越高,段积累得越快,后台 merge 的压力越大,反而可能拖慢整体的写入和查询性能。所以真实项目里,如果业务能接受"几秒延迟",通常会保持默认或者调大这个间隔(比如日志类场景常见调到 30 秒甚至更久),用短暂的延迟换取更好的吞吐量——这是一个典型的"实时性 vs 系统开销"的权衡,没有免费的午餐。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">09 · 参考与说明</p>
+  <h2>这篇文章做了哪些简化</h2>
+  <ul class="refs">
+    <li>这篇讲的是 Elasticsearch/Lucene 公开文档里描述的机制和设计动机,不是逐行对照源码——面向的是想理解"为什么"而不是想读实现代码的读者,和之前 Go 运行时系列的写法刻意不同。想再深入可以看 Elasticsearch 官方文档里 <a href="https://www.elastic.co/guide/en/elasticsearch/reference/current/near-real-time.html" target="_blank" rel="noopener">near real-time 这一节</a>,以及 <a href="https://www.elastic.co/blog/found-elasticsearch-from-the-bottom-up" target="_blank" rel="noopener">Elasticsearch from the Bottom Up</a> 这篇经典博客。</li>
+    <li>真实的 translog 还涉及"写入确认策略"(<code class="mono">index.translog.durability</code>,默认每次请求都 <code class="mono">fsync</code> translog,也可以改成定期 <code class="mono">fsync</code> 换取更高吞吐但增加丢数据窗口)——这篇为了让主线索清楚,统一按"每次写入都追加 translog"处理,没有展开这层可配置的权衡。</li>
+    <li>真实的 merge 由一套可配置的"合并策略"(merge policy)决定什么时候合并哪些段,会综合考虑段大小、段数量等因素;演示里为了让效果一眼可见,直接把 flush 后现存的全部段合并成了一个。</li>
+    <li>演示里的"删除"简化成了只处理已经进入某个段的文档;真实实现里,如果删除的文档还在内存缓冲区、尚未 refresh,做法会不同(直接从待写入的操作里抹掉即可)。</li>
+    <li>本文演示的 10 步完整流程,用 Python 脚本真实模拟并做了断言校验——尤其是"任意时刻能搜到什么"这件事,专门写了第二种独立算法重新推导一遍,和主流程逐步产出的结果逐条核对完全一致。</li>
+  </ul>
+</section>
+
+<footer class="endnote prose">
+  Elasticsearch 系列 · 段不可变、用墓碑代替就地删除、靠后台合并慢慢清理——这套思路在很多存储系统里反复出现(LSM-Tree 数据库、我们之前讲过的 Go map 扩容和 slice 追加也是亲戚关系),值得当成一个通用的设计模式记下来,而不只是 Elasticsearch 一家的细节。
+</footer>
+</article>
+
+<script>
+var EVENTS = [{"doc": "A", "type": "index", "snapshot": {"buffer": ["A"], "translogLen": 1, "translog": [{"op": "index", "doc": "A"}], "segments": [], "searchable": []}}, {"doc": "B", "type": "index", "snapshot": {"buffer": ["A", "B"], "translogLen": 2, "translog": [{"op": "index", "doc": "A"}, {"op": "index", "doc": "B"}], "segments": [], "searchable": []}}, {"newSegmentUid": 1, "newSegmentDocs": ["A", "B"], "type": "refresh", "snapshot": {"buffer": [], "translogLen": 2, "translog": [{"op": "index", "doc": "A"}, {"op": "index", "doc": "B"}], "segments": [{"uid": 1, "docs": ["A", "B"], "tombstones": [], "durable": false}], "searchable": ["A", "B"]}}, {"doc": "C", "type": "index", "snapshot": {"buffer": ["C"], "translogLen": 3, "translog": [{"op": "index", "doc": "A"}, {"op": "index", "doc": "B"}, {"op": "index", "doc": "C"}], "segments": [{"uid": 1, "docs": ["A", "B"], "tombstones": [], "durable": false}], "searchable": ["A", "B"]}}, {"doc": "A", "type": "delete", "snapshot": {"buffer": ["C"], "translogLen": 4, "translog": [{"op": "index", "doc": "A"}, {"op": "index", "doc": "B"}, {"op": "index", "doc": "C"}, {"op": "delete", "doc": "A"}], "segments": [{"uid": 1, "docs": ["A", "B"], "tombstones": ["A"], "durable": false}], "searchable": ["B"]}}, {"newSegmentUid": 2, "newSegmentDocs": ["C"], "type": "refresh", "snapshot": {"buffer": [], "translogLen": 4, "translog": [{"op": "index", "doc": "A"}, {"op": "index", "doc": "B"}, {"op": "index", "doc": "C"}, {"op": "delete", "doc": "A"}], "segments": [{"uid": 1, "docs": ["A", "B"], "tombstones": ["A"], "durable": false}, {"uid": 2, "docs": ["C"], "tombstones": [], "durable": false}], "searchable": ["B", "C"]}}, {"doc": "D", "type": "index", "snapshot": {"buffer": ["D"], "translogLen": 5, "translog": [{"op": "index", "doc": "A"}, {"op": "index", "doc": "B"}, {"op": "index", "doc": "C"}, {"op": "delete", "doc": "A"}, {"op": "index", "doc": "D"}], "segments": [{"uid": 1, "docs": ["A", "B"], "tombstones": ["A"], "durable": false}, {"uid": 2, "docs": ["C"], "tombstones": [], "durable": false}], "searchable": ["B", "C"]}}, {"newSegmentUid": 3, "newSegmentDocs": ["D"], "type": "refresh", "snapshot": {"buffer": [], "translogLen": 5, "translog": [{"op": "index", "doc": "A"}, {"op": "index", "doc": "B"}, {"op": "index", "doc": "C"}, {"op": "delete", "doc": "A"}, {"op": "index", "doc": "D"}], "segments": [{"uid": 1, "docs": ["A", "B"], "tombstones": ["A"], "durable": false}, {"uid": 2, "docs": ["C"], "tombstones": [], "durable": false}, {"uid": 3, "docs": ["D"], "tombstones": [], "durable": false}], "searchable": ["B", "C", "D"]}}, {"fsyncedSegments": [1, 2, 3], "clearedTranslogEntries": 5, "type": "flush", "snapshot": {"buffer": [], "translogLen": 0, "translog": [], "segments": [{"uid": 1, "docs": ["A", "B"], "tombstones": ["A"], "durable": true}, {"uid": 2, "docs": ["C"], "tombstones": [], "durable": true}, {"uid": 3, "docs": ["D"], "tombstones": [], "durable": true}], "searchable": ["B", "C", "D"]}}, {"mergedFrom": [1, 2, 3], "purgedDocs": ["A"], "newSegmentUid": 4, "newSegmentDocs": ["B", "C", "D"], "type": "merge", "snapshot": {"buffer": [], "translogLen": 0, "translog": [], "segments": [{"uid": 4, "docs": ["B", "C", "D"], "tombstones": [], "durable": true}], "searchable": ["B", "C", "D"]}}];
+var idx = -1;
+var playTimer = null;
+
+var searchableChips = document.getElementById('searchableChips');
+var bufferRow = document.getElementById('bufferRow');
+var translogRow = document.getElementById('translogRow');
+var segmentsRow = document.getElementById('segmentsRow');
+var simLog = document.getElementById('simLog');
+
+function render(){
+  var snap = idx >= 0 ? EVENTS[idx].snapshot : {buffer: [], translog: [], segments: [], searchable: []};
+  var e = idx >= 0 ? EVENTS[idx] : null;
+
+  searchableChips.innerHTML = '';
+  if(snap.searchable.length === 0){
+    var em0 = document.createElement('span');
+    em0.className = 'empty-note';
+    em0.textContent = '(还没有任何数据)';
+    searchableChips.appendChild(em0);
+  } else {
+    snap.searchable.forEach(function(d){
+      var chip = document.createElement('span');
+      chip.className = 'doc-chip searchable';
+      chip.textContent = d;
+      searchableChips.appendChild(chip);
+    });
+  }
+
+  bufferRow.innerHTML = '';
+  if(snap.buffer.length === 0){
+    var em1 = document.createElement('span');
+    em1.className = 'empty-note';
+    em1.textContent = '(空)';
+    bufferRow.appendChild(em1);
+  } else {
+    snap.buffer.forEach(function(d){
+      var chip = document.createElement('span');
+      chip.className = 'buf-chip';
+      chip.textContent = d;
+      bufferRow.appendChild(chip);
+    });
+  }
+
+  translogRow.innerHTML = '';
+  document.getElementById('translogLabel').textContent = 'Translog(自上次 flush 以来的操作记录,共 ' + snap.translogLen + ' 条)';
+  if(snap.translog.length === 0){
+    var em2 = document.createElement('span');
+    em2.className = 'empty-note';
+    em2.textContent = '(空)';
+    translogRow.appendChild(em2);
+  } else {
+    snap.translog.forEach(function(t){
+      var chip = document.createElement('span');
+      chip.className = 'tlog-chip';
+      chip.textContent = (t.op === 'index' ? '+' : '-') + t.doc;
+      translogRow.appendChild(chip);
+    });
+  }
+
+  segmentsRow.innerHTML = '';
+  if(snap.segments.length === 0){
+    var em3 = document.createElement('span');
+    em3.className = 'empty-note';
+    em3.textContent = '(还没有任何段)';
+    segmentsRow.appendChild(em3);
+  } else {
+    snap.segments.forEach(function(seg){
+      var card = document.createElement('div');
+      card.className = 'segment-card';
+      card.dataset.fresh = (e && (e.newSegmentUid === seg.uid || (e.mergedFrom && e.mergedFrom.indexOf(seg.uid)===-1 && e.type==='merge' && e.newSegmentUid===seg.uid))) ? 'true' : 'false';
+      var head = document.createElement('div');
+      head.className = 'segment-head';
+      var title = document.createElement('span');
+      title.textContent = 'Segment #' + seg.uid;
+      var badge = document.createElement('span');
+      badge.className = 'durable-badge ' + (seg.durable ? 'yes' : 'no');
+      badge.textContent = seg.durable ? '💾 已持久化' : '🧠 内存态';
+      head.appendChild(title); head.appendChild(badge);
+      var docsRow = document.createElement('div');
+      docsRow.className = 'segment-docs';
+      seg.docs.forEach(function(d){
+        var chip = document.createElement('span');
+        chip.className = 'seg-doc-chip' + (seg.tombstones.indexOf(d) !== -1 ? ' tombstoned' : '');
+        chip.textContent = d;
+        docsRow.appendChild(chip);
+      });
+      card.appendChild(head); card.appendChild(docsRow);
+      segmentsRow.appendChild(card);
+    });
+  }
+
+  var formulaEl = document.getElementById('simFormula');
+  var descEl = document.getElementById('simDesc');
+  if(idx < 0){
+    formulaEl.textContent = '—';
+    descEl.innerHTML = '点击"下一步"或"播放"开始。';
+  } else {
+    formulaEl.textContent = formulaFor(e);
+    descEl.innerHTML = descFor(e);
+  }
+
+  document.getElementById('simProgress').textContent = (idx+1) + ' / ' + EVENTS.length;
+  document.getElementById('btnPrev').disabled = idx < 0;
+  document.getElementById('btnNext').disabled = idx >= EVENTS.length - 1;
+
+  var items = simLog.children;
+  for(var i2=0;i2<items.length;i2++){
+    items[i2].setAttribute('data-active', i2 === idx ? 'true' : 'false');
+  }
+  if(idx >= 0 && items[idx]) items[idx].scrollIntoView({block:'nearest'});
+}
+
+function formulaFor(e){
+  if(e.type === 'index') return 'PUT /doc/' + e.doc + '  → buffer + translog';
+  if(e.type === 'delete') return 'DELETE /doc/' + e.doc + '  → 标记墓碑 + translog';
+  if(e.type === 'refresh') return 'refresh()' + (e.newSegmentUid ? ('  → 新段 #' + e.newSegmentUid) : '  → (缓冲区为空,无事发生)');
+  if(e.type === 'flush') return 'flush()  → fsync 段 [' + e.fsyncedSegments.join(', ') + '],清空 translog(' + e.clearedTranslogEntries + ' 条)';
+  if(e.type === 'merge') return 'merge([' + e.mergedFrom.join(', ') + '])  → 新段 #' + e.newSegmentUid;
+  return '—';
+}
+
+function descFor(e){
+  if(e.type === 'index') return '写入文档 <b>' + e.doc + '</b>。先进内存缓冲区(还搜不到),同时追加一条记录到 translog(万一进程崩溃,靠它恢复)。';
+  if(e.type === 'delete') return '删除文档 <b>' + e.doc + '</b>。它已经在某个不可变的段里了,没法真的抹掉——只是在那个段上打一个"墓碑"标记。从这一刻起搜索会跳过它,但磁盘空间还没被回收。';
+  if(e.type === 'refresh') return e.newSegmentUid
+    ? '把内存缓冲区里的内容,原样写成一个新的不可变段(<b>#' + e.newSegmentUid + '</b>,包含 ' + e.newSegmentDocs.join(', ') + '),这个段立刻对搜索可见。缓冲区清空。<b>注意 translog 完全没被碰</b>。'
+    : '缓冲区当前是空的,这次 refresh 没有新内容可写,什么都不会发生。';
+  if(e.type === 'flush') return '把所有还是"内存态"的段(' + e.fsyncedSegments.map(function(u){return '#'+u;}).join(', ') + ')真正 <code class="mono">fsync</code> 到磁盘,标记为已持久化;同时清空 translog(' + e.clearedTranslogEntries + ' 条记录,因为它们现在已经安全地体现在磁盘上的段里了)。<b>可搜索的文档集合完全没有变化</b>——这一步只影响"崩溃后能不能恢复",不影响"现在能搜到什么"。';
+  if(e.type === 'merge') return '把段 [' + e.mergedFrom.map(function(u){return '#'+u;}).join(', ') + '] 合并成一个新段 <b>#' + e.newSegmentUid + '</b>。' + (e.purgedDocs.length ? ('合并过程中,带墓碑标记的文档(' + e.purgedDocs.join(', ') + ')被彻底清除,磁盘空间被真正回收。') : '') + ' 同样,<b>可搜索的文档集合没有变化</b>——merge 只是把存储整理得更紧凑。';
+  return '';
+}
+
+function labelForEvent(e){
+  if(e.type === 'index') return '写入 ' + e.doc;
+  if(e.type === 'delete') return '删除 ' + e.doc + '(打墓碑)';
+  if(e.type === 'refresh') return 'refresh' + (e.newSegmentUid ? (' → 段#' + e.newSegmentUid) : '(空)');
+  if(e.type === 'flush') return 'flush → 落盘 + 清空 translog';
+  if(e.type === 'merge') return 'merge → 段#' + e.newSegmentUid;
+  return '';
+}
+
+function buildLog(){
+  simLog.innerHTML = '';
+  EVENTS.forEach(function(e,i){
+    var item = document.createElement('div');
+    item.className = 'log-item';
+    item.setAttribute('data-active','false');
+    var idxSpan = document.createElement('span');
+    idxSpan.className = 'log-idx';
+    idxSpan.textContent = i+1;
+    var txt = document.createElement('span');
+    txt.textContent = labelForEvent(e);
+    item.appendChild(idxSpan); item.appendChild(txt);
+    item.addEventListener('click', function(ii){ return function(){ stopPlay(); idx = ii; render(); }; }(i));
+    simLog.appendChild(item);
+  });
+}
+
+function goTo(i){
+  idx = Math.max(-1, Math.min(EVENTS.length-1, i));
+  render();
+}
+function stopPlay(){
+  if(playTimer){ clearInterval(playTimer); playTimer = null; }
+  document.getElementById('btnPlay').textContent = '播放';
+}
+document.getElementById('btnNext').addEventListener('click', function(){ stopPlay(); goTo(idx+1); });
+document.getElementById('btnPrev').addEventListener('click', function(){ stopPlay(); goTo(idx-1); });
+document.getElementById('btnReset').addEventListener('click', function(){ stopPlay(); goTo(-1); });
+document.getElementById('btnPlay').addEventListener('click', function(){
+  if(playTimer){ stopPlay(); return; }
+  if(idx >= EVENTS.length - 1) goTo(-1);
+  document.getElementById('btnPlay').textContent = '暂停';
+  var speed = parseInt(document.getElementById('simSpeed').value, 10);
+  playTimer = setInterval(function(){
+    if(idx >= EVENTS.length - 1){ stopPlay(); return; }
+    goTo(idx+1);
+  }, speed);
+});
+document.getElementById('simSpeed').addEventListener('change', function(){
+  if(playTimer){ stopPlay(); document.getElementById('btnPlay').click(); }
+});
+
+buildLog();
+goTo(-1);
+</script>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+</body>
+</html>

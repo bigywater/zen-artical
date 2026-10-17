@@ -1,0 +1,16 @@
+from lib import *
+S = SS('f128')
+R = J('f128')
+steps = [
+    step("几种常见配置对三种 Origin(自己的前端 app.example.com、陌生站点 other.test、null)的回应(Flask-CORS 6.0.5):origins 不写(默认 *)时,Access-Control-Allow-Origin 回显请求里的 Origin——包括 other.test 与 null;origins=\"*\" 加 supports_credentials=True,同样回显任意 Origin,并且加上 Access-Control-Allow-Credentials: true——也就是任何站点都被允许带着用户的 cookie 读响应;origins=[自己的前端] 时,只有自己的前端得到 Allow-Origin,other.test 与 null 什么头都没有;再加 supports_credentials 也是只对自己的前端放行。带凭证的接口必须写明确的来源名单。", t=tl(S(1)), mark=lidx(S(1), '[origins="*" + supports_credentials=True]'), done=lidx(S(1), '[origins=[自己的前端]]', '[origins=[自己的前端] + supports_credentials]'), kv=KV([['默认 / "*"', '回显任意 Origin(含 null)'], ['"*" + credentials', '任何站点都能带 cookie 读'], ['明确名单', '只放行名单里的']], ['"*" + credentials'])),
+    step("用正则匹配 origins 的陷阱:不严的 https://.*example.com 对 https://app.example.com 放行是对的,但 https://evilexample.com、https://app.example.com.other.test、https://sub.app.example.com 也都被放行(只有 http 协议的被拒绝);加了锚点与转义的 https://app\\.example\\.com$ 只放行 app.example.com;允许一级子域的 https://([a-z0-9-]+\\.)?example\\.com$ 放行 app.example.com,拒绝 evilexample.com 与 app.example.com.other.test。正则必须转义点号并用 $ 锚定结尾。", t=tl(S(2)), mark=lidx(S(2), '(不严)'), done=lidx(S(2), '(锚定)', '(允许子域)'), kv=KV([['没有转义和锚点', '别人的域名也能通过'], ['转义点号 + $', '精确匹配']], ['没有转义和锚点'])),
+    step("CORS 不是认证:Origin 不在名单里的请求,服务端照样处理,返回 200 {ok: true},只是响应里没有 Allow-Origin,浏览器不让页面里的 JS 读取;根本不带 Origin 头的请求(curl、服务器到服务器)同样 200。接口的访问控制必须靠认证与授权,不能指望 CORS。", t=tl(S(3)), done=lidx(S(3), 'Origin 不在名单', '根本不带 Origin'), kv=KV([['CORS', '只管浏览器是否让页面读响应'], ['访问控制', '靠认证与授权']], ['访问控制'])),
+    step("Vary: Origin:按 Origin 回不同头时必须带 Vary: Origin——Origin=app 得到 Allow-Origin: https://app.example.com,Origin=admin 得到 https://admin.example.com,两个响应都带 Vary: Origin,这样缓存才不会把给 app 的响应发给 admin。Flask-CORS 在回显 Origin 时自动加了(缓存的实际后果本篇没有验证)。", t=tl(S(4)), done=lidx(S(4), 'Origin=app', 'Origin=admin'), kv=KV([['Vary: Origin', '告诉缓存响应随 Origin 而异']], ['Vary: Origin'])),
+    step("只给需要的路径与方法开 CORS:resources 只匹配 /api/*、methods 只有 GET 时,/api/x 对自己的前端有 Allow-Origin,/admin/y 没有任何 CORS 头;对 /api/x 发 DELETE 的预检,响应只有 Allow-Origin,没有 Access-Control-Allow-Methods,浏览器据此不会放行 DELETE。", t=tl(S(5)), done=lidx(S(5), '/api/x'), mark=lidx(S(5), '/admin/y', '预检请求'), kv=KV([['resources', '按路径限定'], ['methods', '按方法限定']], ['resources'])),
+]
+A = mkartf('f128', 128, 'Flask,CORS,安全边界,Flask-CORS,真实验证,动画演示',
+    '从防御角度检查 CORS 配置的安全边界:默认与 "*" 加 credentials 会回显任意 Origin(含 null)、明确名单只放行自己的前端、正则匹配 origins 不转义不锚定时别人的域名也能通过、CORS 不是认证、Vary: Origin、用 resources 与 methods 限定路径与方法。',
+    'CORS 配置写成什么样才算安全?带 cookie 的接口能用通配符吗?用正则匹配来源要注意什么?CORS 能挡住 curl 吗?这篇只检查响应头:对几种配置分别发不同的 Origin,看服务端回什么。',
+    [('任意 Origin', '默认或 "*" 加 supports_credentials 时回显的来源范围'), ('evilexample.com', '不严的正则 https://.*example.com 会放行的别人的域名'), ('200', 'Origin 不在名单里的请求,服务端仍然处理并返回的状态码')],
+    [('常见配置对不同 Origin', '<p>上一篇:<a href="flask-host-header-validation.html">Host Header 校验</a>;下一篇:<a href="flask-rate-limiting-security.html">Rate Limiting</a>。</p><p>第 79 篇与第 112 篇在真实浏览器里验证过 CORS 与预检,这一篇只看响应头与配置边界。</p>'), ('正则匹配的陷阱', None), ('CORS 不是认证', None), ('Vary: Origin', None), ('限定路径与方法', None)],
+    steps, [ENV_F + '。Flask-CORS 6.0.5', '没有验证:真实浏览器里跨站读取的实际拦截(见第 79 篇)、Access-Control-Allow-Private-Network、反向代理层同时加 CORS 头造成重复头的问题、null Origin 的来源场景(沙箱 iframe、file://)的浏览器行为'], 'CORS 安全边界')

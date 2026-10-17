@@ -1,0 +1,495 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>中间件:请求怎么被一层层包起来</title>
+<meta name="description" content="真实实测洋葱模型执行顺序、短路后外层仍执行响应阶段、中间件顺序写反触发的真实报错。">
+<link rel="canonical" href="https://bigywater.tech/middleware.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="中间件:请求怎么被一层层包起来">
+<meta property="og:description" content="真实实测洋葱模型执行顺序、短路后外层仍执行响应阶段、中间件顺序写反触发的真实报错。">
+<meta property="og:url" content="https://bigywater.tech/middleware.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="中间件:请求怎么被一层层包起来">
+<meta name="twitter:description" content="真实实测洋葱模型执行顺序、短路后外层仍执行响应阶段、中间件顺序写反触发的真实报错。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F4F7F4; --paper:#FFFFFF; --ink:#132119; --ink-dim:#5C6B61; --line:#DCE6DE;
+  --dj-c:#0C4B33; --dj-c-soft:#E1EEE6;
+  --mem-c:#B8791E; --mem-c-soft:#F6ECD9;
+  --meta-c:#7B4FA8; --meta-c-soft:#EFE6F7;
+  --code-bg:#12211A; --code-ink:#E7F0EA;
+  --shadow: 0 1px 2px rgba(15,30,20,.06), 0 8px 24px -12px rgba(15,30,20,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0E1712; --paper:#18251E; --ink:#E7F0EA; --ink-dim:#9DB0A4; --line:#2C3B32;
+    --dj-c:#5FBF95; --dj-c-soft:#1B3327;
+    --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+    --meta-c:#B08AE0; --meta-c-soft:#332545;
+    --code-bg:#0B120D; --code-ink:#DCE9E0;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0E1712; --paper:#18251E; --ink:#E7F0EA; --ink-dim:#9DB0A4; --line:#2C3B32;
+  --dj-c:#5FBF95; --dj-c-soft:#1B3327;
+  --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+  --meta-c:#B08AE0; --meta-c-soft:#332545;
+  --code-bg:#0B120D; --code-ink:#DCE9E0;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--dj-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--dj-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--dj-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--dj-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.a .tag{background:var(--dj-c-soft); color:var(--dj-c);}
+.card.b .tag{background:var(--mem-c-soft); color:var(--mem-c);}
+.card.c .tag{background:var(--meta-c-soft); color:var(--meta-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#8FB0A0; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#9FE0C3;}
+
+.callout{border-left:3px solid var(--dj-c); background:var(--dj-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+.callout.c{border-color:var(--meta-c); background:var(--meta-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--dj-c-soft); color:var(--dj-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#9FE0C3;}
+.term pre.code{margin:0 0 10px; color:#9FE0C3; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+.term .cm{color:#7C9C8C;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--mem-c-soft); color:var(--mem-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:22px 20px;}
+.scenario-tag{display:inline-block; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.05em; text-transform:uppercase; padding:3px 10px; border-radius:6px; margin-bottom:16px;}
+.scenario-tag.full{background:var(--dj-c-soft); color:var(--dj-c);}
+.scenario-tag.short-circuit{background:var(--meta-c-soft); color:var(--meta-c);}
+.onion{display:flex; flex-direction:column; align-items:center; gap:0;}
+.onion-layer{width:100%; border:2px solid var(--line); border-radius:16px; padding:16px; text-align:center; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; color:var(--ink-dim); transition:border-color .2s, background .2s;}
+.onion-layer.active{border-color:var(--dj-c); background:var(--dj-c-soft); color:var(--dj-c); font-weight:700;}
+.onion-layer.skipped{opacity:.3; border-style:dashed;}
+.onion-layer.view{background:var(--mem-c-soft); border-color:var(--mem-c); color:var(--mem-c); font-weight:700; border-radius:10px;}
+.onion-wrap{display:flex; flex-direction:column; gap:10px;}
+.stat-row{display:flex; gap:16px; flex-wrap:wrap; margin:14px 0 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem;}
+.stat{border:1px solid var(--line); border-radius:8px; padding:8px 12px; background:var(--bg);}
+.stat b{color:var(--dj-c); display:block; font-size:1rem; font-variant-numeric:tabular-nums;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--dj-c); color:var(--dj-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--dj-c); border-color:var(--dj-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{display:flex; align-items:center; gap:10px; margin-bottom:24px; font-size:.88rem; color:var(--ink-dim); flex-wrap:wrap;}
+.prev-post a{font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--dj-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Django 系列 · 第三篇</div>
+    <h1><span class="mono">settings.MIDDLEWARE</span> 里的顺序,是真的有讲究,还是随便排?</h1>
+    <p>Django 中间件常被形容成"洋葱模型"——请求从外到内穿过每一层,响应再从内到外穿回去。这一篇本机真实验证了这个模型,顺着源码找到"洋葱"是怎么被真实拼装出来的(一个出人意料地简单的 <span class="mono">reversed()</span> 循环),还真实复现了一个因为中间件顺序写反而触发的真实报错——证明这个顺序真的不是随便排的。</p>
+    <div class="hero-fact">
+      <div><div class="num">A → B → C → view → C → B → A</div><div class="lbl">本机真实抓到的完整请求/响应执行顺序</div></div>
+      <div><div class="num">ImproperlyConfigured</div><div class="lbl">本机真实复现:AuthenticationMiddleware 排在 SessionMiddleware 前面,真实报错</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <div class="prev-post">← 接上篇 <a href="queryset.html" target="_blank" rel="noopener">QuerySet:链式调用为什么不查库</a></div>
+  <h2>真实实测:洋葱模型,一字不差</h2>
+  <p class="h2-sub">写三个最简单的中间件,各自在请求阶段和响应阶段打一行日志,挂到 <span class="mono">MIDDLEWARE = [A, B, C]</span>,真实发一个请求。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">def make_middleware(name):
+    def middleware(get_response):
+        def mw(request):
+            print(f'  -> entering {name} (request phase)')
+            response = get_response(request)
+            print(f'  &lt;- leaving  {name} (response phase)')
+            return response
+        return mw
+    return middleware
+# 挂载为 MIDDLEWARE = ['mw_test.MwA', 'mw_test.MwB', 'mw_test.MwC']</pre>
+<span class="ok">  -> entering MwA (request phase)
+  -> entering MwB (request phase)
+  -> entering MwC (request phase)
+    ** actual view executing **
+  &lt;- leaving  MwC (response phase)
+  &lt;- leaving  MwB (response phase)
+  &lt;- leaving  MwA (response phase)</span>
+  </div>
+  <p>请求阶段严格按 <span class="mono">MIDDLEWARE</span> 列表里写的顺序(A→B→C)进去,响应阶段严格反过来(C→B→A)出来——写在最前面的中间件,最先碰到请求,也最后碰到响应。</p>
+</section>
+
+<section>
+  <h2>真实源码:洋葱是怎么被拼出来的</h2>
+  <p class="h2-sub">拼装过程出人意料地朴素——就是一个 <span class="mono">reversed()</span> 循环。</p>
+  <blockquote class="src">
+    <span class="path">django/core/handlers/base.py · <a href="https://github.com/django/django/blob/6.0.7/django/core/handlers/base.py#L26" target="_blank" rel="noopener">django @ 6.0.7, L26</a></span>
+def load_middleware(self, is_async=False):
+    handler = convert_exception_to_response(get_response)   # 最内层:真正处理视图
+    for middleware_path in reversed(settings.MIDDLEWARE):    # 注意:倒着遍历!
+        middleware = import_string(middleware_path)
+        mw_instance = middleware(adapted_handler)             # 把"当前 handler"包起来
+        ...
+        handler = convert_exception_to_response(mw_instance)  # 新的 handler 换成刚包好的这层
+    # 循环结束,handler 就是最外层——从最后一个中间件开始包,
+    # 包到第一个中间件结束,第一个自然就成了最外层
+  </blockquote>
+  <p>关键在 <span class="mono">reversed(settings.MIDDLEWARE)</span>:从列表最后一个开始包。第一次循环,<span class="mono">C</span> 把"视图本身"包起来,变成新的 <span class="mono">handler</span>;第二次循环,<span class="mono">B</span> 把"刚包好的 C"包起来;最后一次循环,<span class="mono">A</span> 把"已经包了 B、C 的东西"包起来。循环结束后,最外层自然就是列表里写在最前面的那个——这就是"洋葱"的字面构造过程,不是什么特殊算法,就是从后往前一层层套娃。</p>
+</section>
+
+<section>
+  <h2>真实实测:短路之后,外层还会不会收尾</h2>
+  <p class="h2-sub">如果中间那层中间件直接返回响应、根本不调用 <span class="mono">get_response()</span>,里面的层和视图确实会被跳过——但外层呢?</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code"># MIDDLEWARE = [A, Block, C], Block 直接返回响应不调用 get_response</pre>
+<span class="ok">  -> entering MwA (request phase)
+  -> entering MwBlock (request phase)
+  !! MwBlock returns EARLY, get_response() never called, inner layers and view SKIPPED
+  &lt;- leaving  MwA (response phase)</span>
+<span class="cm"># 注意:MwC 和视图确实完全没跑,但 MwA 的 "leaving" 那行照样打印了</span>
+  </div>
+  <p><span class="mono">MwC</span> 和视图确实一次都没执行,但 <span class="mono">MwA</span> 的响应阶段代码<b>照样跑了</b>——因为短路只是"不往更里层传",并不会让已经在调用栈上的外层代码消失。<span class="mono">MwA</span> 在短路发生前已经调用了 <span class="mono">get_response(request)</span>,这个调用迟早要返回(不管里面发生了什么),返回之后 <span class="mono">MwA</span> 自己的收尾代码自然会继续执行。</p>
+</section>
+
+<section>
+  <h2>真实实测:顺序写反了,真实报错</h2>
+  <p class="h2-sub">Django 自带的 <span class="mono">AuthenticationMiddleware</span> 依赖 <span class="mono">SessionMiddleware</span> 先跑——如果顺序反了会怎样?</p>
+  <blockquote class="src">
+    <span class="path">django/contrib/auth/middleware.py · <a href="https://github.com/django/django/blob/6.0.7/django/contrib/auth/middleware.py#L30" target="_blank" rel="noopener">django @ 6.0.7, L30</a></span>
+class AuthenticationMiddleware(MiddlewareMixin):
+    def process_request(self, request):
+        if not hasattr(request, "session"):
+            raise ImproperlyConfigured(
+                "The Django authentication middleware requires session "
+                "middleware to be installed. Edit your MIDDLEWARE setting to "
+                "insert 'django.contrib.sessions.middleware.SessionMiddleware' "
+                "before 'django.contrib.auth.middleware.AuthenticationMiddleware'."
+            )
+        request.user = SimpleLazyObject(lambda: get_user(request))
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code"># 故意写反顺序:
+# MIDDLEWARE = ['...auth.AuthenticationMiddleware', '...sessions.SessionMiddleware']</pre>
+<span class="bad">django.core.exceptions.ImproperlyConfigured: The Django authentication
+  middleware requires session middleware to be installed. Edit your
+  MIDDLEWARE setting to insert 'django.contrib.sessions.middleware.
+  SessionMiddleware' before 'django.contrib.auth.middleware.
+  AuthenticationMiddleware'.</span>
+  </div>
+  <p>报错信息和源码里的字符串一字不差。原因直接对应上一节的洋葱模型:<span class="mono">AuthenticationMiddleware</span> 排在前面 = 更外层 = 请求阶段更早执行,如果它比 <span class="mono">SessionMiddleware</span> 先跑,这时候 <span class="mono">request.session</span> 还没被设置上,<span class="mono">hasattr</span> 检查自然失败。<span class="mono">django-admin startproject</span> 生成的默认 <span class="mono">MIDDLEWARE</span> 列表里,<span class="mono">SessionMiddleware</span> 排第二、<span class="mono">AuthenticationMiddleware</span> 排第五,顺序是真的经过设计的,不是随手写的。</p>
+  <div class="callout">
+    顺带一提:<span class="mono">request.user = SimpleLazyObject(...)</span> 这行——<span class="mono">request.user</span> 本身也是惰性的,和上一篇 <span class="mono">QuerySet</span>、上上篇 <span class="mono">DeferredAttribute</span> 是同一个思路:真正查用户这件事,被推迟到第一次真的访问 <span class="mono">request.user</span> 的时候才做。
+  </div>
+</section>
+
+<section>
+  <h2>演示:洋葱怎么进去,又怎么出来</h2>
+  <p class="h2-sub">先看完整走一遍(A→B→C→视图→C→B→A),再看 B 直接短路时会发生什么。</p>
+  <div class="demo" id="mwDemo">
+    <div class="demo-head">中间件洋葱模型演示</div>
+    <div class="demo-narration" id="mwNarration"></div>
+    <div class="demo-body">
+      <span class="scenario-tag full" id="mwTag">完整通过</span>
+      <div class="onion-wrap" id="mwOnion"></div>
+      <div class="stat-row" id="mwStats"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="mwReset">⏮ 重来</button>
+      <button class="btn" id="mwPrev">‹ 上一步</button>
+      <button class="btn primary" id="mwNext">下一步 ›</button>
+      <button class="btn" id="mwPlay">▶ 自动播放</button>
+      <span class="step-counter" id="mwCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">数据来自独立验证过的 Python 模拟——用真实的"倒序包装"逻辑复现洋葱构造,两种场景(完整通过、B 短路)都用独立的调用栈回放算法核对过:每一层的"进入"和"离开"事件严格按后进先出配对,短路场景里 C 和视图确实一次都没被记录到。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文全部真实实验(洋葱执行顺序、短路后外层仍执行响应阶段、中间件顺序写反触发 <span class="mono">ImproperlyConfigured</span>)均在本机真实运行的 Django 6.0.7 上完成(用 <span class="mono">RequestFactory</span> + <span class="mono">WSGIHandler</span> 发真实请求,不是 mock),数据未做删改。</li>
+      <li>源码引用(<span class="mono">django/core/handlers/base.py</span> 的 <span class="mono">BaseHandler.load_middleware</span>、<span class="mono">django/contrib/auth/middleware.py</span> 的 <span class="mono">AuthenticationMiddleware.process_request</span>)取自本机通过 pip 安装的 Django 6.0.7 包本身,并逐字节比对确认与 <span class="mono">django/django</span> 仓库 <span class="mono">6.0.7</span> 标签完全一致。默认 <span class="mono">MIDDLEWARE</span> 列表(<span class="mono">SecurityMiddleware</span> 到 <span class="mono">XFrameOptionsMiddleware</span> 共 7 项)取自 <span class="mono">django-admin startproject</span> 使用的真实项目模板文件。</li>
+      <li>演示动画的洋葱模型(倒序包装构造、短路后的调用栈行为)由 Python 独立实现并交叉验证过——用真实实测过的两个场景(完整通过、B 短路)做参数,每一层的进入/离开事件都用独立的调用栈回放算法核对过严格的后进先出关系。</li>
+      <li>没有涉及:新式(函数式)中间件和旧式(<span class="mono">MiddlewareMixin</span>)中间件在异步场景下的适配细节(<span class="mono">adapt_method_mode</span>)、<span class="mono">process_view</span>/<span class="mono">process_exception</span>/<span class="mono">process_template_response</span> 这几个额外钩子的调用时机、<span class="mono">MiddlewareNotUsed</span> 异常怎么让某个中间件在运行时被跳过。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="command.html" target="_blank" rel="noopener">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">management command:谁在决定 manage.py 认识哪些命令</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Django 系列 · 第三篇 · 中间件责任链 · 数据来自本机真实运行的 Django 6.0.7</footer>
+
+<script>
+const DATA = {"combined": [{"layer": "A", "request": "req-1", "type": "enter", "scenario": "full"}, {"layer": "B", "request": "req-1", "type": "enter", "scenario": "full"}, {"layer": "C", "request": "req-1", "type": "enter", "scenario": "full"}, {"request": "req-1", "type": "view", "scenario": "full"}, {"layer": "C", "request": "req-1", "shortCircuited": false, "type": "exit", "scenario": "full"}, {"layer": "B", "request": "req-1", "shortCircuited": false, "type": "exit", "scenario": "full"}, {"layer": "A", "request": "req-1", "shortCircuited": false, "type": "exit", "scenario": "full"}, {"type": "divider", "scenario": "divider"}, {"layer": "A", "request": "req-1", "type": "enter", "scenario": "short-circuit"}, {"layer": "B", "request": "req-1", "type": "enter", "scenario": "short-circuit"}, {"layer": "B", "reason": "B 直接返回响应,不调用 get_response()", "type": "short-circuit", "scenario": "short-circuit"}, {"layer": "B", "request": "req-1", "shortCircuited": true, "type": "exit", "scenario": "short-circuit"}, {"layer": "A", "request": "req-1", "shortCircuited": false, "type": "exit", "scenario": "short-circuit"}]};
+
+(function(){
+  const steps = DATA.combined;
+  const onionEl = document.getElementById('mwOnion');
+  const tagEl = document.getElementById('mwTag');
+  const narration = document.getElementById('mwNarration');
+  const statsBox = document.getElementById('mwStats');
+  const counter = document.getElementById('mwCounter');
+  let idx = 0, playing=false, playTimer=null;
+
+  const LAYERS = ['A', 'B', 'C', 'view'];
+
+  function describe(e){
+    if (e.type === 'divider') return `<b>现在看 B 短路的场景</b>,同样的三层结构,B 这次直接返回响应。`;
+    if (e.type === 'enter') return `进入 <span class="k">${e.layer}</span>(请求阶段代码开始执行)。`;
+    if (e.type === 'view') return `到达最内层,<span class="k">视图</span>真正执行。`;
+    if (e.type === 'short-circuit') return `<span class="k">${e.layer}</span> 短路:${e.reason}`;
+    if (e.type === 'exit') return e.shortCircuited
+      ? `<span class="k">${e.layer}</span> 带着短路产生的响应往外返回。`
+      : `离开 <span class="k">${e.layer}</span>(响应阶段代码执行完)。`;
+    return e.type;
+  }
+
+  function replayUpTo(uptoIdx){
+    let scenario = 'full';
+    const entered = new Set();
+    const exited = new Set();
+    let viewRan = false;
+    let currentLayer = null;
+    for (let i = 0; i <= uptoIdx; i++){
+      const e = steps[i];
+      if (e.type === 'divider'){ scenario = 'short-circuit'; entered.clear(); exited.clear(); viewRan = false; continue; }
+      if (e.type === 'enter'){ entered.add(e.layer); currentLayer = e.layer; }
+      if (e.type === 'view'){ viewRan = true; currentLayer = 'view'; }
+      if (e.type === 'exit'){ exited.add(e.layer); currentLayer = e.layer; }
+      if (e.type === 'short-circuit'){ currentLayer = e.layer; }
+    }
+    return {scenario, entered, exited, viewRan, currentLayer};
+  }
+
+  function render(){
+    idx = Math.max(0, Math.min(steps.length-1, idx));
+    const e = steps[idx];
+    narration.innerHTML = describe(e);
+    const state = replayUpTo(idx);
+
+    tagEl.textContent = state.scenario === 'full' ? '完整通过' : 'B 短路';
+    tagEl.className = 'scenario-tag ' + state.scenario;
+
+    onionEl.innerHTML = LAYERS.map(layer => {
+      const isView = layer === 'view';
+      const wasEntered = isView ? state.viewRan : state.entered.has(layer);
+      const wasExited = isView ? false : state.exited.has(layer);
+      const isActive = state.currentLayer === layer;
+      const isSkipped = state.scenario === 'short-circuit' && !wasEntered && idx > 0 &&
+                          steps.slice(0, idx+1).some(ev => ev.type === 'divider');
+      let cls = 'onion-layer';
+      if (isView) cls += ' view';
+      if (isActive) cls += ' active';
+      if (isSkipped && !wasEntered) cls += ' skipped';
+      const label = isView ? '视图 (view)' : `中间件 ${layer}${wasEntered ? (wasExited ? ' ✓ 已完成' : ' (调用栈中)') : ''}`;
+      return `<div class="${cls}">${label}</div>`;
+    }).join('');
+
+    const enteredCount = state.entered.size + (state.viewRan ? 1 : 0);
+    statsBox.innerHTML = `<div class="stat">已进入的层数<b>${enteredCount} / 4</b></div><div class="stat">场景<b>${state.scenario === 'full' ? '完整通过' : '短路'}</b></div>`;
+
+    counter.textContent = `${idx+1} / ${steps.length}`;
+    document.getElementById('mwPrev').disabled = idx===0;
+    document.getElementById('mwNext').disabled = idx===steps.length-1;
+  }
+  document.getElementById('mwPrev').onclick=()=>{idx--;render();stopPlay();};
+  document.getElementById('mwNext').onclick=()=>{idx++;render();stopPlay();};
+  document.getElementById('mwReset').onclick=()=>{idx=0;render();stopPlay();};
+  function stopPlay(){ playing=false; clearInterval(playTimer); document.getElementById('mwPlay').textContent='▶ 自动播放'; }
+  document.getElementById('mwPlay').onclick=()=>{
+    if(playing){ stopPlay(); return; }
+    playing=true; document.getElementById('mwPlay').textContent='⏸ 暂停';
+    playTimer = setInterval(()=>{
+      if(idx>=steps.length-1){ stopPlay(); return; }
+      idx++; render();
+    }, 1000);
+  };
+  render();
+})();
+</script>
+
+</body>
+</html>

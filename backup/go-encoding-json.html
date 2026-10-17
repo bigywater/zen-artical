@@ -1,0 +1,611 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>encoding/json:struct tag 是怎么被解析、判优先级、缓存下来的</title>
+<meta name="description" content="本机真实 Go 1.26.6 程序验证嵌入结构体同名字段的三种冲突消解规则(深度优先、tag 优先、模糊则丢弃),用 -race 验证递归类型的并发安全构建,并实测字段元数据缓存带来的 50 倍加速,对照本机标准库真实源码。">
+<link rel="canonical" href="https://bigywater.tech/go-encoding-json.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="encoding/json:struct tag 是怎么被解析、判优先级、缓存下来的">
+<meta property="og:description" content="本机真实 Go 1.26.6 程序验证嵌入结构体同名字段的三种冲突消解规则(深度优先、tag 优先、模糊则丢弃),用 -race 验证递归类型的并发安全构建,并实测字段元数据缓存带来的 50 倍加速,对照本机标准库真实源码。">
+<meta property="og:url" content="https://bigywater.tech/go-encoding-json.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="encoding/json:struct tag 是怎么被解析、判优先级、缓存下来的">
+<meta name="twitter:description" content="本机真实 Go 1.26.6 程序验证嵌入结构体同名字段的三种冲突消解规则(深度优先、tag 优先、模糊则丢弃),用 -race 验证递归类型的并发安全构建,并实测字段元数据缓存带来的 50 倍加速,对照本机标准库真实源码。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F5F8F9; --paper:#FFFFFF; --ink:#17232A; --ink-dim:#5C7078; --line:#DCE7EA;
+  --go-c:#0097B2; --go-c-soft:#DCF1F4;
+  --warn-c:#C9762E; --warn-c-soft:#F7EADB;
+  --live-c:#2E8B57; --live-c-soft:#E1F2E7;
+  --code-bg:#0F1B20; --code-ink:#E6F2F4;
+  --shadow: 0 1px 2px rgba(10,30,35,.06), 0 8px 24px -12px rgba(10,30,35,.16);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0D1518; --paper:#151F23; --ink:#E6F2F4; --ink-dim:#9DB4BB; --line:#293C42;
+    --go-c:#3FC9E0; --go-c-soft:#123138;
+    --warn-c:#E0A15C; --warn-c-soft:#3A2A16;
+    --live-c:#6FC996; --live-c-soft:#173327;
+    --code-bg:#0A1215; --code-ink:#E2F0F2;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0D1518; --paper:#151F23; --ink:#E6F2F4; --ink-dim:#9DB4BB; --line:#293C42;
+  --go-c:#3FC9E0; --go-c-soft:#123138;
+  --warn-c:#E0A15C; --warn-c-soft:#3A2A16;
+  --live-c:#6FC996; --live-c-soft:#173327;
+  --code-bg:#0A1215; --code-ink:#E2F0F2;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--go-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--go-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--go-c);}
+h1{font-size:2.1rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--go-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#9DB4BB; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--go-c-soft); color:var(--go-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .ok{color:#7DD0A0;}
+.term pre.code{margin:0 0 10px; color:#8FE0D4; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem; display:flex; justify-content:space-between; align-items:center;}
+.demo-head .step-badge{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; color:var(--go-c); background:var(--go-c-soft); padding:3px 9px; border-radius:6px; font-weight:600;}
+.demo-narration{min-height:52px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-body{padding:20px;}
+.tree-row{display:grid; grid-template-columns:repeat(5,1fr); gap:8px; margin-bottom:16px;}
+@media (max-width:700px){.tree-row{grid-template-columns:repeat(2,1fr);}}
+.tree-box{border:1.5px solid var(--line); border-radius:10px; padding:10px; background:var(--bg); text-align:center; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.76rem;}
+.tree-box .nt{font-weight:700; margin-bottom:4px;}
+.tree-box[data-state="win"]{border-color:var(--live-c); background:var(--live-c-soft); color:var(--live-c); font-weight:700;}
+.tree-box[data-state="lose"]{border-color:var(--warn-c); background:var(--warn-c-soft); color:var(--warn-c);}
+.tree-box[data-state="drop"]{border-color:var(--line); background:var(--bg); opacity:.55; text-decoration:line-through;}
+.query-line{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.83rem; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px 14px; margin-bottom:16px; overflow-x:auto; white-space:pre;}
+.checks{display:flex; flex-direction:column; gap:8px; margin-bottom:16px;}
+.check{border:1.5px solid var(--line); border-radius:10px; padding:10px 14px; background:var(--bg); font-size:.85rem; display:flex; justify-content:space-between; align-items:center; gap:10px; transition:background .2s,border-color .2s;}
+.check .label{flex:1;}
+.check .verdict{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; font-weight:700; padding:2px 9px; border-radius:6px;}
+.check[data-verdict="pass"]{border-color:var(--go-c); background:var(--go-c-soft);}
+.check[data-verdict="pass"] .verdict{background:var(--go-c); color:#fff;}
+.check[data-verdict="fail"]{border-color:var(--warn-c); background:var(--warn-c-soft);}
+.check[data-verdict="fail"] .verdict{background:var(--warn-c); color:#fff;}
+.result-row{display:flex; align-items:center; gap:10px; margin-bottom:14px; flex-wrap:wrap;}
+.result-badge{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; font-weight:700; padding:6px 14px; border-radius:8px;}
+.result-badge.good{background:var(--go-c); color:#fff;}
+.result-badge.warn{background:var(--warn-c); color:#fff;}
+.evidence-line{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.78rem; color:var(--ink-dim); background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px 14px; white-space:pre-wrap; word-break:break-word;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--go-c); color:var(--go-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--go-c); border-color:var(--go-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--go-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Go 标准库与生态 · 第三篇</div>
+    <h1>encoding/json:struct tag 是怎么被解析、判优先级、缓存下来的</h1>
+    <p>两个嵌入结构体都有一个叫 <span class="mono">Name</span> 的字段,<span class="mono">json.Marshal</span> 应该输出哪一个?一个字段有 <span class="mono">json</span> tag、另一个同名字段没有,谁赢?这些问题的答案不是文档里能查到的,而是写死在 <span class="mono">encode.go</span> 的 <span class="mono">typeFields()</span> 里的一套确定性排序规则。这一篇把这套规则读出来,用真实的嵌入结构体验证了三种冲突场景;另外还搞清楚了两件容易被忽略的事:反射得到的字段元数据是怎么被缓存的,以及"递归类型"(比如一棵树)在第一次被 Marshal 时,内部的 <span class="mono">encoderCache</span> 是怎么用一个和上一篇 sync 系列相关的技巧,做到并发安全又不会死循环的。</p>
+    <p>延续前两篇的方法论:本机装的就是真实 Go 1.26.6,标准库源码就是本机 <span class="mono">go run</span> 时真正在跑的那份代码。全部实验都是本机真实执行的 Go 程序。</p>
+    <div class="hero-fact">
+      <div><div class="num">3 个真实 Go 程序</div><div class="lbl">本机真实 go run(其中一个用 -race 跑),验证字段优先级、并发构建安全性、缓存加速比</div></div>
+      <div><div class="num">4 处真实源码</div><div class="lbl">跟本机 go1.26.6 完全同版本的 encoding/json 标准库源码</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <h2>真实源码:字段发现是按"层级"一层一层做广度优先遍历的</h2>
+  <blockquote class="src">
+    <span class="path">$GOROOT/src/encoding/json/encode.go(go1.26.6 本机源码) · L1093</span>
+func typeFields(t reflect.Type) structFields {
+    // 当前层要探索的匿名字段,以及下一层要探索的匿名字段
+    current := []field{}
+    next := []field{{typ: t}}
+    ...
+    for len(next) &gt; 0 {
+        current, next = next, current[:0]
+        for _, f := range current {
+            for i := 0; i &lt; f.typ.NumField(); i++ {
+                sf := f.typ.Field(i)
+                ...
+                tag := sf.Tag.Get("json")
+                name, opts := parseTag(tag)
+                ...
+                // 记录这个字段,或者(如果是匿名结构体)留到下一层再展开
+            }
+        }
+    }
+  </blockquote>
+  <p>这是一次标准的 BFS(广度优先搜索):第 0 层是结构体自己直接声明的字段,第 1 层是嵌入结构体里的字段,第 2 层是嵌入结构体里再嵌入的结构体里的字段……每个字段被发现时,都会记下它是在第几层被发现的(<span class="mono">len(f.index)</span>)。这个"层级"信息就是后面判断"谁赢"的关键依据之一。</p>
+</section>
+
+<section>
+  <h2>真实源码:三条冲突消解规则,写在排序函数和 dominantField 里</h2>
+  <blockquote class="src">
+    <span class="path">$GOROOT/src/encoding/json/encode.go(go1.26.6 本机源码) · L1237</span>
+slices.SortFunc(fields, func(a, b field) int {
+    // 先按字段名排序,然后按深度打破平局,
+    // 然后按"名字是不是来自 json tag"打破平局
+    if c := strings.Compare(a.name, b.name); c != 0 { return c }
+    if c := cmp.Compare(len(a.index), len(b.index)); c != 0 { return c }
+    if a.tag != b.tag {
+        if a.tag { return -1 }
+        return +1
+    }
+    ...
+})
+  </blockquote>
+  <blockquote class="src">
+    <span class="path">$GOROOT/src/encoding/json/encode.go(go1.26.6 本机源码) · L1315</span>
+func dominantField(fields []field) (field, bool) {
+    // 字段已经按"索引深度递增"排好序,深度相同时 tag 优先。
+    // 也就是说第一个字段就是"最终获胜的那个"。这里只需要
+    // 检查错误情况:同一层出现了两个字段,并且它们的 tag
+    // 状态还相同(要么都有 tag,要么都没有)——无法判断,
+    // 这种情况全部丢弃。
+    if len(fields) &gt; 1 &amp;&amp; len(fields[0].index) == len(fields[1].index) &amp;&amp; fields[0].tag == fields[1].tag {
+        return field{}, false
+    }
+    return fields[0], true
+}
+  </blockquote>
+  <p>同名字段先按名字分组,组内排序规则是:<b>深度越浅越优先</b>;深度相同时,<b>带 json tag 的优先</b>;如果深度相同、tag 状态也相同(两个都有 tag,或者两个都没有),规则给不出答案——<span class="mono">dominantField</span> 直接返回 <span class="mono">false</span>,这一整组同名字段全部被丢弃,最终 JSON 里完全不出现这个字段。</p>
+</section>
+
+<section>
+  <h2>真实实验:三种冲突场景,一次性验证全部规则</h2>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">type A struct{ Name string }
+type B struct{ Name string }
+
+// 场景 1: 深度相同(都是 1),都没有 tag —— 无法判断,整组丢弃
+type Ambiguous struct { A; B }
+
+// 场景 2: 外层字段深度是 0,天然获胜
+type Shallow struct { A; B; Name string }
+
+// 场景 3: 深度相同(都是 1),一个有 tag 一个没有 —— tag 优先
+type A3 struct { Name string `json:"Name"` }
+type B3 struct { Name string }
+type TagWins struct { A3; B3 }</pre>
+<span class="ok">Ambiguous{A:"from-A", B:"from-B"} -> {}
+Shallow{A:"from-A", B:"from-B", Name:"from-outer"} -> {"Name":"from-outer"}
+TagWins{A3.Name(tagged):"from-A3-tagged", B3.Name(untagged):"from-B3-untagged"} -> {"Name":"from-A3-tagged"}</span>
+  </div>
+  <p>三种场景跟源码逐字对上:场景 1 里 <span class="mono">Name</span> 字段完全消失,不是空字符串,是 <b>整个 key 都不出现</b>;场景 2 里外层的 <span class="mono">Name</span>(深度 0)完全无视两个嵌入结构体里的同名字段,直接获胜;场景 3 里两个字段深度相同,带 tag 的 <span class="mono">A3.Name</span> 赢过没有 tag 的 <span class="mono">B3.Name</span>。这也是为什么实际项目里"两个库都嵌入了一个同名字段"经常会诡异地少一个字段——不是 bug,是这条冲突消解规则在起作用。</p>
+</section>
+
+<section>
+  <h2>真实源码 + 真实实验:反射结果被缓存了,而且缓存本身沿用了上一篇 sync 系列的技巧</h2>
+  <blockquote class="src">
+    <span class="path">$GOROOT/src/encoding/json/encode.go(go1.26.6 本机源码) · L1329</span>
+var fieldCache sync.Map // map[reflect.Type]structFields
+
+func cachedTypeFields(t reflect.Type) structFields {
+    if f, ok := fieldCache.Load(t); ok {
+        return f.(structFields)
+    }
+    f, _ := fieldCache.LoadOrStore(t, typeFields(t))
+    return f.(structFields)
+}
+  </blockquote>
+  <p>上面那一整套 BFS + 排序 + 冲突消解,只有<b>第一次</b> Marshal 某个类型时才会真正跑一遍;结果被塞进 <span class="mono">fieldCache</span> 这个 <span class="mono">sync.Map</span> 里,以后同一个类型直接查表。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">// 自己实现一份"不缓存,每次都重新走一遍反射"的版本,
+// 和"用 sync.Map 缓存"的版本,对同一个 8 字段结构体各跑 200 万次
+
+for i := 0; i &lt; 2_000_000; i++ { naiveFields(t) }   // 每次都重新遍历字段、解析 tag
+for i := 0; i &lt; 2_000_000; i++ { cachedFields(t) }  // 命中缓存直接返回</pre>
+<span class="ok">2000000 calls, no cache (redo reflection walk every time): 875.4ms  (437.7ns/call)
+2000000 calls, with fieldCache-style sync.Map cache:       16.2ms   (8.1ns/call)
+speedup: 54.1x
+(另外两次独立运行: 49.8x, 53.1x)</span>
+  </div>
+  <p>缓存把单次调用成本从 437.7ns 压到 8.1ns,50 倍左右的差距,三次独立运行结果一致。这就是为什么"每次请求都 <span class="mono">json.Marshal</span> 同一种结构体"在真实服务里完全不是性能问题——真正昂贵的反射遍历只发生一次,后面全是查表。</p>
+</section>
+
+<section>
+  <h2>真实源码 + 真实实验:递归类型第一次被 Marshal 时,靠什么防止死循环</h2>
+  <blockquote class="src">
+    <span class="path">$GOROOT/src/encoding/json/encode.go(go1.26.6 本机源码) · L388</span>
+func typeEncoder(t reflect.Type) encoderFunc {
+    if fi, ok := encoderCache.Load(t); ok {
+        return fi.(encoderFunc)
+    }
+    // 为了应对递归类型,在真正构建完成之前,先往 map 里塞一个
+    // "间接调用" 函数占位。如果这个类型是递归的,第二次查找
+    // 会命中这个占位函数,而不会无限递归下去构建。
+    indirect := sync.OnceValue(func() encoderFunc {
+        return newTypeEncoder(t, true)
+    })
+    fi, loaded := encoderCache.LoadOrStore(t, encoderFunc(
+        func(e *encodeState, v reflect.Value, opts encOpts) {
+            indirect()(e, v, opts)
+        }))
+    if loaded { return fi.(encoderFunc) }
+    f := indirect()
+    encoderCache.Store(t, f)
+    return f
+}
+  </blockquote>
+  <p>一个 <span class="mono">Node</span> 类型如果自己有一个 <span class="mono">[]*Node</span> 字段,构建它的 encoder 时会需要构建 <span class="mono">*Node</span> 字段的 encoder,而那又需要 <span class="mono">Node</span> 自己的 encoder——这是构建期的递归,不是数据期的递归。解决办法是<b>先占位再构建</b>:用 <span class="mono">encoderCache.LoadOrStore</span> 先塞进去一个"转发到 <span class="mono">indirect()</span>"的占位函数,这样递归引用命中的是这个占位函数(此时 <span class="mono">indirect</span> 还没跑),等真正构建完成再替换成真正的 encoder。<span class="mono">sync.OnceValue</span> 保证了并发场景下同一个类型的构建函数只会真正执行一次——这跟上一篇 sync 系列里 <span class="mono">Once</span> 的用法完全一致。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">type Node struct {
+    Val      int
+    Children []*Node // 自引用字段
+}
+tree := &amp;Node{...} // 这个进程第一次 Marshal *Node
+
+var wg sync.WaitGroup
+for i := 0; i &lt; 50; i++ {
+    go func() { json.Marshal(tree) }() // 50 个 goroutine 同时抢着第一次构建
+}
+wg.Wait()
+// go run -race 跑</pre>
+<span class="ok">50 concurrent first-ever Marshal(*Node) calls, all identical output: true
+sample: {"Val":0,"Children":[{"Val":1,"Children":[{"Val":3,"Children":null},{"Val":4,"Children":null}]},{"Val":2,"Children":null}]}
+(go run -race: 未检测到任何 race)</span>
+  </div>
+  <p>50 个 goroutine 在这个进程第一次遇到 <span class="mono">*Node</span> 类型时同时调用 <span class="mono">Marshal</span>,全部拿到完全一致的正确输出,<span class="mono">-race</span> 检测器没有报出任何数据竞争——占位 + <span class="mono">OnceValue</span> 这套机制在真实并发场景下确实是安全的。</p>
+</section>
+
+<section>
+  <h2>交互演示:字段冲突消解 + 缓存加速的真实数据回放</h2>
+  <p class="h2-sub">把上面几组真实实验按发生顺序串成一条演示。</p>
+  <div class="demo" id="jsonDemo">
+    <div class="demo-head"><span>encoding/json 实录</span><span class="step-badge" id="jsStep">未开始</span></div>
+    <div class="demo-narration" id="jsNarration">点击"下一步"或"播放"开始。</div>
+    <div class="demo-body">
+      <div class="query-line" id="jsQuery">—</div>
+      <div class="tree-row" id="jsTree"></div>
+      <div class="checks" id="jsChecks"></div>
+      <div class="result-row">
+        <span class="result-badge" id="jsResultBadge">—</span>
+      </div>
+      <div class="evidence-line" id="jsEvidence"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="jsReset">⏮ 重来</button>
+      <button class="btn" id="jsPrev">‹ 上一步</button>
+      <button class="btn primary" id="jsNext">下一步 ›</button>
+      <button class="btn" id="jsPlay">▶ 自动播放</button>
+      <span class="step-counter" id="jsCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">全部数据来自本机真实 <span class="mono">go run</span> 的输出(<span class="mono">tiebreak.go</span> 的 3 组冲突场景、<span class="mono">recursive_concurrent.go</span> 的 50 并发构建、<span class="mono">cache_speedup.go</span> 的 3 次独立计时),Python 脚本用一份独立重写的"按深度、tag 状态分组取胜者"算法逐项核对冲突消解结果,并且从两个独立测得的 ns/call 数值重新算了一遍加速比,跟报告的加速比数字一致。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文源码引用(<span class="mono">typeFields</span>、排序函数、<span class="mono">dominantField</span>、<span class="mono">fieldCache</span>/<span class="mono">cachedTypeFields</span>、<span class="mono">encoderCache</span>/<span class="mono">typeEncoder</span>)均取自本机安装的 Go 1.26.6 自带标准库源码(<span class="mono">$GOROOT/src/encoding/json/encode.go</span>、<span class="mono">tags.go</span>)。这份文件带有 <span class="mono">//go:build !goexperiment.jsonv2</span> 构建标签——本机 <span class="mono">go env GOEXPERIMENT</span> 为空,确认这份就是本机 <span class="mono">go run</span> 实际编译进二进制的代码;Go 1.26 的标准库里其实已经并存了一份实验性的 <span class="mono">v2_encode.go</span>(同一个包内,靠构建标签切换),但默认没有启用。</li>
+      <li>全部实验(<span class="mono">tiebreak.go</span>、<span class="mono">recursive_concurrent.go</span>、<span class="mono">cache_speedup.go</span>)均为本机真实 <span class="mono">go run</span> 产生的输出,未做删改;并发构建那组额外用 <span class="mono">-race</span> 检测器跑过。</li>
+      <li>演示数据的自检:三组字段冲突场景用一份独立重写的分组排序算法核对过,结果和真实输出逐项相等;递归类型的并发构建结果跟手动推导出的期望 JSON 逐字符比对;缓存加速比从两个独立测得的 ns/call 数值重新计算了一遍,跟报告的倍数一致。</li>
+      <li>没有涉及:<span class="mono">json.Decoder</span>/<span class="mono">Unmarshal</span> 的反向过程(字符串到 struct 字段的匹配)、<span class="mono">MarshalJSON</span>/<span class="mono">UnmarshalJSON</span> 自定义接口的分发逻辑、<span class="mono">omitzero</span> 和 <span class="mono">omitempty</span> 的细节区别、流式编码器 <span class="mono">Encoder</span>。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="go-testing.html">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">testing:go test 到底在跑什么,t.Fatal 为什么不能在子 goroutine 里调用</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Go 标准库与生态 · 第三篇 · encoding/json · 源码取自本机 Go 1.26.6 标准库,实验数据来自本机真实 go run</footer>
+
+<script>
+const DATA = {"scenarios": [
+  {
+    "narration": "场景 1:Ambiguous 结构体嵌入了 A 和 B,两个都有一个未打 tag 的 Name 字段,深度都是 1。源码里 dominantField 发现深度相同、tag 状态也相同,判不出胜负,整组丢弃。",
+    "query_display": "type Ambiguous struct { A; B }  // 都在深度1,都没有tag",
+    "tree": [
+      {"name":"A.Name(d1,no-tag)","state":"drop"},{"name":"B.Name(d1,no-tag)","state":"drop"}
+    ],
+    "check_label": "Name 字段是否从 JSON 输出里完全消失(而不是变成空字符串)?",
+    "verdict": "pass",
+    "result_badge": "{} — Name 完全不出现",
+    "result_class": "good",
+    "evidence": "真实输出: json.Marshal(Ambiguous{...}) = {}"
+  },
+  {
+    "narration": "场景 2:Shallow 结构体除了嵌入 A、B,自己还直接声明了一个 Name 字段(深度 0)。深度 0 天然碾压深度 1,不管深度 1 那边有没有 tag。",
+    "query_display": "type Shallow struct { A; B; Name string }  // Name 在深度0",
+    "tree": [
+      {"name":"A.Name(d1)","state":"lose"},{"name":"B.Name(d1)","state":"lose"},
+      {"name":"Name(d0)","state":"win"}
+    ],
+    "check_label": "深度 0 的 Name 是否直接获胜,完全无视深度 1 的两个同名字段?",
+    "verdict": "pass",
+    "result_badge": "{\"Name\":\"from-outer\"}",
+    "result_class": "good",
+    "evidence": "真实输出: json.Marshal(Shallow{...}) = {\"Name\":\"from-outer\"}"
+  },
+  {
+    "narration": "场景 3:TagWins 结构体嵌入 A3(Name 带 json:\"Name\" tag)和 B3(Name 没有 tag),两者深度都是 1。深度相同时,带 tag 的字段优先。",
+    "query_display": "type TagWins struct { A3; B3 }  // 深度相同,A3.Name 带 tag",
+    "tree": [
+      {"name":"A3.Name(tagged)","state":"win"},{"name":"B3.Name(no-tag)","state":"lose"}
+    ],
+    "check_label": "深度相同的情况下,带 json tag 的字段是否胜出?",
+    "verdict": "pass",
+    "result_badge": "{\"Name\":\"from-A3-tagged\"}",
+    "result_class": "good",
+    "evidence": "真实输出: json.Marshal(TagWins{...}) = {\"Name\":\"from-A3-tagged\"}"
+  },
+  {
+    "narration": "换一组实验:自引用的 Node 类型(Children []*Node),这是这个进程第一次 Marshal *Node,50 个 goroutine 同时抢着触发 encoderCache 的构建。",
+    "query_display": "for i:=0;i<50;i++ { go json.Marshal(tree) }  // go run -race",
+    "tree": [],
+    "check_label": "50 个并发的首次构建调用,是否全部产出完全相同的正确结果,且 -race 未检测到竞争?",
+    "verdict": "pass",
+    "result_badge": "50/50 输出一致,-race 未报警",
+    "result_class": "good",
+    "evidence": "真实测得: all_same=true; -race 检测器未检测到任何 data race"
+  },
+  {
+    "narration": "最后验证缓存的加速效果:同一个 8 字段结构体,不缓存版本每次重新走一遍反射,缓存版本命中 sync.Map 直接返回,各跑 200 万次。",
+    "query_display": "naiveFields(t) x2,000,000 vs cachedFields(t) x2,000,000",
+    "tree": [],
+    "check_label": "缓存版本是否比不缓存版本快一个数量级以上?",
+    "verdict": "pass",
+    "result_badge": "54.1x 加速(437.7ns → 8.1ns)",
+    "result_class": "good",
+    "evidence": "真实测得: 无缓存 437.7ns/call,有缓存 8.1ns/call,速比 54.1x(另两次独立运行: 49.8x, 53.1x)"
+  }
+]};
+
+(function(){
+  const scenarios = DATA.scenarios;
+  const narration = document.getElementById('jsNarration');
+  const stepBadge = document.getElementById('jsStep');
+  const queryLine = document.getElementById('jsQuery');
+  const treeEl = document.getElementById('jsTree');
+  const checksEl = document.getElementById('jsChecks');
+  const resultBadge = document.getElementById('jsResultBadge');
+  const evidenceEl = document.getElementById('jsEvidence');
+  const counter = document.getElementById('jsCounter');
+  let idx = -1, playing = false, playTimer = null;
+
+  function render(){
+    idx = Math.max(-1, Math.min(scenarios.length - 1, idx));
+    if(idx < 0){
+      narration.textContent = '点击"下一步"或"播放"开始。';
+      stepBadge.textContent = '未开始';
+      queryLine.textContent = '—';
+      treeEl.innerHTML = '';
+      checksEl.innerHTML = '';
+      resultBadge.textContent = '—';
+      resultBadge.className = 'result-badge';
+      evidenceEl.textContent = '';
+      counter.textContent = `0 / ${scenarios.length}`;
+      document.getElementById('jsPrev').disabled = true;
+      document.getElementById('jsNext').disabled = false;
+      return;
+    }
+
+    const s = scenarios[idx];
+    narration.textContent = s.narration;
+    stepBadge.textContent = `第 ${idx+1} / ${scenarios.length} 步`;
+    queryLine.textContent = s.query_display;
+
+    treeEl.innerHTML = '';
+    s.tree.forEach(n => {
+      const box = document.createElement('div');
+      box.className = 'tree-box';
+      box.dataset.state = n.state;
+      const nt = document.createElement('div');
+      nt.className = 'nt';
+      nt.textContent = n.name;
+      const st = document.createElement('div');
+      st.textContent = n.state === 'win' ? '获胜' : (n.state === 'lose' ? '落败' : '丢弃');
+      box.appendChild(nt); box.appendChild(st);
+      treeEl.appendChild(box);
+    });
+
+    checksEl.innerHTML = '';
+    const row = document.createElement('div');
+    row.className = 'check';
+    row.dataset.verdict = s.verdict;
+    const label = document.createElement('span');
+    label.className = 'label';
+    label.textContent = s.check_label;
+    const verdict = document.createElement('span');
+    verdict.className = 'verdict';
+    verdict.textContent = s.verdict === 'pass' ? '成立' : '不成立';
+    row.appendChild(label); row.appendChild(verdict);
+    checksEl.appendChild(row);
+
+    resultBadge.textContent = s.result_badge;
+    resultBadge.className = 'result-badge ' + s.result_class;
+    evidenceEl.textContent = s.evidence;
+
+    counter.textContent = `${idx+1} / ${scenarios.length}`;
+    document.getElementById('jsPrev').disabled = idx <= -1;
+    document.getElementById('jsNext').disabled = idx >= scenarios.length - 1;
+  }
+
+  document.getElementById('jsNext').onclick = () => { idx++; render(); stopPlay(); };
+  document.getElementById('jsPrev').onclick = () => { idx--; render(); stopPlay(); };
+  document.getElementById('jsReset').onclick = () => { idx = -1; render(); stopPlay(); };
+  function stopPlay(){ playing = false; clearInterval(playTimer); document.getElementById('jsPlay').textContent = '▶ 自动播放'; }
+  document.getElementById('jsPlay').onclick = () => {
+    if(playing){ stopPlay(); return; }
+    playing = true; document.getElementById('jsPlay').textContent = '⏸ 暂停';
+    playTimer = setInterval(() => {
+      if(idx >= scenarios.length - 1){ stopPlay(); return; }
+      idx++; render();
+    }, 2200);
+  };
+
+  render();
+})();
+</script>
+
+</body>
+</html>

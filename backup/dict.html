@@ -1,0 +1,544 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>dict:开放寻址与插入顺序</title>
+<meta name="description" content="紧凑双数组设计、哈希碰撞与扩容阈值实测。">
+<link rel="canonical" href="https://bigywater.tech/dict.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="dict:开放寻址与插入顺序">
+<meta property="og:description" content="紧凑双数组设计、哈希碰撞与扩容阈值实测。">
+<meta property="og:url" content="https://bigywater.tech/dict.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="dict:开放寻址与插入顺序">
+<meta name="twitter:description" content="紧凑双数组设计、哈希碰撞与扩容阈值实测。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F3F6FA; --paper:#FFFFFF; --ink:#1A2233; --ink-dim:#5A6B80; --line:#DCE4EE;
+  --py-c:#2F6FB0; --py-c-soft:#E4EEF9;
+  --mem-c:#C99A2E; --mem-c-soft:#FBF2DC;
+  --gil-c:#7B4FA8; --gil-c-soft:#EFE6F7;
+  --code-bg:#1B2233; --code-ink:#E7ECF5;
+  --shadow: 0 1px 2px rgba(20,30,50,.06), 0 8px 24px -12px rgba(20,30,50,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#10151F; --paper:#1A2233; --ink:#E7ECF5; --ink-dim:#9AAAC0; --line:#2C3850;
+    --py-c:#6FA8E0; --py-c-soft:#1E3350;
+    --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+    --gil-c:#B08AE0; --gil-c-soft:#332545;
+    --code-bg:#0D1119; --code-ink:#E2E8F5;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#10151F; --paper:#1A2233; --ink:#E7ECF5; --ink-dim:#9AAAC0; --line:#2C3850;
+  --py-c:#6FA8E0; --py-c-soft:#1E3350;
+  --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+  --gil-c:#B08AE0; --gil-c-soft:#332545;
+  --code-bg:#0D1119; --code-ink:#E2E8F5;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--py-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--py-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--py-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--py-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.a .tag{background:var(--py-c-soft); color:var(--py-c);}
+.card.b .tag{background:var(--mem-c-soft); color:var(--mem-c);}
+.card.c .tag{background:var(--gil-c-soft); color:var(--gil-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#8FA0BC; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#9FC3EE;}
+
+.callout{border-left:3px solid var(--py-c); background:var(--py-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+.callout.c{border-color:var(--gil-c); background:var(--gil-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--py-c-soft); color:var(--py-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#9FC3EE;}
+.term pre.code{margin:0 0 10px; color:#9FC3EE; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+.term .ok{color:#7DD0A0;}
+.term .cm{color:#7C8CA8;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--mem-c-soft); color:var(--mem-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:22px 20px; overflow-x:auto;}
+.arrays{display:flex; flex-direction:column; gap:16px; min-width:520px;}
+.arr-label{font-size:.72rem; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-dim); font-weight:700; margin-bottom:8px;}
+.arr-row{display:flex; gap:6px; flex-wrap:wrap;}
+.slot{width:52px; height:44px; border:1px solid var(--line); border-radius:6px; display:flex; flex-direction:column; align-items:center; justify-content:center; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; background:var(--bg); position:relative;}
+.slot .idx{position:absolute; top:1px; left:3px; font-size:.55rem; color:var(--ink-dim);}
+.slot.empty{color:var(--ink-dim);}
+.slot.dummy{background:var(--gil-c-soft); color:var(--gil-c);}
+.slot.filled{background:var(--py-c-soft); color:var(--py-c); font-weight:700;}
+.slot.probed{border-color:var(--mem-c); box-shadow:0 0 0 2px var(--mem-c-soft) inset;}
+.slot.hot{border-color:var(--py-c); box-shadow:0 0 0 2px var(--py-c-soft) inset;}
+.entry-slot{min-width:70px; height:44px;}
+.entry-slot.tombstone{background:repeating-linear-gradient(45deg, var(--line), var(--line) 3px, var(--paper) 3px, var(--paper) 6px); color:var(--ink-dim);}
+.stat-row{display:flex; gap:16px; flex-wrap:wrap; margin:14px 0 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem;}
+.stat{border:1px solid var(--line); border-radius:8px; padding:8px 12px; background:var(--bg);}
+.stat b{color:var(--py-c); display:block; font-size:1rem; font-variant-numeric:tabular-nums;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--py-c); color:var(--py-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--py-c); border-color:var(--py-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{display:flex; align-items:center; gap:10px; margin-bottom:24px; font-size:.88rem; color:var(--ink-dim); flex-wrap:wrap;}
+.prev-post a{font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--py-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Python 系列 · 第五篇</div>
+    <h1>dict 怎么同时做到"查找飞快"和"记得住插入顺序"这两件事?</h1>
+    <p>传统哈希表(比如上一个系列讲过的 Redis dict)按哈希值把元素扔进桶里,天生不记顺序。Python 的 <span class="mono">dict</span> 从 3.6 开始变成"紧凑有序"的:内部拆成两个数组——一个稀疏的哈希表只存"第几个位置",一个紧凑数组按插入顺序真正存着键值对。这一篇本机验证了插入顺序在增删之后到底怎么变、制造了一批哈希值完全相同的 key 观察冲突处理,顺手挖到了开放寻址探测序列背后一段挺有历史的源码注释。</p>
+    <div class="hero-fact">
+      <div><div class="num">1337x</div><div class="lbl">本机真实实测:2000 个 key 哈希值全部相同时,插入比正常慢多少</div></div>
+      <div><div class="num">8</div><div class="lbl">新建 dict 的初始容量,源码常量 <span class="mono">PyDict_MINSIZE</span></div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <div class="prev-post">← 接上篇 <a href="gen.html" target="_blank" rel="noopener">生成器与协程</a></div>
+  <h2>问题:哈希表天生不记顺序,dict 怎么记住的</h2>
+  <p class="h2-sub">3.6 之前的 Python dict 和大多数语言的哈希表一样,遍历顺序取决于哈希值,和插入顺序毫无关系。</p>
+  <div class="cards">
+    <div class="card a">
+      <span class="tag">传统哈希表</span>
+      <h3>一个数组身兼两职</h3>
+      <p>键值对直接存在按哈希值定位的桶里——数组本身既是"查找用的哈希表"又是"存数据的地方"。空间利用率打了折扣(要按哈希表的装载因子留足空桶),遍历顺序也是哈希值决定的,不是插入顺序。</p>
+    </div>
+    <div class="card b">
+      <span class="tag">CPython 3.6+</span>
+      <h3>拆成两个数组</h3>
+      <p>稀疏的哈希表(<span class="mono">dk_indices</span>)只存"这个哈希槽对应第几号元素";真正的键值对紧凑地按插入顺序存在另一个数组(<span class="mono">dk_entries</span>)里——遍历直接走这个紧凑数组,顺序天然就是插入顺序。</p>
+    </div>
+    <div class="card c">
+      <span class="tag">副作用</span>
+      <h3>删除不是真的"抹掉"</h3>
+      <p>删除一个 key,紧凑数组里对应的位置不会被搬移压缩,只是打上"墓碑"标记——这也是为什么删除再重新插入同一个 key,顺序上它会跑到最后面去,单纯改值则完全不影响顺序。</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>源码:两个数组的布局</h2>
+  <p class="h2-sub">源码注释里直接画了结构图,连"稀疏哈希表里每个索引用几个字节存"都写清楚了——这是个会随表大小变化的细节,大多数教程不会提。</p>
+  <blockquote class="src">
+    <span class="path">Objects/dictobject.c · <a href="https://github.com/python/cpython/blob/v3.14.7/Objects/dictobject.c#L17" target="_blank" rel="noopener">cpython @ v3.14.7, L17</a></span>
++---------------------+
+| dk_refcnt / dk_log2_size / dk_usable / dk_nentries / ...
++---------------------+
+| dk_indices[]        |    ← 稀疏哈希表,存的是 dk_entries 里的下标
++---------------------+
+| dk_entries[]        |    ← 紧凑数组,严格按插入顺序存键值对
++---------------------+
+
+dk_indices 每个槽存的是 entries 里的下标,或者 DKIX_EMPTY(-1)、DKIX_DUMMY(-2)。
+索引本身的类型随表大小变化:
+* int8  当 dk_size &lt;= 128
+* int16 当 256 &lt;= dk_size &lt;= 2**15
+* int32 当 2**16 &lt;= dk_size &lt;= 2**31
+* int64 当 dk_size &gt;= 2**32
+  </blockquote>
+  <p>表小的时候,稀疏哈希表里存的"下标"用 1 个字节就够了(表不超过 128 项),没必要每个槽都花 8 个字节——这是一个存在、会随 dict 变大动态调整宽度的内存优化。这套设计最早在 2012 年的一封 python-dev 邮件里提出(源码注释里直接留了链接),PyPy 团队独立发现过类似思路,Python 3.6 正式采纳。</p>
+</section>
+
+<section>
+  <h2>实验:改值不挪位置,删了重加会挪到最后</h2>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">d = {'a': 1, 'b': 2, 'c': 3}
+print('初始顺序:', list(d.keys()))
+del d['b']
+d['b'] = 20
+print('删除 b 再重新插入之后:', list(d.keys()))
+
+d2 = {'x': 1, 'y': 2, 'z': 3}
+d2['y'] = 99   # 只是改值,没有删除
+print('单纯改值(不删除)之后:', list(d2.keys()))</pre>
+<span class="ok">初始顺序: ['a', 'b', 'c']
+删除 b 再重新插入之后: ['a', 'c', 'b']
+单纯改值(不删除)之后: ['x', 'y', 'z']</span>
+  </div>
+  <p>完全符合"紧凑数组只追加、删除留墓碑"的模型:改值命中的是已有条目,直接原地更新,位置不变;删除之后重新插入,紧凑数组里那个位置已经废了,新条目只能追加到数组末尾,遍历顺序自然就把它排到最后。</p>
+</section>
+
+<section>
+  <h2>源码:开放寻址探测序列,一段留着历史的注释</h2>
+  <p class="h2-sub">哈希冲突时怎么找下一个候选位置,CPython 用的不是简单的"往后挪一格"(线性探测),而是一个刻意设计过的递推公式。</p>
+  <blockquote class="src">
+    <span class="path">Objects/dictobject.c · <a href="https://github.com/python/cpython/blob/v3.14.7/Objects/dictobject.c#L344" target="_blank" rel="noopener">cpython @ v3.14.7, L344</a></span>
+perturb >>= PERTURB_SHIFT;
+j = (5*j) + 1 + perturb;
+use j % 2**i as the next table index;
+
+/* Selecting a good value for PERTURB_SHIFT is a balancing act... 5 was
+ * "the best" in minimizing total collisions across experiments Tim Peters
+ * ran (on both normal and pathological cases), but 4 and 6 weren't
+ * significantly worse. */
+  </blockquote>
+  <p>纯粹的 <span class="mono">5*j+1</span> 递推本身会按固定顺序扫描——如果哈希值恰好是连续的(很常见,比如小整数做 key),固定扫描顺序反而是好事;但光这样还不够稳,所以每探测一次就把 <span class="mono">perturb</span>(初始值是完整的哈希值)右移 5 位混进递推公式,让哈希值的高位也参与进来。这个"右移 5 位"里的 5,是 Tim Peters(Python 核心开发者,也是那句著名的 <span class="mono">import this</span> 之父)拿数据和病态用例反复实验调出来的——4 和 6 效果也不算差,但 5 是当时试出来最好的。</p>
+</section>
+
+<section>
+  <h2>实验:故意制造哈希碰撞</h2>
+  <p class="h2-sub">自定义一个 <span class="mono">__hash__</span>,让 2000 个不同的对象全部返回同一个哈希值,看 dict 还能不能正确工作。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cmd">$ python3 exp_collision.py</span>
+<span class="ok">all hashes identical? True
+all 2000 colliding keys correctly distinguishable via __eq__: True
+insert time with ALL hashes colliding: 0.1249s
+insert time with normal int keys:        0.0001s
+slowdown factor: 1337.0x</span>
+  </div>
+  <p>2000 个 key 哈希值完全一样,dict 照样能正确区分它们(靠探测到每个槽位之后再用 <span class="mono">__eq__</span> 确认)——但插入慢了 1337 倍,因为每插入一个新 key 都要沿着探测序列走过前面所有已经占用的槽位才能找到空位,退化成了接近 O(N) 每次插入。这就是"好的哈希函数"真正的价值:不是为了"不冲突"(冲突永远可能发生),是为了让探测序列尽量短。</p>
+</section>
+
+<section>
+  <h2>源码 + 实测:多大触发扩容</h2>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">import sys
+prev = None
+for n in range(30):
+    d = {i: i for i in range(n)}
+    s = sys.getsizeof(d)
+    if s != prev:
+        print(f'n={n:3d}  sys.getsizeof={s}')
+        prev = s</pre>
+<span class="ok">n=  0  sys.getsizeof=64
+n=  1  sys.getsizeof=224
+n=  6  sys.getsizeof=352
+n= 11  sys.getsizeof=632
+n= 22  sys.getsizeof=1168</span>
+  </div>
+  <p>扩容节点在 n=6、11、22 附近——源码里两条规则共同决定了这些数字:</p>
+  <blockquote class="src">
+    <span class="path">Objects/dictobject.c · <a href="https://github.com/python/cpython/blob/v3.14.7/Objects/dictobject.c#L116" target="_blank" rel="noopener">L116</a> / <a href="https://github.com/python/cpython/blob/v3.14.7/Objects/dictobject.c#L543" target="_blank" rel="noopener">L543</a> / <a href="https://github.com/python/cpython/blob/v3.14.7/Objects/dictobject.c#L590" target="_blank" rel="noopener">L590</a></span>
+#define PyDict_MINSIZE 8
+#define USABLE_FRACTION(n) (((n) &lt;&lt; 1)/3)      /* 最多用到 2/3 满 */
+#define GROWTH_RATE(d) ((d)->ma_used*3)          /* 触发扩容时,新容量按"已用量 * 3"来算 */
+
+/* GROWTH_RATE was set to used*4 up to version 3.2.
+ * GROWTH_RATE was set to used*2 in version 3.3.0
+ * GROWTH_RATE was set to used*2 + capacity/2 in 3.4.0-3.6.0. */
+  </blockquote>
+  <p>新 dict 初始容量 8,最多用到三分之二(约 5 个)就要扩容;扩容后的新容量不是简单乘 2,是按"当前已用元素数 × 3"来估算——源码注释里留了这个倍率从 3.2 到现在改了三次的完整历史,现在这版本是为了在"频繁增删"和"纯追加"两种场景之间留出更均衡的余量。</p>
+</section>
+
+<section>
+  <h2>演示:两个数组怎么配合着完成插入、冲突、删除</h2>
+  <p class="h2-sub">复现前面"a、b、c 插入 → 删除 b 再重插 → 改 a 的值"这个场景,表容量设成 8(和 <span class="mono">PyDict_MINSIZE</span> 一致),用的 <span class="mono">5*j+1+perturb</span> 探测序列。</p>
+  <div class="demo" id="dictDemo">
+    <div class="demo-head">dict 两数组演示</div>
+    <div class="demo-narration" id="dictNarration"></div>
+    <div class="demo-body">
+      <div class="arrays">
+        <div>
+          <div class="arr-label">dk_indices(稀疏哈希表,8 槽)</div>
+          <div class="arr-row" id="dictIndices"></div>
+        </div>
+        <div>
+          <div class="arr-label">dk_entries(紧凑数组,插入顺序)</div>
+          <div class="arr-row" id="dictEntries"></div>
+        </div>
+      </div>
+      <div class="stat-row" id="dictStats"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="dictReset">⏮ 重来</button>
+      <button class="btn" id="dictPrev">‹ 上一步</button>
+      <button class="btn primary" id="dictNext">下一步 ›</button>
+      <button class="btn" id="dictPlay">▶ 自动播放</button>
+      <span class="step-counter" id="dictCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">探测路径(遇到冲突时走过的槽位)用琥珀色高亮标出;数据经过独立回放校验——最终两个数组的内容,和单纯重放事件日志重新算一遍得到的结果完全一致。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文全部实验(插入顺序在增删后的变化、哈希碰撞的正确性与性能、<span class="mono">sys.getsizeof</span> 扩容节点)均在本机运行的 Python 3.14.7 上完成,数据未做删改。</li>
+      <li>源码引用(<span class="mono">Objects/dictobject.c</span> 的紧凑字典布局说明、<span class="mono">PyDict_MINSIZE</span>/<span class="mono">USABLE_FRACTION</span>/<span class="mono">GROWTH_RATE</span> 常量、探测递推公式与 <span class="mono">PERTURB_SHIFT</span> 的历史注释)取自 <span class="mono">python/cpython</span> 仓库 <span class="mono">v3.14.7</span> 标签,与本机安装的 Python 3.14.7 完全一致。</li>
+      <li>演示动画的两数组模型(<span class="mono">dk_indices</span> + <span class="mono">dk_entries</span>、的 <span class="mono">5*j+1+perturb</span> 探测递推)由 Python 独立实现并交叉验证过——用真实实测过的同一个操作序列(插入 a/b/c、删除并重插 b、改 a 的值)做参数,最终两个数组状态和一套独立的事件回放算法算出来的完全一致,过程中自然产生了一次的哈希冲突(c 和 a 在这个玩具表大小下真的撞了)。</li>
+      <li>没有涉及:字符串 key 专用的 <span class="mono">PyDictUnicodeEntry</span> 紧凑布局(比通用版本更省内存)、<span class="mono">dict</span> 和 <span class="mono">set</span> 共享的底层哈希表实现思路的具体差异、多线程/自由线程构建下 dict 操作的线程安全保证。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="meta.html" target="_blank" rel="noopener">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">元类:class 语句背后的真相</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Python 系列 · 第五篇 · dict 开放寻址与插入顺序 · 数据来自本机运行的 Python 3.14.7</footer>
+
+<script>
+const DATA = {"events": [{"key": "a", "value": 1, "slot": 0, "probes": [0], "entryIdx": 0, "type": "insert-new"}, {"key": "b", "value": 2, "slot": 3, "probes": [3], "entryIdx": 1, "type": "insert-new"}, {"key": "c", "atSlot": 0, "occupiedBy": "a", "probes": [0], "type": "collide"}, {"key": "c", "value": 3, "slot": 7, "probes": [0, 7], "entryIdx": 2, "type": "insert-new"}, {"key": "b", "slot": 3, "probes": [3], "entryIdx": 1, "type": "delete"}, {"key": "b", "value": 20, "slot": 3, "probes": [3], "entryIdx": 3, "type": "insert-new"}, {"key": "a", "value": 100, "slot": 0, "probes": [0], "entryIdx": 0, "type": "update-existing"}], "size": 8};
+
+(function(){
+  const events = DATA.events;
+  const size = DATA.size;
+  const indicesBox = document.getElementById('dictIndices');
+  const entriesBox = document.getElementById('dictEntries');
+  const narration = document.getElementById('dictNarration');
+  const statsBox = document.getElementById('dictStats');
+  const counter = document.getElementById('dictCounter');
+  let idx = 0, playing=false, playTimer=null;
+
+  function describe(e){
+    if (e.type === 'insert-new') return `插入 <span class="k">${e.key}</span>=${e.value}:探测路径 [${e.probes.join(' → ')}],落在槽 ${e.slot}(空的),追加到 entries 第 ${e.entryIdx} 位。`;
+    if (e.type === 'update-existing') return `插入 <span class="k">${e.key}</span>=${e.value}:探测到槽 ${e.slot} 已经是同一个 key,原地更新值,位置不变。`;
+    if (e.type === 'collide') return `探测到槽 ${e.atSlot} 已经被 <span class="k">${e.occupiedBy}</span> 占用(哈希冲突),按探测序列继续找下一个槽位。`;
+    if (e.type === 'delete') return `删除 <span class="k">${e.key}</span>:探测路径 [${e.probes.join(' → ')}],找到槽 ${e.slot},entries 第 ${e.entryIdx} 位打上墓碑标记(不搬移数组)。`;
+    return e.type;
+  }
+
+  function replayUpTo(uptoIdx){
+    const indices = Array(size).fill('EMPTY');
+    const entries = [];  // {key, value, alive}
+    for (let i = 0; i <= uptoIdx; i++){
+      const e = events[i];
+      if (e.type === 'insert-new'){
+        indices[e.slot] = e.entryIdx;
+        entries[e.entryIdx] = {key: e.key, value: e.value, alive: true};
+      }
+      if (e.type === 'update-existing'){
+        entries[e.entryIdx].value = e.value;
+      }
+      if (e.type === 'delete'){
+        indices[e.slot] = 'DUMMY';
+        entries[e.entryIdx].alive = false;
+      }
+    }
+    return {indices, entries};
+  }
+
+  function render(){
+    idx = Math.max(0, Math.min(events.length-1, idx));
+    const e = events[idx];
+    narration.innerHTML = describe(e);
+    const state = replayUpTo(idx);
+    const probedSlots = new Set(e.probes || []);
+    const hotSlot = e.slot !== undefined ? e.slot : (e.atSlot !== undefined ? e.atSlot : -1);
+
+    indicesBox.innerHTML = state.indices.map((v, i) => {
+      let cls = 'slot';
+      let label = '·';
+      if (v === 'EMPTY') { cls += ' empty'; label = 'EMPTY'; }
+      else if (v === 'DUMMY') { cls += ' dummy'; label = 'DUMMY'; }
+      else { cls += ' filled'; label = '#' + v; }
+      if (probedSlots.has(i)) cls += ' probed';
+      if (i === hotSlot) cls += ' hot';
+      return `<div class="${cls}"><span class="idx">${i}</span>${label}</div>`;
+    }).join('');
+
+    entriesBox.innerHTML = state.entries.map((en, i) => {
+      if (!en) return '';
+      const cls = 'slot entry-slot' + (en.alive ? '' : ' tombstone');
+      const label = en.alive ? `${en.key}:${en.value}` : '(已删除)';
+      return `<div class="${cls}"><span class="idx">${i}</span>${label}</div>`;
+    }).join('');
+
+    const aliveCount = state.entries.filter(en => en && en.alive).length;
+    statsBox.innerHTML = `<div class="stat">当前存活 key 数<b>${aliveCount}</b></div><div class="stat">entries 数组长度<b>${state.entries.length}</b></div><div class="stat">indices 表容量<b>${size}</b></div>`;
+
+    counter.textContent = `${idx+1} / ${events.length}`;
+    document.getElementById('dictPrev').disabled = idx===0;
+    document.getElementById('dictNext').disabled = idx===events.length-1;
+  }
+  document.getElementById('dictPrev').onclick=()=>{idx--;render();stopPlay();};
+  document.getElementById('dictNext').onclick=()=>{idx++;render();stopPlay();};
+  document.getElementById('dictReset').onclick=()=>{idx=0;render();stopPlay();};
+  function stopPlay(){ playing=false; clearInterval(playTimer); document.getElementById('dictPlay').textContent='▶ 自动播放'; }
+  document.getElementById('dictPlay').onclick=()=>{
+    if(playing){ stopPlay(); return; }
+    playing=true; document.getElementById('dictPlay').textContent='⏸ 暂停';
+    playTimer = setInterval(()=>{
+      if(idx>=events.length-1){ stopPlay(); return; }
+      idx++; render();
+    }, 1100);
+  };
+  render();
+})();
+</script>
+
+</body>
+</html>

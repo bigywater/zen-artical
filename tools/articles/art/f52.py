@@ -1,0 +1,17 @@
+from lib import *
+S = SS('f52')
+R = J('f52')
+steps = [
+    step("查找顺序(实测):先应用的 templates,再按注册顺序逐个蓝图。a.html 同时存在于应用与 bp1,得到「应用 a」;dir/x.html 同样应用的赢;only_app、only_bp1、only_bp2 各自来自它所在的目录;nope.html 抛 TemplateNotFound。", t=tl(S(1)), done=lidx(S(1), "'a.html'", "'only_app.html'", "'only_bp1.html'", "'only_bp2.html'"), mark=lidx(S(1), "'dir/x.html'", "'nope.html'"), kv=KV([['同名 a.html', '应用的赢(先于 bp1)'], ['只在 bp2 里', '也能被找到'], ['不存在', 'TemplateNotFound']], ['同名 a.html'])),
+    step("render_template 传列表时取第一个存在的(内部是 select_template):['nope1.html', 'only_bp2.html', 'a.html'] → 只在 bp2;['a.html', 'only_bp2.html'] → 应用 a。全都不存在时抛 TemplatesNotFound「none of the templates given were found: x1.html, x2.html」。适合「专用模板 → 通用模板」的回退。", t=tl(S(2)), done=lidx(S(2), '[nope1, only_bp2, a]'), mark=lidx(S(2), '全都不存在'), kv=KV([['列表', '取第一个存在的'], ['都不存在', 'TemplatesNotFound']], ['列表'])),
+    step("模板名的安全:'../secret.txt'、'../other/x.html'、'/etc/passwd'、'dir/../a.html'、反斜杠 'dir\\\\x.html'、含 NUL 的名字都是 TemplateNotFound(Jinja 拒绝 .. 段与绝对路径);而 'dir//x.html'(多余的斜杠)与 './a.html' 被规整后能找到;以点开头的文件 .hidden.html 也能被加载。模板目录之外的文件读不到,但不要把敏感内容放进模板目录。", t=tl(S(3)), mark=lidx(S(3), "'../secret.txt'", "'/etc/passwd'", "'dir/../a.html'"), done=lidx(S(3), "'dir//x.html'", "'./a.html'", "'.hidden.html'"), kv=KV([['含 .. 的名字', 'TemplateNotFound'], ['绝对路径', 'TemplateNotFound'], ['多余斜杠 / ./', '被规整,能找到']], ['含 .. 的名字'])),
+    step("额外的模板目录:app.jinja_loader = ChoiceLoader([原来的 jinja_loader, FileSystemLoader('extra')]) 之后,render_template('extra_only.html') 得到「额外目录里的」,a.html 仍然是应用的(原目录排在前面)。改了加载器后要 app.jinja_env.cache.clear() 清掉旧的编译缓存。", t=tl(S(4)), done=lidx(S(4), "'extra_only.html'", "'a.html'"), kv=KV([['ChoiceLoader', '原目录在前,额外目录在后']], ['ChoiceLoader'])),
+    step("render_template_string 不经过加载器去找模板本身,直接编译字符串:{{ 1 + 1 }} → 2;但字符串模板里的 {% include \"only_app.html\" %} 仍然通过加载器去找文件,得到 [只在应用里]。", t=tl(S(5)), done=lidx(S(5), 'render_template_string("{{ 1 + 1 }}")', '字符串模板里 include'), kv=KV([['模板本身', '直接编译字符串'], ['include / extends', '仍走加载器']], ['include / extends'])),
+    step("jinja_env.list_templates() 列出所有可用的模板名:['.hidden.html', 'a.html', 'dir/x.html', 'extra_only.html', 'only_app.html', 'only_bp1.html', 'only_bp2.html'];同名的 a.html、dir/x.html 在列表里只出现一次。自己遍历各蓝图的 jinja_loader 与应用的目录,可以找出被多处提供的名字:{'a.html': ['bp1', '应用'], 'dir/x.html': ['bp1', '应用']}。", t=tl(S(6)), done=lidx(S(6), '[\'.hidden.html\''), mark=lidx(S(6), '被多处提供的模板名'), kv=KV([['list_templates()', '同名只列一次'], ['冲突的名字', 'a.html、dir/x.html']], ['冲突的名字'])),
+]
+A = mkartf('f52', 52, 'Flask,模板搜索路径,Jinja2,蓝图,真实验证,动画演示',
+    '实测 Flask 模板的搜索路径:先应用的 templates 再按注册顺序的蓝图,同名先找到的赢;render_template 传列表取第一个存在的;.. 与绝对路径的模板名被拒;用 ChoiceLoader 加额外目录;render_template_string 的 include 仍走加载器;list_templates 与同名冲突检查。',
+    'render_template("x.html") 到底从哪里找?多个目录里有同名文件怎么办?能不能写成路径穿越?想加一个额外的模板目录怎么办?这篇建一个应用加两个蓝图,把每一步查找都打印出来。',
+    [('应用优先', '同名模板时应用的 templates 目录先于蓝图'), ('拒绝', 'Jinja 对含 .. 的模板名与绝对路径的处理'), ('7 个', '本篇示例里 list_templates() 返回的模板名数(同名只算一个)')],
+    [('查找顺序', '<p>上一篇:<a href="flask-jinja2-template-loader.html">Jinja2 Template Loader</a>;下一篇:<a href="flask-template-inheritance-block.html">模板继承与 Block</a>。蓝图自己的模板目录见<a href="flask-blueprint-static-templates.html">Blueprint 的静态文件和模板目录</a>。</p>'), ('render_template 传列表', None), ('模板名的安全', None), ('额外的模板目录', None), ('render_template_string', None), ('list_templates', None)],
+    steps, [ENV_F, '没有验证:Windows 路径分隔符下的模板名、符号链接指向模板目录之外时的行为、模板名大小写在不区分大小写的文件系统上的表现、PackageLoader 的查找'], '模板搜索路径')

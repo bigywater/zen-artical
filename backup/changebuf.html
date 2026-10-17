@@ -1,0 +1,482 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>Change Buffer 是怎么把随机写攒成批量写的</title>
+<meta name="description" content="二级索引随机写入如何被延迟合并成顺序 I/O。">
+<link rel="canonical" href="https://bigywater.tech/changebuf.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Change Buffer 是怎么把随机写攒成批量写的">
+<meta property="og:description" content="二级索引随机写入如何被延迟合并成顺序 I/O。">
+<meta property="og:url" content="https://bigywater.tech/changebuf.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Change Buffer 是怎么把随机写攒成批量写的">
+<meta name="twitter:description" content="二级索引随机写入如何被延迟合并成顺序 I/O。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#EFF1F3; --paper:#FFFFFF; --ink:#1B1F24; --ink-dim:#5B6470; --line:#D8DCE1;
+  --node-c:#1F6FA8; --node-c-soft:#E4EFF6;
+  --key-c:#8B5A2B; --key-c-soft:#F3E9DD;
+  --io-c:#A13D3D; --io-c-soft:#F7E7E5;
+  --code-bg:#1B1F24; --code-ink:#E7EAED;
+  --shadow: 0 1px 2px rgba(20,25,30,.06), 0 8px 24px -12px rgba(20,25,30,.15);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#12151A; --paper:#1A1E24; --ink:#E7EAED; --ink-dim:#9AA4B0; --line:#2B3138;
+    --node-c:#5FA8DE; --node-c-soft:#1D2C38;
+    --key-c:#D6A15C; --key-c-soft:#332619;
+    --io-c:#E27A7A; --io-c-soft:#3A2323;
+    --code-bg:#0E1013; --code-ink:#DCE1E6;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#12151A; --paper:#1A1E24; --ink:#E7EAED; --ink-dim:#9AA4B0; --line:#2B3138;
+  --node-c:#5FA8DE; --node-c-soft:#1D2C38;
+  --key-c:#D6A15C; --key-c-soft:#332619;
+  --io-c:#E27A7A; --io-c-soft:#3A2323;
+  --code-bg:#0E1013; --code-ink:#DCE1E6;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--node-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--node-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--node-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--node-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.node .tag{background:var(--node-c-soft); color:var(--node-c);}
+.card.key .tag{background:var(--key-c-soft); color:var(--key-c);}
+.card.io .tag{background:var(--io-c-soft); color:var(--io-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#8B95A1; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#8FC7EA;}
+
+.callout{border-left:3px solid var(--node-c); background:var(--node-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.io{border-color:var(--io-c); background:var(--io-c-soft);}
+.callout.key{border-color:var(--key-c); background:var(--key-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--node-c-soft); color:var(--node-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#8FC7EA;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88A8A;}
+.term .cm{color:#8B95A1;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.88rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.78rem; padding:8px 10px; border-bottom:1px solid var(--line);}
+td{padding:9px 10px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;}
+.demo-title{font-weight:600; font-size:.95rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--key-c-soft); color:var(--key-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:22px 20px;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--node-c); color:var(--node-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--node-c); border-color:var(--node-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.panels{display:grid; grid-template-columns:1fr 1fr; gap:14px;}
+@media (max-width:640px){.panels{grid-template-columns:1fr;}}
+.panel{border:1px solid var(--line); border-radius:10px; padding:14px 16px; background:var(--bg);}
+.panel h4{margin:0 0 10px; font-size:.78rem; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-dim); font-weight:600;}
+.pagebox{display:flex; justify-content:space-between; align-items:center; padding:8px 12px; border-radius:7px; margin-bottom:6px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; background:var(--paper); border:1.5px solid var(--line);}
+.pagebox.resident{border-color:var(--node-c);}
+.pagebox .status{font-size:.68rem; padding:2px 7px; border-radius:5px; background:var(--key-c-soft); color:var(--key-c);}
+.pagebox.resident .status{background:var(--node-c-soft); color:var(--node-c);}
+.cbrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.78rem; padding:5px 10px; border-radius:6px; margin-bottom:4px; background:var(--io-c-soft); color:var(--io-c); border:1px dashed var(--io-c);}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{display:flex; align-items:center; gap:10px; margin-bottom:24px; font-size:.88rem; color:var(--ink-dim); flex-wrap:wrap;}
+.prev-post a{font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--node-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>MySQL / InnoDB 存储引擎系列 · 第八篇</div>
+    <h1>往一个不在内存里的二级索引页插数据,InnoDB 图省事的办法是什么?</h1>
+    <p>第三篇讲过 Buffer Pool 怎么决定谁该留在内存里。这篇讲一个更直接的问题:如果要改的那个二级索引页<b>压根不在</b>内存里呢?老实的做法是先把它从磁盘读进来,改完,总有一天再刷回去——但如果这是一次随机写入(比如按用户 ID 建的索引,插入顺序跟用户 ID 毫无关系),每次插入都可能对应一次随机磁盘读,非常昂贵。change buffer 就是用来省掉这次读的。</p>
+    <p>本机真实实测:重启拿到一个空的 Buffer Pool,往一个已有 50 万行、二级索引值随机分布的表里插入 1 万行,change buffer 立刻用数字证明了自己在干活。</p>
+    <div class="hero-fact">
+      <div><div class="num">1 → 44 页</div><div class="lbl">插入 1 万行随机数据后,change buffer 自身占用的页数</div></div>
+      <div><div class="num">161 → 9166</div><div class="lbl">一次索引全扫描之后,累计合并的插入记录数</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <div class="prev-post">← 接上篇 <a href="prefix.html" target="_blank" rel="noopener">复合索引的列顺序,为什么不能随便排</a></div>
+  <h2>change buffer 是什么</h2>
+  <p class="h2-sub">它自己也是系统表空间里的一棵 B+树——不是内存结构,是磁盘上存在的一棵索引,专门用来"寄存"那些还没来得及应用的修改。</p>
+  <div class="cards">
+    <div class="card node">
+      <span class="tag">缓冲条件</span>
+      <h3>只对非唯一二级索引生效</h3>
+      <p>聚簇索引和唯一索引都不参与——唯一索引插入必须立刻读页检查有没有冲突,没法拖后。</p>
+    </div>
+    <div class="card key">
+      <span class="tag">寄存位置</span>
+      <h3>按 (space_id, page_no) 建索引</h3>
+      <p>缓冲的修改记录本身按"属于哪个表空间的哪一页"来组织,方便日后按页查找、按页合并。</p>
+    </div>
+    <div class="card io">
+      <span class="tag">合并时机</span>
+      <h3>页被读入内存的那一刻</h3>
+      <p>不管这个页是因为什么原因被读进来的——一次查询、一次后台预读——只要它进了 Buffer Pool,之前攒下的修改就会立刻应用上去。</p>
+    </div>
+  </div>
+  <blockquote class="src">
+    <span class="path">storage/innobase/include/ibuf0ibuf.h · <a href="https://github.com/mysql/mysql-server/blob/mysql-9.7.1/storage/innobase/include/ibuf0ibuf.h#L78" target="_blank" rel="noopener">mysql-server @ mysql-9.7.1, L78</a></span>
+The purpose of the insert buffer is to reduce random disk access.
+When we wish to insert a record into a non-unique secondary index and
+the B-tree leaf page where the record belongs to is not in the buffer
+pool, we insert the record into the insert buffer B-tree, indexed by
+(space_id, page_no). When the page is eventually read into the buffer
+pool, we look up the insert buffer B-tree for any modifications to the
+page, and apply these upon the completion of the read operation. This
+is called the insert buffer merge.
+  </blockquote>
+  <p>"insert buffer"是历史遗留名字——现在正式叫 change buffer,因为它不只缓冲插入,也缓冲二级索引记录的删除标记(delete-mark)和真正的物理删除(purge)。源码里对应的三种操作类型和 <span class="mono">SHOW ENGINE INNODB STATUS</span> 里看到的字段名完全对得上:</p>
+  <blockquote class="src">
+    <span class="path">storage/innobase/include/ibuf0ibuf.h</span>
+typedef enum {
+  IBUF_OP_INSERT = 0,
+  IBUF_OP_DELETE_MARK = 1,
+  IBUF_OP_DELETE = 2,
+} ibuf_op_t;
+  </blockquote>
+</section>
+
+<section>
+  <h2>实验:插入 1 万行随机数据,change buffer 真的在干活</h2>
+  <p class="h2-sub">表 <span class="mono">orders(id, user_id, note)</span>,已有 50 万行、<span class="mono">user_id</span> 随机分布在 0~200 万之间,二级索引 <span class="mono">idx_user_id</span> 是非唯一索引。重启拿到一个真正冷的 Buffer Pool 之后,插入 1 万行新的随机 <span class="mono">user_id</span>。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cm">-- 重启后,基线状态</span>
+<span class="ok">Ibuf: size 1, free list len 0, seg size 2, 0 merges
+merged operations: insert 0, delete mark 0, delete 0</span>
+
+<span class="cm">-- 插入 1 万行随机 user_id(没有做任何查询,没有主动读页)</span>
+<span class="cmd">INSERT INTO orders (user_id, note) SELECT FLOOR(RAND()*2000000), ... ;</span>
+
+<span class="cm">-- 插入完成后,change buffer 自己长大了</span>
+<span class="ok">Ibuf: size 44, free list len 26, seg size 71, 51 merges
+merged operations: insert 161, delete mark 0, delete 0</span>
+
+<span class="cm">-- 做一次覆盖整个 user_id 范围的索引扫描,强制把所有相关页读进内存</span>
+<span class="cmd">SELECT COUNT(*) FROM orders FORCE INDEX(idx_user_id) WHERE user_id BETWEEN 0 AND 2000000;</span>
+
+<span class="cm">-- 扫描把攒下的修改几乎全部合并掉了</span>
+<span class="ok">Ibuf: size 1, free list len 69, seg size 71, 850 merges
+merged operations: insert 9166, delete mark 0, delete 0</span>
+  </div>
+  <p><span class="mono">Ibuf: size</span> 就是 change buffer 这棵 B+树当前占用的页数——插入前是 1(接近空),插入 1 万行随机数据后涨到 44,说明有大量修改被暂存在这里,而不是立刻写回各自的目标页。<span class="mono">merged operations: insert</span> 是累计已经真正合并到目标页的记录数——扫描前只有 161,扫描后跳到 9166,涨了 9000 多,而 change buffer 自身又缩回了 1 页(<span class="mono">free list len</span> 从 26 涨到 69,说明大量曾经被占用的页被释放归还了)。</p>
+  <div class="callout">
+    有个细节值得说清楚:插入阶段就已经有 51 次合并、161 条记录被合并了,不是全部 1 万条插入都进了 change buffer。这是正常的——插入过程中如果目标页因为别的原因(比如同一批插入连续命中了同一页、或者页分裂后新页恰好在内存里)已经在 Buffer Pool 里,就会直接写,不用缓冲;change buffer 只在"目标页确实不在内存里"这个条件成立时才起作用。
+  </div>
+</section>
+
+<section>
+  <h2>演示:一条记录从缓冲到合并的完整过程</h2>
+  <p class="h2-sub">用一个最小场景复现四种情况:聚簇索引直接写、二级索引命中已在内存的页直接写、二级索引命中冷页被缓冲、唯一索引即使目标页是冷的也不能缓冲。</p>
+  <div class="demo" id="cbDemo">
+    <div class="demo-head"><div class="demo-title">page P1(热)、P2/P3(冷)、P4(冷,唯一索引)</div></div>
+    <div class="demo-narration" id="cbNarration"></div>
+    <div class="demo-body">
+      <div class="panels">
+        <div class="panel">
+          <h4>页状态(Buffer Pool)</h4>
+          <div id="cbPages"></div>
+        </div>
+        <div class="panel">
+          <h4>change buffer(尚未合并的记录)</h4>
+          <div id="cbBuffer"></div>
+        </div>
+      </div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="cbReset">⏮ 重来</button>
+      <button class="btn" id="cbPrev">‹ 上一步</button>
+      <button class="btn primary" id="cbNext">下一步 ›</button>
+      <button class="btn" id="cbPlay">▶ 自动播放</button>
+      <span class="step-counter" id="cbCounter"></span>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>不是没有代价</h2>
+  <p class="h2-sub">change buffer 省下的是"立刻读盘"这一步,不是把工作量变没。</p>
+  <table class="mono">
+    <tr><th>配置项</th><th>默认值</th><th>含义</th></tr>
+    <tr><td>innodb_change_buffering</td><td>all</td><td>insert/delete-mark/purge 全部可以缓冲</td></tr>
+    <tr><td>innodb_change_buffer_max_size</td><td>5</td><td>change buffer 最多占 Buffer Pool 的 5%(源码常量 <span class="mono">CHANGE_BUFFER_DEFAULT_SIZE=5</span>,与实测值完全一致)</td></tr>
+  </table>
+  <p>这 5% 的上限意味着 change buffer 不能无限攒下去——攒满了照样得合并。而且合并这件事最终还是要发生,只是被<b>推迟并且很可能被合并成一批</b>:同一个页如果攒了好几条修改,等它真的被读进内存时,是一次性把所有攒下的修改都应用上,而不是当初插入时的那么多次零散读盘。对写多读少、二级索引值分布又足够随机(比如上一篇提到的"选择性高"的列)的场景,这个"延后 + 合并"能省下大量原本会打在磁盘上的随机 I/O。</p>
+  <div class="callout key">
+    反过来想:如果二级索引是<b>单调递增</b>的(比如按时间戳建的索引),新插入总是落在最后一页,而最后一页几乎总是在内存里(第三篇讲过,活跃页会一直被访问、一直是热的)——这种场景下 change buffer 基本用不上,因为条件"目标页不在内存里"很少成立。change buffer 帮的是那些插入位置东一下西一下、真会命中冷页的场景,这也是为什么第七篇提到"选择性高的列适合放索引前面"和这里是同一类权衡的另一面:值分布越随机,查询越受益,但写入的随机 I/O 压力也越大——change buffer 正是用来缓解后者的。
+  </div>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文的核心实验在本机运行的 MySQL 9.7.1 上完成:重启获得真正冷的 Buffer Pool 后(与第三篇同样的手法,清除 <span class="mono">ib_buffer_pool</span> 转储文件),对一张 50 万行、二级索引值随机分布的表做插入和索引扫描,<span class="mono">SHOW ENGINE INNODB STATUS</span> 的 <span class="mono">INSERT BUFFER AND ADAPTIVE HASH INDEX</span> 段落均为抓取,未做任何删改。</li>
+      <li>源码引用(<span class="mono">ibuf0ibuf.h</span> 的模块说明注释、<span class="mono">ibuf_op_t</span>/<span class="mono">ibuf_use_t</span> 枚举、<span class="mono">CHANGE_BUFFER_DEFAULT_SIZE</span> 常量、"Does not do it if the index is clustered or unique"的排除规则)取自 <span class="mono">mysql/mysql-server</span> 仓库 <span class="mono">mysql-9.7.1</span> 标签(commit <span class="mono">a26ea1a2</span>),与本机安装的 MySQL 9.7.1 完全一致。</li>
+      <li>演示动画是源码规则的简化建模(4 个页、4 条修改),用来把"缓冲 vs 直接写 vs 合并"这三种走向的判定条件讲清楚,不是对 change buffer 内部 B+树结构的还原; change buffer 里的记录本身也是按页组织、按需合并的,但物理存储格式比这里复杂得多。</li>
+      <li>没有涉及:change buffer 位图页(每个数据页在 change buffer 里对应的可用空间标记)的具体结构、change buffer 达到 5% 上限后的强制合并策略、崩溃恢复时 change buffer 本身如何参与 redo(它自己也是受 redo log 保护的普通 InnoDB 页)。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="twopc.html" target="_blank" rel="noopener" style="text-decoration:none; color:inherit;">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">redo log 和 binlog 是怎么保持一致的</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>InnoDB B+树系列 · 第八篇 · Change Buffer · 数据来自本机 MySQL 9.7.1 真实实测</footer>
+
+<script>
+const DATA = {"events": [{"page": "P1", "value": "A", "type": "seed"}, {"indexKind": "clustered", "page": "P1", "value": "row-100", "reason": "聚簇索引/唯一索引不参与 change buffer,必须立刻检查/写入", "type": "direct-apply"}, {"indexKind": "secondary", "page": "P1", "value": "idx-100", "reason": "目标页已经在内存里,直接写,没必要缓冲", "type": "direct-apply"}, {"indexKind": "secondary", "page": "P2", "value": "idx-200", "reason": "二级索引 + 非唯一 + 目标页不在内存 -> 缓冲,不触发读盘", "type": "buffer"}, {"indexKind": "secondary", "page": "P2", "value": "idx-201", "reason": "二级索引 + 非唯一 + 目标页不在内存 -> 缓冲,不触发读盘", "type": "buffer"}, {"indexKind": "secondary", "page": "P3", "value": "idx-300", "reason": "二级索引 + 非唯一 + 目标页不在内存 -> 缓冲,不触发读盘", "type": "buffer"}, {"page": "P4", "reason": "这个页因为别的原因被读入了内存", "type": "page-read-in"}, {"indexKind": "unique", "page": "P4", "value": "idx-400", "reason": "聚簇索引/唯一索引不参与 change buffer,必须立刻检查/写入", "type": "direct-apply"}, {"page": "P2", "reason": "查询触发了这个页的读入", "type": "page-read-in"}, {"page": "P2", "mergedCount": 2, "mergedValues": ["idx-200", "idx-201"], "pageContentsAfter": ["idx-200", "idx-201"], "type": "merge"}]};
+
+(function(){
+  const events = DATA.events;
+  const pagesBox = document.getElementById('cbPages');
+  const bufferBox = document.getElementById('cbBuffer');
+  const narration = document.getElementById('cbNarration');
+  const counter = document.getElementById('cbCounter');
+  let idx = 0, playing=false, playTimer=null;
+
+  function describe(e){
+    switch(e.type){
+      case 'seed': return `页 <span class="k">${e.page}</span> 已经在内存里,原本有一条记录 ${e.value}。`;
+      case 'direct-apply': return `${e.indexKind==='clustered'?'聚簇索引':e.indexKind==='unique'?'唯一索引':'二级索引'}写入页 <span class="k">${e.page}</span>,值 ${e.value}——${e.reason}。`;
+      case 'buffer': return `二级索引写入页 <span class="k">${e.page}</span>,值 ${e.value}——${e.reason}。`;
+      case 'page-read-in': return `页 <span class="k">${e.page}</span> 被读入内存(${e.reason})。`;
+      case 'merge': return `合并!页 <span class="k">${e.page}</span> 之前攒下的 ${e.mergedCount} 条修改(${e.mergedValues.join(', ')})现在被应用上了。`;
+      default: return e.type;
+    }
+  }
+
+  function render(){
+    idx = Math.max(0, Math.min(events.length-1, idx));
+    const e = events[idx];
+    narration.innerHTML = describe(e);
+
+    const resident = new Set();
+    const pageContents = {};
+    const cbuf = {};
+    for (let i=0;i<=idx;i++){
+      const ev = events[i];
+      if (ev.type==='seed'){ resident.add(ev.page); (pageContents[ev.page]=pageContents[ev.page]||[]).push(ev.value); }
+      if (ev.type==='direct-apply'){ resident.add(ev.page); (pageContents[ev.page]=pageContents[ev.page]||[]).push(ev.value); }
+      if (ev.type==='buffer'){ (cbuf[ev.page]=cbuf[ev.page]||[]).push(ev.value); }
+      if (ev.type==='page-read-in'){ resident.add(ev.page); }
+      if (ev.type==='merge'){ (pageContents[ev.page]=pageContents[ev.page]||[]).push(...ev.mergedValues); delete cbuf[ev.page]; }
+    }
+
+    const allPages = ['P1','P2','P3','P4'];
+    let pagesHtml = '';
+    allPages.forEach(p=>{
+      const isResident = resident.has(p);
+      const contents = (pageContents[p]||[]).join(', ') || '(空)';
+      pagesHtml += `<div class="pagebox ${isResident?'resident':''}"><span>${p}: ${contents}</span><span class="status">${isResident?'在内存':'不在内存'}</span></div>`;
+    });
+    pagesBox.innerHTML = pagesHtml;
+
+    let bufHtml = '';
+    for (const p in cbuf){
+      if (cbuf[p].length===0) continue;
+      bufHtml += `<div class="cbrow">页 ${p}: ${cbuf[p].join(', ')}</div>`;
+    }
+    bufferBox.innerHTML = bufHtml || '<span style="color:var(--ink-dim); font-size:.85rem;">(当前没有待合并的记录)</span>';
+
+    counter.textContent = `${idx+1} / ${events.length}`;
+    document.getElementById('cbPrev').disabled = idx===0;
+    document.getElementById('cbNext').disabled = idx===events.length-1;
+  }
+  document.getElementById('cbPrev').onclick=()=>{idx--;render();stopPlay();};
+  document.getElementById('cbNext').onclick=()=>{idx++;render();stopPlay();};
+  document.getElementById('cbReset').onclick=()=>{idx=0;render();stopPlay();};
+  function stopPlay(){ playing=false; clearInterval(playTimer); document.getElementById('cbPlay').textContent='▶ 自动播放'; }
+  document.getElementById('cbPlay').onclick=()=>{
+    if(playing){ stopPlay(); return; }
+    playing=true; document.getElementById('cbPlay').textContent='⏸ 暂停';
+    playTimer = setInterval(()=>{
+      if(idx>=events.length-1){ stopPlay(); return; }
+      idx++; render();
+    }, 1100);
+  };
+  render();
+})();
+</script>
+
+</body>
+</html>

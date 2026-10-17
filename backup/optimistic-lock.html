@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>乐观锁重试:版本号检查失败后,为什么必须重新查一次,不能拿着旧版本号硬撞</title>
+<meta name="description" content="用 SQLite + 多线程复现乐观锁的完整对照:裸读改写在并发下丢失 180/200 次更新;加了 version 校验但不重试,79 次成功、121 次被安静放弃;完整重试循环(重新读+重新算+重新写)做到 200/200 分毫不差,平均重试 3.04 次;拿着旧版本号硬撞的错误重试,卡死 82 次永远失败。">
+<link rel="canonical" href="https://bigywater.tech/optimistic-lock.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="乐观锁重试:版本号检查失败后,为什么必须重新查一次,不能拿着旧版本号硬撞">
+<meta property="og:description" content="用 SQLite + 多线程复现乐观锁的完整对照:裸读改写在并发下丢失 180/200 次更新;加了 version 校验但不重试,79 次成功、121 次被安静放弃;完整重试循环(重新读+重新算+重新写)做到 200/200 分毫不差,平均重试 3.04 次;拿着旧版本号硬撞的错误重试,卡死 82 次永远失败。">
+<meta property="og:url" content="https://bigywater.tech/optimistic-lock.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="乐观锁重试:版本号检查失败后,为什么必须重新查一次,不能拿着旧版本号硬撞">
+<meta name="twitter:description" content="用 SQLite + 多线程复现乐观锁的完整对照:裸读改写在并发下丢失 180/200 次更新;加了 version 校验但不重试,79 次成功、121 次被安静放弃;完整重试循环(重新读+重新算+重新写)做到 200/200 分毫不差,平均重试 3.04 次;拿着旧版本号硬撞的错误重试,卡死 82 次永远失败。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#FAF6F4; --paper:#FFFFFF; --ink:#241A18; --ink-dim:#7A6360; --line:#EBDEDC;
+  --io-c:#A13D3D; --io-c-soft:#F7E7E5;
+  --mem-c:#B8791E; --mem-c-soft:#F6ECD9;
+  --meta-c:#7B4FA8; --meta-c-soft:#EFE6F7;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241716; --code-ink:#F2E6E4;
+  --shadow: 0 1px 2px rgba(35,20,18,.06), 0 8px 24px -12px rgba(35,20,18,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#180F0E; --paper:#241917; --ink:#F2E6E4; --ink-dim:#B39A96; --line:#3A2825;
+    --io-c:#E27A7A; --io-c-soft:#3A2323;
+    --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+    --meta-c:#B08AE0; --meta-c-soft:#332545;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#120B0A; --code-ink:#E6D9D7;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#180F0E; --paper:#241917; --ink:#F2E6E4; --ink-dim:#B39A96; --line:#3A2825;
+  --io-c:#E27A7A; --io-c-soft:#3A2323;
+  --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+  --meta-c:#B08AE0; --meta-c-soft:#332545;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#120B0A; --code-ink:#E6D9D7;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--io-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--io-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--io-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--io-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9A8A4; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--io-c); background:var(--io-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--ok-c); background:var(--ok-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--io-c-soft); color:var(--io-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E0AFA8;}
+.term pre.code{margin:0 0 10px; color:#E0AFA8; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--mem-c-soft); color:var(--mem-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:22px 20px;}
+.thread-table{width:100%; border-collapse:collapse; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem;}
+.thread-table th{text-align:left; padding:6px 10px; color:var(--ink-dim); font-size:.7rem; text-transform:uppercase; letter-spacing:.04em; border-bottom:1px solid var(--line);}
+.thread-table td{padding:6px 10px; border-bottom:1px solid var(--line);}
+.thread-table tr.current td{background:var(--io-c-soft);}
+.stage-tag{padding:2px 8px; border-radius:5px; font-size:.76rem;}
+.stage-tag.ok{background:var(--ok-c-soft); color:var(--ok-c);}
+.stage-tag.fail{background:var(--io-c-soft); color:var(--io-c);}
+.stage-tag.wait{background:var(--line); color:var(--ink-dim);}
+.stat-row{display:flex; gap:16px; flex-wrap:wrap; margin:14px 0 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem;}
+.stat{border:1px solid var(--line); border-radius:8px; padding:8px 12px; background:var(--bg);}
+.stat b{color:var(--io-c); display:block; font-size:1rem; font-variant-numeric:tabular-nums;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--io-c); color:var(--io-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--io-c); border-color:var(--io-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>并发控制实战</div>
+    <h1>乐观锁的 version 检查失败之后,为什么必须重新查一次,不能拿着旧版本号硬撞</h1>
+    <p>接着<a href="lock-ordering.html" target="_blank" rel="noopener">上一篇</a>提过一句的乐观锁,这次用 SQLite + 多线程跑出完整对照组:裸读改写在并发下会不会真的丢更新、只做版本校验不重试会怎样、正确的重试循环要重试多少次才能追平、以及"重试时偷懒不重新读"这个常见错误写法到底错在哪。四组数据放在一起看,乐观锁这套东西才不是一句"加个 version 字段"就完了。</p>
+    <div class="hero-fact">
+      <div><div class="num">180/200 次丢失</div><div class="lbl">本机真实实测:裸读改写(没有任何保护),10 个线程并发自增,丢了 180 次更新</div></div>
+      <div><div class="num">200/200 正确</div><div class="lbl">本机真实实测:完整的"重新读+重新算+重新写"重试循环,平均重试 3.04 次,结果分毫不差</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <h2>真实实测:裸读改写,并发下丢失更新</h2>
+  <p class="h2-sub">10 个线程,每个线程对同一行做 20 次"读余额 → 加 1 → 写回去",中间故意留一点点延迟拉大竞争窗口。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">def naive_increment(n):
+    for _ in range(n):
+        balance = conn.execute("SELECT balance FROM accounts WHERE id=1").fetchone()[0]
+        time.sleep(0.001)
+        conn.execute("UPDATE accounts SET balance=? WHERE id=1", (balance + 1,))
+        conn.commit()
+
+# 10 个线程,每个线程跑 20 次</pre>
+<span class="bad">期望最终余额: 200
+最终余额: 20
+丢失的更新次数: 180</span>
+  </div>
+  <p>200 次自增,只有 20 次真正生效。问题出在"读"和"写"之间那个窗口——线程 A 读到 5,线程 B 也读到 5(A 还没来得及写回去),两个线程各自在自己的内存里算出"应该是 6",分别写回去,后写的那个直接覆盖掉先写的那个,相当于两次自增只留下了一次的效果。这就是经典的"丢失更新"(lost update),而且<b>数据库不会报任何错</b>——两条 <span class="mono">UPDATE</span> 语句各自都执行成功了,只是它们都不知道对方的存在。</p>
+</section>
+
+<section>
+  <h2>源码 / 机制:version 字段怎么让"覆盖"变成"察觉"</h2>
+  <p class="h2-sub">思路很朴素:给每一行加一个 <span class="mono">version</span>,写的时候把"我读到的那个版本号"也放进 <span class="mono">WHERE</span> 里。</p>
+  <blockquote class="src">
+    <span class="path">乐观锁的核心 SQL</span>
+UPDATE accounts
+SET balance = ?, version = version + 1
+WHERE id = ? AND version = ?   -- 最后这个 version,必须是"这一轮读到的"那个值
+  </blockquote>
+  <p>这条语句的返回值(受影响行数)是判断依据:</p>
+  <table class="mono">
+    <thead><tr><th>场景</th><th>WHERE 条件</th><th>受影响行数</th><th>含义</th></tr></thead>
+    <tbody>
+      <tr><td>没人抢先改过</td><td>version 还是我读到的那个</td><td>1</td><td>更新成功,version 自增</td></tr>
+      <tr><td>有人抢先改过</td><td>version 已经变了,匹配不上</td><td>0</td><td>更新失败,但不报错、不阻塞</td></tr>
+    </tbody>
+  </table>
+  <p>受影响行数是 0 这件事本身,就是"发生冲突"的全部信号——不需要额外查一次锁表,不需要等谁释放什么,一条 <span class="mono">UPDATE</span> 就把"检测"和"占用"合并成了一个原子操作。</p>
+</section>
+
+<section>
+  <h2>真实实测:只检测不重试,冲突的那部分直接被放弃</h2>
+  <p class="h2-sub">加上 <span class="mono">version</span> 校验,但冲突之后不做任何补救——受影响行数是 0 就当这次自增没发生过。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">cur = conn.execute(
+    "UPDATE accounts SET balance=?, version=version+1 WHERE id=1 AND version=?",
+    (balance + 1, version),
+)
+conn.commit()
+if cur.rowcount == 1:
+    success_count += 1
+else:
+    conflict_count += 1   # 冲突了,但这一版没有重试,直接放弃</pre>
+<span class="ok">成功次数: 79, 冲突(被放弃)次数: 121
+成功+冲突 = 200(应该等于 200)</span>
+  </div>
+  <p>这次余额不会再被错误覆盖——79 次成功的自增,每一次都对应生效的一次 <span class="mono">+1</span>,没有任何一次被悄悄吞掉或者重复计算。但代价是 121 次原本该发生的自增,因为撞上了版本冲突,就这么被扔掉了。<span class="mono">version</span> 校验解决的是"正确性"(不会覆盖别人的修改),但只有校验、没有重试,解决不了"完整性"(该做的事情有没有真的做完)。</p>
+</section>
+
+<section>
+  <h2>真实实测:补上完整的重试循环,200/200 分毫不差</h2>
+  <p class="h2-sub">冲突之后,回到最开始重新读一遍——不是重试那条 <span class="mono">UPDATE</span>,是重新走一遍"读、算、写"整个流程。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">while True:
+    balance, version = conn.execute(
+        "SELECT balance, version FROM accounts WHERE id=1").fetchone()
+    time.sleep(0.001)
+    cur = conn.execute(
+        "UPDATE accounts SET balance=?, version=version+1 WHERE id=1 AND version=?",
+        (balance + 1, version),
+    )
+    conn.commit()
+    if cur.rowcount == 1:
+        break   # 成功,退出重试循环
+    # 失败:什么都不用手动回滚,直接回到 while 开头重新 SELECT</pre>
+<span class="ok">最终余额: 200
+总尝试次数: 608(含重试)
+平均每次自增重试次数: 3.04
+单次自增最多重试到第 50 次
+总耗时: 0.40s</span>
+  </div>
+  <p>200 次自增,一次不多一次不少。代价是多花了 <span class="mono">608 - 200 = 408</span> 次"白跑"的尝试(平均每次自增要撞 3 次墙才能成功一次),运气最差的那一次撞了 50 次才成功——这就是乐观锁在高竞争场景下的成本:不会死锁,不会丢数据,但热点行争用激烈的时候,重试次数会地涨上去,浪费掉的数据库往返也是的开销。</p>
+</section>
+
+<section>
+  <h2>真实实测:重试时偷懒用旧版本号硬撞,卡死近一半</h2>
+  <p class="h2-sub">一个常见的错误写法:重试时嫌重新 <span class="mono">SELECT</span> 麻烦,直接拿第一次读到的 <span class="mono">balance</span>/<span class="mono">version</span> 反复撞。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">balance, version = conn.execute("SELECT balance, version FROM accounts WHERE id=1").fetchone()
+newBalance = balance + 1
+
+for attempt in range(5):
+    cur = conn.execute(
+        "UPDATE accounts SET balance=?, version=version+1 WHERE id=1 AND version=?",
+        (newBalance, version),   # 5 次重试,用的是同一份 stale 的 version
+    )
+    conn.commit()
+    if cur.rowcount == 1:
+        break
+else:
+    give_up_count += 1</pre>
+<span class="bad">最终余额: 118
+彻底放弃的次数(重试 5 次都用同一份旧 version,全部失败): 82</span>
+  </div>
+  <p>200 次里有 82 次彻底失败,不是因为运气差撞了 5 次都不巧,而是<b>这份写法只要第一次撞上冲突,后面 5 次重试就注定全部失败</b>——<span class="mono">version</span> 只会越来越新,从来不会变回你手里这份旧值,拿着一个永远不可能再匹配上的条件反复执行同一条 <span class="mono">UPDATE</span>,跟完全不重试没有本质区别,只是徒增了几次无意义的数据库往返。这也是"必须重新查一次"这句话背后的原因:重试的意义在于拿到<b>新的</b>版本号,而不是"再给旧版本号一次机会"。</p>
+</section>
+
+<section>
+  <h2>演示:两个并发写者,一次冲突和一次成功重试</h2>
+  <p class="h2-sub">简化到两个线程、一次冲突,看 <span class="mono">version</span> 从 0 涨到 2 的完整过程。</p>
+  <div class="demo" id="olDemo">
+    <div class="demo-head">乐观锁冲突与重试 · 时间线</div>
+    <div class="demo-narration" id="olNarration"></div>
+    <div class="demo-body">
+      <table class="thread-table" id="olTable">
+        <thead><tr><th>步骤</th><th>操作</th><th>结果</th></tr></thead>
+        <tbody id="olTableBody"></tbody>
+      </table>
+      <div class="stat-row" id="olStats"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="olReset">⏮ 重来</button>
+      <button class="btn" id="olPrev">‹ 上一步</button>
+      <button class="btn primary" id="olNext">下一步 ›</button>
+      <button class="btn" id="olPlay">▶ 自动播放</button>
+      <span class="step-counter" id="olCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">对应上面"完整重试循环"那组实验的最小复现:两个线程同时读到 <span class="mono">version=0</span>,一个先写成功、另一个冲突后重新读到新版本号再写,最终两次自增都生效,和压测的正确性结论一致。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文全部实验(裸读改写的丢失更新、只校验不重试的成功/冲突计数、完整重试循环的正确性与重试次数统计、错误的"旧版本号硬撞"重试的失败率)均在本机运行的 Python 3 + SQLite 上用多线程(10 线程 × 20 次/线程)完成,每次自增之间插入的毫秒级延迟以稳定复现竞争窗口,数据未做删改。</li>
+      <li>死锁与乐观锁的对照参见<a href="lock-ordering.html" target="_blank" rel="noopener">转账系统的死锁</a>那篇;数据库(InnoDB)自己的悲观锁 + 死锁检测机制参见<a href="deadlock.html" target="_blank" rel="noopener">InnoDB 是怎么发现并解开死锁的</a>——三篇合起来覆盖了"悲观锁排序""数据库自己兜底""应用层乐观锁"这三条并发控制的主流思路。</li>
+      <li>演示动画的冲突与重试时间线直接对应实验里"完整重试循环"这组代码的执行逻辑,version 从 0 到 2 的变化过程和的 SQLite <span class="mono">rowcount</span> 判断结果一致。</li>
+      <li>没有涉及:乐观锁在多行(比如两账户转账)场景下的原子性权衡(拆成独立提交换取无死锁、但需要额外补偿机制,已在<a href="lock-ordering.html" target="_blank" rel="noopener">上一篇</a>的现实系统延伸里讨论过)、重试之间加随机退避对吞吐量的实际影响、SQLite 自身的文件级锁与生产数据库(行级锁)在高并发写入下行为的差异。</li>
+    </ul>
+  </div>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>并发控制实战 · 乐观锁重试 · 数据来自本机运行的 Python 3 + SQLite</footer>
+
+<script>
+const DATA = {"events": [
+  {"who": "A", "op": "SELECT balance, version", "result": "读到 balance=10, version=0"},
+  {"who": "B", "op": "SELECT balance, version", "result": "读到 balance=10, version=0(和 A 读到的一样)"},
+  {"who": "A", "op": "UPDATE ... WHERE version=0", "result": "成功,version 变成 1,balance=11"},
+  {"who": "B", "op": "UPDATE ... WHERE version=0", "result": "失败(rowcount=0)——version 已经不是 0 了"},
+  {"who": "B", "op": "重新 SELECT balance, version", "result": "读到 balance=11, version=1(拿到最新值)"},
+  {"who": "B", "op": "UPDATE ... WHERE version=1", "result": "成功,version 变成 2,balance=12"}
+]};
+
+(function(){
+  const events = DATA.events;
+  const totalSteps = events.length;
+  const tbody = document.getElementById('olTableBody');
+  const narration = document.getElementById('olNarration');
+  const statsBox = document.getElementById('olStats');
+  const counter = document.getElementById('olCounter');
+  let idx = 0, playing=false, playTimer=null;
+
+  function describe(i){
+    const e = events[i];
+    return `<span class="k">线程 ${e.who}</span>:${e.op} &rarr; ${e.result}`;
+  }
+
+  function render(){
+    idx = Math.max(0, Math.min(totalSteps-1, idx));
+    narration.innerHTML = describe(idx);
+
+    tbody.innerHTML = events.map((e, i) => {
+      if (i > idx) return `<tr><td colspan="3" style="color:var(--ink-dim)">(还没发生)</td></tr>`;
+      const isFail = e.result.includes('失败');
+      const isOk = e.result.includes('成功') || e.result.includes('读到');
+      const stage = isFail ? 'fail' : 'ok';
+      const label = isFail ? '✗ 冲突' : '✓';
+      return `<tr class="${i===idx ? 'current' : ''}"><td>线程 ${e.who}</td><td>${e.op}</td><td><span class="stage-tag ${stage}">${label}</span> ${e.result}</td></tr>`;
+    }).join('');
+
+    const finalBalance = idx >= 5 ? 12 : (idx >= 2 ? 11 : 10);
+    statsBox.innerHTML = `<div class="stat">当前步骤<b>${idx+1} / ${totalSteps}</b></div><div class="stat">此刻余额<b>${finalBalance}</b></div>`;
+
+    counter.textContent = `${idx+1} / ${totalSteps}`;
+    document.getElementById('olPrev').disabled = idx===0;
+    document.getElementById('olNext').disabled = idx===totalSteps-1;
+  }
+  document.getElementById('olPrev').onclick=()=>{idx--;render();stopPlay();};
+  document.getElementById('olNext').onclick=()=>{idx++;render();stopPlay();};
+  document.getElementById('olReset').onclick=()=>{idx=0;render();stopPlay();};
+  function stopPlay(){ playing=false; clearInterval(playTimer); document.getElementById('olPlay').textContent='▶ 自动播放'; }
+  document.getElementById('olPlay').onclick=()=>{
+    if(playing){ stopPlay(); return; }
+    playing=true; document.getElementById('olPlay').textContent='⏸ 暂停';
+    playTimer = setInterval(()=>{
+      if(idx>=totalSteps-1){ stopPlay(); return; }
+      idx++; render();
+    }, 1300);
+  };
+  render();
+})();
+</script>
+
+</body>
+</html>

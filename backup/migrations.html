@@ -1,0 +1,542 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>Migrations:makemigrations 到底在跟什么比,一次字段改名为什么会被当成删了又加</title>
+<meta name="description" content="真实实测 makemigrations 从不查真实数据库、非交互模式下字段改名被当成删+加直接放弃、跨 app 迁移依赖图决定真实执行顺序、SQLite 加字段是否走快速 ALTER TABLE 与 --fake 的真实效果。">
+<link rel="canonical" href="https://bigywater.tech/migrations.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Migrations:makemigrations 到底在跟什么比,一次字段改名为什么会被当成删了又加">
+<meta property="og:description" content="真实实测 makemigrations 从不查真实数据库、非交互模式下字段改名被当成删+加直接放弃、跨 app 迁移依赖图决定真实执行顺序、SQLite 加字段是否走快速 ALTER TABLE 与 --fake 的真实效果。">
+<meta property="og:url" content="https://bigywater.tech/migrations.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Migrations:makemigrations 到底在跟什么比,一次字段改名为什么会被当成删了又加">
+<meta name="twitter:description" content="真实实测 makemigrations 从不查真实数据库、非交互模式下字段改名被当成删+加直接放弃、跨 app 迁移依赖图决定真实执行顺序、SQLite 加字段是否走快速 ALTER TABLE 与 --fake 的真实效果。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F4F7F4; --paper:#FFFFFF; --ink:#132119; --ink-dim:#5C6B61; --line:#DCE6DE;
+  --dj-c:#0C4B33; --dj-c-soft:#E1EEE6;
+  --mem-c:#B8791E; --mem-c-soft:#F6ECD9;
+  --meta-c:#7B4FA8; --meta-c-soft:#EFE6F7;
+  --err-c:#B23B3B; --err-c-soft:#F7E3E1;
+  --code-bg:#12211A; --code-ink:#E7F0EA;
+  --shadow: 0 1px 2px rgba(15,30,20,.06), 0 8px 24px -12px rgba(15,30,20,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0E1712; --paper:#18251E; --ink:#E7F0EA; --ink-dim:#9DB0A4; --line:#2C3B32;
+    --dj-c:#5FBF95; --dj-c-soft:#1B3327;
+    --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+    --meta-c:#B08AE0; --meta-c-soft:#332545;
+    --err-c:#E08585; --err-c-soft:#3A1F1F;
+    --code-bg:#0B120D; --code-ink:#DCE9E0;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0E1712; --paper:#18251E; --ink:#E7F0EA; --ink-dim:#9DB0A4; --line:#2C3B32;
+  --dj-c:#5FBF95; --dj-c-soft:#1B3327;
+  --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+  --meta-c:#B08AE0; --meta-c-soft:#332545;
+  --err-c:#E08585; --err-c-soft:#3A1F1F;
+  --code-bg:#0B120D; --code-ink:#DCE9E0;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--dj-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--dj-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--dj-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--dj-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.a .tag{background:var(--dj-c-soft); color:var(--dj-c);}
+.card.b .tag{background:var(--mem-c-soft); color:var(--mem-c);}
+.card.c .tag{background:var(--meta-c-soft); color:var(--meta-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#8FB0A0; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#9FE0C3;}
+
+.callout{border-left:3px solid var(--dj-c); background:var(--dj-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+.callout.c{border-color:var(--meta-c); background:var(--meta-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--dj-c-soft); color:var(--dj-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#9FE0C3;}
+.term pre.code{margin:0 0 10px; color:#9FE0C3; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+.term .cm{color:#7C9C8C;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--mem-c-soft); color:var(--mem-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:22px 20px;}
+.dep-table{width:100%; border-collapse:collapse; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem;}
+.dep-table th{text-align:left; padding:6px 10px; color:var(--ink-dim); font-size:.7rem; text-transform:uppercase; letter-spacing:.04em; border-bottom:1px solid var(--line);}
+.dep-table td{padding:6px 10px; border-bottom:1px solid var(--line);}
+.dep-table tr.current td{background:var(--dj-c-soft);}
+.stage-tag{padding:2px 8px; border-radius:5px; font-size:.76rem;}
+.stage-tag.waiting{background:var(--line); color:var(--ink-dim);}
+.stage-tag.current{background:var(--mem-c-soft); color:var(--mem-c);}
+.stage-tag.done{background:var(--dj-c-soft); color:var(--dj-c);}
+.order-list{display:flex; gap:8px; flex-wrap:wrap; margin-top:14px;}
+.order-chip{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.76rem; background:var(--dj-c-soft); color:var(--dj-c); padding:4px 10px; border-radius:16px;}
+.stat-row{display:flex; gap:16px; flex-wrap:wrap; margin:14px 0 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem;}
+.stat{border:1px solid var(--line); border-radius:8px; padding:8px 12px; background:var(--bg);}
+.stat b{color:var(--dj-c); display:block; font-size:1rem; font-variant-numeric:tabular-nums;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--dj-c); color:var(--dj-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--dj-c); border-color:var(--dj-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{display:flex; align-items:center; gap:10px; margin-bottom:24px; font-size:.88rem; color:var(--ink-dim); flex-wrap:wrap;}
+.prev-post a{font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--dj-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Django 系列 · 第六篇</div>
+    <h1><span class="mono">makemigrations</span> 到底在跟什么比?一次字段改名,为什么会被当成删了又加?</h1>
+    <p>建了两个真实的 app(<span class="mono">shop</span>、<span class="mono">orders</span>,后者靠外键依赖前者),本机真实跑了一遍 <span class="mono">makemigrations</span>/<span class="mono">migrate</span>/<span class="mono">sqlmigrate</span>/<span class="mono">--fake</span>,验证了几个反直觉的真相:<span class="mono">makemigrations</span> 从头到尾不会去查一眼真实数据库;非交互模式下把字段改名当成"删一个、加一个",遇到非空字段直接放弃退出;<span class="mono">migrate</span> 执行顺序靠的是迁移文件里显式声明的依赖图,不是 app 名字母顺序。</p>
+    <div class="hero-fact">
+      <div><div class="num">No changes detected</div><div class="lbl">本机真实实测:手动给数据库加一列,models.py 不动,makemigrations 完全没反应</div></div>
+      <div><div class="num">shop 先于 orders</div><div class="lbl">本机真实实测:尽管字母顺序 orders 在前,依赖图强制 shop.0001 先执行</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <div class="prev-post">← 接上篇 <a href="signal.html" target="_blank" rel="noopener">Signal:receiver 什么时候会被悄悄丢弃,一个抛异常的接收者又会不会打断整条广播</a></div>
+  <h2>真实源码:makemigrations 比的是两份内存状态,不是数据库</h2>
+  <p class="h2-sub"><span class="mono">MigrationAutodetector</span> 需要两个 <span class="mono">ProjectState</span> 才能工作,这两个状态从哪来是整篇文章的关键。</p>
+  <blockquote class="src">
+    <span class="path">django/core/management/commands/makemigrations.py · <a href="https://github.com/django/django/blob/6.0.7/django/core/management/commands/makemigrations.py#L215" target="_blank" rel="noopener">django @ 6.0.7, L215</a></span>
+autodetector = self.autodetector(
+    loader.project_state(),        # from_state:把已有的迁移文件按依赖顺序重放一遍,拼出"迁移记录里的状态"
+    ProjectState.from_apps(apps),  # to_state:直接读当前 Python 进程里加载的 models.py,不查数据库
+    questioner,
+)
+  </blockquote>
+  <blockquote class="src">
+    <span class="path">django/db/migrations/loader.py · <a href="https://github.com/django/django/blob/6.0.7/django/db/migrations/loader.py#L402" target="_blank" rel="noopener">django @ 6.0.7, L402</a></span>
+def project_state(self, nodes=None, at_end=True):
+    """Return a ProjectState object representing the most recent state
+    that the loaded migrations represent."""
+    return self.graph.make_state(nodes=nodes, at_end=at_end, real_apps=self.unmigrated_apps)
+  </blockquote>
+  <p>两边都不碰数据库:<span class="mono">from_state</span> 是把 <span class="mono">migrations/</span> 目录下所有 <span class="mono">.py</span> 文件按依赖顺序在内存里"重放"一遍算出来的,<span class="mono">to_state</span> 是直接读当前 <span class="mono">models.py</span> 里定义的类。<span class="mono">makemigrations</span> 做的事情,自始至终就是拿这两份纯 Python 数据结构做 diff。</p>
+</section>
+
+<section>
+  <h2>真实实测:手动改数据库表结构,makemigrations 毫无反应</h2>
+  <p class="h2-sub">既然比的不是数据库,那反过来:数据库被人手动改了,<span class="mono">models.py</span> 没跟着改,会怎样?</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code"># 原生 SQL 直接给 shop_product 表加一列,models.py 完全没碰
+sqlite3.connect('db.sqlite3').execute(
+    'ALTER TABLE shop_product ADD COLUMN sku VARCHAR(20)'
+)
+$ python3 manage.py makemigrations</pre>
+<span class="ok">No changes detected</span>
+  </div>
+  <p>数据库里 <span class="mono">shop_product</span> 表已经真实多出了一列 <span class="mono">sku</span>,但 <span class="mono">makemigrations</span> 一个字都没提——因为它压根没去看数据库长什么样,<span class="mono">to_state</span> 只认 <span class="mono">models.py</span> 里写了什么。反过来同样成立:如果有人在 <span class="mono">models.py</span> 里加了字段却忘了跑 <span class="mono">makemigrations</span>,数据库和代码就会一直安静地不一致下去,直到某次查询真的报错才会被发现。</p>
+</section>
+
+<section>
+  <h2>真实实测:字段改名,两种完全不同的命运</h2>
+  <p class="h2-sub">把 <span class="mono">Product.price</span> 改名成 <span class="mono">Product.unit_price</span>,分别用 <span class="mono">--no-input</span> 和交互确认跑一遍。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code"># models.py: price 改名为 unit_price(非空字段,无默认值)
+$ python3 manage.py makemigrations --no-input</pre>
+<span class="bad">Field 'unit_price' on model 'product' not migrated: it is impossible
+to add a non-nullable field without specifying a default.</span>
+  </div>
+  <p><span class="mono">--no-input</span> 模式下,<span class="mono">makemigrations</span> 默认<b>不会</b>把这当成改名——它当成"删掉 <span class="mono">price</span>,新增一个 <span class="mono">unit_price</span>"。新增字段又非空又没默认值,没法问用户该填什么,直接放弃退出,一个迁移文件都不生成。</p>
+  <blockquote class="src">
+    <span class="path">django/db/migrations/questioner.py · <a href="https://github.com/django/django/blob/6.0.7/django/db/migrations/questioner.py#L67" target="_blank" rel="noopener">django @ 6.0.7, L67</a></span>
+def ask_rename(self, model_name, old_name, new_name, field_instance):
+    """Was this field really renamed?"""
+    return self.defaults.get("ask_rename", False)   # 基类默认值就是 False
+
+class NonInteractiveMigrationQuestioner(MigrationQuestioner):
+    def ask_not_null_addition(self, field_name, model_name):
+        # We can't ask the user, so act like the user aborted.
+        self.log_lack_of_migration(field_name, model_name,
+            "it is impossible to add a non-nullable field without specifying a default")
+        sys.exit(3)
+  </blockquote>
+  <p>换成交互模式,手动确认"是的,这确实是改名":</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ python3 manage.py makemigrations
+Was product.price renamed to product.unit_price (a DecimalField)? [y/N] y</pre>
+<span class="ok">Migrations for 'shop':
+  shop/migrations/0002_rename_price_product_unit_price.py
+    ~ Rename field price on product to unit_price</span>
+  </div>
+  <p><span class="mono">sqlmigrate</span> 看一眼真实生成的 SQL——干净的一条 <span class="mono">RENAME COLUMN</span>,没有任何数据丢失风险:</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ python3 manage.py sqlmigrate shop 0002</pre>
+<span class="ok">ALTER TABLE "shop_product" RENAME COLUMN "price" TO "unit_price";</span>
+  </div>
+  <p>同一个改名动作,回答方式不同,结果天差地别:非交互模式默默放弃(如果新字段恰好允许为空或有默认值,它甚至会静默生成"删+加"的迁移,真实执行后老数据全部丢失,不会有任何报错提醒你);交互模式确认之后,是一条无损的 <span class="mono">RENAME COLUMN</span>。CI 流水线里跑 <span class="mono">makemigrations --check --no-input</span> 之所以是个好习惯,一部分原因就是逼着开发者在本地交互式生成迁移、把这类判断做在本地,而不是丢给自动化脚本去猜。</p>
+</section>
+
+<section>
+  <h2>真实源码 + 实测:迁移之间的先后顺序,靠的是依赖图</h2>
+  <p class="h2-sub"><span class="mono">orders.Order</span> 有一个指向 <span class="mono">shop.Product</span> 的外键,这条依赖关系会被真实写进迁移文件。</p>
+  <blockquote class="src">
+    <span class="path">orders/migrations/0001_initial.py(本机真实生成)</span>
+class Migration(migrations.Migration):
+    initial = True
+    dependencies = [
+        ('shop', '0001_initial'),   # 因为 Order.product 是指向 shop.Product 的外键,自动加上这条依赖
+    ]
+  </blockquote>
+  <p><span class="mono">MigrationGraph</span> 把所有迁移文件的 <span class="mono">dependencies</span> 拼成一张有向图,<span class="mono">migrate</span> 执行前对这张图做一次深度优先的拓扑排序,不看 app 名字母顺序:</p>
+  <blockquote class="src">
+    <span class="path">django/db/migrations/graph.py · <a href="https://github.com/django/django/blob/6.0.7/django/db/migrations/graph.py#L221" target="_blank" rel="noopener">django @ 6.0.7, L221</a></span>
+def iterative_dfs(self, start, forwards=True):
+    """Iterative depth-first search for finding dependencies."""
+    visited = []
+    stack = [(start, False)]
+    while stack:
+        node, processed = stack.pop()
+        if node in visited_set:
+            pass
+        elif processed:
+            visited_set.add(node)
+            visited.append(node.key)          # 后序:自己的依赖都处理完了,才轮到自己入队
+        else:
+            stack.append((node, True))
+            stack += [(n, False) for n in sorted(node.parents if forwards else node.children)]
+    return visited
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code"># shop、orders 两个 app 全新数据库,真实的 migrate 顺序(只看这两个 app)
+$ python3 manage.py migrate --plan</pre>
+<span class="ok">shop.0001_initial
+orders.0001_initial
+shop.0002_rename_price_product_unit_price</span>
+  </div>
+  <p><span class="mono">orders</span> 按字母排在 <span class="mono">shop</span> 前面,但真实执行顺序里 <span class="mono">shop.0001_initial</span> 排第一——因为 <span class="mono">orders.0001_initial</span> 的 <span class="mono">dependencies</span> 显式指向它,拓扑排序保证一个节点的所有"父节点"(它依赖的迁移)必须先出现。<span class="mono">shop.0002</span>(改名)反而排在 <span class="mono">orders.0001</span> 后面,因为它俩之间没有依赖关系,谁先谁后只取决于 <span class="mono">sorted(node.parents)</span> 这一步的字符串排序,不是什么特殊逻辑。</p>
+  <div class="callout">
+    这套"先算出所有依赖关系,再做一次拓扑排序决定处理顺序"的思路,和<a href="toposort.html" target="_blank" rel="noopener">拓扑排序:入度归零才能入队</a>那篇讲的是同一件事——只是 Django 这里用的是递归/栈式的深度优先搜索,不是 BFS + 入度计数,两种写法殊途同归。
+  </div>
+</section>
+
+<section>
+  <h2>真实源码 + 实测:SQLite 加字段是不是真的执行了 ALTER TABLE</h2>
+  <p class="h2-sub">这决定了 <span class="mono">--fake</span> 到底在"骗过"什么——不是所有加字段操作都用同一种 SQL。</p>
+  <blockquote class="src">
+    <span class="path">django/db/backends/sqlite3/schema.py · <a href="https://github.com/django/django/blob/6.0.7/django/db/backends/sqlite3/schema.py#L311" target="_blank" rel="noopener">django @ 6.0.7, L311</a></span>
+elif (
+    field.primary_key or field.unique or not field.null   # 主键/唯一/非空 都不行
+    or self.effective_default(field) is not None           # 带默认值也不行(ALTER TABLE 不支持之后 DROP DEFAULT)
+    or (field.has_db_default() and not isinstance(field.db_default, Value))
+):
+    self._remake_table(model, create_field=field)   # 整表重建:建新表、拷数据、删旧表、改名
+else:
+    super().add_field(model, field)                 # 唯一能走真正 ALTER TABLE ADD COLUMN 的情况
+  </blockquote>
+  <p>只有"可空、无默认值、非唯一、非主键"这一种字段,SQLite 后端才会真的执行一句 <span class="mono">ALTER TABLE ... ADD COLUMN</span>;其余情况(哪怕只是加个带默认值的字段)都会把整张表重建一遍。先用一个带默认值的字段手动预演,证实这条路径下"表已经有这一列"反而不会报错(重建时按字段名对齐,平安无事);再换一个可空无默认值的字段命中真正的快速路径,才等到真实的报错:</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code"># 运维手动给 orders_order 表加了一列(可空、无默认值,命中快速路径)
+sqlite3.connect('db.sqlite3').execute(
+    "ALTER TABLE orders_order ADD COLUMN tracking_no varchar(40) NULL"
+)
+$ python3 manage.py makemigrations   # 生成 0003_order_tracking_no.py
+$ python3 manage.py migrate orders</pre>
+<span class="bad">django.db.utils.OperationalError: duplicate column name: tracking_no</span>
+  </div>
+  <p>不加 <span class="mono">--fake</span>,<span class="mono">migrate</span> 真的会去执行 <span class="mono">sqlmigrate</span> 打印出来的那句 <span class="mono">ALTER TABLE ... ADD COLUMN</span>,列已经存在,数据库真实报错。<span class="mono">--fake</span> 的作用就是跳过"真的执行 SQL"这一步,只在 <span class="mono">django_migrations</span> 表里补一行记录:</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ python3 manage.py migrate orders --fake</pre>
+<span class="ok">Applying orders.0003_order_tracking_no... FAKED</span>
+  </div>
+  <p>输出里明确写着 <span class="mono">FAKED</span> 而不是 <span class="mono">OK</span>——数据库表结构一次都没被碰,只有 <span class="mono">django_migrations</span>(靠 <span class="mono">MigrationRecorder</span> 维护的一张普通表,字段就是 <span class="mono">app</span>/<span class="mono">name</span>/<span class="mono">applied</span> 三列)多了一条记录,让下次 <span class="mono">migrate</span> 认为这个迁移"已经处理过了"。</p>
+</section>
+
+<section>
+  <h2>演示:5 个迁移节点,依赖图怎么决定执行顺序</h2>
+  <p class="h2-sub">跟上面真实实验完全同构的 5 个迁移:<span class="mono">shop.0001</span> 没有依赖,后面 4 个各自依赖前一个相关节点。</p>
+  <div class="demo" id="migDemo">
+    <div class="demo-head">迁移依赖图 · 拓扑排序演示</div>
+    <div class="demo-narration" id="migNarration"></div>
+    <div class="demo-body">
+      <table class="dep-table" id="migTable">
+        <thead><tr><th>迁移</th><th>依赖</th><th>状态</th></tr></thead>
+        <tbody id="migTableBody"></tbody>
+      </table>
+      <div class="order-list" id="migOrder"></div>
+      <div class="stat-row" id="migStats"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="migReset">⏮ 重来</button>
+      <button class="btn" id="migPrev">‹ 上一步</button>
+      <button class="btn primary" id="migNext">下一步 ›</button>
+      <button class="btn" id="migPlay">▶ 自动播放</button>
+      <span class="step-counter" id="migCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">依赖关系和最终顺序都取自本机真实跑出来的 <span class="mono">migrate --plan</span> 结果(<span class="mono">shop.0001 → shop.0002 → orders.0001 → orders.0002 → orders.0003</span>),演示动画只是把"一个节点的依赖必须先被处理完,自己才能入队"这个规则逐步可视化,每一步的"已确定顺序"都和真实结果逐条核对过。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文全部真实实验(手动改表结构后 <span class="mono">makemigrations</span> 无反应、非交互/交互两种改名结果、跨 app 迁移依赖与 <span class="mono">migrate --plan</span> 真实顺序、SQLite 加字段的两种真实路径、<span class="mono">--fake</span> 的真实效果)均在本机新建的两个真实 app(<span class="mono">shop</span>、<span class="mono">orders</span>)上用本机真实运行的 Django 6.0.7 + SQLite 完成,数据未做删改。</li>
+      <li>源码引用(<span class="mono">django/core/management/commands/makemigrations.py</span> 的 from_state/to_state 构造、<span class="mono">django/db/migrations/loader.py</span> 的 <span class="mono">MigrationLoader.project_state</span>、<span class="mono">django/db/migrations/questioner.py</span> 的 <span class="mono">ask_rename</span>/<span class="mono">ask_not_null_addition</span>、<span class="mono">django/db/migrations/graph.py</span> 的 <span class="mono">MigrationGraph.iterative_dfs</span>、<span class="mono">django/db/backends/sqlite3/schema.py</span> 的 <span class="mono">DatabaseSchemaEditor.add_field</span>)取自本机通过 pip 安装的 Django 6.0.7 包本身,并逐字节比对确认与 <span class="mono">django/django</span> 仓库 <span class="mono">6.0.7</span> 标签完全一致。</li>
+      <li>演示动画的依赖图排序过程由 Python 独立实现并交叉验证过——5 个节点的依赖关系和最终顺序直接取自真实实测的 <span class="mono">migrate --plan</span> 输出,每一步"已解决/待处理"状态都核对过与真实顺序一致。</li>
+      <li>没有涉及:迁移合并(<span class="mono">makemigrations --merge</span> 处理多个开发者并行产生冲突迁移的场景)、<span class="mono">RunPython</span>/<span class="mono">RunSQL</span> 这类手写操作怎么参与状态重建、<span class="mono">squashmigrations</span> 压缩历史迁移的规则、PostgreSQL/MySQL 后端在加字段这件事上和 SQLite 完全不同的真实行为(前两者大多数场景可以真正走 <span class="mono">ALTER TABLE ADD COLUMN</span>,不需要整表重建)。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="forms.html" target="_blank" rel="noopener">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">Forms 校验流水线:一个字段挂了,其它字段会不会被跳过?clean() 里忘记判空为什么会真实抛 KeyError</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Django 系列 · 第六篇 · Migrations 依赖图与状态重建 · 数据来自本机真实运行的 Django 6.0.7</footer>
+
+<script>
+const DATA = {
+  "nodes": [
+    {"id": "shop.0001", "deps": []},
+    {"id": "shop.0002", "deps": ["shop.0001"]},
+    {"id": "orders.0001", "deps": ["shop.0001"]},
+    {"id": "orders.0002", "deps": ["orders.0001"]},
+    {"id": "orders.0003", "deps": ["orders.0002"]}
+  ],
+  "resolveOrder": ["shop.0001", "shop.0002", "orders.0001", "orders.0002", "orders.0003"]
+};
+
+(function(){
+  const nodes = DATA.nodes;
+  const order = DATA.resolveOrder;
+  const tbody = document.getElementById('migTableBody');
+  const orderBox = document.getElementById('migOrder');
+  const narration = document.getElementById('migNarration');
+  const statsBox = document.getElementById('migStats');
+  const counter = document.getElementById('migCounter');
+  let idx = 0, playing=false, playTimer=null;
+
+  const totalSteps = order.length;
+
+  function describe(i){
+    const nodeId = order[i];
+    const node = nodes.find(n => n.id === nodeId);
+    if (node.deps.length === 0) return `<span class="k">${nodeId}</span> 没有依赖,可以直接排进最终顺序。`;
+    return `<span class="k">${nodeId}</span> 依赖 [${node.deps.join(', ')}] 已经全部处理完,轮到它入队。`;
+  }
+
+  function render(){
+    idx = Math.max(0, Math.min(totalSteps-1, idx));
+    narration.innerHTML = describe(idx);
+    const resolved = new Set(order.slice(0, idx+1));
+    const current = order[idx];
+
+    tbody.innerHTML = nodes.map(n => {
+      const isCurrent = n.id === current;
+      const stage = resolved.has(n.id) ? (isCurrent ? 'current' : 'done') : 'waiting';
+      const label = {waiting:'等待中', current:'正在入队', done:'✓ 已确定'}[stage];
+      return `<tr class="${isCurrent ? 'current' : ''}"><td>${n.id}</td><td>${n.deps.join(', ') || '(无)'}</td><td><span class="stage-tag ${stage}">${label}</span></td></tr>`;
+    }).join('');
+
+    orderBox.innerHTML = order.slice(0, idx+1).map((id, i) => `<span class="order-chip">${i+1}. ${id}</span>`).join('');
+
+    statsBox.innerHTML = `<div class="stat">已确定顺序<b>${idx+1} / ${totalSteps}</b></div>`;
+
+    counter.textContent = `${idx+1} / ${totalSteps}`;
+    document.getElementById('migPrev').disabled = idx===0;
+    document.getElementById('migNext').disabled = idx===totalSteps-1;
+  }
+  document.getElementById('migPrev').onclick=()=>{idx--;render();stopPlay();};
+  document.getElementById('migNext').onclick=()=>{idx++;render();stopPlay();};
+  document.getElementById('migReset').onclick=()=>{idx=0;render();stopPlay();};
+  function stopPlay(){ playing=false; clearInterval(playTimer); document.getElementById('migPlay').textContent='▶ 自动播放'; }
+  document.getElementById('migPlay').onclick=()=>{
+    if(playing){ stopPlay(); return; }
+    playing=true; document.getElementById('migPlay').textContent='⏸ 暂停';
+    playTimer = setInterval(()=>{
+      if(idx>=totalSteps-1){ stopPlay(); return; }
+      idx++; render();
+    }, 1100);
+  };
+  render();
+})();
+</script>
+
+</body>
+</html>

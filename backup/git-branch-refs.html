@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>Git 分支的本质:创建一个分支,.git/objects 里到底多了几个对象</title>
+<meta name="description" content="真实建两次提交后创建分支,现场数出 .git/objects 对象总数创建前后完全没变(6→6),分支文件本身只有 41 字节;真实验证分支 ref 文件里就是一个 40 位提交哈希加换行符,不是什么特殊结构;在新分支上真实再提交一次,证明 main 分支的 ref 文件内容一字未动;真实对比普通分支和 detached HEAD 下 .git/HEAD 文件内容的区别;真实删掉一个分支后,用它原来指向的哈希直接 cat-file,证明底层 commit 对象根本没被删,只是没有引用再指着它了。">
+<link rel="canonical" href="https://bigywater.tech/git-branch-refs.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Git 分支的本质:创建一个分支,.git/objects 里到底多了几个对象">
+<meta property="og:description" content="真实建两次提交后创建分支,现场数出 .git/objects 对象总数创建前后完全没变(6→6),分支文件本身只有 41 字节;真实验证分支 ref 文件里就是一个 40 位提交哈希加换行符,不是什么特殊结构;在新分支上真实再提交一次,证明 main 分支的 ref 文件内容一字未动;真实对比普通分支和 detached HEAD 下 .git/HEAD 文件内容的区别;真实删掉一个分支后,用它原来指向的哈希直接 cat-file,证明底层 commit 对象根本没被删,只是没有引用再指着它了。">
+<meta property="og:url" content="https://bigywater.tech/git-branch-refs.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Git 分支的本质:创建一个分支,.git/objects 里到底多了几个对象">
+<meta name="twitter:description" content="真实建两次提交后创建分支,现场数出 .git/objects 对象总数创建前后完全没变(6→6),分支文件本身只有 41 字节;真实验证分支 ref 文件里就是一个 40 位提交哈希加换行符,不是什么特殊结构;在新分支上真实再提交一次,证明 main 分支的 ref 文件内容一字未动;真实对比普通分支和 detached HEAD 下 .git/HEAD 文件内容的区别;真实删掉一个分支后,用它原来指向的哈希直接 cat-file,证明底层 commit 对象根本没被删,只是没有引用再指着它了。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F7F4F8; --paper:#FFFFFF; --ink:#221C25; --ink-dim:#6E6376; --line:#E6DFEA;
+  --git-c:#8B3FA0; --git-c-soft:#F1E4F5;
+  --mem-c:#C99A2E; --mem-c-soft:#FBF2DC;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#211A28; --code-ink:#EDE6F0;
+  --shadow: 0 1px 2px rgba(30,20,35,.06), 0 8px 24px -12px rgba(30,20,35,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#170F1B; --paper:#241A2B; --ink:#EDE6F0; --ink-dim:#AEA0B6; --line:#3A2C43;
+    --git-c:#C97FDC; --git-c-soft:#332039;
+    --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#170F1B; --code-ink:#E4D9E8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#170F1B; --paper:#241A2B; --ink:#EDE6F0; --ink-dim:#AEA0B6; --line:#3A2C43;
+  --git-c:#C97FDC; --git-c-soft:#332039;
+  --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#170F1B; --code-ink:#E4D9E8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--git-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--git-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--git-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--git-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#C9A8D9; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--git-c); background:var(--git-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--git-c-soft); color:var(--git-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#D6B3E6;}
+.term pre.code{margin:0 0 10px; color:#D6B3E6; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--git-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Git 内部原理 · 02</div>
+    <h1>Git 分支的本质:创建一个分支,.git/objects 里到底多了几个对象</h1>
+    <p>"git 分支很轻量"这句话到处都能看到,但很少有人真的数过"轻量"具体是多轻。<a href="git-object-storage.html" target="_blank" rel="noopener">上一篇</a>验证了 blob/tree/commit 都是按内容哈希存的对象,这一篇接着问:分支本身算不算一种对象?创建一个分支,磁盘上到底多写了什么?真实建了两次提交、真实创建/删除分支,边跑边数。</p>
+    <div class="hero-fact">
+      <div><div class="num">对象数 +0</div><div class="lbl">真实创建一个分支前后,.git/objects 目录里的对象总数完全没变</div></div>
+      <div><div class="num">41 字节</div><div class="lbl">一个分支在磁盘上就是这么大的一个文件,内容是一行 40 位哈希加换行符</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<p class="prev-post">上一篇:<a href="git-object-storage.html" target="_blank" rel="noopener">Git 是怎么给内容去重的</a></p>
+
+<section style="padding-top:8px;">
+  <h2>思路:ref 跟 blob/tree/commit 完全不是一回事</h2>
+  <p class="h2-sub">前三种是内容寻址的对象,分支是纯粹的指针,连哈希都不用算。</p>
+  <p>上一篇验证过,<span class="mono">.git/objects</span> 里的每一份内容——不管是文件、目录结构还是提交本身——都要先按内容算一次 SHA-1,再按这个哈希存放,内容不变,哈希必然不变。<b>分支不是这样的东西</b>。一个分支只是 <span class="mono">.git/refs/heads/</span> 目录下的一个普通文本文件,文件名就是分支名,文件内容就是它当前指向的 commit 哈希——没有类型头,没有 zlib 压缩,不参与 <span class="mono">.git/objects</span> 那套内容寻址体系。<span class="mono">git branch foo</span> 做的事,说到底就是"新建一个文本文件,写一行当前 commit 的哈希进去"。</p>
+</section>
+
+<section>
+  <h2>真实验证:创建分支,对象总数一个没多</h2>
+  <p class="h2-sub">两次真实提交之后创建一个新分支,前后对比 .git/objects 里的对象数量。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ cat .git/HEAD
+ref: refs/heads/main
+
+$ cat .git/refs/heads/main
+f70352e6a0ab6d433b5f4595f2ec98c36d08f282
+
+$ find .git/objects -type f | wc -l
+6
+
+$ git branch feature-x
+
+$ find .git/objects -type f | wc -l
+6</pre>
+<span class="ok">创建分支前后,对象总数都是 6,一个没多——git branch 没有让任何新内容进入内容寻址存储</span>
+  </div>
+  <p>再看这个新分支的 ref 文件本身:</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ cat .git/refs/heads/feature-x
+f70352e6a0ab6d433b5f4595f2ec98c36d08f282
+
+$ ls -la .git/refs/heads/
+-rw-r--r--  41 main
+-rw-r--r--  41 feature-x</pre>
+<span class="ok">跟 main 内容完全一样(因为刚创建,两个分支指向同一个 commit),文件大小都是 41 字节 —— 40 个十六进制字符 + 1 个换行符,没有任何多余的结构</span>
+  </div>
+  <p>这就是"分支创建几乎零成本"这句话背后真实发生的事:不用复制任何提交历史,不用给任何对象打标记,只是多写了一个 41 字节的文本文件。一个仓库里有 5 个分支还是 500 个分支,只要它们指向的 commit 集合不变,<span class="mono">.git/objects</span> 里的内容不会有任何差别。</p>
+</section>
+
+<section>
+  <h2>真实验证:在新分支上提交,main 完全不受影响</h2>
+  <p class="h2-sub">切到 feature-x,真实提交一次,看 main 分支的 ref 文件会不会跟着变。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ git checkout feature-x
+$ echo "v3-on-feature" &gt;&gt; file.txt
+$ git add -A && git commit -m "commit 3 on feature-x"
+
+$ cat .git/refs/heads/feature-x
+107222f948aafe595e3a18b4497bf519d23b9616    # 变了,指向新提交
+
+$ cat .git/refs/heads/main
+f70352e6a0ab6d433b5f4595f2ec98c36d08f282    # 和提交前一模一样,main 完全没动
+
+$ find .git/objects -type f | wc -l
+9    # 6 -&gt; 9,只多了 commit3 需要的 3 个新对象(新内容的 blob/tree/commit)</pre>
+<span class="ok">main 分支的 ref 文件内容一个字节都没变,新提交只改了 feature-x 自己那个 41 字节的文件</span>
+  </div>
+  <p>这也是为什么在 git 里"切分支"是一个几乎瞬间完成的操作:不涉及任何对象的复制或移动,git 要做的只是把 <span class="mono">.git/HEAD</span> 指向另一个 ref 文件,再把工作目录的文件内容换成那个 ref 指向的 commit 对应的快照——磁盘上没有任何东西被"搬"过,搬的只是指针。</p>
+</section>
+
+<section>
+  <h2>真实验证:detached HEAD 状态下,.git/HEAD 的内容不一样</h2>
+  <p class="h2-sub">正常在分支上,HEAD 是"指针的指针";直接 checkout 一个哈希,HEAD 就直接变成那个哈希本身。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">正常在 main 分支上:
+$ cat .git/HEAD
+ref: refs/heads/main              # 间接引用:HEAD 指向一个分支,分支再指向 commit
+
+直接用哈希 checkout(不接分支名):
+$ git checkout d9f2b09ee3b6fdb52dd581850a9d60027196ca6f
+$ cat .git/HEAD
+d9f2b09ee3b6fdb52dd581850a9d60027196ca6f   # 直接引用:HEAD 直接就是 commit 哈希本身,没有 "ref:" 前缀</pre>
+  </div>
+  <p>平时在分支上,<span class="mono">.git/HEAD</span> 存的是一个符号引用(symbolic ref)——"当前指向哪个分支",分支再指向具体的 commit,隔了一层。<span class="mono">git checkout &lt;哈希&gt;</span> 跳过了这一层,<span class="mono">HEAD</span> 直接变成了一个具体的 commit 哈希——这就是 <span class="mono">detached HEAD</span> 这个名字的来源:HEAD 跟所有分支"断开"了,不再挂在任何一个分支指针上。这个状态下如果继续提交,新提交同样会生成真实的 commit 对象,但没有任何分支 ref 会跟着移动指向它——一旦切回某个分支,这些提交就不再挂在任何引用链上了(不是被删除,后面这节会验证)。</p>
+</section>
+
+<section>
+  <h2>真实验证:删掉分支,底层 commit 对象根本没消失</h2>
+  <p class="h2-sub">git branch -D 删的只是那个 41 字节的指针文件,不是它指向的内容。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ git branch -D feature-x
+Deleted branch feature-x (was 107222f).
+
+$ git cat-file -p 107222f948aafe595e3a18b4497bf519d23b9616
+tree 25e3b26e8ad7ed0625e74a443e98be85ba925fdf
+parent f70352e6a0ab6d433b5f4595f2ec98c36d08f282
+author demo &lt;demo@example.com&gt; 1790057452 +0800
+committer demo &lt;demo@example.com&gt; 1790057452 +0800
+
+commit 3 on feature-x</pre>
+<span class="ok">分支已经被删了,但这个 commit 对象用它原来的哈希直接查,内容完完整整还在——tree/parent/author 一个字段都没少</span>
+  </div>
+  <p><span class="mono">git branch -D</span> 只是删掉了 <span class="mono">.git/refs/heads/feature-x</span> 这一个文件,并没有连带把它指向的 commit 对象从 <span class="mono">.git/objects</span> 里清掉。这个 commit(以及它引用的 tree、blob)现在成了"悬挂对象"(dangling object)——没有任何分支、tag 或其他引用指着它,<span class="mono">git log</span>/<span class="mono">git branch</span> 这类日常命令也看不到它,但只要知道那个哈希,<span class="mono">git cat-file</span> 依然能把内容完整读出来,这也是误删分支之后经常能救回来的原因。真正把这些没人指的对象从磁盘上清掉,是 <span class="mono">git gc</span>/<span class="mono">git prune</span> 的工作,不是删分支这一步做的。</p>
+  <div class="callout b">
+    <b>那 git gc 到底会不会立刻删掉悬挂对象?</b>不一定——默认有个宽限期(悬挂对象的最后修改时间在最近 2 周内不会被清理),就是为了给"删错分支了"这种情况留出反悔和找回的时间。这部分涉及 <span class="mono">.git/objects</span> 从松散文件被打包压缩成 pack 文件的完整流程,留给系列后面专门写一篇。
+  </div>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文所有 ref 文件内容、对象数量均在本机真实 <span class="mono">git init</span> 后用真实命令(<span class="mono">git branch</span>/<span class="mono">git checkout</span>/<span class="mono">git cat-file</span>)现场跑出,没有编造任何一个哈希值。</li>
+      <li>对象内容寻址存储(blob/tree/commit 怎么按内容算哈希、怎么去重)参见上一篇<a href="git-object-storage.html" target="_blank" rel="noopener">Git 是怎么给内容去重的</a>。</li>
+      <li>没有涉及:<span class="mono">packed-refs</span>(分支多了之后 git 会把松散的 ref 文件打包成一个文件)、<span class="mono">reflog</span> 的具体存储格式——这些留给系列后面的文章。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="git-gc-pack.html" target="_blank" rel="noopener" style="text-decoration:none; color:inherit;">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">Git gc 到底做了什么:一个文件真实改 31 次,松散对象是怎么被压缩、清理掉的</div>
+    </div>
+    <div style="font-size:1.5rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Git 内部原理 · 分支与 refs · 数据来自本机真实运行的 git</footer>
+
+</body>
+</html>

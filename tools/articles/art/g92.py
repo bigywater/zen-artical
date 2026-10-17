@@ -1,0 +1,22 @@
+from lib import *
+S = SS('g92')
+steps = [
+    step("两种 Handler 的输出(为了稳定去掉了时间字段)。TextHandler:level=INFO msg=请求完成 method=GET path=\"/a b\" status=200 dur=1.5ms;With(\"req_id\", 7).WithGroup(\"http\") 之后:level=INFO msg=请求完成 req_id=7 http.status=200。JSONHandler:{\"level\":\"INFO\",\"msg\":\"请求完成\",\"method\":\"GET\",\"path\":\"/a b\",\"status\":200,\"dur\":1500000}(时长是纳秒数);分组变成嵌套对象:{…,\"req_id\":7,\"http\":{\"status\":200}};key 后面没有配对的值:{…,\"!BADKEY\":\"orphan\"}。", t=tl(S(1)), done=lidx(S(1), 'level=INFO msg=请求完成 method=GET', '{"level":"INFO","msg":"请求完成","method"'), mark=lidx(S(1), 'http.status=200', '"http":{"status":200}', '!BADKEY'), kv=KV([['Text', 'key=value,分组用 http.status'], ['JSON', '分组是嵌套对象,time.Duration 是纳秒整数'], ['单个 key 无值', '变成 !BADKEY']], ['单个 key 无值'])),
+    step("级别过滤与参数求值:Level=Info 时调用 Debug,带一个 LogValuer 参数:LogValue 被调用了 0 次;调用 Info:被调用了 1 次。被过滤的 Debug:l.Debug(key,value 形式)0 次分配,LogAttrs(slog.Attr 形式)0 次分配;输出到 io.Discard 的 Info:两种形式也都是 0 次分配。", t=tl(S(2)), done=lidx(S(2), '调用 Debug', '被过滤的 Debug'), mark=lidx(S(2), '调用 Info', 'io.Discard 的 Info'), kv=KV([['被过滤的日志', 'LogValue 不会被调用'], ['分配', '两种写法都是 0 次(这组参数)']], ['被过滤的日志'])),
+    step("一条日志多少钱(输出到什么都不做但不是 io.Discard 的 writer):slog JSONHandler.Info 471 ns、0 次分配;TextHandler 505 ns;JSONHandler + AddSource 931 ns、6 次分配;LogAttrs 448 ns;被级别过滤的 Info 5 ns;标准库 log.Printf 145 ns;fmt.Fprintf 55 ns;标准库 log.Printf 写到 io.Discard 只要 3 ns(标准库对 io.Discard 有短路,不会真的格式化)。", t=tl(S(3)), done=lidx(S(3), '被级别过滤的 Info', 'fmt.Fprintf'), mark=lidx(S(3), 'AddSource', '标准库 log.Printf  '), b=bars([['被过滤的 Info (ns)', 5, '5'], ['fmt.Fprintf', 55, '55'], ['标准库 log.Printf', 145, '145'], ['slog JSONHandler.Info', 471, '471'], ['JSONHandler + AddSource', 931, '931']], 931, done=[0, 1], mark=[2, 3, 4]), kv=KV([['slog JSON', '471 ns,0 次分配'], ['AddSource', '约 2 倍(931 ns)、多 6 次分配'], ['被过滤', '5 ns'], ['对比标准库 log', '约 3.2 倍(但 log 没有结构化字段)']], ['AddSource'])),
+    step("并发写日志会不会交错:8 个 goroutine 各写 2000 条 JSON 日志(writer 外面套了一个锁):共 16000 行,每行都是完整合法 JSON 的有 16000 行(损坏 0 行)。", t=tl(S(4)), mark=lidx(S(4), '16000 行'), kv=KV([['行数', '16000'], ['损坏', '0 行'], ['原因', 'Handler 每条日志一次 Write(这里还加了锁)']], ['损坏'])),
+    step("文档(go doc log/slog 开头):slog 包提供结构化日志,每条日志记录包含一条消息、一个严重级别以及各种以键值对表示的属性;它定义了 Logger 类型,提供 Logger.Info、Logger.Error 等方法报告事件;每个 Logger 关联一个 Handler。", t=tl(S(5)), done=lidx(S(5), 'severity level', 'Handler'), kv=KV([['记录', '消息 + 级别 + 键值属性'], ['Logger', 'Info、Error 等方法'], ['Handler', '每个 Logger 关联一个']], ['Handler'])),
+]
+A = mkartg('g92', 92, 'Go,log/slog,结构化日志,Handler,性能,真实验证,动画演示',
+    '在 Go 1.27.1 里实测 log/slog:TextHandler 与 JSONHandler 的输出格式(分组、With、!BADKEY);被级别过滤的日志不会计算 LogValuer;输出到空 writer 时 JSONHandler.Info 471 ns、0 次分配,AddSource 约翻倍到 931 ns 并多 6 次分配,被过滤的 Info 只要 5 ns;标准库 log.Printf 145 ns,写到 io.Discard 时因短路只要 3 ns;8 个 goroutine 的 16000 条日志每行都完整。',
+    'slog 把日志从“一行字符串”变成“带键值的记录”,由 Handler 决定输出格式。这篇看两种内置 Handler 的输出,验证被过滤的日志是不是真的几乎免费、AddSource 的代价、和标准库 log 的差距,以及并发写入会不会把日志行撕裂。',
+    [('471 ns', 'JSONHandler.Info 带两个属性、输出到空 writer 的耗时,0 次分配'), ('5 ns', '被级别过滤掉的一条 Info 的耗时'), ('2×', '开启 AddSource 后一条日志的耗时倍数(931 ns)')],
+    [('输出格式', '<p>同一条日志,Text 是 <code>key=value</code>,分组变成 <code>http.status=200</code>;JSON 里分组是嵌套对象,<code>time.Duration</code> 被输出成纳秒整数 1500000。参数个数不配对时,孤零零的 key 变成 <code>!BADKEY</code>——静默地出现在日志里;不过 <code>go vet</code> 能在编译前发现(我另外试了 <code>slog.Info("x", "orphan")</code>,vet 报 <code>call to slog.Info missing a final value</code>,另一种把非字符串当 key 的写法也会被报)。</p>'),
+     ('过滤与惰性求值', '<p>被级别过滤的日志:<code>LogValuer</code> 的 <code>LogValue</code> 一次都没被调用,这就是“昂贵的值只在真的要输出时才计算”。被过滤的 Info 只要约 5 ns。</p>'),
+     ('性能', '<p>写到空 writer,JSONHandler 一条日志 471 ns、0 次分配,TextHandler 505 ns;标准库 log.Printf 是 145 ns——结构化和时间格式化让 slog 约慢 3 倍。<code>AddSource</code> 要多取调用栈,耗时翻倍(931 ns)并多 6 次分配。需要源码位置再开。注意:标准库 log 写到 <code>io.Discard</code> 时会短路(3 ns),拿它做基准会得到误导性的数字,我一开始就用 <code>io.Discard</code> 测,所以后来换成了一个不会被短路的 writer。</p>'),
+     ('并发', '<p>8 个 goroutine 共 16000 条 JSON 日志,每行都是完整合法的 JSON,没有撕裂。本实验里我给 writer 加了一把锁,所以它验证的是“每条日志一次 <code>Write</code>”,而不是 Handler 自己的锁;我没有试过去掉这把锁。</p>'),
+     ('文档', '<p>slog 的模型很简单:一条记录=消息+级别+键值属性,Logger 把它交给 Handler。想换格式或输出目的地,就换 Handler。</p>')],
+    steps,
+    [ENV_G + '。基准输出到一个自己写的什么都不做的 writer(避开标准库对 io.Discard 的短路);分配与耗时用 testing.Benchmark / AllocsPerRun;并发实验的 writer 外加了互斥锁;格式展示时用 ReplaceAttr 去掉时间字段;读过的文档:go doc log/slog 开头',
+     '没有验证:Handler 内部锁的作用(未去掉外层锁试验)、自定义 Handler 的写法、slog.SetDefault 与标准库 log 的桥接、真实文件/网络输出下的成本、大量属性时的分配'],
+    'log/slog')

@@ -1,0 +1,46 @@
+import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from ll import *
+tee('l39')
+def check(d, paths):
+    for p in paths:
+        o = run(d, f'git check-ignore -v -- {shq(p)}')
+        if o[0] != 0: print(f'  {p:<24} (没有匹配的模式 → 不忽略)'); continue
+        src, _, rest = o[1].partition('\t'); neg = src.split(':', 2)[2].startswith('!')
+        print(f'  {p:<24} {src}  →  ' + ('不忽略(最后匹配的是取反模式)' if neg else '忽略'))
+def mkfiles(d, paths):
+    for p in paths:
+        f = d / p
+        if p.endswith('/'): f.mkdir(parents=True, exist_ok=True)
+        else: f.parent.mkdir(parents=True, exist_ok=True); f.write_text('x\n')
+print('== 一:各种写法匹配哪些路径(git check-ignore -v 会告诉你是哪个文件的第几行、哪条模式)')
+d = lab('l39a')
+W(d, {'.gitignore': '*.log\n/todo.txt\nbuild/\n**/tmp\ndoc/*.md\nlogs/**/*.txt\nfoo?.c\n[ab]x.c\n'})
+paths = ['a.log', 'sub/deep/b.log', 'todo.txt', 'sub/todo.txt', 'build', 'sub/build', 'x/tmp', 'tmp', 'doc/a.md', 'doc/sub/b.md', 'logs/a.txt', 'logs/x/y/a.txt', 'foo1.c', 'foo12.c', 'ax.c', 'cx.c']
+mkfiles(d, ['a.log', 'sub/deep/b.log', 'todo.txt', 'sub/todo.txt', 'build/', 'sub/build/', 'x/tmp', 'tmp', 'doc/a.md', 'doc/sub/b.md', 'logs/a.txt', 'logs/x/y/a.txt', 'foo1.c', 'foo12.c', 'ax.c', 'cx.c'])
+check(d, paths)
+print('== 二:取反 !:能把前面忽略的重新包含进来——但如果父目录已经被忽略,里面的文件就救不回来')
+d = lab('l39b')
+W(d, {'.gitignore': '*.log\n!important.log\nbuild/\n!build/keep.txt\ncache/*\n!cache/keep.txt\n'})
+mkfiles(d, ['a.log', 'important.log', 'build/keep.txt', 'build/o.o', 'cache/keep.txt', 'cache/o.o'])
+check(d, ['a.log', 'important.log', 'build/keep.txt', 'build/o.o', 'cache/keep.txt', 'cache/o.o'])
+sh(d, 'git status --short -uall | sed -E "s/^/  /"; echo "(上面是 git status 看到的未跟踪文件)"')
+print('== 三:斜杠:开头的 / 锚定到 .gitignore 所在目录;结尾的 / 只匹配目录;中间有 / 也是锚定')
+d = lab('l39c')
+W(d, {'.gitignore': '/a.txt\nb.txt\nc/\nd/e.txt\n'})
+mkfiles(d, ['a.txt', 'sub/a.txt', 'b.txt', 'sub/b.txt', 'c/', 'sub/c', 'd/e.txt', 'sub/d/e.txt'])
+check(d, ['a.txt', 'sub/a.txt', 'b.txt', 'sub/b.txt', 'c/f', 'sub/c', 'd/e.txt', 'sub/d/e.txt'])
+print('== 四:多个来源的优先级:子目录的 .gitignore 覆盖上层、同一文件里后写的覆盖先写的、.git/info/exclude 与 core.excludesFile')
+d = lab('l39d')
+W(d, {'.gitignore': '*.tmp\n', 'sub/.gitignore': '!keep.tmp\n*.dat\n', '.git/info/exclude': '*.secret\n'})
+(HOME / 'global_ignore').write_text('*.bak\n'); run(d, f'git config core.excludesFile {HOME / "global_ignore"}')
+mkfiles(d, ['a.tmp', 'sub/a.tmp', 'sub/keep.tmp', 'keep.tmp', 'sub/x.dat', 'x.dat', 'a.secret', 'a.bak'])
+check(d, ['a.tmp', 'sub/a.tmp', 'sub/keep.tmp', 'keep.tmp', 'sub/x.dat', 'x.dat', 'a.secret', 'a.bak'])
+print('== 五:忽略只对未跟踪的文件有效:已经被跟踪的文件,事后加进 .gitignore 也还会被跟踪')
+d = lab('l39e'); ci(d, '先提交了', {'secret.env': 'KEY=1\n', 'a.txt': 'a\n'}, t=0)
+W(d, {'.gitignore': 'secret.env\n'}); W(d, {'secret.env': 'KEY=2\n'})
+sh(d, 'git check-ignore -v secret.env; echo "(退出码 $?:对已跟踪的文件,check-ignore 默认直接说“不忽略”)"; git check-ignore -v --no-index secret.env; echo "(加 --no-index 才忽略 index 里的跟踪状态,看到匹配的模式)"; git status --short; echo "(status 仍然显示它被修改:已跟踪的文件不受 .gitignore 影响)"')
+sh(d, 'git rm --cached -q secret.env; git status --short; git ls-files --others --ignored --exclude-standard')
+sh(d, 'git add secret.env 2>&1 | head -3; git add -f secret.env; git status --short')
+print('== 六:git status --ignored、git ls-files -o -i --exclude-standard 列出被忽略的文件;git clean -X 只清理被忽略的')
+d = lab('l39f'); W(d, {'.gitignore': '*.o\n'}); mkfiles(d, ['a.c', 'a.o', 'sub/b.o'])
+sh(d, 'git status --short --ignored; git ls-files -o -i --exclude-standard; git clean -n -X | sed -E "s/^/  /"; git clean -n -X -d | sed -E "s/^/  /"')

@@ -1,0 +1,833 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>KMP字符串匹配分步演示</title>
+<meta name="description" content="next 数组构建原理与失配后指针回退的可视化过程。">
+<link rel="canonical" href="https://bigywater.tech/kmp.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="KMP字符串匹配分步演示">
+<meta property="og:description" content="next 数组构建原理与失配后指针回退的可视化过程。">
+<meta property="og:url" content="https://bigywater.tech/kmp.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="KMP字符串匹配分步演示">
+<meta name="twitter:description" content="next 数组构建原理与失配后指针回退的可视化过程。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+  :root {
+    --paper: #EDEFF1;
+    --panel: #FFFFFF;
+    --panel-2: #F5F6F8;
+    --ink: #14181C;
+    --ink-soft: #5B6570;
+    --ink-faint: #8B94A0;
+    --line: #D6DBE0;
+    --line-strong: #B7C0C8;
+    --accent-left: #0E8388;
+    --accent-left-soft: #E3F4F3;
+    --accent-top: #C2660E;
+    --accent-top-soft: #FBEEDD;
+    --shadow: 0 1px 2px rgba(20, 24, 28, 0.04), 0 8px 24px rgba(20, 24, 28, 0.06);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #0E1114;
+      --panel: #171B1F;
+      --panel-2: #1D2226;
+      --ink: #EDEFF1;
+      --ink-soft: #A7B0B8;
+      --ink-faint: #6B747C;
+      --line: #2A3036;
+      --line-strong: #3A424A;
+      --accent-left: #3FC6BE;
+      --accent-left-soft: rgba(63, 198, 190, 0.14);
+      --accent-top: #E39A4C;
+      --accent-top-soft: rgba(227, 154, 76, 0.14);
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --paper: #0E1114;
+    --panel: #171B1F;
+    --panel-2: #1D2226;
+    --ink: #EDEFF1;
+    --ink-soft: #A7B0B8;
+    --ink-faint: #6B747C;
+    --line: #2A3036;
+    --line-strong: #3A424A;
+    --accent-left: #3FC6BE;
+    --accent-left-soft: rgba(63, 198, 190, 0.14);
+    --accent-top: #E39A4C;
+    --accent-top-soft: rgba(227, 154, 76, 0.14);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    padding: 40px 20px 64px;
+    display: flex;
+    justify-content: center;
+  }
+
+  .mono {
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .page { width: 100%; max-width: 980px; display: flex; flex-direction: column; gap: 28px; }
+
+  header { display: flex; flex-direction: column; gap: 8px; }
+
+  .eyebrow { font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent-left); }
+  h1 { font-size: 25px; font-weight: 700; letter-spacing: -0.01em; margin: 0; text-wrap: balance; }
+  .subtitle { font-size: 14.5px; line-height: 1.6; color: var(--ink-soft); max-width: 66ch; }
+
+  code.inline {
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px;
+    padding: 1px 5px; font-size: 0.92em;
+  }
+
+  .stage { display: grid; grid-template-columns: minmax(0, 420px) minmax(0, 1fr); gap: 24px; align-items: start; }
+  @media (max-width: 780px) { .stage { grid-template-columns: 1fr; } }
+
+  .visual-col { display: flex; flex-direction: column; gap: 18px; position: sticky; top: 20px; }
+  @media (max-width: 780px) { .visual-col { position: static; } }
+
+  .panel {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    padding: 18px; box-shadow: var(--shadow);
+  }
+
+  .panel-label {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--ink-faint); margin-bottom: 14px;
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  }
+  .panel-label .stat { color: var(--accent-left); font-weight: 700; font-family: ui-monospace, monospace; }
+
+  /* ---------- shared cell states ---------- */
+  .cell {
+    text-align: center; font-size: 16px; font-weight: 700; padding: 6px 0;
+    border-radius: 6px; border: 1.5px solid var(--line); background: var(--panel-2); color: var(--ink-faint);
+    transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease, box-shadow 0.3s ease, transform 0.3s ease, opacity 0.3s ease;
+  }
+  .cell[data-state="done"] { color: var(--ink); }
+  .cell[data-state="current"] {
+    color: var(--ink); border-color: var(--ink);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink) 14%, transparent);
+    transform: scale(1.06);
+  }
+  .cell[data-state="confirmed"] { background: var(--accent-left-soft); border-color: var(--accent-left); color: var(--accent-left); }
+  .cell[data-state="matched"] { background: var(--accent-left); border-color: var(--accent-left); color: var(--panel); }
+
+  /* ---------- LPS panel ---------- */
+  .lps-scroll { overflow-x: auto; }
+  .lps-row { display: flex; gap: 5px; }
+  .lps-col { flex: 1 1 0; min-width: 34px; display: flex; flex-direction: column; gap: 4px; }
+  .lps-idx { text-align: center; font-size: 10px; color: var(--ink-faint); }
+  .lps-val.cell { font-size: 13px; font-weight: 700; padding: 4px 0; }
+
+  .ptr-row { position: relative; height: 20px; margin-top: 8px; }
+  .ptr-chip {
+    position: absolute; top: 0; transform: translateX(-50%);
+    font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 999px;
+    white-space: nowrap; transition: left 0.35s ease, opacity 0.25s ease;
+  }
+  .ptr-chip.i { background: var(--panel-2); color: var(--ink); border: 1px solid var(--ink); }
+  .ptr-chip.len { background: var(--accent-left-soft); color: var(--accent-left); border: 1px solid var(--accent-left); }
+
+  /* ---------- search panel ---------- */
+  .align-scroll { overflow-x: auto; }
+  .align-wrap { min-width: 560px; }
+
+  .text-row { display: flex; gap: 3px; }
+  .text-col { flex: 1 1 0; min-width: 24px; }
+  .text-idx-row { display: flex; gap: 3px; margin-top: 4px; }
+  .text-idx { flex: 1 1 0; min-width: 24px; text-align: center; font-size: 9.5px; color: var(--ink-faint); }
+
+  .pat-float-wrap { position: relative; height: 48px; margin-top: 6px; }
+  .pat-float {
+    position: absolute; top: 0; display: flex; gap: 3px;
+    transition: left 0.45s cubic-bezier(.4,0,.2,1), width 0.45s cubic-bezier(.4,0,.2,1), opacity 0.3s ease;
+  }
+  .pat-float .cell { min-width: 0; flex: 1 1 0; font-size: 15px; }
+  .pat-hint {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    font-size: 12.5px; color: var(--ink-faint); text-align: center; transition: opacity 0.3s ease;
+  }
+
+  /* ---------- Legend ---------- */
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--ink-soft); margin-top: 14px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { width: 9px; height: 9px; border-radius: 3px; flex-shrink: 0; }
+  .swatch.cur { background: transparent; border: 2px solid var(--ink); }
+  .swatch.ref { background: var(--accent-left-soft); border: 1.5px solid var(--accent-left); }
+  .swatch.final { background: var(--accent-left); }
+
+  /* ---------- Narrative col ---------- */
+  .narrative-col { display: flex; flex-direction: column; gap: 16px; }
+  .formula-panel { display: flex; flex-direction: column; gap: 12px; min-height: 168px; }
+  .step-tag {
+    display: inline-flex; width: fit-content; font-size: 11px; font-weight: 600; letter-spacing: 0.02em;
+    padding: 3px 9px; border-radius: 999px; background: var(--panel-2); color: var(--ink-soft); border: 1px solid var(--line);
+  }
+  .formula-line { font-size: 15.5px; line-height: 1.7; overflow-x: auto; white-space: nowrap; padding-bottom: 2px; }
+  .formula-line .cur { color: var(--ink); font-weight: 700; }
+  .formula-line .cy { color: var(--accent-left); font-weight: 700; }
+  .desc { font-size: 14px; line-height: 1.7; color: var(--ink-soft); }
+  .desc b { color: var(--ink); font-weight: 600; }
+
+  .controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  button {
+    font-family: inherit; font-size: 13.5px; font-weight: 600; border-radius: 9px;
+    border: 1px solid var(--line-strong); background: var(--panel); color: var(--ink);
+    padding: 9px 15px; cursor: pointer; transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+  }
+  button:hover:not(:disabled) { border-color: var(--ink-soft); }
+  button:active:not(:disabled) { transform: translateY(1px); }
+  button:disabled { opacity: 0.38; cursor: not-allowed; }
+  button:focus-visible { outline: 2px solid var(--accent-left); outline-offset: 2px; }
+  button.primary { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+
+  .progress { margin-left: auto; font-size: 12.5px; color: var(--ink-faint); font-weight: 600; }
+  .progress .n { color: var(--ink); }
+
+  .log-panel { padding: 16px 16px 8px; }
+  .log-list { max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+  .log-row {
+    display: flex; gap: 10px; align-items: baseline; padding: 6px 8px; border-radius: 7px;
+    font-size: 12px; color: var(--ink-faint); cursor: pointer; border: 1px solid transparent;
+    background: transparent; text-align: left; width: 100%;
+  }
+  .log-row:hover { background: var(--panel-2); }
+  .log-row .lidx { flex-shrink: 0; width: 22px; color: var(--ink-faint); }
+  .log-row .lphase { flex-shrink: 0; width: 14px; color: var(--ink-faint); }
+  .log-row .lf { color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .log-row[data-active="true"] { background: var(--panel-2); border-color: var(--line); }
+  .log-row[data-active="true"] .lidx, .log-row[data-active="true"] .lf { color: var(--ink); }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="page">
+<header>
+    <div class="eyebrow">KMP 字符串匹配 · 分步演示</div>
+    <h1>KMP：失配之后，为什么主指针从来不用往回走</h1>
+    <p class="subtitle">
+      模式串 <code class="inline">"ABABCABAB"</code>，文本 <code class="inline">"ABABDABACDABABCABAB"</code>。
+      KMP 分两个阶段：先给模式串自己算一张 <b>LPS（最长相同前后缀）表</b>，
+      再用这张表在匹配失败时直接跳过一大截，不用把文本指针 <code class="inline">i</code> 往回退。
+    </p>
+  </header>
+
+  <div class="stage">
+    <div class="visual-col">
+      <div class="panel">
+        <div class="panel-label">
+          <span>阶段一 · LPS（next）数组</span>
+          <span class="stat mono" id="lpsStat"></span>
+        </div>
+        <div class="lps-scroll">
+          <div class="align-wrap" style="min-width:340px;">
+            <div class="lps-row" id="patRow"></div>
+            <div class="lps-row" id="lpsRow" style="margin-top:5px;"></div>
+            <div class="lps-row" id="lpsIdxRow" style="margin-top:5px;"></div>
+          </div>
+        </div>
+        <div class="ptr-row" id="lpsPtrRow"></div>
+        <div class="legend">
+          <span><i class="swatch cur"></i>当前正在算的位置 i</span>
+          <span><i class="swatch ref"></i>拿来比较的候选前缀 pat[len]</span>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-label">
+          <span>阶段二 · 用 LPS 表做匹配</span>
+          <span class="stat mono" id="searchStat"></span>
+        </div>
+        <div class="align-scroll">
+          <div class="align-wrap">
+            <div class="text-row" id="textRow"></div>
+            <div class="text-idx-row" id="textIdxRow"></div>
+            <div class="pat-float-wrap">
+              <div class="pat-hint" id="patHint">先把 LPS 表建完，才开始匹配</div>
+              <div class="pat-float" id="patFloat"></div>
+            </div>
+          </div>
+        </div>
+        <div class="legend">
+          <span><i class="swatch cur"></i>正在比较的一对字符</span>
+          <span><i class="swatch ref"></i>已确认匹配的前缀</span>
+          <span><i class="swatch final"></i>完整匹配成功</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="narrative-col">
+      <div class="panel formula-panel">
+        <span class="step-tag" id="steptag">尚未开始</span>
+        <div class="formula-line mono" id="formula">点击「下一步」开始推演</div>
+        <div class="desc" id="desc">
+          暴力匹配每次失配都要把文本指针 <code class="inline">i</code> 退回去重新试，最坏要 O(n·m) 时间。
+          KMP 的核心洞察是：模式串自己内部的重复结构（LPS 表）已经告诉我们，失配时该跳到哪，
+          <b>文本指针 i 全程只往前走，一次都不回退</b>。
+        </div>
+      </div>
+
+      <div class="controls">
+        <button id="btnReset">重置</button>
+        <button id="btnPrev">上一步</button>
+        <button id="btnPlay" class="primary">播放</button>
+        <button id="btnNext" class="primary">下一步</button>
+        <span class="progress" id="progress">步骤 <span class="n">0</span> / 0</span>
+      </div>
+
+      <div class="panel log-panel">
+        <div class="panel-label">推演记录</div>
+        <div class="log-list" id="log"></div>
+      </div>
+    </div>
+  </div>
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+</div>
+
+<script>
+(function () {
+  var DATA = {"pattern":"ABABCABAB","text":"ABABDABACDABABCABAB","lps":[0,0,1,2,0,1,2,3,4],"matches":[10],"lpsEvents":[{"type":"lps-zero","i":1,"lps":[0,0,0,0,0,0,0,0,0]},{"type":"lps-match","i":2,"len":1,"lps":[0,0,1,0,0,0,0,0,0]},{"type":"lps-match","i":3,"len":2,"lps":[0,0,1,2,0,0,0,0,0]},{"type":"lps-fallback","i":4,"oldLen":2,"newLen":0},{"type":"lps-zero","i":4,"lps":[0,0,1,2,0,0,0,0,0]},{"type":"lps-match","i":5,"len":1,"lps":[0,0,1,2,0,1,0,0,0]},{"type":"lps-match","i":6,"len":2,"lps":[0,0,1,2,0,1,2,0,0]},{"type":"lps-match","i":7,"len":3,"lps":[0,0,1,2,0,1,2,3,0]},{"type":"lps-match","i":8,"len":4,"lps":[0,0,1,2,0,1,2,3,4]},{"type":"lps-done","lps":[0,0,1,2,0,1,2,3,4]}],"searchEvents":[{"type":"search-match","i":0,"j":0},{"type":"search-match","i":1,"j":1},{"type":"search-match","i":2,"j":2},{"type":"search-match","i":3,"j":3},{"type":"search-mismatch","i":4,"j":4},{"type":"search-fallback","jBefore":4,"jAfter":2,"i":4},{"type":"search-mismatch","i":4,"j":2},{"type":"search-fallback","jBefore":2,"jAfter":0,"i":4},{"type":"search-mismatch","i":4,"j":0},{"type":"search-advance","i":4},{"type":"search-match","i":5,"j":0},{"type":"search-match","i":6,"j":1},{"type":"search-match","i":7,"j":2},{"type":"search-mismatch","i":8,"j":3},{"type":"search-fallback","jBefore":3,"jAfter":1,"i":8},{"type":"search-mismatch","i":8,"j":1},{"type":"search-fallback","jBefore":1,"jAfter":0,"i":8},{"type":"search-mismatch","i":8,"j":0},{"type":"search-advance","i":8},{"type":"search-mismatch","i":9,"j":0},{"type":"search-advance","i":9},{"type":"search-match","i":10,"j":0},{"type":"search-match","i":11,"j":1},{"type":"search-match","i":12,"j":2},{"type":"search-match","i":13,"j":3},{"type":"search-match","i":14,"j":4},{"type":"search-match","i":15,"j":5},{"type":"search-match","i":16,"j":6},{"type":"search-match","i":17,"j":7},{"type":"search-match","i":18,"j":8},{"type":"search-found","pos":10,"i":19,"j":9},{"type":"search-resume","jBefore":9,"jAfter":4,"i":19},{"type":"search-done","matches":[10]}]};
+
+  var PAT = DATA.pattern, TXT = DATA.text;
+  var M = PAT.length, TN = TXT.length;
+  var LPS_EVENTS = DATA.lpsEvents, SEARCH_EVENTS = DATA.searchEvents;
+  var EVENTS = LPS_EVENTS.concat(SEARCH_EVENTS);
+  var LPS_COUNT = LPS_EVENTS.length;
+
+  var patRow = document.getElementById('patRow');
+  var lpsRow = document.getElementById('lpsRow');
+  var lpsIdxRow = document.getElementById('lpsIdxRow');
+  var lpsPtrRow = document.getElementById('lpsPtrRow');
+  var lpsStat = document.getElementById('lpsStat');
+
+  var textRow = document.getElementById('textRow');
+  var textIdxRow = document.getElementById('textIdxRow');
+  var patFloat = document.getElementById('patFloat');
+  var patHint = document.getElementById('patHint');
+  var searchStat = document.getElementById('searchStat');
+
+  var formulaEl = document.getElementById('formula');
+  var descEl = document.getElementById('desc');
+  var steptagEl = document.getElementById('steptag');
+  var progressTotalEl = document.getElementById('progress');
+  var progressEl = progressTotalEl.querySelector('.n');
+  var logEl = document.getElementById('log');
+
+  var btnPrev = document.getElementById('btnPrev');
+  var btnNext = document.getElementById('btnNext');
+  var btnPlay = document.getElementById('btnPlay');
+  var btnReset = document.getElementById('btnReset');
+
+  progressTotalEl.innerHTML = '步骤 <span class="n">0</span> / ' + EVENTS.length;
+  progressEl = progressTotalEl.querySelector('.n');
+
+  // --- build LPS panel cells ---
+  var patCells = [], lpsCells = [];
+  for (var k = 0; k < M; k++) {
+    var pc = document.createElement('div');
+    pc.className = 'lps-col';
+    var pchar = document.createElement('div');
+    pchar.className = 'cell mono';
+    pchar.textContent = PAT[k];
+    pc.appendChild(pchar);
+    patRow.appendChild(pc);
+    patCells.push(pchar);
+
+    var lc = document.createElement('div');
+    lc.className = 'lps-col';
+    var lval = document.createElement('div');
+    lval.className = 'cell lps-val mono';
+    lval.textContent = '–';
+    lc.appendChild(lval);
+    lpsRow.appendChild(lc);
+    lpsCells.push(lval);
+
+    var li = document.createElement('div');
+    li.className = 'lps-col';
+    var lidx = document.createElement('div');
+    lidx.className = 'lps-idx mono';
+    lidx.textContent = k;
+    li.appendChild(lidx);
+    lpsIdxRow.appendChild(li);
+  }
+
+  // --- build search panel cells ---
+  var textCells = [];
+  for (var t = 0; t < TN; t++) {
+    var tc = document.createElement('div');
+    tc.className = 'text-col';
+    var tchar = document.createElement('div');
+    tchar.className = 'cell mono';
+    tchar.textContent = TXT[t];
+    tc.appendChild(tchar);
+    textRow.appendChild(tc);
+    textCells.push(tchar);
+
+    var ti = document.createElement('div');
+    ti.className = 'text-idx mono';
+    ti.textContent = t;
+    textIdxRow.appendChild(ti);
+  }
+
+  var patFloatCells = [];
+  for (var f = 0; f < M; f++) {
+    var fc = document.createElement('div');
+    fc.className = 'cell mono';
+    fc.textContent = PAT[f];
+    patFloat.appendChild(fc);
+    patFloatCells.push(fc);
+  }
+
+  // --- log ---
+  var TAG = {
+    'lps-zero': 'LPS·清零', 'lps-match': 'LPS·匹配', 'lps-fallback': 'LPS·回退', 'lps-done': 'LPS·完成',
+    'search-match': '匹配·相同', 'search-mismatch': '匹配·失配', 'search-fallback': '匹配·跳转',
+    'search-advance': '匹配·前进', 'search-found': '匹配·命中', 'search-resume': '匹配·继续', 'search-done': '匹配·结束'
+  };
+
+  function shortFormula(ev) {
+    switch (ev.type) {
+      case 'lps-zero': return 'i=' + ev.i + ': mismatch, lps[' + ev.i + ']=0';
+      case 'lps-match': return 'i=' + ev.i + ': pat[' + ev.i + ']==pat[' + (ev.len - 1) + '], lps[' + ev.i + ']=' + ev.len;
+      case 'lps-fallback': return 'i=' + ev.i + ': len ' + ev.oldLen + '→' + ev.newLen + ' (via lps)';
+      case 'lps-done': return 'lps = [' + ev.lps.join(',') + ']';
+      case 'search-match': return 'i=' + ev.i + ',j=' + ev.j + ': txt==pat';
+      case 'search-mismatch': return 'i=' + ev.i + ',j=' + ev.j + ': txt!=pat';
+      case 'search-fallback': return 'j ' + ev.jBefore + '→' + ev.jAfter + ' (via lps)';
+      case 'search-advance': return 'j==0, i→' + (ev.i + 1);
+      case 'search-found': return 'found @ ' + ev.pos;
+      case 'search-resume': return 'j ' + ev.jBefore + '→' + ev.jAfter + ' (继续找)';
+      case 'search-done': return 'done, matches=[' + ev.matches.join(',') + ']';
+    }
+    return '';
+  }
+
+  var logRows = [];
+  EVENTS.forEach(function (ev, i) {
+    var row = document.createElement('button');
+    row.className = 'log-row'; row.type = 'button';
+    var lidx = document.createElement('span'); lidx.className = 'lidx mono'; lidx.textContent = i + 1;
+    var lphase = document.createElement('span'); lphase.className = 'lphase mono'; lphase.textContent = i < LPS_COUNT ? '①' : '②';
+    var lf = document.createElement('span'); lf.className = 'lf mono';
+    lf.textContent = '[' + TAG[ev.type] + '] ' + shortFormula(ev);
+    row.appendChild(lidx); row.appendChild(lphase); row.appendChild(lf);
+    row.addEventListener('click', function () { stopPlay(); goTo(i); });
+    logEl.appendChild(row);
+    logRows.push(row);
+  });
+
+  function buildNarration(ev, idx) {
+    var phase = idx < LPS_COUNT ? '阶段一' : '阶段二';
+    switch (ev.type) {
+      case 'lps-zero': {
+        var cmpCol = 0;
+        return {
+          tag: phase + ' · i=' + ev.i + ' 清零',
+          formula: 'pat[' + ev.i + ']=<span class="cur">' + PAT[ev.i] + '</span> ≠ pat[' + cmpCol + ']=<span class="cy">' + PAT[cmpCol] + '</span> → lps[' + ev.i + ']=0',
+          desc: '比较 <b>pat[' + ev.i + ']=' + PAT[ev.i] + '</b> 和候选前缀字符 <b>pat[0]=' + PAT[cmpCol] + '</b>：不同。候选前缀长度已经是 0，没法再往回退了，直接记 <b>lps[' + ev.i + ']=0</b>，i 才继续往右移一位。'
+        };
+      }
+      case 'lps-match': {
+        var cc = ev.len - 1;
+        return {
+          tag: phase + ' · i=' + ev.i + ' 匹配',
+          formula: 'pat[' + ev.i + ']=<span class="cur">' + PAT[ev.i] + '</span> == pat[' + cc + ']=<span class="cy">' + PAT[cc] + '</span> → lps[' + ev.i + ']=' + ev.len,
+          desc: '比较 <b>pat[' + ev.i + ']=' + PAT[ev.i] + '</b> 和候选前缀字符 <b>pat[' + cc + ']=' + PAT[cc] + '</b>：相同！说明当前位置能延续一个长度为 <b>' + ev.len + '</b> 的"前缀=后缀"，记 <b>lps[' + ev.i + ']=' + ev.len + '</b>，i 和候选长度都往右移一位。'
+        };
+      }
+      case 'lps-fallback': {
+        return {
+          tag: phase + ' · i=' + ev.i + ' 回退',
+          formula: 'pat[' + ev.i + ']=<span class="cur">' + PAT[ev.i] + '</span> ≠ pat[' + ev.oldLen + ']=<span class="cy">' + PAT[ev.oldLen] + '</span> → len 回退到 lps[' + (ev.oldLen - 1) + ']=' + ev.newLen,
+          desc: '比较 <b>pat[' + ev.i + ']=' + PAT[ev.i] + '</b> 和候选前缀字符 <b>pat[' + ev.oldLen + ']=' + PAT[ev.oldLen] + '</b>：不同。但候选长度不是 0，不能直接清零——利用<b>已经算好的 lps[' + (ev.oldLen - 1) + ']=' + ev.newLen + '</b>，把候选前缀长度回退到 ' + ev.newLen + '，<b>i 不动</b>，用新的候选长度重新比一次。'
+        };
+      }
+      case 'lps-done': {
+        return {
+          tag: phase + ' · 完成',
+          formula: 'lps = [' + ev.lps.join(', ') + ']',
+          desc: 'LPS 表构建完成：<b>[' + ev.lps.join(', ') + ']</b>。它记录了"模式串每个前缀，自身最长的相同前后缀长度"。接下来第二阶段匹配失配时，直接查这张表决定跳到哪，不用从头再试。'
+        };
+      }
+      case 'search-match': {
+        return {
+          tag: phase + ' · i=' + ev.i + ' j=' + ev.j + ' 相同',
+          formula: 'txt[' + ev.i + ']=<span class="cur">' + TXT[ev.i] + '</span> == pat[' + ev.j + ']=<span class="cur">' + PAT[ev.j] + '</span>',
+          desc: 'txt[' + ev.i + ']=' + TXT[ev.i] + ' 和 pat[' + ev.j + ']=' + PAT[ev.j] + ' 相同，已匹配前缀又延长了一位。i、j 各自往右移一位，继续比下一对字符。'
+        };
+      }
+      case 'search-mismatch': {
+        return {
+          tag: phase + ' · i=' + ev.i + ' j=' + ev.j + ' 失配',
+          formula: 'txt[' + ev.i + ']=<span class="cur">' + TXT[ev.i] + '</span> ≠ pat[' + ev.j + ']=<span class="cur">' + PAT[ev.j] + '</span>',
+          desc: 'txt[' + ev.i + ']=' + TXT[ev.i] + ' 和 pat[' + ev.j + ']=' + PAT[ev.j] + ' 不同，发生失配。' + (ev.j === 0 ? '当前 j 已经是 0，没有前缀可以复用了。' : '看看 LPS 表能不能帮我们跳过一部分重新比较。')
+        };
+      }
+      case 'search-fallback': {
+        return {
+          tag: phase + ' · j 跳转',
+          formula: 'j: ' + ev.jBefore + ' → lps[' + (ev.jBefore - 1) + ']=<span class="cy">' + ev.jAfter + '</span>，<span class="cur">i 不变</span>',
+          desc: '已匹配前缀长度 j=' + ev.jBefore + ' 不是 0，说明这段前缀自己也有更短的重复前缀——直接用 <b>lps[' + (ev.jBefore - 1) + ']=' + ev.jAfter + '</b>，把 j 跳到 ' + ev.jAfter + '。<b>i 全程没有动</b>，这正是 KMP 比暴力匹配快的关键：文本指针从不回退。'
+        };
+      }
+      case 'search-advance': {
+        return {
+          tag: phase + ' · i 前进',
+          formula: 'j=0，无法复用 → i: ' + ev.i + ' → <span class="cur">' + (ev.i + 1) + '</span>',
+          desc: 'j 已经是 0，没有更短的前缀可以复用了，只能把 i 往右移一位，重新从 pat[0] 开始比较。'
+        };
+      }
+      case 'search-found': {
+        return {
+          tag: phase + ' · 命中！',
+          formula: 'j == m(=' + M + ') → 在文本下标 <span class="cy">' + ev.pos + '</span> 处完整匹配',
+          desc: 'j 达到了模式串长度 ' + M + '，说明整个模式串都对上了！在文本下标 <b>' + ev.pos + '</b> 处找到一次完整匹配（覆盖 txt[' + ev.pos + '..' + (ev.pos + M - 1) + ']）。'
+        };
+      }
+      case 'search-resume': {
+        return {
+          tag: phase + ' · 继续找',
+          formula: 'j: ' + ev.jBefore + ' → lps[' + (ev.jBefore - 1) + ']=<span class="cy">' + ev.jAfter + '</span>',
+          desc: '找到一次匹配后，并不需要把 j 清零重新开始——同样用 lps[' + (ev.jBefore - 1) + ']=' + ev.jAfter + ' 把 j 跳过去，这样如果文本里还有和模式串首尾重叠的匹配也不会漏掉，继续往后扫描。'
+        };
+      }
+      case 'search-done': {
+        return {
+          tag: phase + ' · 全部完成',
+          formula: 'matches = [' + ev.matches.join(', ') + ']',
+          desc: '扫描结束，一共找到 <b>' + ev.matches.length + '</b> 处匹配，位置是 <b>[' + ev.matches.join(', ') + ']</b>。整个过程中文本指针 i 从头到尾只往前走，从没有回退过——这正是 KMP 把时间复杂度从暴力匹配的 O(n·m) 降到 <b>O(n+m)</b> 的原因。'
+        };
+      }
+    }
+    return { tag: '', formula: '', desc: '' };
+  }
+
+  function getLpsSnapshot(upto) {
+    for (var k = Math.min(upto, LPS_COUNT - 1); k >= 0; k--) {
+      if (LPS_EVENTS[k].lps) return LPS_EVENTS[k].lps;
+    }
+    return null;
+  }
+
+  function getFoundMatches(upto) {
+    var list = [];
+    for (var k = 0; k <= upto && k < EVENTS.length; k++) {
+      if (EVENTS[k].type === 'search-found') list.push(EVENTS[k].pos);
+    }
+    return list;
+  }
+
+  var index = -1;
+  var timer = null;
+
+  function renderLpsPanel() {
+    var inPhase1 = index >= 0 && index < LPS_COUNT;
+    var ev = inPhase1 ? EVENTS[index] : null;
+    var snapshot = getLpsSnapshot(index);
+
+    var iCol = null, cmpCol = null;
+    if (ev) {
+      iCol = ev.i;
+      if (ev.type === 'lps-match') cmpCol = ev.len - 1;
+      else if (ev.type === 'lps-fallback') cmpCol = ev.oldLen;
+      else if (ev.type === 'lps-zero') cmpCol = 0;
+    }
+
+    for (var k = 0; k < M; k++) {
+      var valKnown = snapshot != null && (index >= 0);
+      var colKnown = index >= 0 && (k === 0 || knownAt(k, index));
+
+      if (k === iCol) {
+        patCells[k].dataset.state = 'current';
+        lpsCells[k].dataset.state = 'current';
+      } else if (k === cmpCol) {
+        patCells[k].dataset.state = 'confirmed';
+        lpsCells[k].dataset.state = 'confirmed';
+      } else {
+        patCells[k].dataset.state = colKnown ? 'done' : 'idle';
+        lpsCells[k].dataset.state = colKnown ? 'done' : 'idle';
+      }
+      lpsCells[k].textContent = (valKnown && colKnown) ? snapshot[k] : '–';
+    }
+
+    lpsStat.textContent = index < 0 ? '' : (inPhase1 ? ('i=' + (ev.i != null ? ev.i : '')) : 'lps=[' + DATA.lps.join(',') + ']');
+
+    // pointer chips
+    lpsPtrRow.innerHTML = '';
+    if (ev) {
+      var chipI = document.createElement('div');
+      chipI.className = 'ptr-chip i';
+      chipI.textContent = 'i';
+      chipI.style.left = ((ev.i + 0.5) / M * 100) + '%';
+      lpsPtrRow.appendChild(chipI);
+      if (cmpCol !== null) {
+        var chipLen = document.createElement('div');
+        chipLen.className = 'ptr-chip len';
+        chipLen.textContent = 'len';
+        chipLen.style.left = ((cmpCol + 0.5) / M * 100) + '%';
+        lpsPtrRow.appendChild(chipLen);
+      }
+    }
+  }
+
+  // whether column k's lps value has been determined by event index `upto`
+  function knownAt(k, upto) {
+    for (var i = 0; i <= upto && i < LPS_COUNT; i++) {
+      var e = LPS_EVENTS[i];
+      if ((e.type === 'lps-match' || e.type === 'lps-zero') && e.i === k) return true;
+    }
+    return false;
+  }
+  function renderSearchPanel() {
+    var inPhase2 = index >= LPS_COUNT;
+    var localIdx = index - LPS_COUNT;
+    var ev = inPhase2 && localIdx >= 0 ? SEARCH_EVENTS[localIdx] : null;
+
+    patHint.style.opacity = inPhase2 ? '0' : '1';
+    patFloat.style.opacity = inPhase2 ? '1' : '0';
+
+    var offset = 0, displayJ = 0, curI = null, curJ = null;
+    if (ev) {
+      switch (ev.type) {
+        case 'search-match':
+        case 'search-mismatch':
+          offset = ev.i - ev.j; displayJ = ev.j; curI = ev.i; curJ = ev.j; break;
+        case 'search-fallback':
+          offset = ev.i - ev.jAfter; displayJ = ev.jAfter; break;
+        case 'search-advance':
+          offset = (ev.i + 1) - 0; displayJ = 0; break;
+        case 'search-found':
+          offset = ev.i - ev.j; displayJ = ev.j; break;
+        case 'search-resume':
+          offset = ev.i - ev.jAfter; displayJ = ev.jAfter; break;
+        case 'search-done':
+          var prev = localIdx > 0 ? SEARCH_EVENTS[localIdx - 1] : null;
+          if (prev) {
+            if (prev.type === 'search-resume') { offset = prev.i - prev.jAfter; displayJ = prev.jAfter; }
+            else if (prev.type === 'search-fallback') { offset = prev.i - prev.jAfter; displayJ = prev.jAfter; }
+            else if (prev.type === 'search-advance') { offset = prev.i + 1; displayJ = 0; }
+          }
+          break;
+      }
+      offset = Math.max(0, Math.min(offset, TN - M));
+      patFloat.style.left = (offset / TN * 100) + '%';
+      patFloat.style.width = (M / TN * 100) + '%';
+    }
+
+    var foundList = getFoundMatches(index);
+
+    for (var t = 0; t < TN; t++) {
+      var inFinal = foundList.some(function (p) { return t >= p && t < p + M; });
+      if (inFinal) { textCells[t].dataset.state = 'matched'; continue; }
+      if (ev && curI !== null && t === curI) { textCells[t].dataset.state = 'current'; continue; }
+      if (ev && t >= offset && t < offset + displayJ) { textCells[t].dataset.state = 'confirmed'; continue; }
+      textCells[t].dataset.state = 'idle';
+    }
+
+    for (var f = 0; f < M; f++) {
+      if (ev && curJ !== null && f === curJ) { patFloatCells[f].dataset.state = 'current'; continue; }
+      if (ev && f < displayJ) { patFloatCells[f].dataset.state = 'confirmed'; continue; }
+      patFloatCells[f].dataset.state = 'idle';
+    }
+
+    searchStat.textContent = ev ? ('i=' + (curI !== null ? curI : (ev.i != null ? ev.i : '')) + (curJ !== null ? ', j=' + curJ : '')) : (inPhase2 ? '' : '');
+  }
+
+  function render() {
+    renderLpsPanel();
+    renderSearchPanel();
+
+    if (index === -1) {
+      steptagEl.textContent = '尚未开始';
+      formulaEl.innerHTML = '点击「下一步」开始推演';
+      descEl.innerHTML = '暴力匹配每次失配都要把文本指针 <code class="inline">i</code> 退回去重新试，最坏要 O(n·m) 时间。KMP 的核心洞察是：模式串自己内部的重复结构（LPS 表）已经告诉我们，失配时该跳到哪，<b>文本指针 i 全程只往前走，一次都不回退</b>。';
+    } else {
+      var n = buildNarration(EVENTS[index], index);
+      steptagEl.textContent = n.tag;
+      formulaEl.innerHTML = n.formula;
+      descEl.innerHTML = n.desc;
+    }
+
+    progressEl.textContent = index === -1 ? '0' : (index + 1);
+    btnPrev.disabled = index <= -1;
+    btnNext.disabled = index >= EVENTS.length - 1;
+
+    logRows.forEach(function (row, i) {
+      row.dataset.active = i === index ? 'true' : 'false';
+      if (i === index) row.scrollIntoView({ block: 'nearest' });
+    });
+  }
+
+  function goTo(i) {
+    index = Math.max(-1, Math.min(EVENTS.length - 1, i));
+    render();
+  }
+  function next() { if (index < EVENTS.length - 1) goTo(index + 1); else stopPlay(); }
+  function prev() { if (index > -1) goTo(index - 1); }
+  function reset() { stopPlay(); goTo(-1); }
+
+  function stopPlay() {
+    if (timer) { clearInterval(timer); timer = null; }
+    btnPlay.textContent = '播放';
+  }
+  function togglePlay() {
+    if (timer) { stopPlay(); return; }
+    if (index >= EVENTS.length - 1) goTo(-1);
+    btnPlay.textContent = '暂停';
+    timer = setInterval(function () {
+      if (index >= EVENTS.length - 1) { stopPlay(); return; }
+      next();
+    }, 1000);
+  }
+
+  btnNext.addEventListener('click', function () { stopPlay(); next(); });
+  btnPrev.addEventListener('click', function () { stopPlay(); prev(); });
+  btnReset.addEventListener('click', reset);
+  btnPlay.addEventListener('click', togglePlay);
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); stopPlay(); next(); }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); stopPlay(); prev(); }
+    else if (e.key.toLowerCase() === 'r') { reset(); }
+  });
+
+  render();
+})();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>Cgroups:--memory 限制是不是真的生效,真实吃内存到被 OOM Kill</title>
+<meta name="description" content="真实构建 FROM scratch 容器镜像,本机真实实测 --memory/--cpus 最终写进 cgroup v2 的 memory.max/cpu.max 文件、一个真实吃内存的程序在限制下被真实 OOM Kill(退出码 137)、--cpus=0.25 真实测出的耗时不是理论上的 4 倍而是约 6 倍,用真实的 cpu.stat 节流计数解释原因,对照 runc 依赖的 cgroups 库真实源码。">
+<link rel="canonical" href="https://bigywater.tech/docker-cgroups.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Cgroups:--memory 限制是不是真的生效,真实吃内存到被 OOM Kill">
+<meta property="og:description" content="真实构建 FROM scratch 容器镜像,本机真实实测 --memory/--cpus 最终写进 cgroup v2 的 memory.max/cpu.max 文件、一个真实吃内存的程序在限制下被真实 OOM Kill(退出码 137)、--cpus=0.25 真实测出的耗时不是理论上的 4 倍而是约 6 倍,用真实的 cpu.stat 节流计数解释原因,对照 runc 依赖的 cgroups 库真实源码。">
+<meta property="og:url" content="https://bigywater.tech/docker-cgroups.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Cgroups:--memory 限制是不是真的生效,真实吃内存到被 OOM Kill">
+<meta name="twitter:description" content="真实构建 FROM scratch 容器镜像,本机真实实测 --memory/--cpus 最终写进 cgroup v2 的 memory.max/cpu.max 文件、一个真实吃内存的程序在限制下被真实 OOM Kill(退出码 137)、--cpus=0.25 真实测出的耗时不是理论上的 4 倍而是约 6 倍,用真实的 cpu.stat 节流计数解释原因,对照 runc 依赖的 cgroups 库真实源码。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F2F6FA; --paper:#FFFFFF; --ink:#132029; --ink-dim:#5C6B75; --line:#DCE6EC;
+  --dk-c:#2496ED; --dk-c-soft:#DEEEFC;
+  --mem-c:#B8791E; --mem-c-soft:#F6ECD9;
+  --meta-c:#7B4FA8; --meta-c-soft:#EFE6F7;
+  --err-c:#B23B3B; --err-c-soft:#F7E3E1;
+  --code-bg:#0F1E2B; --code-ink:#E6EEF5;
+  --shadow: 0 1px 2px rgba(15,25,35,.06), 0 8px 24px -12px rgba(15,25,35,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0C1620; --paper:#16232F; --ink:#E6EEF5; --ink-dim:#96A8B5; --line:#2A3A46;
+    --dk-c:#5FB7F5; --dk-c-soft:#183246;
+    --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+    --meta-c:#B08AE0; --meta-c-soft:#332545;
+    --err-c:#E08585; --err-c-soft:#3A1F1F;
+    --code-bg:#09131B; --code-ink:#DCE7EE;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0C1620; --paper:#16232F; --ink:#E6EEF5; --ink-dim:#96A8B5; --line:#2A3A46;
+  --dk-c:#5FB7F5; --dk-c-soft:#183246;
+  --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+  --meta-c:#B08AE0; --meta-c-soft:#332545;
+  --err-c:#E08585; --err-c-soft:#3A1F1F;
+  --code-bg:#09131B; --code-ink:#DCE7EE;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--dk-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--dk-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--dk-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--dk-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#8FC4E8; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#9FD4F0;}
+
+.callout{border-left:3px solid var(--dk-c); background:var(--dk-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--dk-c-soft); color:var(--dk-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#8FD4F0;}
+.term pre.code{margin:0 0 10px; color:#8FD4F0; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+.term .cm{color:#7C93A0;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--mem-c-soft); color:var(--mem-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:22px 20px;}
+.mem-bar-wrap{border:1px solid var(--line); border-radius:10px; overflow:hidden; height:28px; background:var(--bg); position:relative;}
+.mem-bar-fill{height:100%; background:var(--dk-c); transition:width .3s, background .3s;}
+.mem-bar-fill.danger{background:var(--err-c);}
+.mem-bar-limit{position:absolute; top:0; bottom:0; width:2px; background:var(--mem-c);}
+.mem-bar-label{margin-top:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; color:var(--ink-dim);}
+.stat-row{display:flex; gap:16px; flex-wrap:wrap; margin:14px 0 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem;}
+.stat{border:1px solid var(--line); border-radius:8px; padding:8px 12px; background:var(--bg);}
+.stat b{color:var(--dk-c); display:block; font-size:1rem; font-variant-numeric:tabular-nums;}
+.stat.danger b{color:var(--err-c);}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--dk-c); color:var(--dk-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--dk-c); border-color:var(--dk-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{display:flex; align-items:center; gap:10px; margin-bottom:24px; font-size:.88rem; color:var(--ink-dim); flex-wrap:wrap;}
+.prev-post a{font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--dk-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Docker 系列 · 第二篇</div>
+    <h1><span class="mono">--memory</span> 写在命令行里,是不是真的能拦住一个疯狂吃内存的程序?</h1>
+    <p>接着<a href="docker-namespaces.html" target="_blank" rel="noopener">上一篇</a>的 <span class="mono">FROM scratch</span> 套路,这次写一个真的会不断分配、真的会写入内存的 Go 程序,分别在有 <span class="mono">--memory</span> 限制和没有限制的情况下真实跑,看它到底会不会被杀掉、什么时候被杀掉、退出码是什么。顺带用同样的思路测了 <span class="mono">--cpus</span>,结果比想象中更有意思——不是简单的"限制到 0.25 核就慢 4 倍"。</p>
+    <div class="hero-fact">
+      <div><div class="num">退出码 137</div><div class="lbl">本机真实实测:--memory=50m 下的吃内存程序被内核真实 OOM Kill,docker inspect 显示 OOMKilled=true</div></div>
+      <div><div class="num">7.66s,不是 5.12s</div><div class="lbl">本机真实实测:--cpus=0.25 下同样的计算量,耗时不是"无限制耗时 ×4",用真实的节流计数解释了差距</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <div class="prev-post">← 接上篇 <a href="docker-namespaces.html" target="_blank" rel="noopener">Linux 命名空间:同一个进程,为什么宿主机和容器内部看到的 PID 不一样</a></div>
+  <h2>真实源码:--memory/--cpus 最终写进哪两个文件</h2>
+  <p class="h2-sub">这台机器的 Docker Desktop 用的是 cgroup v2(<span class="mono">docker info</span> 真实确认),runc 依赖的 <span class="mono">opencontainers/cgroups</span> 库把命令行参数翻译成两个纯文本文件。</p>
+  <blockquote class="src">
+    <span class="path">opencontainers/cgroups · fs2/memory.go · <a href="https://github.com/opencontainers/cgroups/blob/v0.0.6/fs2/memory.go#L10" target="_blank" rel="noopener">cgroups @ v0.0.6, L10</a></span>
+func numToStr(value int64) string {
+    switch value {
+    case 0:
+        return ""      // 0(没传 --memory)不写任何值
+    case -1:
+        return "max"    // -1 代表"无限制",写字符串 "max"
+    }
+    return strconv.FormatInt(value, 10)   // 否则原样写字节数
+}
+// setMemory() 里:cgroups.WriteFile(dirPath, "memory.max", numToStr(r.Memory))
+  </blockquote>
+  <blockquote class="src">
+    <span class="path">opencontainers/cgroups · fs2/cpu.go · <a href="https://github.com/opencontainers/cgroups/blob/v0.0.6/fs2/cpu.go#L47" target="_blank" rel="noopener">cgroups @ v0.0.6, L47</a></span>
+str := "max"
+if r.CpuQuota > 0 {
+    str = strconv.FormatInt(r.CpuQuota, 10)
+}
+period := r.CpuPeriod
+if period == 0 {
+    period = 100000          // 默认周期 100ms(100000 微秒)
+}
+str += " " + strconv.FormatUint(period, 10)
+// 写进 cpu.max,格式是 "<quota> <period>"
+  </blockquote>
+  <p><span class="mono">--memory=50m</span> 会被换算成字节数直接写进 <span class="mono">memory.max</span>;<span class="mono">--cpus=0.5</span> 会被换算成"每 100000 微秒的周期里,只允许用 50000 微秒的 CPU 时间",写进 <span class="mono">cpu.max</span>。这两个文件本身就是内核 cgroup v2 文件系统的一部分,runc 只是负责把人类友好的参数翻译成内核认识的格式。</p>
+</section>
+
+<section>
+  <h2>真实实测:容器内部读到的 memory.max / cpu.max,和参数精确对应</h2>
+  <p class="h2-sub">容器里读 <span class="mono">/sys/fs/cgroup/memory.max</span> 和 <span class="mono">/sys/fs/cgroup/cpu.max</span>——之所以能直接读到"只属于这个容器"的数字,而不是宿主机整棵 cgroup 树的汇总值,靠的是上一篇提到的 Cgroup 命名空间:每个容器都以为自己就站在 cgroup 文件系统的根上。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ docker run --rm cginfo:scratch                          # 不加任何限制
+$ docker run --rm --memory=50m --cpus=0.5 cginfo:scratch   # 加限制</pre>
+<span class="ok">不加限制:
+  memory.max -> max
+  cpu.max    -> max 100000
+
+--memory=50m --cpus=0.5:
+  memory.max -> 52428800      # 精确等于 50 × 1024 × 1024
+  cpu.max    -> 50000 100000  # 精确等于 0.5 × 100000</span>
+  </div>
+  <p>数字严丝合缝对上了——<span class="mono">50m</span> 换算成字节就是 <span class="mono">52428800</span>,<span class="mono">0.5</span> 个 CPU 换算成每 100ms 周期里 <span class="mono">50000</span> 微秒的配额,跟上面源码里的换算逻辑完全对得上。</p>
+</section>
+
+<section>
+  <h2>真实实测:真的会被 OOM Kill,但不是卡在限制的那一瞬间精确停下</h2>
+  <p class="h2-sub">写一个 Go 程序,循环分配 5MB 的 <span class="mono">byte</span> 切片,并且<b>真的把每个字节写一遍</b>(不写的话可能只是虚拟地址,内核未必会立刻分配物理页),在 <span class="mono">--memory=50m</span> 限制下跑。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ docker run --name oom_test --memory=50m oomdemo:scratch
+已分配 5 MB
+已分配 10 MB
+...
+已分配 85 MB
+已分配 90 MB
+$ echo $?
+137
+$ docker inspect -f 'OOMKilled={{.State.OOMKilled}} ExitCode={{.State.ExitCode}}' oom_test</pre>
+<span class="bad">OOMKilled=true ExitCode=137</span>
+  </div>
+  <p>限制是 <span class="mono">50m</span>,但程序真实打印到了 <span class="mono">90 MB</span> 才被杀掉——这不是限制没生效,退出码 <span class="mono">137</span>(<span class="mono">128 + 9</span>,<span class="mono">SIGKILL</span>)和 <span class="mono">docker inspect</span> 的 <span class="mono">OOMKilled=true</span> 都实打实确认了内核真的出手了。超出的这部分来自几个真实、不可完全消除的延迟:Go 运行时自身的元数据/GC 开销不计入我们自己数的字节数、内核在真正判定"这个 cgroup 已经没救了、必须杀"之前会先尝试一轮内存回收、加上 <span class="mono">docker logs</span> 落盘本身也有缓冲延迟。<b>结论是"限制真实生效",但"在哪一字节精确触发"不是一个可以指望到字节级精确的保证。</b></p>
+</section>
+
+<section>
+  <h2>真实实测:--cpus=0.25 不是简单的"变慢 4 倍"</h2>
+  <p class="h2-sub">写一个纯 CPU busy loop(固定迭代次数,<span class="mono">GOMAXPROCS=1</span> 避免多核干扰),测真实耗时。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ docker run --rm cpuload:scratch              # 不限制
+$ docker run --rm --cpus=0.25 cpuload:scratch  # 限制 0.25 核
+$ docker run --rm --cpus=1 cpuload:scratch     # 限制 1 核(不该有影响)</pre>
+<span class="ok">不限制:        耗时 = 1.28s
+--cpus=0.25:  耗时 = 7.50s   (不是 1.28 × 4 = 5.12s)
+--cpus=1:     耗时 = 1.28s   (跟不限制几乎一样)</span>
+  </div>
+  <p>如果只按"允许用 1/4 的 CPU"这么简单换算,应该是 <span class="mono">5.12s</span> 左右,但真实测出来是 <span class="mono">7.5s</span>。看一眼容器自己的 <span class="mono">/sys/fs/cgroup/cpu.stat</span> 就知道差距从哪来:</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ docker run --rm --cpus=0.25 cpuload2:scratch   # 打印耗时 + cpu.stat</pre>
+<span class="ok">busy loop 完成,耗时 = 7.66s (sink=...)
+usage_usec 1935340        # 真实消耗的 CPU 时间,约 1.94s
+nr_periods 77             # 一共经历了 77 个 100ms 调度周期
+nr_throttled 77           # 这 77 个周期,每一个都被限流了
+throttled_usec 6120358    # 累计被限流(强制挂起)约 6.12s</span>
+  </div>
+  <p><span class="mono">77 × 100ms ≈ 7.7s</span>,跟真实测到的 <span class="mono">7.66s</span> 墙钟时间几乎精确对上;而这个程序真实消耗的 CPU 时间是 <span class="mono">1.94s</span>(比不限制时的 <span class="mono">1.28s</span> 略高,本身也有节流恢复调度的开销),不是 <span class="mono">1.28s</span>。<span class="mono">nr_periods == nr_throttled == 77</span> 说明<b>每一个</b> 100ms 周期,程序都在用完 25ms 配额之后被强制挂起,直到下个周期才能继续——正确的估算公式应该是"真实需要的 CPU 时间 ÷ 配额比例",而不是"不限制时的墙钟时间 ÷ 配额比例",这也是为什么很多人拿 <span class="mono">--cpus</span> 粗略估算延迟,结果都比实测出来的更乐观。</p>
+</section>
+
+<section>
+  <h2>演示:内存分配到超限,一步步走到 OOM Kill</h2>
+  <p class="h2-sub">对应上面真实实测的吃内存程序,<span class="mono">--memory=50m</span> 限制下,一步步看内存占用怎么爬过限制线、最终触发 Kill。</p>
+  <div class="demo" id="oomDemo">
+    <div class="demo-head">--memory=50m · 真实内存分配轨迹</div>
+    <div class="demo-narration" id="oomNarration"></div>
+    <div class="demo-body">
+      <div class="mem-bar-wrap">
+        <div class="mem-bar-fill" id="oomBarFill" style="width:0%"></div>
+        <div class="mem-bar-limit" id="oomBarLimit"></div>
+      </div>
+      <div class="mem-bar-label" id="oomBarLabel"></div>
+      <div class="stat-row" id="oomStats"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="oomReset">⏮ 重来</button>
+      <button class="btn" id="oomPrev">‹ 上一步</button>
+      <button class="btn primary" id="oomNext">下一步 ›</button>
+      <button class="btn" id="oomPlay">▶ 自动播放</button>
+      <span class="step-counter" id="oomCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">数据直接取自上面真实实测的分配轨迹(每步 5MB,共 18 步到 90MB 处被杀),限制线画在真实的 50MB(<span class="mono">memory.max=52428800</span>)处——图上能清楚看到分配量越过限制线之后还继续走了几步才真正被 Kill,这正是上一节讲的"生效但非字节级瞬时"。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文全部真实实验(<span class="mono">memory.max</span>/<span class="mono">cpu.max</span> 跟 <span class="mono">--memory</span>/<span class="mono">--cpus</span> 参数的精确对应、真实吃内存程序在限制下被真实 OOM Kill 及退出码/<span class="mono">OOMKilled</span> 状态、<span class="mono">--cpus=0.25</span> 真实耗时与真实 <span class="mono">cpu.stat</span> 节流计数)均在本机真实运行的 Docker Desktop(cgroup v2,cgroupfs 驱动)上完成,用的是跟上一篇一样的 <span class="mono">FROM scratch</span> + 本机交叉编译静态 Go 二进制技巧,全程零网络镜像拉取,数据未做删改。</li>
+      <li>源码引用(<span class="mono">fs2/memory.go</span> 的 <span class="mono">numToStr</span>/<span class="mono">setMemory</span>、<span class="mono">fs2/cpu.go</span> 的 <span class="mono">setCPU</span>)取自 <span class="mono">opencontainers/cgroups</span> 仓库 <span class="mono">v0.0.6</span> 标签——这是 runc <span class="mono">v1.5.1</span>(上一篇引用的同一个版本)<span class="mono">go.mod</span> 里实际依赖的版本号,不是随便挑的。</li>
+      <li>演示动画的内存分配轨迹直接取自真实实测的 18 步分配日志和真实的 <span class="mono">memory.max</span> 数值,限制线位置和最终被杀的时间点都跟真实输出一致。</li>
+      <li>没有涉及:cgroup v1 与 v2 在文件格式上的差异(<span class="mono">memory.limit_in_bytes</span> vs <span class="mono">memory.max</span>)、<span class="mono">memory.high</span> 软限制(只做内存回收压力、不直接 kill)和 <span class="mono">memory.max</span> 硬限制的区别、<span class="mono">--memory-swap</span>/swap 空间对 OOM 判定的影响、cgroup 内核 OOM killer 具体挑选"杀哪个进程"的打分算法(<span class="mono">oom_score_adj</span>)。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="docker-layers.html" target="_blank" rel="noopener">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">镜像分层与构建缓存:一条 COPY 指令怎么变成一层,缓存在什么粒度失效</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Docker 系列 · 第二篇 · Cgroups 资源限制 · 数据来自本机真实运行的 Docker Desktop</footer>
+
+<script>
+const DATA = {
+  "limitMB": 50,
+  "killedAtMB": 90,
+  "steps": [5,10,15,20,25,30,35,40,45,50,55,60,65,70,75,80,85,90]
+};
+
+(function(){
+  const steps = DATA.steps;
+  const limit = DATA.limitMB;
+  const totalSteps = steps.length;
+  const barFill = document.getElementById('oomBarFill');
+  const barLimit = document.getElementById('oomBarLimit');
+  const barLabel = document.getElementById('oomBarLabel');
+  const narration = document.getElementById('oomNarration');
+  const statsBox = document.getElementById('oomStats');
+  const counter = document.getElementById('oomCounter');
+  let idx = 0, playing=false, playTimer=null;
+
+  const maxScale = DATA.killedAtMB + 10;
+  barLimit.style.left = (limit / maxScale * 100) + '%';
+
+  function describe(i){
+    const mb = steps[i];
+    if (i === totalSteps - 1) return `已分配 <span class="k">${mb} MB</span>——内核这时候真正出手,进程被 <span class="k">SIGKILL</span>(退出码 137)。`;
+    if (mb > limit) return `已分配 <span class="k">${mb} MB</span>,已经超过 memory.max(<span class="k">${limit} MB</span>)——内核正在尝试回收,还没立刻杀。`;
+    return `已分配 <span class="k">${mb} MB</span>,还在 memory.max(<span class="k">${limit} MB</span>)以内。`;
+  }
+
+  function render(){
+    idx = Math.max(0, Math.min(totalSteps-1, idx));
+    const mb = steps[idx];
+    narration.innerHTML = describe(idx);
+
+    const pct = mb / maxScale * 100;
+    barFill.style.width = pct + '%';
+    barFill.className = 'mem-bar-fill' + (mb > limit ? ' danger' : '');
+    barLabel.textContent = `已分配: ${mb} MB   /   memory.max 限制: ${limit} MB`;
+
+    const isKilled = idx === totalSteps - 1;
+    statsBox.innerHTML = `<div class="stat">已分配<b>${mb} MB</b></div><div class="stat">是否超限<b>${mb > limit ? '是' : '否'}</b></div><div class="stat${isKilled ? ' danger' : ''}">进程状态<b>${isKilled ? '已被 OOM Kill' : '运行中'}</b></div>`;
+
+    counter.textContent = `${idx+1} / ${totalSteps}`;
+    document.getElementById('oomPrev').disabled = idx===0;
+    document.getElementById('oomNext').disabled = idx===totalSteps-1;
+  }
+  document.getElementById('oomPrev').onclick=()=>{idx--;render();stopPlay();};
+  document.getElementById('oomNext').onclick=()=>{idx++;render();stopPlay();};
+  document.getElementById('oomReset').onclick=()=>{idx=0;render();stopPlay();};
+  function stopPlay(){ playing=false; clearInterval(playTimer); document.getElementById('oomPlay').textContent='▶ 自动播放'; }
+  document.getElementById('oomPlay').onclick=()=>{
+    if(playing){ stopPlay(); return; }
+    playing=true; document.getElementById('oomPlay').textContent='⏸ 暂停';
+    playTimer = setInterval(()=>{
+      if(idx>=totalSteps-1){ stopPlay(); return; }
+      idx++; render();
+    }, 500);
+  };
+  render();
+})();
+</script>
+
+</body>
+</html>

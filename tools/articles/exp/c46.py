@@ -1,0 +1,40 @@
+import sys, os, re, time, subprocess, json; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from dl import *
+tee('c46')
+img('alpine:3.20')
+purge()
+def vm(cmd):
+    rc, o = dk('run', '--rm', '--privileged', '--pid=host', *LAB, 'alpine:3.20', 'nsenter', '-t', '1', '-m', '-u', '-n', '-i', 'sh', '-c', cmd, raw=True)
+    return o.strip()
+def ip(n, net=None):
+    return out('inspect', '--format', '{{range $k,$v := .NetworkSettings.Networks}}{{$v.IPAddress}} {{end}}', n).split()
+print('== 一:默认 bridge 网络(Docker Engine 29.8.2)')
+print('  docker network ls 里的内置网络:' + out('network', 'ls', '--format', '{{.Name}}/{{.Driver}}').replace('\n', ' '))
+print('  bridge 网络的 Subnet / Gateway:' + out('network', 'inspect', 'bridge', '--format', '{{range .IPAM.Config}}{{.Subnet}} {{.Gateway}}{{end}}'))
+v0 = int(vm('ip -br link show type veth | wc -l'))
+a, b = 'bwlab-c46a', 'bwlab-c46b'
+dk('run', '-d', '--name', a, *LAB, 'alpine:3.20', 'sleep', '120'); dk('run', '-d', '--name', b, *LAB, 'alpine:3.20', 'sleep', '120')
+ia, ib = ip(a)[0], ip(b)[0]
+print(f'  两个默认 bridge 上的容器 IP:a={ia} b={ib}')
+rc, o = dk('exec', a, 'ping', '-c', '1', '-W', '2', ib); print(f'  a ping b 的 IP:退出码 {rc}')
+rc, o = dk('exec', a, 'ping', '-c', '1', '-W', '2', b); print(f'  a ping b 的名字 {b}:退出码 {rc};{o.strip().splitlines()[0][:80]}')
+print('  容器里的默认路由:' + dk('exec', a, 'ip', 'route')[1].strip().replace('\n', ' ; '))
+print('== 二:自定义 bridge 网络')
+dk('network', 'create', '--label', 'bwlab=1', 'bwlab-c46net')
+print('  docker network create 之后新网络的 Subnet / Gateway:' + out('network', 'inspect', 'bwlab-c46net', '--format', '{{range .IPAM.Config}}{{.Subnet}} {{.Gateway}}{{end}}'))
+c, d_ = 'bwlab-c46c', 'bwlab-c46d'
+dk('run', '-d', '--name', c, *LAB, '--network', 'bwlab-c46net', 'alpine:3.20', 'sleep', '120'); dk('run', '-d', '--name', d_, *LAB, '--network', 'bwlab-c46net', 'alpine:3.20', 'sleep', '120')
+ic, id_ = ip(c)[0], ip(d_)[0]
+rc, o = dk('exec', c, 'ping', '-c', '1', '-W', '2', d_); print(f'  自定义网络里 c ping d 的名字 {d_}:退出码 {rc};解析到 {o.strip().splitlines()[0][:70]}')
+print('== 三:不同网络之间的隔离')
+rc, o = dk('exec', c, 'ping', '-c', '1', '-W', '2', ia); print(f'  自定义网络里的 c ping 默认 bridge 上的 a({ia}):退出码 {rc}')
+rc, o = dk('exec', a, 'ping', '-c', '1', '-W', '2', ic); print(f'  默认 bridge 上的 a ping c({ic}):退出码 {rc}')
+dk('network', 'connect', 'bwlab-c46net', a)
+print(f'  docker network connect bwlab-c46net {a} 之后,a 有 {len(ip(a))} 个 IP:{ip(a)}')
+rc, o = dk('exec', a, 'ping', '-c', '1', '-W', '2', c); print(f'  a ping c 的名字:退出码 {rc}')
+print('== 四:虚拟机里看到的网桥和 veth')
+print('  虚拟机里的网桥设备:' + vm("ip -br link show type bridge | awk '{print $1}'").replace('\n', ' '))
+v1 = int(vm('ip -br link show type veth | wc -l'))
+print(f'  虚拟机里 veth 设备个数:起容器前 {v0} 个,起 4 个容器(其中 a 连了两个网络)之后 {v1} 个,增加 {v1 - v0} 个——每个容器每连一个网络就多一个 veth')
+print('  docker0 的地址:' + vm("ip -4 -br addr show docker0 | awk '{print $3}'"))
+purge()

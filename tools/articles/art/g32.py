@@ -1,0 +1,25 @@
+from lib import *
+S = SS('g32')
+def tail(lines, sub):
+    i = [k for k, l in enumerate(lines) if sub in l][0]
+    return lines[i:]
+steps = [
+    step("一个本机的 file:// GOPROXY 里放了 4 个模块的多个版本:b v1.1.0 需要 d v1.1.0、b v1.2.0 需要 d v1.3.0;c v1.1.0 需要 d v1.2.0、c v1.2.0 需要 d v1.4.0;d 的 v1.1.0 与 v1.2.0 需要 e v1.1.0,v1.3.0 与 v1.4.0 需要 e v1.2.0;e 有 v1.1.0、v1.2.0、v1.3.0。主模块直接依赖 b v1.2.0 与 c v1.2.0,go mod tidy 之后的 go.mod 把间接依赖也列了出来:d v1.4.0 // indirect、e v1.2.0 // indirect。", t=tl(S(1)), done=lidx(S(1), 'b v1.1.0 需要', 'b v1.2.0 需要', 'c v1.2.0 需要'), mark=lidx(S(1), 'd v1.4.0 // indirect', 'e v1.2.0 // indirect'), kv=KV([['主模块', 'b v1.2.0、c v1.2.0'], ['b v1.2.0 → d', 'v1.3.0'], ['c v1.2.0 → d', 'v1.4.0'], ['d v1.4.0 → e', 'v1.2.0'], ['tidy 之后的 go.mod', '间接依赖 d v1.4.0、e v1.2.0 也写进去']], ['tidy 之后的 go.mod'])),
+    step("go list -m all(构建列表):app、b v1.2.0、c v1.2.0、d v1.4.0、e v1.2.0。go mod graph 列出需求边:b@v1.2.0 d@v1.3.0、c@v1.2.0 d@v1.4.0、d@v1.4.0 e@v1.2.0 等。e 的仓库里有 v1.1.0、v1.2.0、v1.3.0。运行时每个模块打印自己用的版本:b v1.2.0 → d v1.4.0 → e v1.2.0,c v1.2.0 → d v1.4.0 → e v1.2.0——b 虽然声明只要 d v1.3.0,实际链接的是 d v1.4.0。", t=tl(S(2)), done=lidx(S(2), 'go list -m all:', 'go mod graph:'), mark=lidx(S(2), 'e 仓库里有的版本', 'b v1.2.0 → d v1.4.0'), kv=KV([['构建列表', 'b v1.2.0、c v1.2.0、d v1.4.0、e v1.2.0'], ['e 仓库里有', 'v1.1.0、v1.2.0、v1.3.0'], ['实际链接的 d', 'v1.4.0(b 只要 v1.3.0,c 要 v1.4.0,取大者)']], ['实际链接的 d'])),
+    step("最小版本选择取的是“需求图里出现过的最大版本”,不是仓库里最新的:d 出现过 v1.3.0(来自 b)与 v1.4.0(来自 c),选 v1.4.0;e 只被 d v1.4.0 要求 v1.2.0,所以是 v1.2.0,尽管仓库里已经有 v1.3.0。go list -m e 得到 e v1.2.0。", t=tl(S(3)), done=lidx(S(3), 'd 是 v1.4.0'), mark=lidx(S(3), 'go list -m e'), kv=KV([['d', '需求里出现 v1.3.0、v1.4.0 → 选 v1.4.0'], ['e', '需求里只出现 v1.2.0 → 选 v1.2.0,不是最新的 v1.3.0']], ['e'])),
+    step("升级与降级:go get e@latest:upgraded e v1.2.0 => v1.3.0,go.mod 里新增 e v1.3.0 // indirect;go get d@v1.1.0(降级)牵连别的模块:downgraded b v1.2.0 => v1.1.0、removed c v1.2.0(c 的所有版本都要求比 d v1.1.0 更高的 d)、downgraded d v1.4.0 => v1.1.0;之后 go list -m all 是 b v1.1.0、d v1.1.0、e v1.2.0,go.mod 里 c 没有了,用 -mod=readonly 构建报 cannot find module providing package c: import lookup disabled by -mod=readonly。", t=tl(S(4)), done=lidx(S(4), 'go get e@latest', '升级之后'), mark=lidx(S(4), 'downgraded b', 'removed c', '降级之后 go list', 'cannot find module providing package c'), kv=KV([['go get e@latest', 'e v1.2.0 → v1.3.0,go.mod 记下来'], ['go get d@v1.1.0', 'b 降到 v1.1.0,c 被移除,d 降到 v1.1.0'], ['降级之后', 'e 仍是 v1.2.0,主模块 import 的 c 找不到了']], ['go get d@v1.1.0'])),
+    step("go mod why -m e:e 被需要的原因是 app → b → d → e。go.mod 里加 exclude d v1.4.0:go: dropping requirement on excluded version d v1.4.0,构建列表里 d 变成 v1.3.0。replace e => ../e_local:go run 输出的 e 变成 “e 本地替换版”,b、c、d 的版本不变。", t=tl(S(5)), done=lidx(S(5), 'go mod why', '# e'), mark=lidx(S(5), 'dropping requirement', 'd v1.3.0', 'e 本地替换版'), kv=KV([['go mod why -m e', 'app → b → d → e'], ['exclude d v1.4.0', 'd 回到 v1.3.0'], ['replace e => ../e_local', '所有对 e 的需求都用本地目录']], ['exclude d v1.4.0'])),
+]
+A = mkartg('g32', 32, 'Go,模块,最小版本选择,go.mod,go mod,真实验证,动画演示',
+    '在一个本机 file:// GOPROXY 里搭出 4 个模块的多个版本,真实验证最小版本选择:构建列表取“需求图里出现过的最大版本”(d v1.4.0),而不是仓库里最新的版本(e 有 v1.3.0 却选 v1.2.0);go mod tidy 写出间接依赖;go get 升级与降级会牵连其它模块(降级 d 到 v1.1.0 使 b 降级、c 被移除);go mod why、exclude 与 replace 的效果。',
+    '“最小版本选择”(MVS)这个名字容易让人误会成“选最小的”。它的意思是:对每个模块,选需求里出现过的最大版本——这已经是满足所有需求的最小版本,不会自动升级到更新的发布。这篇用一个自己搭的本机模块仓库,把这条规则以及升级、降级、exclude、replace 的行为逐个跑出来。',
+    [('d v1.4.0', '构建列表里 d 的版本:b 要 v1.3.0、c 要 v1.4.0,取大者'), ('e v1.2.0', 'e 有 v1.3.0,但没有任何需求要它,所以不会被选中'), ('removed c', '降级 d 到 v1.1.0 时,c 的所有版本都要更高的 d,于是被从 go.mod 里移除')],
+    [('搭一个本机仓库', '<p>为了不依赖网络与别人的模块,我在本机用 <code>file://</code> 形式的 <code>GOPROXY</code> 放了四个模块的多个版本(目录里是 Go 代理协议要求的 <code>list</code>、<code>.info</code>、<code>.mod</code>、<code>.zip</code>),并且让每个模块的代码打印自己的版本,这样运行时能看到最终链接了哪个版本。</p>'),
+     ('构建列表', '<p><code>go list -m all</code> 给出的是 MVS 的结果。b 虽然只声明需要 d v1.3.0,链接的却是 d v1.4.0,因为图里另一条边(c 要 d v1.4.0)要求更高。<code>go mod graph</code> 列出所有需求边,<code>go mod tidy</code> 把构建需要的间接依赖(d、e)也写进主模块的 go.mod 并标注 <code>// indirect</code>——这是为了让主模块不用下载整个传递闭包的 go.mod 就能算出构建列表(这一点是我对 go.mod 里列出间接依赖的目的的理解,没有单独验证)。</p>'),
+     ('“最小”的含义', '<p>e 在仓库里已经有 v1.3.0,但没有任何需求指向它,所以选的是需求里出现过的最大版本 v1.2.0。不会因为“有新版本”就自动升级,也不会因为“别的模块更新了”而变——构建是可重复的,这是 MVS 的卖点。</p>'),
+     ('升级与降级', '<p>要新版本必须显式 <code>go get e@latest</code>,go.mod 里多一行需求。降级更微妙:降 <code>d</code> 会让所有要求更高版本 <code>d</code> 的模块一起降(<code>b</code> 降到 v1.1.0)或被移除(<code>c</code>),因为不存在满足条件的更低版本。降级之后 <code>e</code> 留在 v1.2.0,不会自动跟着降。这个例子里主模块 import 了 <code>c</code>,被移除后构建失败(<code>-mod=readonly</code> 时直接报错)。</p>'),
+     ('why、exclude、replace', '<p><code>go mod why -m</code> 给出“主模块为什么需要它”的最短链;<code>exclude</code> 让某个版本被当作不存在,所有指向它的需求被丢弃,图里下一个满足的版本接上(这里是 d v1.3.0);<code>replace</code> 把一个模块整体换成本地目录,所有需求指向本地版本。replace 只对主模块的 go.mod 生效。</p>')],
+    steps,
+    [ENV_G + '。所有模块来自本机 file:// 代理(GOPROXY=file://…,GOSUMDB=off,GOFLAGS=-mod=mod),不联网;每个模块一个很小的包,返回 “名字 版本 → 依赖的 Info()”;go.mod 与 go list 的输出来自真实命令',
+     '没有验证:真实代理与校验和数据库(go.sum、GOSUMDB)的交互、模块图剪枝(go 1.17 之后 go.mod 的 go 版本对 MVS 的影响)的细节、retract 与 deprecated、多个 major 版本(/v2)并存、go work 下的 MVS(见下一篇)、go get -u 与 go mod tidy 在大型依赖图上的差异'],
+    '最小版本选择')

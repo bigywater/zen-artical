@@ -1,0 +1,652 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>Sanitizer</title>
+<meta name="description" content="用 nightly 的 -Zsanitizer 验证:ASan 在原生速度上报告释放后使用、堆/栈越界、重复释放、泄漏(本机 detect_leaks=1 可用)与 libc memcpy 越界;TSan 需要 -Zbuild-std 才能报数据竞争;-Zsanitizer=leak/memory 在本机不支持;开销:分配密集场景 ×9.3,遍历 ×2.4,内存 ×2.3。">
+<link rel="canonical" href="https://bigywater.tech/rust-sanitizer.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Sanitizer">
+<meta property="og:description" content="用 nightly 的 -Zsanitizer 验证:ASan 在原生速度上报告释放后使用、堆/栈越界、重复释放、泄漏(本机 detect_leaks=1 可用)与 libc memcpy 越界;TSan 需要 -Zbuild-std 才能报数据竞争;-Zsanitizer=leak/memory 在本机不支持;开销:分配密集场景 ×9.3,遍历 ×2.4,内存 ×2.3。">
+<meta property="og:url" content="https://bigywater.tech/rust-sanitizer.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Sanitizer">
+<meta name="twitter:description" content="用 nightly 的 -Zsanitizer 验证:ASan 在原生速度上报告释放后使用、堆/栈越界、重复释放、泄漏(本机 detect_leaks=1 可用)与 libc memcpy 越界;TSan 需要 -Zbuild-std 才能报数据竞争;-Zsanitizer=leak/memory 在本机不支持;开销:分配密集场景 ×9.3,遍历 ×2.4,内存 ×2.3。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">1937</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#B7410E; --series-c-soft:#F7E0D3;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#E8805A; --series-c-soft:#3A1D12;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#E8805A; --series-c-soft:#3A1D12;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Rust · 164</div>
+  <h1>Sanitizer</h1>
+  <p>上一篇的 Miri 能解释执行但很慢,也不能调 C 函数。Sanitizer 换了一条路:编译时在原生代码里插入检查,运行得快得多。这篇把常见的内存错误和数据竞争各跑一遍,看它们的报告长什么样、哪些在本机能用、代价多大。</p>
+  <div class="hero-fact">
+<div><div class="num">5</div><div class="lbl">本篇用 ASan 触发并报告的内存错误种类(释放后使用、堆越界、栈越界、重复释放、泄漏;另有 memcpy 越界)</div></div><div><div class="num">×9.3</div><div class="lbl">200 万次 Box::new:ASan 对原生 -O 的耗时倍数</div></div><div><div class="num">2</div><div class="lbl">本机不支持的 -Zsanitizer 值:leak、memory</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="rust-miri.html">Miri 检查未定义行为</a></div>
+<section>
+  <h2>释放后使用</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  源码:
+      1 | fn main() {
+      2 |     let v = vec![1, 2, 3];
+      3 |     let p = v.as_ptr();
+      4 |     drop(v);
+      5 |     println!("{}", unsafe { *p });
+      6 | }
+  -Zsanitizer=address 编译运行:退出码 -6
+    =================================================================
+    ==92812==ERROR: AddressSanitizer: heap-use-after-free on address 0x602000000970 at pc 0x00010206d61c bp 0x00016dd92270 sp 0x00016dd92268
+    READ of size 4 at 0x602000000970 thread T0
+        #0 u164_uaf::main::h4690bcd4eeb5eab8 u164_uaf.rs:5
+        #1 core::ops::function::FnOnce::call_once::h81b718fb6564e259 function.rs:250
+        #2 std::sys::backtrace::__rust_begin_short_backtrace::h4808e6b10d96054f backtrace.rs:166
+    0x602000000970 is located 0 bytes inside of 12-byte region [0x602000000970,0x60200000097c)
+    freed by thread T0 here:
+        #0 free+0x70
+        #1 _$LT$alloc..raw_vec..RawVec$LT$T$C$A$GT$$u20$as$u20$core..ops..drop..Drop$GT$::drop::h9b52e4e4c87f2eea mod.rs:443
+        #2 core::ptr::drop_glue$LT$alloc..raw_vec..RawVec$LT$i32$GT$$GT$::hfbdd768f8728e56a mod.rs:848
+    previously allocated by thread T0 here:
+        #0 malloc+0x6c
+        #1 alloc::alloc::alloc::h4d231932ce95d638 alloc.rs:158
+        #2 alloc::alloc::Global::alloc_impl_runtime::hec25b63c3797b59e alloc.rs:335
+    SUMMARY: AddressSanitizer: heap-use-after-free u164_uaf.rs:5 in u164_uaf::main::h4690bcd4eeb5eab8
+    ==92812==ABORTING</pre></div>
+  <p>对比解释执行的 Miri 见<a href="rust-miri.html">Miri 检查未定义行为</a>。</p>
+</section>
+<section>
+  <h2>堆越界读</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  源码:
+      1 | use std::hint::black_box;
+      2 | fn main() {
+      3 |     let v = vec![10u32, 20, 30];
+      4 |     let i = black_box(3);
+      5 |     let x = unsafe { *v.as_ptr().add(i) };
+      6 |     println!("{}", x);
+      7 | }
+  -Zsanitizer=address 编译运行:退出码 -6
+    =================================================================
+    ==92843==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x60200000097c at pc 0x000102095630 bp 0x00016dd6a2b0 sp 0x00016dd6a2a8
+    READ of size 4 at 0x60200000097c thread T0
+        #0 u164_oob::main::h68f0db86d30f4ac0 u164_oob.rs:5
+        #1 core::ops::function::FnOnce::call_once::h985e0e6e4afcdd18 function.rs:250
+        #2 std::sys::backtrace::__rust_begin_short_backtrace::h7748453a8d8cbf95 backtrace.rs:166
+    0x60200000097c is located 0 bytes after 12-byte region [0x602000000970,0x60200000097c)
+    allocated by thread T0 here:
+        #0 malloc+0x6c
+        #1 alloc::alloc::alloc::hd44f808ba37a7cc0 alloc.rs:158
+        #2 alloc::alloc::Global::alloc_impl_runtime::hdd866a2a3943b54e alloc.rs:335
+    SUMMARY: AddressSanitizer: heap-buffer-overflow u164_oob.rs:5 in u164_oob::main::h68f0db86d30f4ac0
+    ==92843==ABORTING
+  源码:
+      1 | use std::hint::black_box;
+      2 | fn main() {
+      3 |     let v = vec![10u32, 20, 30];
+      4 |     let i = black_box(3);
+      5 |     println!("{}", v[i]);
+      6 | }
+  -Zsanitizer=address 编译运行:退出码 101
+    thread 'main' (7610322) panicked at &lt;实验目录&gt;/src/u164_safe_oob.rs:5:21:
+    index out of bounds: the len is 3 but the index is 3
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</pre></div>
+</section>
+<section>
+  <h2>栈越界与重复释放</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  源码:
+      1 | use std::hint::black_box;
+      2 | fn main() {
+      3 |     let a = [1u8, 2, 3, 4];
+      4 |     let p = a.as_ptr();
+      5 |     let i = black_box(4);
+      6 |     println!("{}", unsafe { *p.add(i) });
+      7 | }
+  -Zsanitizer=address 编译运行:退出码 -6
+    =================================================================
+    ==92913==ERROR: AddressSanitizer: stack-buffer-overflow on address 0x00016d6523d4 at pc 0x0001027accc8 bp 0x00016d652370 sp 0x00016d652368
+    READ of size 1 at 0x00016d6523d4 thread T0
+        #0 u164_stack::main::h0ee85ba49f3c565c u164_stack.rs:6
+        #1 core::ops::function::FnOnce::call_once::h4c56f55464e056c3 function.rs:250
+        #2 std::sys::backtrace::__rust_begin_short_backtrace::hda93cf726b48ae27 backtrace.rs:166
+    Address 0x00016d6523d4 is located in stack of thread T0 at offset 84 in frame
+        #0 u164_stack::main::h0ee85ba49f3c565c u164_stack.rs:2
+      This frame has 3 object(s):
+        [32, 48) 'args' (line 6)
+        [64, 65) '_10' (line 6)
+        [80, 84) 'a' (line 3) &lt;== Memory access at offset 84 overflows this variable
+    HINT: this may be a false positive if your program uses some custom stack unwind mechanism, swapcontext or vfork
+          (longjmp and C++ exceptions *are* supported)
+    …(共 16 行)
+  源码:
+      1 | fn main() {
+      2 |     let b = Box::new(5u32);
+      3 |     let p = Box::into_raw(b);
+      4 |     unsafe { drop(Box::from_raw(p)); drop(Box::from_raw(p)); }
+      5 | }
+  -Zsanitizer=address 编译运行:退出码 -6
+    =================================================================
+    ==92953==ERROR: AddressSanitizer: attempting double-free on 0x602000000970 in thread T0:
+        #0 free+0x70
+        #1 alloc::alloc::dealloc_nonnull::hd83b3ba2b3e2d01c alloc.rs:205
+        #2 alloc::alloc::Global::deallocate_impl_runtime::h9ea61a1be044d64f alloc.rs:354
+    0x602000000970 is located 0 bytes inside of 4-byte region [0x602000000970,0x602000000974)
+    freed by thread T0 here:
+        #0 free+0x70
+        #1 alloc::alloc::dealloc_nonnull::hd83b3ba2b3e2d01c alloc.rs:205
+        #2 alloc::alloc::Global::deallocate_impl_runtime::h9ea61a1be044d64f alloc.rs:354
+    previously allocated by thread T0 here:
+        #0 malloc+0x6c
+        #1 alloc::alloc::alloc::h67cc3907dedf19bb alloc.rs:158
+        #2 alloc::alloc::Global::alloc_impl_runtime::h0161344b0a1b8663 alloc.rs:335
+    SUMMARY: AddressSanitizer: double-free (librustc-nightly_rt.asan.dylib:arm64+0x3ef54) in free+0x70
+    ==92953==ABORTING</pre></div>
+</section>
+<section>
+  <h2>泄漏</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  源码:
+      1 | fn main() {
+      2 |     let b = Box::new([1u8; 16]);
+      3 |     std::mem::forget(b);
+      4 |     println!("done");
+      5 | }
+  -Zsanitizer=address 编译运行:退出码 1
+    done
+    =================================================================
+    ==92982==ERROR: LeakSanitizer: detected memory leaks
+    Direct leak of 16 byte(s) in 1 object(s) allocated from:
+        #0 malloc+0x6c
+        #1 alloc::alloc::alloc::h5c1c31a4651401fe alloc.rs:158
+        #2 alloc::alloc::Global::alloc_impl_runtime::h8df4232c0085002b alloc.rs:335
+    SUMMARY: AddressSanitizer: 16 byte(s) leaked in 1 allocation(s).
+  -Zsanitizer=leak 编译: error: leak sanitizer is not supported for this target
+  -Zsanitizer=memory 编译: error: memory sanitizer is not supported for this target</pre></div>
+</section>
+<section>
+  <h2>外部 C 函数</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  源码:
+      1 | use std::hint::black_box;
+      2 | unsafe extern "C" { fn memcpy(dst: *mut u8, src: *const u8, n: usize) -&gt; *mut u8; }
+      3 | fn main() {
+      4 |     let mut dst = vec![0u8; 8];
+      5 |     let src = [7u8; 16];
+      6 |     unsafe { memcpy(dst.as_mut_ptr(), src.as_ptr(), black_box(16)) };
+      7 |     println!("{}", dst[0]);
+      8 | }
+  -Zsanitizer=address 编译运行:退出码 -6
+    =================================================================
+    ==93022==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x602000000978 at pc 0x0001007ed1dc bp 0x00016fc062f0 sp 0x00016fc05aa0
+    WRITE of size 16 at 0x602000000978 thread T0
+        #0 memcpy+0x48c
+        #1 u164_ffi::main::h789552d2ef368346 u164_ffi.rs:6
+        #2 core::ops::function::FnOnce::call_once::hcfe6ab0c5df18b36 function.rs:250
+    0x602000000978 is located 0 bytes after 8-byte region [0x602000000970,0x602000000978)
+    allocated by thread T0 here:
+        #0 calloc+0x74
+        #1 _RNvMs8_NtCs3OnNwH6WCZa_5alloc7raw_vecNtB5_11RawVecInner15try_allocate_inCs6isvwMtXNgT_5gimli+0x60
+        #2 alloc::raw_vec::RawVecInner$LT$A$GT$::with_capacity_zeroed_in::h5e2911326f496cac mod.rs:610
+    SUMMARY: AddressSanitizer: heap-buffer-overflow (librustc-nightly_rt.asan.dylib:arm64+0x3d1d8) in memcpy+0x48c
+    ==93022==ABORTING</pre></div>
+</section>
+<section>
+  <h2>ThreadSanitizer</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  源码:
+      1 | use std::thread;
+      2 | struct P(*mut u32);
+      3 | unsafe impl Send for P {}
+      4 | fn main() {
+      5 |     let mut x = 0u32;
+      6 |     let p = P(&amp;mut x as *mut u32);
+      7 |     let h = thread::spawn(move || {
+      8 |         let p = p;
+      9 |         for _ in 0..1000 { unsafe { *p.0 += 1 }; }
+     10 |     });
+     11 |     for _ in 0..1000 { unsafe { *(&amp;mut x as *mut u32) += 1 }; }
+     12 |     h.join().unwrap();
+     13 |     println!("x = {}", x);
+     14 | }
+  只给自己的 crate 加 -Zsanitizer=thread(不重编标准库):退出码 101
+    error: mixing `-Zsanitizer` will cause an ABI mismatch in crate `ts`
+      |
+      = help: the `-Zsanitizer` flag modifies the ABI so Rust crates compiled with different values of this flag cannot be used together safely
+      = note: `-Zsanitizer=thread` in this crate is incompatible with `-Zsanitizer` being unset in dependency `std`
+      = help: unset `-Zsanitizer` in this crate or set `-Zsanitizer=thread` in `std`
+      = help: if you are sure this will not cause problems, you may use `-Cunsafe-allow-abi-mismatch=sanitizer` to silence this error
+    …(共 134 行)
+  加 -Zbuild-std(含重编标准库,共 12 秒):退出码 -6
+    ==================
+    WARNING: ThreadSanitizer: data race (pid=93031)
+      Read of size 4 at 0x00016d7598bc by thread T1:
+        #0 ts::main::_$u7b$$u7b$closure$u7d$$u7d$::hdf5edab4845b39f7 main.rs:9
+        #1 std::sys::backtrace::__rust_begin_short_backtrace::h156f8089f55476ae backtrace.rs:166
+        #2 std::thread::lifecycle::spawn_unchecked::_$u7b$$u7b$closure$u7d$$u7d$::_$u7b$$u7b$closure$u7d$$u7d$::h53f13b1c4a46dbcc lifecycle.rs:70
+      Previous write of size 4 at 0x00016d7598bc by main thread:
+        #0 ts::main::hf31edbd70aaa0657 main.rs:11
+        #1 core::ops::function::FnOnce::call_once::h56d34f4555891b70 function.rs:250
+        #2 std::sys::backtrace::__rust_begin_short_backtrace::h65b730afc025650e backtrace.rs:166
+      Location is stack of main thread.
+      Thread T1 (tid=7611885, running) created by main thread at:
+        #0 pthread_create &lt;null&gt;
+        #1 std::sys::thread::unix::Thread::new::ha849696e57eca4aa &lt;null&gt;
+        #2 std::thread::lifecycle::spawn_unchecked::h4ad50f56bd654a92 lifecycle.rs:116
+    SUMMARY: ThreadSanitizer: data race main.rs:9 in ts::main::_$u7b$$u7b$closure$u7d$$u7d$::hdf5edab4845b39f7
+    ==================
+    ==================
+    WARNING: ThreadSanitizer: data race (pid=93031)
+      Write of size 4 at 0x00016d7598bc by thread T1:
+        #0 ts::main::_$u7b$$u7b$closure$u7d$$u7d$::hdf5edab4845b39f7 main.rs:9
+        #1 std::sys::backtrace::__rust_begin_short_backtrace::h156f8089f55476ae backtrace.rs:166
+        #2 std::thread::lifecycle::spawn_unchecked::_$u7b$$u7b$closure$u7d$$u7d$::_$u7b$$u7b$closure$u7d$$u7d$::h53f13b1c4a46dbcc lifecycle.rs:70
+      Previous write of size 4 at 0x00016d7598bc by main thread:
+        #0 ts::main::hf31edbd70aaa0657 main.rs:11
+        #1 core::ops::function::FnOnce::call_once::h56d34f4555891b70 function.rs:250
+        #2 std::sys::backtrace::__rust_begin_short_backtrace::h65b730afc025650e backtrace.rs:166
+      Location is stack of main thread.
+      Thread T1 (tid=7611885, running) created by main thread at:
+        #0 pthread_create &lt;null&gt;
+        #1 std::sys::thread::unix::Thread::new::ha849696e57eca4aa &lt;null&gt;
+        #2 std::thread::lifecycle::spawn_unchecked::h4ad50f56bd654a92 lifecycle.rs:116
+    SUMMARY: ThreadSanitizer: data race main.rs:9 in ts::main::_$u7b$$u7b$closure$u7d$$u7d$::hdf5edab4845b39f7
+    ==================
+    ThreadSanitizer: reported 2 warnings
+    x = 2000</pre></div>
+  <p>数据竞争在安全代码里是编译错误,见<a href="rust-data-race-compile-error.html">数据竞争为什么编译不过</a>;这里为了触发它用了 unsafe 的裸指针。</p>
+</section>
+<section>
+  <h2>代价</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  源码:
+      1 | use std::hint::black_box;
+      2 | use std::time::Instant;
+      3 | fn main() {
+      4 |     let n = 20_000_000usize;
+      5 |     let v: Vec&lt;u32&gt; = (0..n as u32).collect();
+      6 |     let t = Instant::now();
+      7 |     let mut s = 0u64;
+      8 |     for i in 0..v.len() { s += unsafe { *v.as_ptr().add(black_box(i)) } as u64; }
+      9 |     black_box(s);
+     10 |     let a = t.elapsed().as_secs_f64() * 1000.0;
+     11 |     let t = Instant::now();
+     12 |     for i in 0..2_000_000u32 { let b = Box::new([i; 4]); black_box(&amp;b); }
+     13 |     let b = t.elapsed().as_secs_f64() * 1000.0;
+     14 |     println!("{:.2} {:.2}", a, b);
+     15 | }
+                   遍历 2000 万元素 (ms)     200 万次 Box::new (ms)       峰值内存 (MiB)        可执行文件 (KiB)
+  原生 -O                         6.1                     21.1               78                500
+  ASan -O                      14.5                    196.5              180                502</pre></div>
+  <p>模糊测试通常与 sanitizer 一起运行,见<a href="rust-fuzz.html">Fuzz 测试</a>。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">Sanitizer</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "释放后使用:ASan 编译(-Zsanitizer=address)的程序遇到 drop 之后的读取,立刻 abort,报「heap-use-after-free」,并给出三份调用栈:读取发生在 u164_uaf.rs:5;内存「0 bytes inside of 12-byte region」(3 个 i32);「freed by」栈指向 RawVec 的 drop;「previously allocated by」栈指向 alloc。SUMMARY 行直接给出出错的源码行。对比 Miri:这里不需要解释执行,是原生速度的程序加了运行时检查。", "s": {"t": {"lines": ["  源码:", "      1 | fn main() {", "      2 |     let v = vec![1, 2, 3];", "      3 |     let p = v.as_ptr();", "      4 |     drop(v);", "      5 |     println!(\"{}\", unsafe { *p });", "      6 | }", "  -Zsanitizer=address 编译运行:退出码 -6", "    =================================================================", "    ==92812==ERROR: AddressSanitizer: heap-use-after-free on address 0x602000000970 at pc 0x00010206d61c bp 0x00016dd92270 sp 0x00016dd92268", "    READ of size 4 at 0x602000000970 thread T0", "        #0 u164_uaf::main::h4690bcd4eeb5eab8 u164_uaf.rs:5", "        #1 core::ops::function::FnOnce::call_once::h81b718fb6564e259 function.rs:250", "        #2 std::sys::backtrace::__rust_begin_short_backtrace::h4808e6b10d96054f backtrace.rs:166", "    0x602000000970 is located 0 bytes inside of 12-byte region [0x602000000970,0x60200000097c)", "    freed by thread T0 here:", "        #0 free+0x70", "        #1 _$LT$alloc..raw_vec..RawVec$LT$T$C$A$GT$$u20$as$u20$core..ops..drop..Drop$GT$::drop::h9b52e4e4c87f2eea mod.rs:443", "        #2 core::ptr::drop_glue$LT$alloc..raw_vec..RawVec$LT$i32$GT$$GT$::hfbdd768f8728e56a mod.rs:848", "    previously allocated by thread T0 here:", "        #0 malloc+0x6c", "        #1 alloc::alloc::alloc::h4d231932ce95d638 alloc.rs:158", "        #2 alloc::alloc::Global::alloc_impl_runtime::hec25b63c3797b59e alloc.rs:335", "    SUMMARY: AddressSanitizer: heap-use-after-free u164_uaf.rs:5 in u164_uaf::main::h4690bcd4eeb5eab8", "    ==92812==ABORTING"], "cur": [], "mark": [], "done": []}, "mark": [9, 15, 19, 23], "kv": {"items": [["错误类型", "heap-use-after-free"], ["区域", "12-byte region"], ["定位", "u164_uaf.rs:5"]], "hl": ["错误类型"]}}}, {"note": "堆越界读:读第 4 个 u32 时报「heap-buffer-overflow」,「located 0 bytes after 12-byte region」,即刚好越过 12 字节分配的末尾。对照安全代码 v[3]:不需要 sanitizer,直接 panic「index out of bounds: the len is 3 but the index is 3」,退出码 101。sanitizer 针对的是 unsafe 绕过了安全检查的访问。", "s": {"t": {"lines": ["  源码:", "      1 | use std::hint::black_box;", "      2 | fn main() {", "      3 |     let v = vec![10u32, 20, 30];", "      4 |     let i = black_box(3);", "      5 |     let x = unsafe { *v.as_ptr().add(i) };", "      6 |     println!(\"{}\", x);", "      7 | }", "  -Zsanitizer=address 编译运行:退出码 -6", "    =================================================================", "    ==92843==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x60200000097c at pc 0x000102095630 bp 0x00016dd6a2b0 sp 0x00016dd6a2a8", "    READ of size 4 at 0x60200000097c thread T0", "        #0 u164_oob::main::h68f0db86d30f4ac0 u164_oob.rs:5", "        #1 core::ops::function::FnOnce::call_once::h985e0e6e4afcdd18 function.rs:250", "        #2 std::sys::backtrace::__rust_begin_short_backtrace::h7748453a8d8cbf95 backtrace.rs:166", "    0x60200000097c is located 0 bytes after 12-byte region [0x602000000970,0x60200000097c)", "    allocated by thread T0 here:", "        #0 malloc+0x6c", "        #1 alloc::alloc::alloc::hd44f808ba37a7cc0 alloc.rs:158", "        #2 alloc::alloc::Global::alloc_impl_runtime::hdd866a2a3943b54e alloc.rs:335", "    SUMMARY: AddressSanitizer: heap-buffer-overflow u164_oob.rs:5 in u164_oob::main::h68f0db86d30f4ac0", "    ==92843==ABORTING", "  源码:", "      1 | use std::hint::black_box;", "      2 | fn main() {", "      3 |     let v = vec![10u32, 20, 30];", "      4 |     let i = black_box(3);", "      5 |     println!(\"{}\", v[i]);", "      6 | }", "  -Zsanitizer=address 编译运行:退出码 101", "    thread 'main' (7610322) panicked at <实验目录>/src/u164_safe_oob.rs:5:21:", "    index out of bounds: the len is 3 but the index is 3", "    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace"], "cur": [], "mark": [], "done": []}, "mark": [10, 15, 20, 31], "kv": {"items": [["unsafe 越界", "ASan:heap-buffer-overflow(abort)"], ["安全下标越界", "panic,退出码 101"]], "hl": ["unsafe 越界"]}}}, {"note": "栈越界:读长度为 4 的数组 a 之后的 1 字节,ASan 报「stack-buffer-overflow」,并列出栈帧里的变量:[80, 84) 'a' (line 3),注明「Memory access at offset 84 overflows this variable」。重复释放:对同一个裸指针 Box::from_raw 两次,报「attempting double-free」,同样给出 freed by 与 previously allocated by 两份栈。", "s": {"t": {"lines": ["  源码:", "      1 | use std::hint::black_box;", "      2 | fn main() {", "      3 |     let a = [1u8, 2, 3, 4];", "      4 |     let p = a.as_ptr();", "      5 |     let i = black_box(4);", "      6 |     println!(\"{}\", unsafe { *p.add(i) });", "      7 | }", "  -Zsanitizer=address 编译运行:退出码 -6", "    =================================================================", "    ==92913==ERROR: AddressSanitizer: stack-buffer-overflow on address 0x00016d6523d4 at pc 0x0001027accc8 bp 0x00016d652370 sp 0x00016d652368", "    READ of size 1 at 0x00016d6523d4 thread T0", "        #0 u164_stack::main::h0ee85ba49f3c565c u164_stack.rs:6", "        #1 core::ops::function::FnOnce::call_once::h4c56f55464e056c3 function.rs:250", "        #2 std::sys::backtrace::__rust_begin_short_backtrace::hda93cf726b48ae27 backtrace.rs:166", "    Address 0x00016d6523d4 is located in stack of thread T0 at offset 84 in frame", "        #0 u164_stack::main::h0ee85ba49f3c565c u164_stack.rs:2", "      This frame has 3 object(s):", "        [32, 48) 'args' (line 6)", "        [64, 65) '_10' (line 6)", "        [80, 84) 'a' (line 3) <== Memory access at offset 84 overflows this variable", "    HINT: this may be a false positive if your program uses some custom stack unwind mechanism, swapcontext or vfork", "          (longjmp and C++ exceptions *are* supported)", "    …(共 16 行)", "  源码:", "      1 | fn main() {", "      2 |     let b = Box::new(5u32);", "      3 |     let p = Box::into_raw(b);", "      4 |     unsafe { drop(Box::from_raw(p)); drop(Box::from_raw(p)); }", "      5 | }", "  -Zsanitizer=address 编译运行:退出码 -6", "    =================================================================", "    ==92953==ERROR: AddressSanitizer: attempting double-free on 0x602000000970 in thread T0:", "        #0 free+0x70", "        #1 alloc::alloc::dealloc_nonnull::hd83b3ba2b3e2d01c alloc.rs:205", "        #2 alloc::alloc::Global::deallocate_impl_runtime::h9ea61a1be044d64f alloc.rs:354", "    0x602000000970 is located 0 bytes inside of 4-byte region [0x602000000970,0x602000000974)", "    freed by thread T0 here:", "        #0 free+0x70", "        #1 alloc::alloc::dealloc_nonnull::hd83b3ba2b3e2d01c alloc.rs:205", "        #2 alloc::alloc::Global::deallocate_impl_runtime::h9ea61a1be044d64f alloc.rs:354", "    previously allocated by thread T0 here:", "        #0 malloc+0x6c", "        #1 alloc::alloc::alloc::h67cc3907dedf19bb alloc.rs:158", "        #2 alloc::alloc::Global::alloc_impl_runtime::h0161344b0a1b8663 alloc.rs:335", "    SUMMARY: AddressSanitizer: double-free (librustc-nightly_rt.asan.dylib:arm64+0x3ef54) in free+0x70", "    ==92953==ABORTING"], "cur": [], "mark": [], "done": []}, "mark": [10, 20, 32, 45], "kv": {"items": [["栈越界", "定位到变量 'a' (line 3)"], ["重复释放", "attempting double-free"]], "hl": ["栈越界"]}}}, {"note": "泄漏:ASan 在本机(macOS arm64)上、设 ASAN_OPTIONS=detect_leaks=1 时,程序退出时给出「LeakSanitizer: detected memory leaks」:Direct leak of 16 byte(s) in 1 object(s),退出码 1;程序自己的 done 照常打印。而单独的 -Zsanitizer=leak 与 -Zsanitizer=memory 在本机的编译器上都报「not supported for this target」。", "s": {"t": {"lines": ["  源码:", "      1 | fn main() {", "      2 |     let b = Box::new([1u8; 16]);", "      3 |     std::mem::forget(b);", "      4 |     println!(\"done\");", "      5 | }", "  -Zsanitizer=address 编译运行:退出码 1", "    done", "    =================================================================", "    ==92982==ERROR: LeakSanitizer: detected memory leaks", "    Direct leak of 16 byte(s) in 1 object(s) allocated from:", "        #0 malloc+0x6c", "        #1 alloc::alloc::alloc::h5c1c31a4651401fe alloc.rs:158", "        #2 alloc::alloc::Global::alloc_impl_runtime::h8df4232c0085002b alloc.rs:335", "    SUMMARY: AddressSanitizer: 16 byte(s) leaked in 1 allocation(s).", "  -Zsanitizer=leak 编译: error: leak sanitizer is not supported for this target", "  -Zsanitizer=memory 编译: error: memory sanitizer is not supported for this target"], "cur": [], "mark": [], "done": []}, "mark": [9, 10, 15, 16], "kv": {"items": [["address + detect_leaks=1", "能报 16 字节泄漏"], ["-Zsanitizer=leak", "not supported for this target"], ["-Zsanitizer=memory", "not supported for this target"]], "hl": ["address + detect_leaks=1"]}}}, {"note": "C 函数造成的越界:Rust 调用 libc 的 memcpy 往 8 字节的 Vec 写 16 字节。ASan 拦截了 memcpy,报「heap-buffer-overflow」「WRITE of size 16」「0 bytes after 8-byte region」,调用栈第一帧是 memcpy,第二帧是出错的 u164_ffi.rs:6。上一篇 Miri 对外部 C 函数 ffs 直接报不支持,而 sanitizer 在原生代码里运行,没有这个限制。(没有验证:Miri 对 memcpy 本身的处理,本篇没有跑。)", "s": {"t": {"lines": ["  源码:", "      1 | use std::hint::black_box;", "      2 | unsafe extern \"C\" { fn memcpy(dst: *mut u8, src: *const u8, n: usize) -> *mut u8; }", "      3 | fn main() {", "      4 |     let mut dst = vec![0u8; 8];", "      5 |     let src = [7u8; 16];", "      6 |     unsafe { memcpy(dst.as_mut_ptr(), src.as_ptr(), black_box(16)) };", "      7 |     println!(\"{}\", dst[0]);", "      8 | }", "  -Zsanitizer=address 编译运行:退出码 -6", "    =================================================================", "    ==93022==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x602000000978 at pc 0x0001007ed1dc bp 0x00016fc062f0 sp 0x00016fc05aa0", "    WRITE of size 16 at 0x602000000978 thread T0", "        #0 memcpy+0x48c", "        #1 u164_ffi::main::h789552d2ef368346 u164_ffi.rs:6", "        #2 core::ops::function::FnOnce::call_once::hcfe6ab0c5df18b36 function.rs:250", "    0x602000000978 is located 0 bytes after 8-byte region [0x602000000970,0x602000000978)", "    allocated by thread T0 here:", "        #0 calloc+0x74", "        #1 _RNvMs8_NtCs3OnNwH6WCZa_5alloc7raw_vecNtB5_11RawVecInner15try_allocate_inCs6isvwMtXNgT_5gimli+0x60", "        #2 alloc::raw_vec::RawVecInner$LT$A$GT$::with_capacity_zeroed_in::h5e2911326f496cac mod.rs:610", "    SUMMARY: AddressSanitizer: heap-buffer-overflow (librustc-nightly_rt.asan.dylib:arm64+0x3d1d8) in memcpy+0x48c", "    ==93022==ABORTING"], "cur": [], "mark": [], "done": []}, "mark": [11, 12, 13, 21], "kv": {"items": [["写入", "WRITE of size 16"], ["区域", "8-byte region"], ["来源", "libc memcpy ← u164_ffi.rs:6"]], "hl": ["来源"]}}}, {"note": "ThreadSanitizer 检测数据竞争,但有额外要求:只给自己的 crate 加 -Zsanitizer=thread,编译直接失败「mixing `-Zsanitizer` will cause an ABI mismatch in crate `ts`」(标准库没有用同一个选项编译),退出码 101。加上 -Zbuild-std 重新编译标准库(这次共 12 秒)后可以运行:报 2 个「data race」,一个是子线程 main.rs:9 的读与主线程 main.rs:11 的写,一个是两个线程各自的写;最后「reported 2 warnings」。注意这次运行程序自己打印的结果是 x = 2000(竞争存在,结果碰巧对)。", "s": {"t": {"lines": ["  源码:", "      1 | use std::thread;", "      2 | struct P(*mut u32);", "      3 | unsafe impl Send for P {}", "      4 | fn main() {", "      5 |     let mut x = 0u32;", "      6 |     let p = P(&mut x as *mut u32);", "      7 |     let h = thread::spawn(move || {", "      8 |         let p = p;", "      9 |         for _ in 0..1000 { unsafe { *p.0 += 1 }; }", "     10 |     });", "     11 |     for _ in 0..1000 { unsafe { *(&mut x as *mut u32) += 1 }; }", "     12 |     h.join().unwrap();", "     13 |     println!(\"x = {}\", x);", "     14 | }", "  只给自己的 crate 加 -Zsanitizer=thread(不重编标准库):退出码 101", "    error: mixing `-Zsanitizer` will cause an ABI mismatch in crate `ts`", "      |", "      = help: the `-Zsanitizer` flag modifies the ABI so Rust crates compiled with different values of this flag cannot be used together safely", "      = note: `-Zsanitizer=thread` in this crate is incompatible with `-Zsanitizer` being unset in dependency `std`", "      = help: unset `-Zsanitizer` in this crate or set `-Zsanitizer=thread` in `std`", "      = help: if you are sure this will not cause problems, you may use `-Cunsafe-allow-abi-mismatch=sanitizer` to silence this error", "    …(共 134 行)", "  加 -Zbuild-std(含重编标准库,共 12 秒):退出码 -6", "    ==================", "    WARNING: ThreadSanitizer: data race (pid=93031)", "      Read of size 4 at 0x00016d7598bc by thread T1:", "        #0 ts::main::_$u7b$$u7b$closure$u7d$$u7d$::hdf5edab4845b39f7 main.rs:9", "        #1 std::sys::backtrace::__rust_begin_short_backtrace::h156f8089f55476ae backtrace.rs:166", "        #2 std::thread::lifecycle::spawn_unchecked::_$u7b$$u7b$closure$u7d$$u7d$::_$u7b$$u7b$closure$u7d$$u7d$::h53f13b1c4a46dbcc lifecycle.rs:70", "      Previous write of size 4 at 0x00016d7598bc by main thread:", "        #0 ts::main::hf31edbd70aaa0657 main.rs:11", "        #1 core::ops::function::FnOnce::call_once::h56d34f4555891b70 function.rs:250", "        #2 std::sys::backtrace::__rust_begin_short_backtrace::h65b730afc025650e backtrace.rs:166", "      Location is stack of main thread.", "      Thread T1 (tid=7611885, running) created by main thread at:", "        #0 pthread_create <null>", "        #1 std::sys::thread::unix::Thread::new::ha849696e57eca4aa <null>", "        #2 std::thread::lifecycle::spawn_unchecked::h4ad50f56bd654a92 lifecycle.rs:116", "    SUMMARY: ThreadSanitizer: data race main.rs:9 in ts::main::_$u7b$$u7b$closure$u7d$$u7d$::hdf5edab4845b39f7", "    ==================", "    ==================", "    WARNING: ThreadSanitizer: data race (pid=93031)", "      Write of size 4 at 0x00016d7598bc by thread T1:", "        #0 ts::main::_$u7b$$u7b$closure$u7d$$u7d$::hdf5edab4845b39f7 main.rs:9", "        #1 std::sys::backtrace::__rust_begin_short_backtrace::h156f8089f55476ae backtrace.rs:166", "        #2 std::thread::lifecycle::spawn_unchecked::_$u7b$$u7b$closure$u7d$$u7d$::_$u7b$$u7b$closure$u7d$$u7d$::h53f13b1c4a46dbcc lifecycle.rs:70", "      Previous write of size 4 at 0x00016d7598bc by main thread:", "        #0 ts::main::hf31edbd70aaa0657 main.rs:11", "        #1 core::ops::function::FnOnce::call_once::h56d34f4555891b70 function.rs:250", "        #2 std::sys::backtrace::__rust_begin_short_backtrace::h65b730afc025650e backtrace.rs:166", "      Location is stack of main thread.", "      Thread T1 (tid=7611885, running) created by main thread at:", "        #0 pthread_create <null>", "        #1 std::sys::thread::unix::Thread::new::ha849696e57eca4aa <null>", "        #2 std::thread::lifecycle::spawn_unchecked::h4ad50f56bd654a92 lifecycle.rs:116", "    SUMMARY: ThreadSanitizer: data race main.rs:9 in ts::main::_$u7b$$u7b$closure$u7d$$u7d$::hdf5edab4845b39f7", "    ==================", "    ThreadSanitizer: reported 2 warnings", "    x = 2000"], "cur": [], "mark": [], "done": []}, "mark": [16, 25, 42, 58], "done": [59], "kv": {"items": [["不重编 std", "ABI mismatch,编译失败"], ["-Zbuild-std", "12 秒;2 个 data race"]], "hl": ["-Zbuild-std"]}}}, {"note": "代价(-O,7 次取中位数):遍历 2000 万个元素 6.1 ms → ASan 14.5 ms(×2.4);200 万次 Box::new 21.1 ms → 196.5 ms(×9.3);峰值内存 78 MiB → 180 MiB(×2.3);可执行文件 500 KiB 对 502 KiB(ASan 运行库是动态链接的 librustc-nightly_rt.asan.dylib,不在可执行文件里)。分配密集的程序更慢,因为每次 malloc/free 都要维护隔离区与红区。与上一篇 Miri 慢约 3 万倍相比,开销小得多。", "s": {"t": {"lines": ["  源码:", "      1 | use std::hint::black_box;", "      2 | use std::time::Instant;", "      3 | fn main() {", "      4 |     let n = 20_000_000usize;", "      5 |     let v: Vec<u32> = (0..n as u32).collect();", "      6 |     let t = Instant::now();", "      7 |     let mut s = 0u64;", "      8 |     for i in 0..v.len() { s += unsafe { *v.as_ptr().add(black_box(i)) } as u64; }", "      9 |     black_box(s);", "     10 |     let a = t.elapsed().as_secs_f64() * 1000.0;", "     11 |     let t = Instant::now();", "     12 |     for i in 0..2_000_000u32 { let b = Box::new([i; 4]); black_box(&b); }", "     13 |     let b = t.elapsed().as_secs_f64() * 1000.0;", "     14 |     println!(\"{:.2} {:.2}\", a, b);", "     15 | }", "                   遍历 2000 万元素 (ms)     200 万次 Box::new (ms)       峰值内存 (MiB)        可执行文件 (KiB)", "  原生 -O                         6.1                     21.1               78                500", "  ASan -O                      14.5                    196.5              180                502"], "cur": [], "mark": [], "done": []}, "b": {"items": [["遍历 原生", 6.12, "6.1 ms"], ["遍历 ASan", 14.53, "14.5 ms"], ["分配 原生", 21.06, "21.1 ms"], ["分配 ASan", 196.49, "196.5 ms"]], "max": 196.49, "cur": [], "mark": [], "done": [0, 1, 2, 3]}, "kv": {"items": [["遍历", "×2.4"], ["200 万次分配", "×9.3"], ["峰值内存", "×2.3"]], "hl": ["200 万次分配"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / rustc 1.98.1(brew)/ cargo 1.98.1;单个文件用 rustc 直接编译,需要依赖时用 cargo(经代理从 crates.io 下载);计时用 std::time::Instant,数字每次运行会有小幅抖动。nightly 工具链用 rustup 装在隔离目录(不影响 brew 的 rustc):rustc 1.101.0-nightly (21b707e3f 2026-09-30)、miri 0.1.0 (21b707e3f9 2026-09-30)。-Zsanitizer=address(直接用 rustc);-Zsanitizer=thread 配合 cargo -Zbuild-std(rust-src 组件);栈符号用 -Zunstable-options -C symbol-mangling-version=legacy 以便阅读</li><li>没有验证:Linux 上的 sanitizer 行为与支持范围(例如 leak、memory)、-Zbuild-std 对 ASan 的影响(本篇的 ASan 没有重编标准库,因此标准库内部代码没有被插桩)、stack-use-after-return 与 stack-use-after-scope、ASAN_OPTIONS 的其它选项、sanitizer 与 Miri 同时使用</li><li>本篇的调用栈只截取了前 3 帧、省略了 Shadow bytes 部分以便阅读;其余内容为原样输出</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="rust-fuzz.html">
+    <div>
+      <div class="t1">下一篇 · RUST 165</div>
+      <div class="t2">Fuzz 测试</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Rust · Sanitizer · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

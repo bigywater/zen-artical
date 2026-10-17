@@ -1,0 +1,20 @@
+from lib import *
+S = SS('w89')
+steps = [
+    step("向 httpbin.org/status/<码> 逐个请求 20 个状态码。2xx:200 OK、201 CREATED、204 NO CONTENT,消息体都是 0 字节(204 本来就不能有体)。3xx:301 与 302 带 Location: /redirect/1;304 NOT MODIFIED 没有体。4xx:400、403、404、405、409、410 都是 0 字节;401 UNAUTHORIZED 带 WWW-Authenticate: Basic realm=\"Fake Realm\"(告诉客户端要用什么认证方式);418 I'M A TEAPOT 是 135 字节的彩蛋页面;429 TOO MANY REQUESTS 这个服务器没有带 Retry-After。5xx:500、501、502、503、504 都是 0 字节。原因短语(“NOT FOUND”“OK”这些)只是给人看的文字,这台服务器全部大写,客户端不应该依赖它,只看数字码。", t=tl(S(1)), mark=lidx(S(1), '401', '418', '429'), done=lidx(S(1), '200', '204', '301', '404', '500', '503'), kv=KV([['2xx', '成功;204 没有体'], ['3xx', '带 Location(304 没有体)'], ['4xx', '客户端的错;401 带 WWW-Authenticate'], ['5xx', '服务器的错'], ['原因短语', '仅供人读,别依赖']], ['4xx'])),
+    step("同一个 404 / 500,不同客户端库对“错误”的定义不同。requests.get:不抛异常,status_code = 404 / 500,r.ok = False;你必须主动调用 raise_for_status(),才会抛 HTTPError(\"404 Client Error: NOT FOUND for url …\" / \"500 Server Error: INTERNAL SERVER ERROR …\")。urllib.request.urlopen:自动抛 HTTPError 404 / 500。urllib3(retries=False):不抛异常,status = 404 / 500。http.client:不抛异常,status = 404 / 500。也就是说,在 requests、urllib3、http.client 里,如果不检查状态码,404 页面会被当成正常内容继续处理——这是常见的 bug 来源。", t=tl(S(2)), mark=lidx(S(2), 'requests.get:不抛异常', 'urllib.request.urlopen:抛 HTTPError'), done=lidx(S(2), 'urllib3.request', 'http.client'), kv=KV([['requests', '不抛,要调 raise_for_status()'], ['urllib.request', '自动抛 HTTPError'], ['urllib3 / http.client', '不抛']], ['requests'])),
+    step("429 / 503 与重试。本机服务器前几次返回错误码,之后返回 200;客户端用 urllib3 的 Retry(status_forcelist=[429, 503])。第一种:服务器回 429 并带 Retry-After: 2 → 客户端第 2 次请求拿到 200,两次请求到达服务器的间隔 2.01 秒——客户端按服务器要求的时间等。第二种:服务器前 4 次回 503 且没有 Retry-After,backoff_factor = 0.5 → 客户端第 5 次请求拿到 200,相邻请求的间隔是 0.0、1.0、2.01、4.01 秒——指数退避(第一次重试不等,之后每次加倍)。Retry-After 是服务器告诉客户端“别太急”的唯一标准办法;没有它,客户端只能自己退避,否则会让过载的服务器雪上加霜。", t=tl(S(3)), mark=lidx(S(3), '429 + Retry-After', '503 前 4 次失败'), done=lidx(S(3), '429 + Retry-After'), b=bars([['Retry-After: 2 → 等待', 2.01, '2.01 s'], ['退避第 2 次', 1.0, '1.0 s'], ['退避第 3 次', 2.01, '2.01 s'], ['退避第 4 次', 4.01, '4.01 s']], 4.1, mark=[0], done=[1, 2, 3]), kv=KV([['429 + Retry-After: 2', '间隔 2.01 秒'], ['503 无 Retry-After', '间隔 0 / 1 / 2 / 4 秒(指数退避)']], ['429 + Retry-After: 2'])),
+    step("Expect: 100-continue。要上传一个 5 MB 的请求体,不带 Expect 的客户端把 5 MB 全部发完(写出 5000000 字节),服务器读了 5000000 字节才回 401 Unauthorized——这 5 MB 全白发了。带上 Expect: 100-continue 的客户端先只发请求头:服务器发现没有认证,直接回 401,客户端没有发请求体(写出 0 字节),省下 5 MB。如果认证通过,服务器会先回 100 Continue,客户端再发体。所以大上传前用 Expect 可以让服务器在看到请求头后就拒绝(认证失败、过大、方法不对),不必等体传完。", t=tl(S(4)), mark=lidx(S(4), '不带 Expect', '带 Expect'), done=lidx(S(4), '不带 Expect'), b=bars([['不带 Expect 发出', 5000000, '5000000 字节'], ['带 Expect 发出', 0, '0 字节']], 5000000, mark=[1], done=[0]), kv=KV([['不带 Expect', '发完 5 MB 才被 401'], ['带 Expect', '先发头,401 后不发体,省 5 MB'], ['通过时', '服务器先回 100 Continue']], ['带 Expect'])),
+]
+A = mkartw('w89', 89, '网络协议,HTTP,状态码,错误处理,Retry-After,100-continue,真实验证,动画演示',
+    '逐个取 20 个状态码的真实响应;requests / urllib3 / http.client 对 404 / 500 都不抛异常而 urllib.request 抛;429 带 Retry-After: 2 时 urllib3 等了 2.01 秒,503 无头时指数退避 0 / 1 / 2 / 4 秒;Expect: 100-continue 让未认证的 5 MB 上传省下全部请求体。',
+    '状态码是 HTTP 里最浓缩的一个数字。客户端到底该怎么对待它们?404 要不要抛异常?429 / 503 之后什么时候重试?一个大请求体应不应该等服务器先说“继续”?这篇用真实的 httpbin 响应和本机服务器逐个验证。',
+    [('2.01 秒', '服务器回 429 + Retry-After: 2 时,urllib3 两次请求之间等待的时间'), ('0 / 1 / 2 / 4 秒', '503 且没有 Retry-After、backoff_factor = 0.5 时 urllib3 相邻请求的间隔'), ('5000000 → 0 字节', '未认证上传 5 MB 时,不带与带 Expect: 100-continue 客户端实际发出的请求体')],
+    [('状态码的家族', '<p>2xx 成功、3xx 重定向、4xx 客户端的错、5xx 服务器的错;原因短语只给人看。</p>'),
+     ('客户端对错误的定义', '<p>requests、urllib3、http.client 对 404 / 500 都不抛异常;urllib.request 会抛;不检查状态码是常见 bug。</p>'),
+     ('Retry-After 与退避', '<p>有 Retry-After 就听服务器的;没有就指数退避。</p>'),
+     ('Expect: 100-continue', '<p>大请求体前先问服务器,被拒绝时省下整个请求体。</p>')],
+    steps,
+    [ENV_W + '。第一、二节是对 httpbin.org 的 HTTPS 请求(原因短语和 429 没有 Retry-After 是它的行为);第三、四节用本机脚本服务器和 urllib3 2.8.0 / requests;没有测浏览器对状态码的处理',
+     '没有验证:浏览器遇到各状态码的表现(例如 401 弹认证框、5xx 的错误页);100 Continue 在 HTTP/2 里的行为;自动重试对非幂等请求的风险(w77 讲过);408、425、451 等较少见的状态码;带 Retry-After 为日期格式的情形;服务端限流(429)的实现方式'],
+    '状态码与错误处理')

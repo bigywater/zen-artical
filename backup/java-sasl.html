@@ -1,0 +1,511 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>Java SASL:可插拔的认证与安全层</title>
+<meta name="description" content="在 JDK 21 上用同一个 JVM 里的 SaslClient / SaslServer 验证 SASL:服务端机制只有 DIGEST-MD5、NTLM、CRAM-MD5、GSSAPI,PLAIN 只有客户端,没有 SCRAM / OAUTHBEARER;CRAM-MD5 的响应是确定性的 HMAC-MD5;DIGEST-MD5 的 4 个报文与 rspauth;QOP 与强度协商;auth-int / auth-conf 的 wrap 开销,篡改后的 unwrap 不抛异常而返回空数组。">
+<link rel="canonical" href="https://bigywater.tech/java-sasl.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Java SASL:可插拔的认证与安全层">
+<meta property="og:description" content="在 JDK 21 上用同一个 JVM 里的 SaslClient / SaslServer 验证 SASL:服务端机制只有 DIGEST-MD5、NTLM、CRAM-MD5、GSSAPI,PLAIN 只有客户端,没有 SCRAM / OAUTHBEARER;CRAM-MD5 的响应是确定性的 HMAC-MD5;DIGEST-MD5 的 4 个报文与 rspauth;QOP 与强度协商;auth-int / auth-conf 的 wrap 开销,篡改后的 unwrap 不抛异常而返回空数组。">
+<meta property="og:url" content="https://bigywater.tech/java-sasl.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Java SASL:可插拔的认证与安全层">
+<meta name="twitter:description" content="在 JDK 21 上用同一个 JVM 里的 SaslClient / SaslServer 验证 SASL:服务端机制只有 DIGEST-MD5、NTLM、CRAM-MD5、GSSAPI,PLAIN 只有客户端,没有 SCRAM / OAUTHBEARER;CRAM-MD5 的响应是确定性的 HMAC-MD5;DIGEST-MD5 的 4 个报文与 rspauth;QOP 与强度协商;auth-int / auth-conf 的 wrap 开销,篡改后的 unwrap 不抛异常而返回空数组。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">1865</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">362</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#B85C00; --series-c-soft:#FBE7D1;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#F29A4A; --series-c-soft:#3B2208;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#F29A4A; --series-c-soft:#3B2208;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Java · 363</div>
+  <h1>Java SASL:可插拔的认证与安全层</h1>
+  <p>SASL 把认证机制从协议里抽出来。这篇不连任何外部服务,直接让 JDK 自带的客户端与服务端互相认证,看有哪些机制、报文怎么走、协商出的保护层是什么,以及 unwrap 在遇到篡改时的真实行为。</p>
+  <div class="hero-fact">
+<div><div class="num">4 个服务端机制</div><div class="lbl">JDK 21 的 SaslServerFactory 提供的机制:DIGEST-MD5、NTLM、CRAM-MD5、GSSAPI(没有 PLAIN 与 SCRAM)</div></div><div><div class="num">byte[0]</div><div class="lbl">auth-int / auth-conf 下 unwrap 被篡改的报文时的返回值(不抛异常,只写一条 INFO 日志)</div></div><div><div class="num">+16 / +23 B</div><div class="lbl">39 字节明文经 auth-int / auth-conf wrap 后多出的字节数</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="java-password-callback.html">PasswordCallback:认证过程中如何请求密码</a></div>
+<section>
+  <h2>有哪些机制</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [mechs]
+    客户端工厂:[ClientFactoryImpl[EXTERNAL, CRAM-MD5, PLAIN], FactoryImpl[GSSAPI], FactoryImpl[NTLM], ClientFactoryImpl[EXTERNAL, CRAM-MD5, PLAIN], FactoryImpl[DIGEST-MD5], ClientFactoryImpl[EXTERNAL, CRAM-MD5, PLAIN]]
+    服务端工厂:[FactoryImpl[DIGEST-MD5], FactoryImpl[NTLM], ServerFactoryImpl[CRAM-MD5], FactoryImpl[GSSAPI]]
+        SunSASL SaslClientFactory DIGEST-MD5
+        SunSASL SaslServerFactory DIGEST-MD5
+        SunSASL SaslClientFactory EXTERNAL
+        SunSASL SaslClientFactory CRAM-MD5
+        SunSASL SaslServerFactory CRAM-MD5
+        SunSASL SaslClientFactory PLAIN
+        SunSASL SaslServerFactory NTLM
+        SunSASL SaslClientFactory NTLM
+        JdkSASL SaslClientFactory GSSAPI
+        JdkSASL SaslServerFactory GSSAPI
+        Sasl.createSaslClient("PLAIN"       ) = 有;createSaslServer = null(没有)
+        Sasl.createSaslClient("SCRAM-SHA-256") = null(没有);createSaslServer = null(没有)
+        Sasl.createSaslClient("OAUTHBEARER" ) = null(没有);createSaslServer = null(没有)
+        Sasl.createSaslClient("ANONYMOUS"   ) = null(没有);createSaslServer = null(没有)
+        Sasl.createSaslClient("LOGIN"       ) = null(没有);createSaslServer = null(没有)
+    mechanism 数组里有多个时按顺序选第一个能用的:PLAIN
+    机制列表 [PLAIN, CRAM-MD5]:不加属性选中 PLAIN;加 Sasl.POLICY_NOPLAINTEXT=true 选中 CRAM-MD5;加 POLICY_NOANONYMOUS / POLICY_NOACTIVE / POLICY_NODICTIONARY=true 对 CRAM-MD5 与 DIGEST-MD5 的影响:NODICTIONARY:CRAM-MD5 → null;DIGEST-MD5 → null</pre></div>
+</section>
+<section>
+  <h2>CRAM-MD5:报文交换与确定性响应</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [cram]
+    CRAM-MD5 好口令:成功;客户端 isComplete=true,服务端 isComplete=true;授权 ID amy;服务端回调 [NameCallback, PasswordCallback, AuthorizeCallback];交换了 3 个报文
+        客户端先发初始响应? false
+        服务端第 1 步 → &lt;-6192225565412829630.1791056115839@localhost&gt;(46B);isComplete=false
+        客户端 → amy 897d4b39b641c033227ddb06a0785bc3(36B);c.isComplete=true
+        服务端 → (null);s.isComplete=true
+        协商出的属性:QOP=auth,STRENGTH=null,MAX_BUFFER=null,RAW_SEND_SIZE=null
+    CRAM-MD5 错口令:失败 SaslException: Invalid response;交换了 2 个报文
+        客户端先发初始响应? false
+        服务端第 1 步 → &lt;-2697646539720517548.1791056115851@localhost&gt;(46B);isComplete=false
+        客户端 → amy 0888e6f48c3401854aebb065004553ba(36B);c.isComplete=true
+    CRAM-MD5 的 hasInitialResponse = false;getMechanismName = CRAM-MD5
+    同样的挑战、同样的口令,两次响应是否相同(确定性 HMAC-MD5,没有客户端随机数):true;响应 = amy ecc5ee0f37841e7fa4fd8acdff50eac0(36B)
+    手算 HMAC-MD5(口令, 挑战) 得到的响应:amy ecc5ee0f37841e7fa4fd8acdff50eac0;与客户端一致? true
+    已完成的客户端再 evaluateChallenge:IllegalStateException: CRAM-MD5 authentication already completed
+    服务端生成的挑战:&lt;1656850057871703639.1791056115861@localhost&gt;(45B)
+    响应的最后一个字节被改动:SaslException: Invalid response
+    用上一个服务端会话的挑战算出的响应去验证新会话(重放):SaslException: Invalid response</pre></div>
+</section>
+<section>
+  <h2>DIGEST-MD5 的 4 个报文</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [digest]
+    DIGEST-MD5 好口令(默认 QOP):成功;客户端 isComplete=true,服务端 isComplete=true;授权 ID amy;服务端回调 [RealmCallback, NameCallback, PasswordCallback, AuthorizeCallback];交换了 4 个报文
+        客户端先发初始响应? false
+        服务端第 1 步 → realm="localhost",nonce="EY4BrUzSJ3T94LYcp8bhgO5OOABB7Ucr1H1tlCbW",charset=utf-8,algorithm=md5-sess(99B);isComplete=false
+        客户端 → charset=utf-8,username="amy",realm="localhost",nonce="EY4BrUzSJ3T94LYcp8bhgO5OOABB7Ucr1H1tlCbW",nc=00000001,cnonce="CZx1xhxcOiq94HjrI913ORFX2bhgTzygJI…(249B);c.isComplete=false
+        服务端 → rspauth=548261afff7a988660ea466304a4fb6b(40B);s.isComplete=true
+        客户端 → (null);c.isComplete=true
+        协商出的属性:QOP=auth,STRENGTH=null,MAX_BUFFER=65536,RAW_SEND_SIZE=0
+    DIGEST-MD5 错口令:失败 SaslException: DIGEST-MD5: digest response format violation. Mismatched response.;交换了 2 个报文
+        客户端先发初始响应? false
+        服务端第 1 步 → realm="localhost",nonce="lhZQy18BdIhsTqmdtihxVBZ0ngNJvzGMNCZxk1Om",charset=utf-8,algorithm=md5-sess(99B);isComplete=false
+        客户端 → charset=utf-8,username="amy",realm="localhost",nonce="lhZQy18BdIhsTqmdtihxVBZ0ngNJvzGMNCZxk1Om",nc=00000001,cnonce="V0+cii9q4ybQ5Mxwu//hwpahFrCy3ZAA+g…(249B);c.isComplete=false</pre></div>
+</section>
+<section>
+  <h2>QOP 与强度协商</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [qop]
+    QOP 请求 “auth”:成功;客户端 isComplete=true,服务端 isComplete=true;授权 ID amy;服务端回调 [RealmCallback, NameCallback, PasswordCallback, AuthorizeCallback];交换了 4 个报文
+        协商出的属性:QOP=auth,STRENGTH=null,MAX_BUFFER=65536,RAW_SEND_SIZE=0
+    QOP 请求 “auth-int”:成功;客户端 isComplete=true,服务端 isComplete=true;授权 ID amy;服务端回调 [RealmCallback, NameCallback, PasswordCallback, AuthorizeCallback];交换了 4 个报文
+        协商出的属性:QOP=auth-int,STRENGTH=null,MAX_BUFFER=65536,RAW_SEND_SIZE=65520
+    QOP 请求 “auth-conf”:成功;客户端 isComplete=true,服务端 isComplete=true;授权 ID amy;服务端回调 [RealmCallback, NameCallback, PasswordCallback, AuthorizeCallback];交换了 4 个报文
+        协商出的属性:QOP=auth-conf,STRENGTH=high,MAX_BUFFER=65536,RAW_SEND_SIZE=65510
+    QOP 请求 “auth-conf,auth-int,auth”:成功;客户端 isComplete=true,服务端 isComplete=true;授权 ID amy;服务端回调 [RealmCallback, NameCallback, PasswordCallback, AuthorizeCallback];交换了 4 个报文
+        协商出的属性:QOP=auth-conf,STRENGTH=high,MAX_BUFFER=65536,RAW_SEND_SIZE=65510
+    客户端要 auth-conf、服务端只允许 auth:失败 SaslException: DIGEST-MD5: No common protection layer between client and server;交换了 1 个报文
+    auth-conf + STRENGTH=high:成功;客户端 isComplete=true,服务端 isComplete=true;授权 ID amy;服务端回调 [RealmCallback, NameCallback, PasswordCallback, AuthorizeCallback];交换了 4 个报文
+        协商出的属性:QOP=auth-conf,STRENGTH=high,MAX_BUFFER=65536,RAW_SEND_SIZE=65510
+    auth-conf + STRENGTH=low:成功;客户端 isComplete=true,服务端 isComplete=true;授权 ID amy;服务端回调 [RealmCallback, NameCallback, PasswordCallback, AuthorizeCallback];交换了 4 个报文
+        协商出的属性:QOP=auth-conf,STRENGTH=low,MAX_BUFFER=65536,RAW_SEND_SIZE=65510</pre></div>
+</section>
+<section>
+  <h2>wrap 与 unwrap</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [wrap]
+    [auth-int] 明文 39 字节 → wrap 后 55 字节(多 16 字节);包含明文? true;前 12 字节 61747461636b206174206461…(55B)
+        服务端 unwrap:attack at dawn, payload payload payload
+        改动 wrap 后字节中间一位再 unwrap:没有抛异常,返回 byte[0]
+        同一条消息第二次 wrap 的密文是否与第一次相同:false
+        把第一条 wrap 的字节再 unwrap 一次(重放,序号已前进):SaslException: DIGEST-MD5: Out of order sequencing of messages from server. Got: 0 Expected: 1
+        先 unwrap 第二条:attack at dawn, payload payload payload
+        CRAM-MD5(没有 QOP 协商)上调用 wrap:IllegalStateException: CRAM-MD5 authentication not completed
+    [auth-conf] 明文 39 字节 → wrap 后 62 字节(多 23 字节);包含明文? false;前 12 字节 9351eb15118a6530dc6e052a…(62B)
+        服务端 unwrap:attack at dawn, payload payload payload
+        改动 wrap 后字节中间一位再 unwrap:没有抛异常,返回 byte[0]
+        同一条消息第二次 wrap 的密文是否与第一次相同:false
+        把第一条 wrap 的字节再 unwrap 一次(重放,序号已前进):没有抛异常,返回 byte[0]
+        先 unwrap 第二条:attack at dawn, payload payload payload
+        CRAM-MD5(没有 QOP 协商)上调用 wrap:IllegalStateException: CRAM-MD5 authentication not completed
+  Oct 04, 2026 3:35:17 AM com.sun.security.sasl.digest.DigestMD5Base$DigestIntegrity unwrap
+  INFO: DIGEST23:Unmatched MACs
+  Oct 04, 2026 3:35:17 AM com.sun.security.sasl.digest.DigestMD5Base$DigestPrivacy unwrap
+  INFO: DIGEST41:Unmatched MACs
+  Oct 04, 2026 3:35:17 AM com.sun.security.sasl.digest.DigestMD5Base$DigestPrivacy unwrap
+  INFO: DIGEST41:Unmatched MACs</pre></div>
+</section>
+<section>
+  <h2>EXTERNAL 与边界</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [client]
+    EXTERNAL 客户端:hasInitialResponse = true;初始响应 amy(3B)(授权 ID 直接作为响应,认证由底层(如 TLS 客户端证书)完成)
+    EXTERNAL 不带授权 ID:(0B)
+    createSaslClient 的 handler 为 null 而机制需要口令:SaslException: Callback handler to get username/password required
+    DIGEST-MD5 服务端没有 handler:SaslException: Callback handler with support for AuthorizeCallback, RealmCallback, NameCallback, and PasswordCallback required
+    协议名 / 服务器名为 null:成功 / 成功</pre></div>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">SASL</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "JDK 21 里的 SASL 机制:客户端工厂(SunSASL + JdkSASL)提供 EXTERNAL、CRAM-MD5、PLAIN、GSSAPI、NTLM、DIGEST-MD5;服务端工厂只有 DIGEST-MD5、NTLM、CRAM-MD5、GSSAPI。也就是说 PLAIN 只有客户端实现,Sasl.createSaslServer(\"PLAIN\") 返回 null;SCRAM-SHA-256、OAUTHBEARER、ANONYMOUS、LOGIN 客户端与服务端都没有(返回 null)。机制数组 [PLAIN, CRAM-MD5] 默认选中 PLAIN,加 Sasl.POLICY_NOPLAINTEXT=true 选中 CRAM-MD5;POLICY_NODICTIONARY=true 会把 CRAM-MD5 与 DIGEST-MD5 都过滤掉(返回 null)。", "s": {"t": {"lines": ["  [mechs]", "    客户端工厂:[ClientFactoryImpl[EXTERNAL, CRAM-MD5, PLAIN], FactoryImpl[GSSAPI], FactoryImpl[NTLM], ClientFactoryImpl[EXTERNAL, CRAM-MD5, PLAIN], FactoryImpl[DIGEST-MD5], ClientFactoryImpl[EXTERNAL, CRAM-MD5, PLAIN]]", "    服务端工厂:[FactoryImpl[DIGEST-MD5], FactoryImpl[NTLM], ServerFactoryImpl[CRAM-MD5], FactoryImpl[GSSAPI]]", "        SunSASL SaslClientFactory DIGEST-MD5", "        SunSASL SaslServerFactory DIGEST-MD5", "        SunSASL SaslClientFactory EXTERNAL", "        SunSASL SaslClientFactory CRAM-MD5", "        SunSASL SaslServerFactory CRAM-MD5", "        SunSASL SaslClientFactory PLAIN", "        SunSASL SaslServerFactory NTLM", "        SunSASL SaslClientFactory NTLM", "        JdkSASL SaslClientFactory GSSAPI", "        JdkSASL SaslServerFactory GSSAPI", "        Sasl.createSaslClient(\"PLAIN\"       ) = 有;createSaslServer = null(没有)", "        Sasl.createSaslClient(\"SCRAM-SHA-256\") = null(没有);createSaslServer = null(没有)", "        Sasl.createSaslClient(\"OAUTHBEARER\" ) = null(没有);createSaslServer = null(没有)", "        Sasl.createSaslClient(\"ANONYMOUS\"   ) = null(没有);createSaslServer = null(没有)", "        Sasl.createSaslClient(\"LOGIN\"       ) = null(没有);createSaslServer = null(没有)", "    mechanism 数组里有多个时按顺序选第一个能用的:PLAIN", "    机制列表 [PLAIN, CRAM-MD5]:不加属性选中 PLAIN;加 Sasl.POLICY_NOPLAINTEXT=true 选中 CRAM-MD5;加 POLICY_NOANONYMOUS / POLICY_NOACTIVE / POLICY_NODICTIONARY=true 对 CRAM-MD5 与 DIGEST-MD5 的影响:NODICTIONARY:CRAM-MD5 → null;DIGEST-MD5 → null"], "cur": [], "mark": [], "done": []}, "done": [1, 2], "mark": [13, 14, 19], "kv": {"items": [["服务端机制", "DIGEST-MD5 / NTLM / CRAM-MD5 / GSSAPI"], ["PLAIN", "只有客户端"], ["SCRAM / OAUTHBEARER / ANONYMOUS / LOGIN", "都没有"]], "hl": ["PLAIN"]}}}, {"note": "CRAM-MD5(客户端与服务端都在同一个 JVM 里,用回调 handler 提供口令)好口令:客户端没有初始响应(hasInitialResponse = false),服务端先发挑战 <随机数.时间戳@localhost>(45–46 字节),客户端回 “amy <32 位十六进制>”(36 字节),服务端验证后返回 null,两端 isComplete = true,服务端回调依次是 NameCallback、PasswordCallback、AuthorizeCallback,共交换 3 个报文;协商出的 QOP = auth,没有 STRENGTH / MAX_BUFFER。错口令 → SaslException: Invalid response。", "s": {"t": {"lines": ["  [cram]", "    CRAM-MD5 好口令:成功;客户端 isComplete=true,服务端 isComplete=true;授权 ID amy;服务端回调 [NameCallback, PasswordCallback, AuthorizeCallback];交换了 3 个报文", "        客户端先发初始响应? false", "        服务端第 1 步 → <-6192225565412829630.1791056115839@localhost>(46B);isComplete=false", "        客户端 → amy 897d4b39b641c033227ddb06a0785bc3(36B);c.isComplete=true", "        服务端 → (null);s.isComplete=true", "        协商出的属性:QOP=auth,STRENGTH=null,MAX_BUFFER=null,RAW_SEND_SIZE=null", "    CRAM-MD5 错口令:失败 SaslException: Invalid response;交换了 2 个报文", "        客户端先发初始响应? false", "        服务端第 1 步 → <-2697646539720517548.1791056115851@localhost>(46B);isComplete=false", "        客户端 → amy 0888e6f48c3401854aebb065004553ba(36B);c.isComplete=true", "    CRAM-MD5 的 hasInitialResponse = false;getMechanismName = CRAM-MD5", "    同样的挑战、同样的口令,两次响应是否相同(确定性 HMAC-MD5,没有客户端随机数):true;响应 = amy ecc5ee0f37841e7fa4fd8acdff50eac0(36B)", "    手算 HMAC-MD5(口令, 挑战) 得到的响应:amy ecc5ee0f37841e7fa4fd8acdff50eac0;与客户端一致? true", "    已完成的客户端再 evaluateChallenge:IllegalStateException: CRAM-MD5 authentication already completed", "    服务端生成的挑战:<1656850057871703639.1791056115861@localhost>(45B)", "    响应的最后一个字节被改动:SaslException: Invalid response", "    用上一个服务端会话的挑战算出的响应去验证新会话(重放):SaslException: Invalid response"], "cur": [], "mark": [], "done": []}, "done": [1, 2, 3, 8, 9], "mark": [4, 7, 10], "kv": {"items": [["挑战", "<随机数.时间戳@主机名>,45–46 字节"], ["响应", "“用户名 + 空格 + 32 位十六进制”,36 字节"], ["错口令", "SaslException: Invalid response"]], "hl": ["挑战"]}}}, {"note": "CRAM-MD5 的响应就是确定性的 HMAC-MD5(口令, 挑战):同样的挑战与口令,两次响应完全相同,手算 HMAC-MD5 得到的 “amy ecc5ee0f37841e7fa4fd8acdff50eac0” 与客户端一致。已完成的客户端再 evaluateChallenge → IllegalStateException: CRAM-MD5 authentication already completed。响应最后一个字节被改动 → SaslException: Invalid response;用上一个会话的挑战算出的响应去验证新会话(重放)→ 同样 Invalid response(挑战每次不同)。没有客户端随机数,所以口令的强度完全取决于服务端保存的口令与挑战的新鲜度。", "s": {"t": {"lines": ["  [cram]", "    CRAM-MD5 好口令:成功;客户端 isComplete=true,服务端 isComplete=true;授权 ID amy;服务端回调 [NameCallback, PasswordCallback, AuthorizeCallback];交换了 3 个报文", "        客户端先发初始响应? false", "        服务端第 1 步 → <-6192225565412829630.1791056115839@localhost>(46B);isComplete=false", "        客户端 → amy 897d4b39b641c033227ddb06a0785bc3(36B);c.isComplete=true", "        服务端 → (null);s.isComplete=true", "        协商出的属性:QOP=auth,STRENGTH=null,MAX_BUFFER=null,RAW_SEND_SIZE=null", "    CRAM-MD5 错口令:失败 SaslException: Invalid response;交换了 2 个报文", "        客户端先发初始响应? false", "        服务端第 1 步 → <-2697646539720517548.1791056115851@localhost>(46B);isComplete=false", "        客户端 → amy 0888e6f48c3401854aebb065004553ba(36B);c.isComplete=true", "    CRAM-MD5 的 hasInitialResponse = false;getMechanismName = CRAM-MD5", "    同样的挑战、同样的口令,两次响应是否相同(确定性 HMAC-MD5,没有客户端随机数):true;响应 = amy ecc5ee0f37841e7fa4fd8acdff50eac0(36B)", "    手算 HMAC-MD5(口令, 挑战) 得到的响应:amy ecc5ee0f37841e7fa4fd8acdff50eac0;与客户端一致? true", "    已完成的客户端再 evaluateChallenge:IllegalStateException: CRAM-MD5 authentication already completed", "    服务端生成的挑战:<1656850057871703639.1791056115861@localhost>(45B)", "    响应的最后一个字节被改动:SaslException: Invalid response", "    用上一个服务端会话的挑战算出的响应去验证新会话(重放):SaslException: Invalid response"], "cur": [], "mark": [], "done": []}, "done": [12, 13], "mark": [14, 16, 17], "kv": {"items": [["响应", "= HMAC-MD5(口令, 挑战),确定性"], ["篡改 / 重放", "Invalid response"], ["完成后再 evaluateChallenge", "IllegalStateException"]], "hl": ["响应"]}}}, {"note": "DIGEST-MD5 好口令:服务端回调是 RealmCallback、NameCallback、PasswordCallback、AuthorizeCallback;交换 4 个报文:服务端挑战 realm=\"localhost\",nonce=…,charset=utf-8,algorithm=md5-sess(99 字节)→ 客户端响应 username、realm、nonce、nc=00000001、cnonce … (249 字节)→ 服务端 rspauth=…(40 字节,服务端向客户端证明自己也知道口令)→ 客户端最后 null;协商出的属性 QOP=auth、MAX_BUFFER=65536、RAW_SEND_SIZE=0。错口令 → SaslException: DIGEST-MD5: digest response format violation. Mismatched response.(服务端只收到客户端响应就失败了)。", "s": {"t": {"lines": ["  [digest]", "    DIGEST-MD5 好口令(默认 QOP):成功;客户端 isComplete=true,服务端 isComplete=true;授权 ID amy;服务端回调 [RealmCallback, NameCallback, PasswordCallback, AuthorizeCallback];交换了 4 个报文", "        客户端先发初始响应? false", "        服务端第 1 步 → realm=\"localhost\",nonce=\"EY4BrUzSJ3T94LYcp8bhgO5OOABB7Ucr1H1tlCbW\",charset=utf-8,algorithm=md5-sess(99B);isComplete=false", "        客户端 → charset=utf-8,username=\"amy\",realm=\"localhost\",nonce=\"EY4BrUzSJ3T94LYcp8bhgO5OOABB7Ucr1H1tlCbW\",nc=00000001,cnonce=\"CZx1xhxcOiq94HjrI913ORFX2bhgTzygJI…(249B);c.isComplete=false", "        服务端 → rspauth=548261afff7a988660ea466304a4fb6b(40B);s.isComplete=true", "        客户端 → (null);c.isComplete=true", "        协商出的属性:QOP=auth,STRENGTH=null,MAX_BUFFER=65536,RAW_SEND_SIZE=0", "    DIGEST-MD5 错口令:失败 SaslException: DIGEST-MD5: digest response format violation. Mismatched response.;交换了 2 个报文", "        客户端先发初始响应? false", "        服务端第 1 步 → realm=\"localhost\",nonce=\"lhZQy18BdIhsTqmdtihxVBZ0ngNJvzGMNCZxk1Om\",charset=utf-8,algorithm=md5-sess(99B);isComplete=false", "        客户端 → charset=utf-8,username=\"amy\",realm=\"localhost\",nonce=\"lhZQy18BdIhsTqmdtihxVBZ0ngNJvzGMNCZxk1Om\",nc=00000001,cnonce=\"V0+cii9q4ybQ5Mxwu//hwpahFrCy3ZAA+g…(249B);c.isComplete=false"], "cur": [], "mark": [], "done": []}, "done": [1, 3, 4, 10, 11], "mark": [5, 7, 8], "kv": {"items": [["报文", "挑战 99 B → 响应 249 B → rspauth 40 B → null"], ["rspauth", "服务端向客户端证明自己知道口令(双向认证)"], ["错口令", "Mismatched response"]], "hl": ["rspauth"]}}}, {"note": "DIGEST-MD5 协商 QOP:请求 auth → QOP=auth,RAW_SEND_SIZE=0;auth-int → RAW_SEND_SIZE=65520;auth-conf → STRENGTH=high,RAW_SEND_SIZE=65510;QOP 写成 “auth-conf,auth-int,auth”(客户端首选顺序)→ 协商成 auth-conf;客户端要 auth-conf、服务端只允许 auth → SaslException: DIGEST-MD5: No common protection layer between client and server;auth-conf 下 STRENGTH=high 或 low 都能协商成功(STRENGTH 的值体现在协商结果里)。", "s": {"t": {"lines": ["  [qop]", "    QOP 请求 “auth”:成功;客户端 isComplete=true,服务端 isComplete=true;授权 ID amy;服务端回调 [RealmCallback, NameCallback, PasswordCallback, AuthorizeCallback];交换了 4 个报文", "        协商出的属性:QOP=auth,STRENGTH=null,MAX_BUFFER=65536,RAW_SEND_SIZE=0", "    QOP 请求 “auth-int”:成功;客户端 isComplete=true,服务端 isComplete=true;授权 ID amy;服务端回调 [RealmCallback, NameCallback, PasswordCallback, AuthorizeCallback];交换了 4 个报文", "        协商出的属性:QOP=auth-int,STRENGTH=null,MAX_BUFFER=65536,RAW_SEND_SIZE=65520", "    QOP 请求 “auth-conf”:成功;客户端 isComplete=true,服务端 isComplete=true;授权 ID amy;服务端回调 [RealmCallback, NameCallback, PasswordCallback, AuthorizeCallback];交换了 4 个报文", "        协商出的属性:QOP=auth-conf,STRENGTH=high,MAX_BUFFER=65536,RAW_SEND_SIZE=65510", "    QOP 请求 “auth-conf,auth-int,auth”:成功;客户端 isComplete=true,服务端 isComplete=true;授权 ID amy;服务端回调 [RealmCallback, NameCallback, PasswordCallback, AuthorizeCallback];交换了 4 个报文", "        协商出的属性:QOP=auth-conf,STRENGTH=high,MAX_BUFFER=65536,RAW_SEND_SIZE=65510", "    客户端要 auth-conf、服务端只允许 auth:失败 SaslException: DIGEST-MD5: No common protection layer between client and server;交换了 1 个报文", "    auth-conf + STRENGTH=high:成功;客户端 isComplete=true,服务端 isComplete=true;授权 ID amy;服务端回调 [RealmCallback, NameCallback, PasswordCallback, AuthorizeCallback];交换了 4 个报文", "        协商出的属性:QOP=auth-conf,STRENGTH=high,MAX_BUFFER=65536,RAW_SEND_SIZE=65510", "    auth-conf + STRENGTH=low:成功;客户端 isComplete=true,服务端 isComplete=true;授权 ID amy;服务端回调 [RealmCallback, NameCallback, PasswordCallback, AuthorizeCallback];交换了 4 个报文", "        协商出的属性:QOP=auth-conf,STRENGTH=low,MAX_BUFFER=65536,RAW_SEND_SIZE=65510"], "cur": [], "mark": [], "done": []}, "done": [1, 3, 5], "mark": [4, 6, 8, 9, 11, 12, 13], "b": {"items": [["auth:RAW_SEND_SIZE", 0, "0"], ["auth-int:RAW_SEND_SIZE", 65520, "65520"], ["auth-conf:RAW_SEND_SIZE", 65510, "65510"]], "max": 65520, "cur": [], "mark": [], "done": [0, 1, 2]}, "kv": {"items": [["auth-int", "RAW_SEND_SIZE=65520"], ["auth-conf", "STRENGTH=high,RAW_SEND_SIZE=65510"], ["双方没有共同 QOP", "SaslException: No common protection layer"]], "hl": ["双方没有共同 QOP"]}}}, {"note": "协商成 auth-int 与 auth-conf 之后的 wrap / unwrap(39 字节明文):auth-int 的 wrap 后 55 字节(多 16 字节 MAC 与序号),字节里还能直接看到明文(只有完整性);auth-conf 的 wrap 后 62 字节(多 23 字节),不含明文(加密);同一条消息 wrap 两次密文不同(带序号)。服务端 unwrap 得到原文。篡改 wrap 后的字节再 unwrap:两种模式都没有抛异常,而是返回长度为 0 的数组,同时 JUL 打出 INFO “DIGEST23:Unmatched MACs”(auth-int)或 “DIGEST41:Unmatched MACs”(auth-conf)。重放第一条已处理过的报文:auth-int 抛 SaslException: Out of order sequencing … Got: 0 Expected: 1;auth-conf 同样是返回空数组加 INFO 日志。所以调用 unwrap 之后必须检查返回长度。", "s": {"t": {"lines": ["  [wrap]", "    [auth-int] 明文 39 字节 → wrap 后 55 字节(多 16 字节);包含明文? true;前 12 字节 61747461636b206174206461…(55B)", "        服务端 unwrap:attack at dawn, payload payload payload", "        改动 wrap 后字节中间一位再 unwrap:没有抛异常,返回 byte[0]", "        同一条消息第二次 wrap 的密文是否与第一次相同:false", "        把第一条 wrap 的字节再 unwrap 一次(重放,序号已前进):SaslException: DIGEST-MD5: Out of order sequencing of messages from server. Got: 0 Expected: 1", "        先 unwrap 第二条:attack at dawn, payload payload payload", "        CRAM-MD5(没有 QOP 协商)上调用 wrap:IllegalStateException: CRAM-MD5 authentication not completed", "    [auth-conf] 明文 39 字节 → wrap 后 62 字节(多 23 字节);包含明文? false;前 12 字节 9351eb15118a6530dc6e052a…(62B)", "        服务端 unwrap:attack at dawn, payload payload payload", "        改动 wrap 后字节中间一位再 unwrap:没有抛异常,返回 byte[0]", "        同一条消息第二次 wrap 的密文是否与第一次相同:false", "        把第一条 wrap 的字节再 unwrap 一次(重放,序号已前进):没有抛异常,返回 byte[0]", "        先 unwrap 第二条:attack at dawn, payload payload payload", "        CRAM-MD5(没有 QOP 协商)上调用 wrap:IllegalStateException: CRAM-MD5 authentication not completed", "  Oct 04, 2026 3:35:17 AM com.sun.security.sasl.digest.DigestMD5Base$DigestIntegrity unwrap", "  INFO: DIGEST23:Unmatched MACs", "  Oct 04, 2026 3:35:17 AM com.sun.security.sasl.digest.DigestMD5Base$DigestPrivacy unwrap", "  INFO: DIGEST41:Unmatched MACs", "  Oct 04, 2026 3:35:17 AM com.sun.security.sasl.digest.DigestMD5Base$DigestPrivacy unwrap", "  INFO: DIGEST41:Unmatched MACs"], "cur": [], "mark": [], "done": []}, "done": [1, 2, 8, 9], "mark": [3, 5, 10, 12, 16, 18, 20], "b": {"items": [["明文", 39, "39 B"], ["auth-int wrap", 55, "55 B"], ["auth-conf wrap", 62, "62 B"]], "max": 62, "cur": [], "mark": [], "done": [0, 1, 2]}, "kv": {"items": [["auth-int", "+16 B,明文可见"], ["auth-conf", "+23 B,明文不可见"], ["篡改后 unwrap", "不抛异常,返回 byte[0] + INFO 日志"]], "hl": ["篡改后 unwrap"]}}}, {"note": "EXTERNAL 客户端:hasInitialResponse = true,初始响应就是授权 ID “amy”(3 字节),认证由底层(如 TLS 客户端证书)完成;不带授权 ID 时响应为空(0 字节)。机制需要口令而 handler 为 null:SaslException: Callback handler to get username/password required;DIGEST-MD5 服务端没有 handler:SaslException: Callback handler with support for AuthorizeCallback, RealmCallback, NameCallback, and PasswordCallback required;协议名或服务器名传 null,CRAM-MD5 与 DIGEST-MD5 的客户端都能创建成功(不检查)。", "s": {"t": {"lines": ["  [client]", "    EXTERNAL 客户端:hasInitialResponse = true;初始响应 amy(3B)(授权 ID 直接作为响应,认证由底层(如 TLS 客户端证书)完成)", "    EXTERNAL 不带授权 ID:(0B)", "    createSaslClient 的 handler 为 null 而机制需要口令:SaslException: Callback handler to get username/password required", "    DIGEST-MD5 服务端没有 handler:SaslException: Callback handler with support for AuthorizeCallback, RealmCallback, NameCallback, and PasswordCallback required", "    协议名 / 服务器名为 null:成功 / 成功"], "cur": [], "mark": [], "done": []}, "done": [1, 2], "mark": [3, 4, 5], "kv": {"items": [["EXTERNAL", "初始响应 = 授权 ID,认证靠底层"], ["缺 handler", "SaslException: Callback handler … required"]], "hl": ["EXTERNAL"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / OpenJDK(Temurin 17.0.20、Homebrew 21.0.12 与 27,每篇注明实际用的版本);用 javac 编译、java 直接运行,需要第三方库时用 Maven 解析依赖;计时用 System.nanoTime,数字每次运行会有小幅抖动。JDK 21.0.12,SunSASL / JdkSASL;客户端与服务端在同一个 JVM 里用内存传递报文,没有真实的 LDAP / IMAP / SMTP 服务器,所以也没有测网络上的行为</li><li>没有验证:GSSAPI(需要 KDC)、NTLM 机制的报文、DIGEST-MD5 的 realm 选择(RealmChoiceCallback)与 cipher 选项(javax.security.sasl.digest.cipher)、服务器端 Sasl.SERVER_AUTH(双向认证)属性、DIGEST-MD5 与 CRAM-MD5 在真实 LDAP / SMTP 服务器上的互操作、JDK 17 / 27 上 unwrap 篡改行为是否相同</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="java-authenticator.html">
+    <div>
+      <div class="t1">下一篇 · JAVA 364</div>
+      <div class="t2">Authenticator:集中处理网络认证挑战</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Java · Java SASL:可插拔的认证与安全层 · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

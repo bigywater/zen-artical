@@ -1,0 +1,20 @@
+from lib import *
+S = SS('p3')
+steps = [
+    step("服务器在连接空闲 1.0 秒后关掉它。客户端隔 0.2 秒再发下一个请求:服务器累计 1 条连接,第 2 个请求 200,客户端套接字一直是 ESTABLISHED;隔 1.5 秒:这时 lsof 看到客户端那端的套接字已经是 CLOSE_WAIT(对端发来了 FIN,本端还没关),第 2 个请求照样返回 200,服务器累计 2 条连接——客户端悄悄换了一条新连接,没有任何报错。", t=tl(S(1)), done=lidx(S(1), '间隔 0.2 秒'), mark=lidx(S(1), '间隔 1.5 秒'), kv=KV([['间隔 0.2 秒', 'ESTABLISHED,复用,1 条连接'], ['间隔 1.5 秒', 'CLOSE_WAIT,新建,2 条连接'], ['客户端表现', '都是 200,没有异常']], ['间隔 1.5 秒'])),
+    step("为什么没报错:urllib3 从池里取连接时先调用 is_connection_dropped(connectionpool.py 第 288 行),它读 HTTPConnection.is_connected,里面用 wait_for_read(self.sock, timeout=0.0) 看这个套接字当前是不是“可读”——对端关了连接,就会有 EOF 可读,于是判定已断开、关掉旧连接并新建。实测:服务器空闲 0.5 秒就关、客户端每隔 0.7 秒请求一次,6 次请求 0 次异常,服务器累计 6 条连接(每次都是新的)。", t=tl(S(2)), done=lidx(S(2), '异常 0 次', 'wait_for_read'), mark=lidx(S(2), 'is_connection_dropped'), b=bars([['请求次数', 6, '6'], ['异常次数', 0, '0'], ['服务器累计连接', 6, '6']], 6, done=[1], mark=[2]), kv=KV([['检查方式', 'wait_for_read(sock, timeout=0.0)'], ['结果', '6 次请求 0 次异常'], ['代价', '每次都新建连接']], ['检查方式'])),
+    step("检查只发生在“取连接”那一刻,管不了竞态:如果服务器在收到请求之后、回应之前把连接关了,客户端已经把请求写出去了,就会报错。模拟这个情形:第 2 个请求在复用的连接上被服务器直接断开,默认 max_retries=0 的 Session 抛 ConnectionError(Connection aborted.、RemoteDisconnected: Remote end closed connection without response),服务器累计 1 条连接、收到 2 个请求;换成 Retry(total=1),第 2 个请求成功 200,服务器累计 2 条连接、收到 3 个请求——被断开的那次请求服务器其实收到了,重试等于它又收到一次。", t=tl(S(3)), done=lidx(S(3), 'Retry(total=1)'), mark=lidx(S(3), '默认(max_retries=0)'), b=bars([['默认:服务器收到的请求', 2, '2'], ['Retry(total=1):服务器收到的请求', 3, '3']], 3, mark=[0], done=[1]), kv=KV([['默认', 'ConnectionError(RemoteDisconnected)'], ['Retry(total=1)', '成功,服务器多收到 1 次'], ['风险', '被断开的请求服务器可能已经处理']], ['风险'])),
+    step("服务器还可以用 Keep-Alive: timeout=1 响应头告诉客户端“我 1 秒后关”。实测客户端不听:服务器实际 3.0 秒才关,客户端等了 2.0 秒(超过提示的 1 秒)再请求,服务器累计仍是 1 条连接——旧连接照样被复用。我在 urllib3 和 requests 的顶层模块里搜 keep-alive,只在 requests/utils.py 里找到默认请求头一处,没有读取这个提示的代码。所以客户端能否复用,只取决于套接字此刻是否还开着。", t=tl(S(4)), done=lidx(S(4), '服务器累计 1 条连接'), mark=lidx(S(4), 'Keep-Alive: timeout=1'), kv=KV([['Keep-Alive: timeout=1', '客户端不读这个提示'], ['等待 2.0 秒后', '仍复用同一条连接(服务器 3.0 秒才关)'], ['依据', '套接字是否还开着']], ['Keep-Alive: timeout=1'])),
+]
+A = mkartp('p3', 3, '爬虫,requests,keep-alive,空闲超时,urllib3,RemoteDisconnected,Python,真实验证,动画演示',
+    '在本机测试服务器上实测 keep-alive 空闲超时:服务器空闲 1 秒后关闭连接,客户端隔 1.5 秒再请求会悄悄新建连接(套接字已是 CLOSE_WAIT),没有报错;urllib3 靠 wait_for_read 在取连接时检测;服务器收到请求后才断开则会抛 RemoteDisconnected,需要 Retry;Keep-Alive: timeout 提示客户端不读。',
+    '服务器会在连接空闲一段时间后关掉它。爬虫的 Session 里躺着一条早就被对端关了的连接,下一个请求会怎样?这篇用本机服务器把几种情形都复现一遍:悄悄重建、真正报错的竞态,以及 Keep-Alive 提示头到底有没有人听。',
+    [('CLOSE_WAIT', '服务器空闲超时关闭后,客户端套接字的状态;下一个请求自动换新连接'), ('0 次', '服务器空闲 0.5 秒就关、客户端每 0.7 秒请求一次:6 次请求的异常次数'), ('3 个', '用 Retry 重试后服务器收到的请求数(被断开的那次也收到了)')],
+    [('空闲超时之后:悄悄重建', '<p>服务器在连接空闲 1.0 秒后关闭它。隔 0.2 秒再请求,复用同一条连接;隔 1.5 秒,<code>lsof</code> 看到客户端那端已经是 <code>CLOSE_WAIT</code>(对端的 FIN 到了,本端还没关),请求依然成功,服务器那边是第 2 条连接。</p>'),
+     ('urllib3 怎么发现连接断了', '<p>从池里取连接时,urllib3 调 <code>is_connection_dropped</code>(2.7.0 的 <code>connectionpool.py</code> 第 288 行),它读 <code>is_connected</code>:套接字存在,并且 <code>wait_for_read(sock, timeout=0.0)</code> 不可读,才算还连着——对端关闭会留下可读的 EOF,所以被判为断开。代价是每次都得重新建连接:空闲超时比请求间隔短时,Session 的复用等于没有。</p>'),
+     ('竞态:请求已经发出才断开', '<p>检查只发生在取连接那一刻。如果服务器恰好在收到请求之后关了连接,客户端抛出 <code>ConnectionError</code>(内含 <code>RemoteDisconnected</code>)。给 Session 挂 <code>Retry(total=1)</code> 可以让 GET 重试成功,但注意服务器已经收到了第一次请求——对有副作用的请求,重试可能让它被处理两次(POST 重试在后面单独讲)。</p>'),
+     ('Keep-Alive: timeout 提示', '<p>服务器可以在响应里写 <code>Keep-Alive: timeout=1</code> 告诉客户端空闲多久会被关。实测 requests 不会据此提前放弃连接:等了 2.0 秒、超过提示,只要服务器还没真关,旧连接就继续被复用。在 urllib3 和 requests 的顶层模块里我只搜到默认请求头里的 <code>keep-alive</code>,没找到读取这个提示的代码。</p>')],
+    steps,
+    [ENV_P + '。服务器用 Python 标准库 http.server 的连接超时(Handler 的 timeout 属性)实现“空闲 N 秒后关闭”;客户端套接字状态用 lsof -nP -iTCP:端口 读取(这台 macOS 上 netstat 看不到回环连接);竞态用服务器在收到第 2 个请求后直接 shutdown 并关闭套接字来模拟;源码位置取自 urllib3 2.7.0',
+     '没有验证:真实服务器(nginx、负载均衡)的 keep-alive 超时与 Connection: close 的发送时机;客户端恰好在服务器关闭的同一瞬间发请求这类真正的时间竞态(这里是用服务器主动断开来确定性地模拟);aiohttp 等其它客户端对已关闭连接的处理;HTTP/2 连接的空闲处理'],
+    'keep-alive 空闲超时')

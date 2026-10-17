@@ -1,0 +1,17 @@
+from lib import *
+S = SS('u130')
+R = J('u130'); sp = R['spawn']; sz = R['sizes']
+cm, nm, rm = sp['C 空 main'], sp['Rust #![no_main]'], sp['Rust 空 main(std 的 lang_start)']
+steps = [
+    step(f"空的 Rust 程序(fn main() {{}},release)的入口:nm 里能看到 std::rt::lang_start 与 lang_start_internal 的符号 —— main 不是被系统直接调用的。otool -L 显示只动态依赖 /usr/lib/libSystem.B.dylib;Mach-O 的 LC_MAIN 入口偏移是 {R['entryoff']},指向 rustc 生成的 C 风格 main,它再调用 std 的 lang_start,由 lang_start 调用你写的 main。", t=tl(S(1)), done=lidx(S(1), 'lang_start', 'otool', 'LC_MAIN'), kv=KV([['系统入口', 'C 风格 main(LC_MAIN)'], ['再调用', 'std::rt::lang_start'], ['再调用', '你写的 fn main']], ['再调用'])),
+    step("lang_start 在 main 之前做的事里能用现象证明的有两件:参数在 main 开始时就可用(std::env::args() 得 1 个);更关键的是 SIGPIPE 被设成忽略。Rust 程序往被 head -1 提前关掉的管道里写 10 万行,不会被信号杀死,而是写到第 662 行时收到 Err(BrokenPipe),程序自己处理并以退出码 3 结束。", t=tl(S(2)), done=lidx(S(2), '参数在 main', 'BrokenPipe'), mark=lidx(S(2), '退出码(PIPESTATUS)'), kv=KV([['std::env::args', 'main 之前已就绪'], ['SIGPIPE', '被忽略 → 写入返回 BrokenPipe']], ['SIGPIPE'])),
+    step("对照:同样的事用 C 程序做(printf 10 万行再 | head -1),C 程序被 SIGPIPE 直接杀死,退出码 141(128 + 13)。同样是写被关闭的管道,Rust 变成可处理的错误,C 变成信号终止 —— 这是 lang_start 设置的差异(这里只验证了现象,没有读 lang_start 的实现)。", t=tl(S(2)), mark=lidx(S(2), '141'), kv=KV([['Rust', 'EPIPE 错误,退出码由你决定'], ['C', 'SIGPIPE 终止,141']], ['C'])),
+    step(f"启动时间(fork + exec + 退出,1000 次平均,含 Python subprocess 本身约 2 ms 的开销):C 空 main {cm:.0f} µs,Rust #![no_main](自己提供 main,跳过 lang_start){nm:.0f} µs,Rust 空 main {rm:.0f} µs。std 的启动多出约 {rm - cm:.0f} µs;二进制大小 C {sz['C 空 main']:,} 字节、no_main {sz['Rust #![no_main]']:,} 字节、std 空 main {sz['Rust 空 main']:,} 字节。", t=tl(S(3)), done=lidx(S(3), 'C 空 main', 'Rust #![no_main]', 'Rust 空 main'), b=bars([['C 空 main', cm, f'{cm:.0f} µs'], ['Rust no_main', nm, f'{nm:.0f} µs'], ['Rust 空 main', rm, f'{rm:.0f} µs']], rm * 1.05, done=[0, 1, 2]), kv=KV([['C', f'{cm:.0f} µs'], ['no_main', f'{nm:.0f} µs'], ['Rust std', f'{rm:.0f} µs(多约 {rm - cm:.0f} µs)']], ['Rust std'])),
+    step("main 之后:main 返回 ExitCode::from(7) 时,局部变量 D 照常析构(「main 里」「D 被 drop」),进程退出码是 7;调用 std::process::exit(5) 则立刻结束进程,栈上的 D 没有 drop(输出里没有「D 被 drop」),退出码 5。", t=tl(S(4)), done=lidx(S(4), 'D 被 drop'), mark=lidx(S(4), 'process::exit'), kv=KV([['main 返回 ExitCode', '先析构局部变量,再带退出码退出'], ['process::exit', '不运行析构']], ['process::exit'])),
+]
+A = mkart('u130', 130, 'Rust,启动,lang_start,SIGPIPE,真实验证,动画演示',
+    f'用 nm、otool、管道与计时验证 Rust 二进制的启动:真正入口是 C 风格 main → std::rt::lang_start → 你的 main;lang_start 把 SIGPIPE 设成忽略(写关闭的管道得 BrokenPipe,C 被信号杀死返回 141);std 的启动比 C 空 main 多约 {rm - cm:.0f} µs;main 返回 ExitCode 照常析构而 process::exit 不析构。',
+    'fn main 并不是程序的第一行。这篇看真实的 Mach-O 入口与符号,用 SIGPIPE 的行为差异证明 lang_start 在 main 之前做了事情,再量出 std 的启动开销,最后看 main 返回之后的两种退出方式。',
+    [('141 对 BrokenPipe', 'C 程序与 Rust 程序写入被关闭的管道时的结局'), (f'约 {rm - cm:.0f} µs', 'std 的 lang_start 相对 C 空 main 多出的启动时间'), (f'{sz["Rust 空 main"]:,} 字节', '空的 Rust main 的二进制大小(C 空 main 是 16,840)')],
+    [('入口在哪里', '<p>程序的编译阶段见<a href="rust-compile-stages.html">Rust 编译阶段</a>。</p>'), ('lang_start 做了什么(与 C 对照)', None), ('启动时间', '<p>计时包含 Python subprocess 启动子进程的开销,因此只能比较差值,绝对值没有意义。</p>'), ('main 之后', '<p>panic 与 exit 的关系见<a href="rust-panic-unwrap-expect.html">panic!、unwrap 与 expect</a>。</p>')],
+    steps, [ENV_U + '。macOS aarch64;符号名为 v0 mangling', '没有验证:lang_start 里的其它初始化(栈保护页、线程名、panic 计数)的具体实现、Linux 上的启动过程(ELF 的 _start、init_array)、动态链接器 dyld 的耗时、静态链接 musl 目标的启动、#[ctor] 之类 main 之前的钩子'], '二进制启动')

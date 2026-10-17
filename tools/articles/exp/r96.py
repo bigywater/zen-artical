@@ -1,0 +1,41 @@
+import sys, time, random, os, json, subprocess, signal, statistics, threading, socket, select, re, collections, struct; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import rl
+from rl import *
+tee('r96'); R = {}
+n = Node(8000, name='r96', conf={'slowlog-log-slower-than': 10000, 'slowlog-max-len': 5, 'enable-debug-command': 'yes'}).start(); c = n.c()
+sh(c, 'CONFIG', 'GET', 'slowlog-log-slower-than'); sh(c, 'CONFIG', 'GET', 'slowlog-max-len')
+print()
+print('== 一:制造几条慢命令(阈值 10000 µs = 10 ms)')
+for i in range(500000 // 5000): c.pipeline([['SET', f'k:{i*5000+j}', 'v'] for j in range(5000)])
+c.do('DEBUG', 'SLEEP', 0.05); c.do('KEYS', 'k:1*'); c.do('SORT', 'nosuch'); c.do('SET', 'fast', 1)
+r = c.do('SLOWLOG', 'GET')
+print(f'SLOWLOG LEN = {c.do("SLOWLOG", "LEN")}')
+for e in r: print(f'  id={e[0]} 时间戳={e[1]} 耗时={e[2]} µs 命令={e[3]} 客户端={e[4]} 名字={e[5]!r}')
+R['entries'] = [(e[0], e[2], e[3][:2], e[4]) for e in r]
+print()
+print('== 二:slowlog-max-len = 5 是个环形队列:再制造 8 条慢命令,只保留最新的 5 条')
+for i in range(8): c.do('DEBUG', 'SLEEP', 0.015 + i * 0.001)
+r = c.do('SLOWLOG', 'GET'); print(f'SLOWLOG LEN = {c.do("SLOWLOG", "LEN")};id 依次为 {[e[0] for e in r]}(id 单调递增,最旧的被挤掉了)')
+R['ring'] = [e[0] for e in r]
+print()
+print('== 三:阈值的两个特殊值:0 = 记录所有命令;-1 = 关闭')
+c.do('SLOWLOG', 'RESET'); c.do('CONFIG', 'SET', 'slowlog-log-slower-than', 0); c.do('PING'); c.do('GET', 'fast'); print('阈值 0 之后 PING、GET 各执行一次:', [(e[3]) for e in c.do('SLOWLOG', 'GET')][:4], '(最新在前;第三条是把阈值改成 0 的 CONFIG SET 自己,因为改完之后它才执行完)')
+c.do('CONFIG', 'SET', 'slowlog-log-slower-than', -1); c.do('SLOWLOG', 'RESET'); c.do('DEBUG', 'SLEEP', 0.05); print('阈值 -1 之后 DEBUG SLEEP 0.05:SLOWLOG LEN =', c.do('SLOWLOG', 'LEN'))
+c.do('CONFIG', 'SET', 'slowlog-log-slower-than', 10000); c.do('SLOWLOG', 'RESET')
+print()
+print('== 四:参数会被截断(最多 32 个参数、每个最多 128 字节)')
+c.do('CONFIG', 'SET', 'slowlog-log-slower-than', 0); c.do('SLOWLOG', 'RESET')
+c.do('MSET', *[x for i in range(40) for x in (f'key{i}', 'v' * 300)])
+e = [x for x in c.do('SLOWLOG', 'GET') if x[3][0] == 'MSET'][0]
+print(f'MSET 80 个参数、value 各 300 字节 → 记录下来的参数个数 {len(e[3])};第 2 个参数被截成 {len(e[3][2])} 字节(末尾 {e[3][2][-22:]!r});最后一个参数 = {e[3][-1]!r}')
+R['trunc'] = dict(n=len(e[3]), l=len(e[3][2]), last=e[3][-1])
+c.do('CONFIG', 'SET', 'slowlog-log-slower-than', 10000); c.do('SLOWLOG', 'RESET')
+print()
+print('== 五:SLOWLOG 只记录「执行」时间,不含排队与网络:一个连接被 DEBUG SLEEP 0.3 阻塞时,另一个连接的 PING')
+res = {}
+def slow(): C(8000).do('DEBUG', 'SLEEP', 0.3)
+th = threading.Thread(target=slow); th.start(); time.sleep(0.05)
+t = time.perf_counter(); C(8000).do('PING'); res['ping'] = (time.perf_counter() - t) * 1000; th.join()
+print(f'  PING 客户端感受到的耗时 {res["ping"]:.0f} ms;SLOWLOG 里的记录:', [(e[3][0], e[2]) for e in c.do('SLOWLOG', 'GET')])
+R['queue'] = dict(ping_ms=res['ping'], slowlog=[(e[3][0], e[2]) for e in c.do('SLOWLOG', 'GET')])
+save('r96', R); cleanup([n])

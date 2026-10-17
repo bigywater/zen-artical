@@ -1,0 +1,24 @@
+from lib import *
+S = SS('q17')
+steps = [
+    step("stream 队列是只追加的日志,消息读完不会消失:发 10 条 m0~m9,消费者 A 从头(offset=first)读到并 ack 了全部 10 条,每条投递时带 x-stream-offset 头,值 0~9;随后消费者 B 又从头读,同样读到 m0~m9。rabbitmq-streams stream_status 看到 offset=9、committed_offset=9、first_offset=0、segments=1。ack 在 stream 里不删除任何东西,只是告诉 broker 流控窗口可以前移。", t=tl(S(1)), mark=lidx(S(1), '消费者 B 随后也从头读', 'stream_status'), done=lidx(S(1), '消费者 A'), kv=KV([['消息读后', '仍在,可重复读'], ['x-stream-offset', '每条消息的序号,从 0 开始'], ['ack', '只管流控,不删除']], ['消息读后'])),
+    step("x-stream-offset 各取值(流里有 30 条):first 收到 30 条(m0 起);last 只收到最后一个 chunk,这次是 1 条 m29(多次运行里 chunk 里有 1~4 条,取决于写入时怎么分块);next 和不设(默认就是 next)都收到 0 条,只收订阅之后新到的;数字 20 从 m20 起共 10 条;时间戳(第 15 条之后的时刻)从 m15 起共 15 条。", t=tl(S(2)), mark=lidx(S(2), 'offset=first', 'offset=last', 'offset=next'), done=lidx(S(2), '数字 20', '时间戳', '不设'), b=bars([['first', 30, '30 条'], ['数字 20', 10, '10 条'], ['时间戳(第 15 条后)', 15, '15 条'], ['last', 1, '1 条'], ['next / 不设', 0, '0 条']], 30, mark=[3, 4], done=[0, 1, 2]), kv=KV([['first / last / next', '头 / 最后一个 chunk / 只要新的'], ['数字', '指定 offset'], ['时间戳', '从该时刻起'], ['不设', '等于 next']], ['不设'])),
+    step("消费者自己记位置:先读 5 条(最后一条 offset=4),下次用 offset=5 继续,读到 15 条,从 m5 到 m19,接得上。broker 不替消费者存位置(AMQP 里没有消费者 offset 存储),消费者要自己把处理到的 offset 存起来;每个消费者的位置互不影响,这也是 stream 能支撑多个独立读者的原因。", t=tl(S(3)), mark=lidx(S(3), '先读 5 条'), done=lidx(S(3), '先读 5 条'), kv=KV([['位置', '消费者自己存 offset'], ['重启后', '用 offset = 上次 + 1 继续'], ['多个消费者', '各读各的']], ['位置'])),
+    step("stream 不支持的操作:basic_get 直接 540 NOT_IMPLEMENTED(连接被关);不设 prefetch 就 consume 是 406 PRECONDITION_FAILED consumer prefetch count is not set;auto_ack 消费是 540 NOT_IMPLEMENTED automatic acknowledgement not supported;exclusive 队列是 406(invalid property 'exclusive-owner');durable=False 在 4.3.6 默认就被拒(541)。stream 是持久的、必须手动 ack、必须设 prefetch 的。", t=tl(S(4)), mark=lidx(S(4), 'basic_get', '不设 prefetch', 'auto_ack'), done=lidx(S(4), 'durable=False', 'exclusive=True'), kv=KV([['basic_get', '540 不支持'], ['不设 prefetch', '406'], ['auto_ack', '540 不支持'], ['exclusive / 非持久', '被拒']], ['basic_get'])),
+    step("保留:x-max-length-bytes=20 MB、段大小 5 MB,发 60000 条 1 KB(约 60 MB)。最老的整段被删除:stream_status 里 first_offset=44778,segments=4,第一条还能读到的是 offset 44779(first_offset 是段的起点);s5 的 4 个 .segment 文件名是 44778、49258、53729、58196(名字就是这一段第一条消息的 offset),大小 4、4、4、1 MiB,共约 13 MiB。删除按整段做,所以实际保留量比 20 MB 略小;committed_offset=60012 比 60000 条多出的是 stream 自己的内部条目。", t=tl(S(5)), mark=lidx(S(5), '发了 60000 条', 'stream_status'), done=lidx(S(5), '.segment'), b=bars([['发布', 60000, '60000 条'], ['最老可读 offset', 44779, 'offset 44779'], ['被删掉的', 44779, '约 44779 条']], 60000, mark=[1, 2], done=[0]), kv=KV([['保留方式', '按段整段删除'], ['first_offset', '44778'], ['segments', '4 个']], ['保留方式'])),
+    step("消费吞吐:同样 100000 条 100 字节,classic 队列消费并 ack 要 903 ms,stream 消费并 ack 要 924 ms(3 次中位数,prefetch=1000),基本一样;区别是 stream 读完还在,可以再读 3 次得到同样的数据,而 classic 读完就没了。stream 的优势不在“读得更快”,而在“可重复读、多读者互不影响”。", t=tl(S(6)), mark=lidx(S(6), 'stream 读'), done=lidx(S(6), 'classic 读'), b=bars([['stream', 924, '924 ms'], ['classic', 903, '903 ms']], 924, mark=[0], done=[1]), kv=KV([['stream', '924 ms,可重复读'], ['classic', '903 ms,读完就没'], ['结论', '吞吐相当,语义不同']], ['结论'])),
+]
+A = mkartq('q17', 17, 'RabbitMQ,stream队列,offset,追加日志,保留策略,真实验证,动画演示',
+    '在 RabbitMQ 4.3.6 上用 AMQP 客户端验证 stream 队列:消息读完不删,多个消费者各从自己的 offset 读;x-stream-offset 的 first / last / next / 数字 / 时间戳;basic_get、自动确认、非持久、exclusive 都不支持;按段保留(限制 20 MB 后最老的 44778 条之前被整段删除);消费吞吐与 classic 相当。',
+    'stream 队列不是“队列”,而是一个追加日志:消息读完还在,消费者用 offset 决定从哪读。它能做什么、不能做什么、保留策略怎么删?这篇用普通 AMQP 客户端在 RabbitMQ 4.3.6 上把这些都过一遍。',
+    [('读完仍在', '两个消费者先后从头读同一个 stream,都读到 m0~m9'), ('540 / 406', 'basic_get 与自动确认被拒的 AMQP 错误码,以及不设 prefetch 的 406'), ('first_offset=44778', '限制 20 MB 后,60000 条里最老的 44778 条所在的段被整段删除')],
+    [('追加日志', '<p>stream 队列把消息追加在日志里,每条有一个递增的 offset(从 0 开始),投递时放在 <code>x-stream-offset</code> 头里。ack 不删除任何东西,同一批消息可以被很多消费者重复读取。</p>'),
+     ('从哪里开始读', '<p>消费时用参数 <code>x-stream-offset</code> 指定:<code>first</code>、<code>last</code>(最后一个 chunk)、<code>next</code>(只要新的,也是不设时的默认)、一个数字 offset、或一个时间戳。</p>'),
+     ('位置自己存', '<p>AMQP 0-9-1 没有消费者位置的存储,消费者要自己记住处理到的 offset,下次用上次 + 1 继续。</p>'),
+     ('不支持的操作', '<p>basic_get、自动确认、非持久、exclusive 队列、不设 prefetch 的消费,都被 broker 拒绝。</p>'),
+     ('保留', '<p>用 <code>x-max-length-bytes</code> 或按时间的 <code>x-max-age</code> 限制,段大小由 <code>x-stream-max-segment-size-bytes</code> 决定;超出限制时最老的段整段删除。</p>'),
+     ('吞吐', '<p>用 AMQP 读 100000 条的耗时与 classic 队列相当(924 对 903 ms);stream 的价值在语义。</p>')],
+    steps,
+    [ENV_Q + '。启用 rabbitmq_stream 插件,但全部实验仍通过 AMQP 0-9-1(pika)读写,没有用 stream 专用二进制协议;stream 状态来自 rabbitmq-streams stream_status --formatter json;消费者需手动 ack 且设了 prefetch;第五节的 .segment 文件列表里名字为 0 的三个文件属于前面几个小 stream,s5 自己的是名字 44778 起的四个',
+     '没有验证:stream 专用协议(端口 5552)的客户端、offset 存储与去重发布;超级流(super stream)与分区;x-max-age 按时间保留;多节点 stream 的副本与选举;过滤(Bloom filter);单消息很大时的 chunk 行为。last 的 chunk 大小每次运行不同(见过 1、2、4 条),没有总结规律'],
+    'stream 队列')

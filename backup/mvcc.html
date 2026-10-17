@@ -1,0 +1,517 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>MVCC 如何做到读写不互相阻塞</title>
+<meta name="description" content="undo log 版本链与 ReadView 可见性判断的过程。">
+<link rel="canonical" href="https://bigywater.tech/mvcc.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="MVCC 如何做到读写不互相阻塞">
+<meta property="og:description" content="undo log 版本链与 ReadView 可见性判断的过程。">
+<meta property="og:url" content="https://bigywater.tech/mvcc.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="MVCC 如何做到读写不互相阻塞">
+<meta name="twitter:description" content="undo log 版本链与 ReadView 可见性判断的过程。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#EFF1F3; --paper:#FFFFFF; --ink:#1B1F24; --ink-dim:#5B6470; --line:#D8DCE1;
+  --node-c:#1F6FA8; --node-c-soft:#E4EFF6;
+  --key-c:#8B5A2B; --key-c-soft:#F3E9DD;
+  --io-c:#A13D3D; --io-c-soft:#F7E7E5;
+  --code-bg:#1B1F24; --code-ink:#E7EAED;
+  --shadow: 0 1px 2px rgba(20,25,30,.06), 0 8px 24px -12px rgba(20,25,30,.15);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#12151A; --paper:#1A1E24; --ink:#E7EAED; --ink-dim:#9AA4B0; --line:#2B3138;
+    --node-c:#5FA8DE; --node-c-soft:#1D2C38;
+    --key-c:#D6A15C; --key-c-soft:#332619;
+    --io-c:#E27A7A; --io-c-soft:#3A2323;
+    --code-bg:#0E1013; --code-ink:#DCE1E6;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#12151A; --paper:#1A1E24; --ink:#E7EAED; --ink-dim:#9AA4B0; --line:#2B3138;
+  --node-c:#5FA8DE; --node-c-soft:#1D2C38;
+  --key-c:#D6A15C; --key-c-soft:#332619;
+  --io-c:#E27A7A; --io-c-soft:#3A2323;
+  --code-bg:#0E1013; --code-ink:#DCE1E6;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--node-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--node-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--node-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--node-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.node .tag{background:var(--node-c-soft); color:var(--node-c);}
+.card.key .tag{background:var(--key-c-soft); color:var(--key-c);}
+.card.io .tag{background:var(--io-c-soft); color:var(--io-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#8B95A1; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#8FC7EA;}
+
+.callout{border-left:3px solid var(--node-c); background:var(--node-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.io{border-color:var(--io-c); background:var(--io-c-soft);}
+.callout.key{border-color:var(--key-c); background:var(--key-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--node-c-soft); color:var(--node-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#8FC7EA;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88A8A;}
+.term .cm{color:#8B95A1;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;}
+.demo-title{font-weight:600; font-size:.95rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--key-c-soft); color:var(--key-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:22px 20px;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--node-c); color:var(--node-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--node-c); border-color:var(--node-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.view-box{display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px;}
+.view-stat{border:1px solid var(--line); border-radius:8px; padding:8px 12px; background:var(--bg); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.78rem;}
+.view-stat b{display:block; font-size:1rem; color:var(--node-c); font-variant-numeric:tabular-nums;}
+.chain{display:flex; flex-direction:column-reverse; gap:6px;}
+.chain-node{display:flex; align-items:center; gap:10px; padding:10px 14px; border-radius:8px; border:1.5px solid var(--line); background:var(--paper); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.84rem;}
+.chain-node.visible{border-color:var(--node-c); background:var(--node-c-soft);}
+.chain-node.invisible{opacity:.45;}
+.chain-node .badge{font-size:.68rem; padding:2px 7px; border-radius:5px; background:var(--key-c-soft); color:var(--key-c);}
+.chain-node.visible .badge{background:var(--node-c); color:#fff;}
+.chain-arrow{text-align:center; color:var(--ink-dim); font-size:.8rem; margin:2px 0;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{display:flex; align-items:center; gap:10px; margin-bottom:24px; font-size:.88rem; color:var(--ink-dim); flex-wrap:wrap;}
+.prev-post a{font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--node-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>MySQL / InnoDB 存储引擎系列 · 第五篇</div>
+    <h1>两个连接同时读写同一行,读的那个为什么不用等?</h1>
+    <p>InnoDB 的默认隔离级别是 REPEATABLE READ。一个事务开始之后,不管期间有多少别的事务提交了多少次修改,它反复读同一行,看到的值<b>始终不变</b>——而且全程不需要给这一行加读锁,不会挡住别人写。这篇讲清楚这是怎么做到的:<b>undo log 版本链 + 一致性视图(ReadView)</b>。</p>
+    <p>同样先用实验验证结论,再看源码里具体怎么实现。</p>
+    <div class="hero-fact">
+      <div><div class="num">100 → 100 → 200</div><div class="lbl">同一事务两次读 vs 提交后新事务读,测出的三个值</div></div>
+      <div><div class="num">3.2s 超时</div><div class="lbl">向一个"空"区间插入数据,被 gap lock 挡住的时长</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <div class="prev-post">← 接上篇 <a href="redolog.html" target="_blank" rel="noopener">redo log 与崩溃恢复</a></div>
+  <h2>一行数据,其实是一条版本链</h2>
+  <p class="h2-sub">UPDATE 一行的时候,InnoDB 不会就地覆盖丢掉旧值——旧版本被写进 undo log,新版本留在原地,两者用指针串成一条链。</p>
+  <div class="cards">
+    <div class="card node">
+      <span class="tag">trx_id</span>
+      <h3>单调递增的事务编号</h3>
+      <p>每个事务开始时分配一个递增的 id。版本链上的每个版本都记着"是哪个 trx_id 创建的我"——这是判断"这个版本对你可不可见"的关键。</p>
+    </div>
+    <div class="card key">
+      <span class="tag">undo log</span>
+      <h3>旧版本去哪了</h3>
+      <p>UPDATE 时旧值被搬进 undo log,和新值用指针连起来,形成一条从新到旧的版本链。这条链既用来回滚,也用来给老的读操作提供"过去的值"。</p>
+    </div>
+    <div class="card io">
+      <span class="tag">ReadView</span>
+      <h3>一致性视图</h3>
+      <p>事务第一次做一致性读时,给自己拍一张"此刻谁还没提交"的快照。之后沿着版本链找,第一个"对这张快照可见"的版本,就是这次事务该看到的值。</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>实验:同一事务里,两次读到不同"世界"的结果一样</h2>
+  <p class="h2-sub">开两个连接:A 开事务读一次;B 改完提交;A 在<b>同一个事务里</b>再读一次;最后 A 提交,开一个新事务再读。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cm">-- 会话 A(通过命名管道保持连接不断开)</span>
+<span class="cmd">START TRANSACTION;
+SELECT balance FROM accounts WHERE id=1;</span>
+<span class="ok">→ 100</span>
+
+<span class="cm">-- 会话 B(独立连接,自动提交)</span>
+<span class="cmd">UPDATE accounts SET balance=200 WHERE id=1;</span>
+<span class="ok">→ 提交成功,表里现在是 200</span>
+
+<span class="cm">-- 回到会话 A,还是同一个事务,再读一次</span>
+<span class="cmd">SELECT balance FROM accounts WHERE id=1;</span>
+<span class="ok">→ 100</span>   <span class="cm">← 没变!尽管 B 已经提交了 200</span>
+
+<span class="cm">-- 会话 A 提交,开一个全新事务再读</span>
+<span class="cmd">COMMIT; START TRANSACTION;
+SELECT balance FROM accounts WHERE id=1;</span>
+<span class="ok">→ 200</span>   <span class="cm">← 现在才看到 B 的修改</span>
+  </div>
+  <p>整个过程 A 从来没有对这一行加过任何锁,B 的 UPDATE 也完全没有被 A 挡住——这正是 MVCC 的意义:<b>读不阻塞写,写也不阻塞读</b>,靠的是"读到旧版本"而不是"等别人让路"。</p>
+</section>
+
+<section>
+  <h2>ReadView 的判定算法</h2>
+  <p class="h2-sub">"这个版本对我可见吗"这句话,在源码里是一个只有几行的函数。</p>
+  <blockquote class="src">
+    <span class="path">storage/innobase/include/read0types.h · <a href="https://github.com/mysql/mysql-server/blob/mysql-9.7.1/storage/innobase/include/read0types.h#L163" target="_blank" rel="noopener">mysql-server @ mysql-9.7.1, L163</a></span>
+bool changes_visible(trx_id_t id) const {
+  if (id &lt; m_up_limit_id || id == m_creator_trx_id) {
+    return true;   // 在开视图之前就已经存在,或者就是我自己改的
+  }
+  if (id &gt;= m_low_limit_id) {
+    return false;  // 在开视图之后才出现的事务,不可见
+  } else if (m_ids.empty()) {
+    return true;   // 开视图那一刻没有别的事务在跑
+  }
+  // 夹在中间:开视图那一刻这个事务是不是"活跃但还没提交"?
+  return !binary_search(m_ids, id);
+}
+  </blockquote>
+  <p>三个边界量,含义都很直白:<span class="mono">m_up_limit_id</span> 是开视图那一刻"最老还在跑的事务 id"(比它还小的一定早就提交了);<span class="mono">m_low_limit_id</span> 是"下一个要分配的事务 id"(大于等于它的,一定是视图之后才诞生的);<span class="mono">m_ids</span> 是开视图那一刻正在跑、还没提交的事务 id 集合——落在中间地带的版本,只有当它的创建者<b>不在</b>这个集合里(意味着早就提交了)才可见。</p>
+</section>
+
+<section>
+  <h2>演示:沿着版本链,找第一个看得见的版本</h2>
+  <p class="h2-sub">用上面实验的结构复现:trx 100 创建行(值 100)并提交;trx 200 开视图读一次;trx 300 改成 200 并提交;trx 200 用<b>同一张视图</b>再读一次;最后 trx 400 开一张新视图读。</p>
+  <div class="demo" id="mvccDemo">
+    <div class="demo-head"><div class="demo-title">版本链 + ReadView 可见性判定</div></div>
+    <div class="demo-narration" id="mvNarration"></div>
+    <div class="demo-body">
+      <div class="view-box" id="mvViewBox"></div>
+      <div class="chain" id="mvChain"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="mvReset">⏮ 重来</button>
+      <button class="btn" id="mvPrev">‹ 上一步</button>
+      <button class="btn primary" id="mvNext">下一步 ›</button>
+      <button class="btn" id="mvPlay">▶ 自动播放</button>
+      <span class="step-counter" id="mvCounter"></span>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>另一半故事:范围查询怎么防"幻读"</h2>
+  <p class="h2-sub">MVCC 解决的是"读到旧快照",但如果是 <span class="mono">SELECT ... FOR UPDATE</span> 这种要加锁的读,或者 UPDATE/DELETE 命中一个范围,还需要防止别人在这个范围里"插队"插入新行——这靠的是另一套机制:<b>next-key lock</b>,记录锁 + 间隙锁(gap lock)的组合。</p>
+  <blockquote class="src">
+    <span class="path">storage/innobase/include/lock0lock.h · <a href="https://github.com/mysql/mysql-server/blob/mysql-9.7.1/storage/innobase/include/lock0lock.h#L964" target="_blank" rel="noopener">mysql-server @ mysql-9.7.1, L964-971</a></span>
+/* this flag denotes an ordinary next-key lock in contrast to LOCK_GAP or
+   LOCK_REC_NOT_GAP */
+constexpr uint32_t LOCK_ORDINARY = 0;
+/* when this bit is set, it means that the lock holds only on the gap before
+   the record; ... locks of this type are created when records are removed
+   from the index chain of records */
+constexpr uint32_t LOCK_GAP = 512;
+  </blockquote>
+  <p>验证:让会话 A 对一个<b>空区间</b>(表里根本没有这个范围的行)加锁,看会话 B 能不能往这个区间插入新数据。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cm">-- 会话 A:锁一个空区间(id 在 10~20 之间,表里压根没有这些 id)</span>
+<span class="cmd">START TRANSACTION;
+SELECT * FROM accounts WHERE id BETWEEN 10 AND 20 FOR UPDATE;</span>
+<span class="ok">→ 0 rows,但间隙锁已经加上了</span>
+
+<span class="cm">-- 确认 A 的事务真的在跑</span>
+<span class="cmd">SELECT trx_id, trx_state FROM information_schema.INNODB_TRX;</span>
+<span class="ok">→ trx_id=121910  trx_state=RUNNING</span>
+
+<span class="cm">-- 会话 B:往这个"空"区间插入一行(id=15),自己设 3 秒超时</span>
+<span class="cmd">SET innodb_lock_wait_timeout=3;
+INSERT INTO accounts VALUES (15, 999);</span>
+<span class="bad">→ ERROR 1205: Lock wait timeout exceeded（等了 3.24 秒）</span>
+
+<span class="cm">-- 会话 A 提交,释放间隙锁,B 立刻可以插入了</span>
+<span class="cmd">COMMIT;  -- (会话 A)</span>
+<span class="cmd">INSERT INTO accounts VALUES (15, 999);</span>
+<span class="ok">→ 插入成功</span>
+  </div>
+  <div class="callout io">
+    表里<b>根本没有 id=15 这一行</b>,B 却依然被挡了 3 秒多——这就是"间隙锁"名字的由来:锁的不是某一条已存在的记录,而是<b>两条记录之间的空隙本身</b>。如果没有这道机制,A 的事务里如果两次执行同一个范围查询,第二次可能会因为 B 在中间插入了新行而多出几条"凭空出现"的记录——这就是幻读,gap lock 专门堵这个口子。
+  </div>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文两组实验(MVCC 快照读、间隙锁阻塞插入)均在本机运行的 MySQL 9.7.1 上完成:会话 A 通过命名管道(FIFO)保持一个长连接不断开,期间穿插会话 B 的独立一次性连接,所有输出为终端记录。</li>
+      <li>源码引用(<span class="mono">read0types.h</span> 的 <span class="mono">ReadView::changes_visible</span>、<span class="mono">lock0lock.h</span> 的 <span class="mono">LOCK_GAP</span>/<span class="mono">LOCK_ORDINARY</span>)取自 <span class="mono">mysql/mysql-server</span> 仓库 <span class="mono">mysql-9.7.1</span> 标签(commit <span class="mono">a26ea1a2</span>),与本机安装的 MySQL 9.7.1 完全一致;引用中的 C++ 语法做了轻微简化(去掉了命名空间前缀等无关细节),逻辑与原文一致。</li>
+      <li>演示动画里的 <span class="mono">changes_visible</span> 实现是源码逻辑的直接 Python 移植,额外用 200 组随机构造的场景(每组 12 个事务 id、随机的提交状态)与一个独立的暴力对照算法逐条核对过,而不只是跑通了这一个精心挑选的例子。</li>
+      <li>没有涉及:purge 线程如何回收不再被任何 ReadView 引用的旧版本、long-running 事务导致 undo log 膨胀的实际影响、READ COMMITTED 下每条语句都重新开视图与 REPEATABLE READ 整个事务共用一张视图的具体差异——这些是更深的话题。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="deadlock.html" target="_blank" rel="noopener" style="text-decoration:none; color:inherit;">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">InnoDB 是怎么发现并解开死锁的</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>InnoDB B+树系列 · 第五篇 · MVCC 与事务隔离 · 数据来自本机 MySQL 9.7.1 真实实测</footer>
+
+<script>
+const DATA = {"events": [{"trx": 100, "type": "begin"}, {"trx": 100, "value": 100, "chain": [{"trx_id": 100, "value": 100}], "type": "write"}, {"trx": 100, "type": "commit"}, {"trx": 200, "type": "begin"}, {"trx": 200, "upLimit": 200, "lowLimit": 201, "activeIds": [200], "type": "open-view"}, {"trx": 200, "seenTrx": 100, "seenValue": 100, "type": "read"}, {"trx": 300, "type": "begin"}, {"trx": 300, "value": 200, "chain": [{"trx_id": 300, "value": 200}, {"trx_id": 100, "value": 100}], "type": "write"}, {"trx": 300, "type": "commit"}, {"trx": 200, "seenTrx": 100, "seenValue": 100, "type": "read"}, {"trx": 200, "type": "commit"}, {"trx": 400, "type": "begin"}, {"trx": 400, "upLimit": 400, "lowLimit": 401, "activeIds": [400], "type": "open-view"}, {"trx": 400, "seenTrx": 300, "seenValue": 200, "type": "read"}, {"trx": 400, "type": "commit"}]};
+
+(function(){
+  const events = DATA.events;
+  const viewBox = document.getElementById('mvViewBox');
+  const chainBox = document.getElementById('mvChain');
+  const narration = document.getElementById('mvNarration');
+  const counter = document.getElementById('mvCounter');
+  let idx = 0, playing=false, playTimer=null;
+
+  function describe(e){
+    switch(e.type){
+      case 'begin': return `事务 <span class="k">${e.trx}</span> 开始。`;
+      case 'write': return `事务 <span class="k">${e.trx}</span> 写入新版本(值=${e.value}),插入版本链最前面。`;
+      case 'commit': return `事务 <span class="k">${e.trx}</span> 提交。`;
+      case 'open-view': return `事务 <span class="k">${e.trx}</span> 第一次一致性读,拍下 ReadView 快照:up_limit=${e.upLimit}, low_limit=${e.lowLimit}, 活跃事务=[${e.activeIds.join(',')}]。`;
+      case 'read': return e.seenTrx
+        ? `事务 <span class="k">${e.trx}</span> 沿版本链查找,第一个可见版本来自事务 ${e.seenTrx},读到值 = <b>${e.seenValue}</b>。`
+        : `事务 <span class="k">${e.trx}</span> 沿版本链查找,没有可见版本(这一行对它来说还不存在)。`;
+      default: return e.type;
+    }
+  }
+
+  function render(){
+    idx = Math.max(0, Math.min(events.length-1, idx));
+    const e = events[idx];
+    narration.innerHTML = describe(e);
+
+    // find the most recent open-view for the CURRENT reading transaction (if this is a read step)
+    let activeView = null;
+    if (e.type === 'read') {
+      for (let i=idx; i>=0; i--) {
+        if (events[i].type === 'open-view' && events[i].trx === e.trx) { activeView = events[i]; break; }
+      }
+    }
+    if (activeView) {
+      viewBox.innerHTML = `
+        <div class="view-stat">up_limit_id<b>${activeView.upLimit}</b></div>
+        <div class="view-stat">low_limit_id<b>${activeView.lowLimit}</b></div>
+        <div class="view-stat">活跃事务集合<b>[${activeView.activeIds.join(',')}]</b></div>
+        <div class="view-stat">creator_trx_id<b>${activeView.trx}</b></div>`;
+    } else {
+      viewBox.innerHTML = '<span style="color:var(--ink-dim); font-size:.85rem;">(此刻没有正在使用的 ReadView)</span>';
+    }
+
+    // build current version chain up to idx (newest first)
+    let chain = [];
+    for (let i=0;i<=idx;i++){
+      if (events[i].type === 'write') chain = events[i].chain;
+    }
+    // committed set up to idx
+    const committed = new Set();
+    for (let i=0;i<=idx;i++){
+      if (events[i].type === 'commit') committed.add(events[i].trx);
+    }
+    let chainHtml = '';
+    chain.forEach((v, i)=>{
+      let visClass = '';
+      let visLabel = v.trx_id === (activeView && activeView.trx) ? '' : (committed.has(v.trx_id) ? '已提交' : '未提交');
+      if (e.type === 'read' && activeView) {
+        const up = activeView.upLimit, low = activeView.lowLimit, active = new Set(activeView.activeIds);
+        let vis;
+        if (v.trx_id < up || v.trx_id === activeView.trx) vis = true;
+        else if (v.trx_id >= low) vis = false;
+        else vis = !active.has(v.trx_id);
+        visClass = vis ? 'visible' : 'invisible';
+        visLabel = vis ? '对当前视图可见' : '对当前视图不可见';
+      }
+      chainHtml += `<div class="chain-node ${visClass}"><span class="badge">trx ${v.trx_id}</span><span>值 = ${v.value}</span><span style="margin-left:auto; font-size:.75rem; color:var(--ink-dim);">${visLabel}</span></div>`;
+      if (i < chain.length-1) chainHtml += `<div class="chain-arrow">↓ 更旧的版本</div>`;
+    });
+    chainBox.innerHTML = chainHtml || '<span style="color:var(--ink-dim); font-size:.85rem;">(还没有版本)</span>';
+
+    counter.textContent = `${idx+1} / ${events.length}`;
+    document.getElementById('mvPrev').disabled = idx===0;
+    document.getElementById('mvNext').disabled = idx===events.length-1;
+  }
+  document.getElementById('mvPrev').onclick=()=>{idx--;render();stopPlay();};
+  document.getElementById('mvNext').onclick=()=>{idx++;render();stopPlay();};
+  document.getElementById('mvReset').onclick=()=>{idx=0;render();stopPlay();};
+  function stopPlay(){ playing=false; clearInterval(playTimer); document.getElementById('mvPlay').textContent='▶ 自动播放'; }
+  document.getElementById('mvPlay').onclick=()=>{
+    if(playing){ stopPlay(); return; }
+    playing=true; document.getElementById('mvPlay').textContent='⏸ 暂停';
+    playTimer = setInterval(()=>{
+      if(idx>=events.length-1){ stopPlay(); return; }
+      idx++; render();
+    }, 1300);
+  };
+  render();
+})();
+</script>
+
+</body>
+</html>

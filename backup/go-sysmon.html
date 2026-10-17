@@ -1,0 +1,468 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>sysmon:后台监控线程在检查什么</title>
+<meta name="description" content="在 Go 1.27.1 里观察后台监控线程 sysmon 的工作:schedtrace 下空闲与空转的调度器状态对比;完全空闲 3.5 秒 CPU 时间 0.000 秒;空闲进程只有在已发生过一次 GC 之后才会在 2 分钟时被强制 GC(@120.014s),从没 GC 过的进程 130 秒 NumGC 仍是 0;并读 sysmon 源码里的五件事:轮询网络、更新 GOMAXPROCS、叫醒 scavenger、retake、强制 GC。">
+<link rel="canonical" href="https://bigywater.tech/go-sysmon.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="sysmon:后台监控线程在检查什么">
+<meta property="og:description" content="在 Go 1.27.1 里观察后台监控线程 sysmon 的工作:schedtrace 下空闲与空转的调度器状态对比;完全空闲 3.5 秒 CPU 时间 0.000 秒;空闲进程只有在已发生过一次 GC 之后才会在 2 分钟时被强制 GC(@120.014s),从没 GC 过的进程 130 秒 NumGC 仍是 0;并读 sysmon 源码里的五件事:轮询网络、更新 GOMAXPROCS、叫醒 scavenger、retake、强制 GC。">
+<meta property="og:url" content="https://bigywater.tech/go-sysmon.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="sysmon:后台监控线程在检查什么">
+<meta name="twitter:description" content="在 Go 1.27.1 里观察后台监控线程 sysmon 的工作:schedtrace 下空闲与空转的调度器状态对比;完全空闲 3.5 秒 CPU 时间 0.000 秒;空闲进程只有在已发生过一次 GC 之后才会在 2 分钟时被强制 GC(@120.014s),从没 GC 过的进程 130 秒 NumGC 仍是 0;并读 sysmon 源码里的五件事:轮询网络、更新 GOMAXPROCS、叫醒 scavenger、retake、强制 GC。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">1989</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">63</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#00799A; --series-c-soft:#D9F1F8;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#4FC3E8; --series-c-soft:#0B2A33;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#4FC3E8; --series-c-soft:#0B2A33;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Go · 64</div>
+  <h1>sysmon:后台监控线程在检查什么</h1>
+  <p>Go 程序里有一个不占 P 的后台线程 sysmon。它在干什么、空闲时会不会白白耗电、一个什么都不做的程序到底会不会被强制 GC?这篇用 schedtrace、getrusage 和 130 秒的 gctrace 实测,再对着源码逐项读。</p>
+  <div class="hero-fact">
+<div><div class="num">@120.014s</div><div class="lbl">先 GC 过一次的空闲进程被强制 GC 的时刻,forcegcperiod 是 2 分钟</div></div><div><div class="num">0.000 秒</div><div class="lbl">完全空闲 3.5 秒,进程用掉的 CPU 时间</div></div><div><div class="num">5 件事</div><div class="lbl">读源码看到 sysmon 周期性做的事:轮询网络、更新 GOMAXPROCS、叫醒 scavenger、retake、强制 GC</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="go-ticker-leak.html">Ticker 与 time.After 泄漏:Go 1.23 之后改了什么</a></div>
+<section>
+  <h2>空闲和忙的样子</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  SCHED 0ms: gomaxprocs=4 idleprocs=2 threads=3 spinningthreads=1 needspinning=0 idlethreads=0 runqueue=0 [ 0 0 0 0 ] schedticks=[ 0 0 0 0 ]
+  SCHED 1011ms: gomaxprocs=4 idleprocs=4 threads=5 spinningthreads=0 needspinning=0 idlethreads=3 runqueue=0 [ 0 0 0 0 ] schedticks=[ 2 0 2 3 ]
+  SCHED 2017ms: gomaxprocs=4 idleprocs=4 threads=5 spinningthreads=0 needspinning=0 idlethreads=3 runqueue=0 [ 0 0 0 0 ] schedticks=[ 2 0 2 3 ]
+  SCHED 3019ms: gomaxprocs=4 idleprocs=4 threads=5 spinningthreads=0 needspinning=0 idlethreads=3 runqueue=0 [ 0 0 0 0 ] schedticks=[ 2 0 2 3 ]
+  SCHED 0ms: gomaxprocs=4 idleprocs=1 threads=4 spinningthreads=1 needspinning=0 idlethreads=0 runqueue=0 [ 1 0 0 0 ] schedticks=[ 0 0 0 0 ]
+  SCHED 1010ms: gomaxprocs=4 idleprocs=0 threads=5 spinningthreads=0 needspinning=1 idlethreads=0 runqueue=0 [ 0 0 0 0 ] schedticks=[ 37 35 36 37 ]
+  SCHED 2018ms: gomaxprocs=4 idleprocs=0 threads=5 spinningthreads=0 needspinning=1 idlethreads=0 runqueue=0 [ 0 0 0 0 ] schedticks=[ 71 69 70 71 ]
+  SCHED 3028ms: gomaxprocs=4 idleprocs=0 threads=5 spinningthreads=0 needspinning=1 idlethreads=0 runqueue=0 [ 0 0 0 0 ] schedticks=[ 106 104 105 105 ]</pre></div>
+  <p><code>schedtrace</code> 每秒打印一次调度器快照。空闲时 4 个 P 全空闲、<code>schedticks</code> 不再变化;每个 P 上都有空转 goroutine 时没有空闲 P,<code>schedticks</code> 每秒增加约 35 次。注意源码注释说开启 schedtrace 会让 sysmon 不进入深睡,所以这个观察本身改变了 sysmon 的行为。</p>
+</section>
+<section>
+  <h2>空闲的程序几乎不被打扰</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  完全空闲 3.5 秒:进程用掉的 CPU 时间 0.000 秒
+  完全空闲 3.5 秒:进程用掉的 CPU 时间 0.000 秒
+  完全空闲 3.5 秒:进程用掉的 CPU 时间 0.000 秒</pre></div>
+  <p>完全空闲 3.5 秒,进程自己读到的 CPU 时间是 0.000 秒(三次)。源码里所有 P 都空闲时 sysmon 会睡到下一个定时器到期,或者最多 <code>forcegcperiod/2</code>。我没有直接观察 sysmon 线程,这个解释来自源码。</p>
+</section>
+<section>
+  <h2>强制 GC 有前提</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">[A 没有调用过 runtime.GC()]
+  启动后 没有调用过 runtime.GC():NumGC=0,然后什么都不做,空闲 130 秒(不分配)
+    130 秒后 NumGC=0
+[B 先调用一次 runtime.GC()]
+  gc 1 @0.001s 6%: 0.079+0.31+0.009 ms clock, 0.79+0/0.73/0.16+0.093 ms cpu, 0-&gt;0-&gt;0 MB, 4 MB goal, 0 MB stacks, 0 MB globals, 10 P (forced)
+    启动后 先调用了一次 runtime.GC():NumGC=1,然后什么都不做,空闲 130 秒(不分配)
+  GC forced
+  gc 2 @120.014s 0%: 0.11+0.28+0.014 ms clock, 1.1+0/0.62/0+0.14 ms cpu, 0-&gt;0-&gt;0 MB, 4 MB goal, 0 MB stacks, 0 MB globals, 10 P
+    130 秒后 NumGC=2</pre></div>
+  <p>很多文章说“Go 每 2 分钟强制 GC 一次”。实测:程序从没发生过 GC 时,空闲 130 秒也不会;先发生过一次 GC 之后,在 @120.014s 触发了强制 GC。源码里的条件正是 <code>lastgc != 0 &amp;&amp; now-lastgc &gt; forcegcperiod</code>。</p>
+</section>
+<section>
+  <h2>sysmon 的清单</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  proc.go:6618-6621
+    		// poll network if not polled for more than 10ms
+    		lastpoll := sched.lastpoll.Load()
+    		if netpollinited() &amp;&amp; lastpoll != 0 &amp;&amp; lastpoll+10*1000*1000 &lt; now {
+    			sched.lastpoll.CompareAndSwap(lastpoll, now)
+  proc.go:6637-6640
+    		// Check if we need to update GOMAXPROCS at most once per second.
+    		if debug.updatemaxprocs != 0 &amp;&amp; lastgomaxprocs+1e9 &lt;= now {
+    			sysmonUpdateGOMAXPROCS()
+    			lastgomaxprocs = now
+  proc.go:6642-6644
+    		if scavenger.sysmonWake.Load() != 0 {
+    			// Kick the scavenger awake if someone requested it.
+    			scavenger.wake()
+  proc.go:6646-6647
+    		// retake P's blocked in syscalls
+    		// and preempt long running G's
+  proc.go:6653-6654
+    		// check if we need to force a GC
+    		if t := (gcTrigger{kind: gcTriggerTime, now: now}); t.test() &amp;&amp; forcegc.idle.Load() {
+  proc.go:6522-6527
+    // forcegcperiod is the maximum time in nanoseconds between garbage
+    // collections. If we go this long without a garbage collection, one
+    // is forced to run.
+    //
+    // This is a variable for testing purposes. It normally doesn't change.
+    var forcegcperiod int64 = 2 * 60 * 1e9
+  mgc.go:692-694
+    	// gcTriggerTime indicates that a cycle should be started when
+    	// it's been more than forcegcperiod nanoseconds since the
+    	// previous GC cycle.
+  mgc.go:718-719
+    		lastgc := int64(atomic.Load64(&amp;memstats.last_gc_nanotime))
+    		return lastgc != 0 &amp;&amp; t.now-lastgc &gt; forcegcperiod</pre></div>
+  <p>函数里依次是:睡眠(20 µs 起、最长 10 ms,见上一篇系统调用的文章)、必要时深睡、10 ms 没人轮询就自己轮询网络、每秒一次检查 GOMAXPROCS、叫醒 scavenger、retake 系统调用中的 P 并抢占运行太久的 G、满足条件时唤醒强制 GC 的 goroutine。其中 scavenger 被叫醒后具体怎么归还内存,我没有实验(试过一次分配 400 MB 再释放,10 秒内只多归还了约 2 MB,没有得出结论,所以没有写进来)。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">sysmon</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "b", "kind": "bars", "label": "数字对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "用 GODEBUG=schedtrace=1000(GOMAXPROCS=4)每秒看一次调度器。完全空闲时:idleprocs=4,threads=5,idlethreads=3,schedticks 在 1 s、2 s、3 s 三次都是 [ 2 0 2 3 ],没有变化。每个 P 上都有一个空转 goroutine 时:idleprocs=0,needspinning=1,schedticks 从 [ 37 35 36 37 ] 到 [ 71 69 70 71 ] 再到 [ 106 104 105 105 ],每个 P 每秒大约增加 34–35 次。(每秒约 35 次的原因我没有查。)", "s": {"t": {"lines": ["  SCHED 0ms: gomaxprocs=4 idleprocs=2 threads=3 spinningthreads=1 needspinning=0 idlethreads=0 runqueue=0 [ 0 0 0 0 ] schedticks=[ 0 0 0 0 ]", "  SCHED 1011ms: gomaxprocs=4 idleprocs=4 threads=5 spinningthreads=0 needspinning=0 idlethreads=3 runqueue=0 [ 0 0 0 0 ] schedticks=[ 2 0 2 3 ]", "  SCHED 2017ms: gomaxprocs=4 idleprocs=4 threads=5 spinningthreads=0 needspinning=0 idlethreads=3 runqueue=0 [ 0 0 0 0 ] schedticks=[ 2 0 2 3 ]", "  SCHED 3019ms: gomaxprocs=4 idleprocs=4 threads=5 spinningthreads=0 needspinning=0 idlethreads=3 runqueue=0 [ 0 0 0 0 ] schedticks=[ 2 0 2 3 ]", "  SCHED 0ms: gomaxprocs=4 idleprocs=1 threads=4 spinningthreads=1 needspinning=0 idlethreads=0 runqueue=0 [ 1 0 0 0 ] schedticks=[ 0 0 0 0 ]", "  SCHED 1010ms: gomaxprocs=4 idleprocs=0 threads=5 spinningthreads=0 needspinning=1 idlethreads=0 runqueue=0 [ 0 0 0 0 ] schedticks=[ 37 35 36 37 ]", "  SCHED 2018ms: gomaxprocs=4 idleprocs=0 threads=5 spinningthreads=0 needspinning=1 idlethreads=0 runqueue=0 [ 0 0 0 0 ] schedticks=[ 71 69 70 71 ]", "  SCHED 3028ms: gomaxprocs=4 idleprocs=0 threads=5 spinningthreads=0 needspinning=1 idlethreads=0 runqueue=0 [ 0 0 0 0 ] schedticks=[ 106 104 105 105 ]"], "cur": [], "mark": [], "done": []}, "done": [1, 2, 3], "mark": [5, 6, 7], "b": {"items": [["空闲:3 秒内 schedticks 增量(P0)", 0, "0"], ["空转:每个 P 约每秒增量", 35, "≈35"]], "max": 35, "cur": [], "mark": [1], "done": [0]}, "kv": {"items": [["空闲", "idleprocs=4,schedticks 不变"], ["空转", "idleprocs=0,needspinning=1"], ["注意", "schedtrace 本身会让 sysmon 不进深睡(源码注释)"]], "hl": ["注意"]}}}, {"note": "空闲进程的 CPU 成本:完全空闲 3.5 秒,用 getrusage 读自己用掉的 CPU 时间,重复 3 次都是 0.000 秒(不到半毫秒)。源码里 sysmon 在所有 P 都空闲时会 notetsleep 睡到下一个定时器或最多 forcegcperiod/2(一分钟),所以空闲的程序基本不被它打扰。", "s": {"t": {"lines": ["  完全空闲 3.5 秒:进程用掉的 CPU 时间 0.000 秒", "  完全空闲 3.5 秒:进程用掉的 CPU 时间 0.000 秒", "  完全空闲 3.5 秒:进程用掉的 CPU 时间 0.000 秒"], "cur": [], "mark": [], "done": []}, "done": [0, 1, 2], "kv": {"items": [["完全空闲 3.5 秒", "CPU 时间 0.000 秒(3 次)"], ["原因(源码)", "全部 P 空闲时 sysmon 深睡"], ["未验证", "没有直接观察 sysmon 线程的睡眠"]], "hl": ["未验证"]}}}, {"note": "空闲进程会被强制 GC 吗?进程 A 从没调用过 runtime.GC(),什么都不做空闲 130 秒:NumGC 始终是 0。进程 B 先调用一次 runtime.GC(),再空闲 130 秒:gctrace 在 @120.014s 打出 “GC forced” 和 gc 2,NumGC=2。源码里 gcTriggerTime 的条件是 lastgc != 0 && t.now-lastgc > forcegcperiod,forcegcperiod = 2 分钟——必须已经发生过一次 GC 才计时。", "s": {"t": {"lines": ["[A 没有调用过 runtime.GC()]", "  启动后 没有调用过 runtime.GC():NumGC=0,然后什么都不做,空闲 130 秒(不分配)", "    130 秒后 NumGC=0", "[B 先调用一次 runtime.GC()]", "  gc 1 @0.001s 6%: 0.079+0.31+0.009 ms clock, 0.79+0/0.73/0.16+0.093 ms cpu, 0->0->0 MB, 4 MB goal, 0 MB stacks, 0 MB globals, 10 P (forced)", "    启动后 先调用了一次 runtime.GC():NumGC=1,然后什么都不做,空闲 130 秒(不分配)", "  GC forced", "  gc 2 @120.014s 0%: 0.11+0.28+0.014 ms clock, 1.1+0/0.62/0+0.14 ms cpu, 0->0->0 MB, 4 MB goal, 0 MB stacks, 0 MB globals, 10 P", "    130 秒后 NumGC=2"], "cur": [], "mark": [], "done": []}, "done": [3, 6, 7, 8], "mark": [0, 2], "kv": {"items": [["A:从没 GC 过", "130 秒 NumGC=0"], ["B:先 GC 一次", "@120.014s 强制 GC,NumGC=2"], ["条件", "lastgc != 0 && 距上次 GC > 2 分钟"]], "hl": ["条件"]}}}, {"note": "读 sysmon 函数里的几件事(runtime/proc.go):①如果 10 ms 没有人轮询网络,它自己非阻塞地 netpoll;②GOMAXPROCS 的更新“at most once per second”;③有人请求时叫醒 scavenger(scavenger.wake);④“retake P's blocked in syscalls and preempt long running G's”;⑤满足 gcTriggerTime 时唤醒 forcegc 的 goroutine。forcegcperiod 的注释:如果这么久没有 GC,就强制一次。", "s": {"t": {"lines": ["  proc.go:6618-6621", "    \t\t// poll network if not polled for more than 10ms", "    \t\tlastpoll := sched.lastpoll.Load()", "    \t\tif netpollinited() && lastpoll != 0 && lastpoll+10*1000*1000 < now {", "    \t\t\tsched.lastpoll.CompareAndSwap(lastpoll, now)", "  proc.go:6637-6640", "    \t\t// Check if we need to update GOMAXPROCS at most once per second.", "    \t\tif debug.updatemaxprocs != 0 && lastgomaxprocs+1e9 <= now {", "    \t\t\tsysmonUpdateGOMAXPROCS()", "    \t\t\tlastgomaxprocs = now", "  proc.go:6642-6644", "    \t\tif scavenger.sysmonWake.Load() != 0 {", "    \t\t\t// Kick the scavenger awake if someone requested it.", "    \t\t\tscavenger.wake()", "  proc.go:6646-6647", "    \t\t// retake P's blocked in syscalls", "    \t\t// and preempt long running G's", "  proc.go:6653-6654", "    \t\t// check if we need to force a GC", "    \t\tif t := (gcTrigger{kind: gcTriggerTime, now: now}); t.test() && forcegc.idle.Load() {", "  proc.go:6522-6527", "    // forcegcperiod is the maximum time in nanoseconds between garbage", "    // collections. If we go this long without a garbage collection, one", "    // is forced to run.", "    //", "    // This is a variable for testing purposes. It normally doesn't change.", "    var forcegcperiod int64 = 2 * 60 * 1e9", "  mgc.go:692-694", "    \t// gcTriggerTime indicates that a cycle should be started when", "    \t// it's been more than forcegcperiod nanoseconds since the", "    \t// previous GC cycle.", "  mgc.go:718-719", "    \t\tlastgc := int64(atomic.Load64(&memstats.last_gc_nanotime))", "    \t\treturn lastgc != 0 && t.now-lastgc > forcegcperiod"], "cur": [], "mark": [], "done": []}, "done": [1, 6, 12], "mark": [15, 18, 29, 33], "kv": {"items": [["网络", "10 ms 没人轮询就自己 netpoll(0)"], ["GOMAXPROCS", "每秒最多更新一次"], ["scavenger", "被请求时叫醒"], ["系统调用与长 G", "retake / 抢占"], ["强制 GC", "2 分钟,且之前已发生过 GC"]], "hl": ["强制 GC"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / Go 1.27.1(brew);用 go run / go build / go test 直接编译运行,需要第三方库时经代理从 proxy.golang.org 下载;计时用 time.Now / testing.B,数字每次运行会有小幅抖动。schedtrace 与 gctrace 由 GODEBUG 打开;CPU 时间用 syscall.Getrusage 读自己;强制 GC 的两个进程同时跑 130 秒,GOMAXPROCS 为默认的 10;读过的源码:runtime/proc.go 的 sysmon 与 forcegcperiod,runtime/mgc.go 的 gcTrigger.test</li><li>没有验证:sysmon 线程自身的 CPU 占用与唤醒次数(没有直接观测)、scavenger 被 sysmon 叫醒后的行为、网络轮询 10 ms 的触发场景、Linux 上的表现、schedticks 每秒约 35 次的原因、空闲 GOMAXPROCS 更大时的 idlethreads 数量</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="go-runtime-metrics.html">
+    <div>
+      <div class="t1">下一篇 · GO 65</div>
+      <div class="t2">runtime/metrics:读运行时指标的稳定接口</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Go · sysmon:后台监控线程在检查什么 · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

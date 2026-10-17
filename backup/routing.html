@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>一条文档怎么知道该去哪个分片</title>
+<meta name="description" content="真实的 routing 哈希公式与分片数不能随便改的原因。">
+<link rel="canonical" href="https://bigywater.tech/routing.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="一条文档怎么知道该去哪个分片">
+<meta property="og:description" content="真实的 routing 哈希公式与分片数不能随便改的原因。">
+<meta property="og:url" content="https://bigywater.tech/routing.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="一条文档怎么知道该去哪个分片">
+<meta name="twitter:description" content="真实的 routing 哈希公式与分片数不能随便改的原因。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F6F7F9; --paper:#FFFFFF; --ink:#1C2230; --ink-dim:#5F6B7C; --line:#DEE3EA;
+  --term-c:#3B4C9E; --term-c-soft:#E7E9F7;
+  --match-c:#B8891A; --match-c-soft:#F6EDD9;
+  --postings-c:#12807E; --postings-c-soft:#DCF0EF;
+  --code-bg:#1C2230; --code-ink:#E7EAF0;
+  --shadow: 0 1px 2px rgba(20,25,40,.05), 0 8px 24px -12px rgba(20,25,40,.14);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#14171F; --paper:#1B1F2A; --ink:#E7EAF0; --ink-dim:#9AA3B5; --line:#2C3242;
+    --term-c:#8B9AE8; --term-c-soft:#232A46;
+    --match-c:#E0B75C; --match-c-soft:#332B18;
+    --postings-c:#5FC9C6; --postings-c-soft:#193232;
+    --code-bg:#10131A; --code-ink:#DCE1E6;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#14171F; --paper:#1B1F2A; --ink:#E7EAF0; --ink-dim:#9AA3B5; --line:#2C3242;
+  --term-c:#8B9AE8; --term-c-soft:#232A46;
+  --match-c:#E0B75C; --match-c-soft:#332B18;
+  --postings-c:#5FC9C6; --postings-c-soft:#193232;
+  --code-bg:#10131A; --code-ink:#DCE1E6;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",Helvetica,Arial,sans-serif; line-height:1.7;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+.wrap{max-width:880px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--term-c);}
+
+.hero{padding:68px 24px 36px;}
+.hero-inner{max-width:880px; margin:0 auto;}
+.eyebrow{font-size:.8rem; letter-spacing:.06em; text-transform:uppercase; color:var(--term-c); display:flex; align-items:center; gap:8px; margin-bottom:16px; font-weight:600;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--term-c);}
+h1{font-size:2.1rem; line-height:1.32; margin:0 0 18px; text-wrap:balance; letter-spacing:-.01em; font-weight:700;}
+.hero p{font-size:1.05rem; color:var(--ink-dim); max-width:680px; margin:0 0 14px;}
+.hero-fact{margin-top:26px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:700; color:var(--term-c);}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:40px 24px;}
+h2{font-size:1.4rem; margin:0 0 6px; letter-spacing:-.01em; font-weight:700;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 24px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:22px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.7rem; letter-spacing:.05em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.a .tag{background:var(--term-c-soft); color:var(--term-c);}
+.card.b .tag{background:var(--match-c-soft); color:var(--match-c);}
+.card.c .tag{background:var(--postings-c-soft); color:var(--postings-c);}
+.card h3{margin:0 0 8px; font-size:1.02rem;}
+.card p{font-size:.9rem; color:var(--ink-dim); margin:0;}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:16px 18px; margin:14px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--term-c-soft); color:var(--term-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#9DB4F0;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88A8A;}
+.term .cm{color:#8B95A1;}
+
+table{width:100%; border-collapse:collapse; margin:18px 0; font-size:.88rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.78rem; padding:8px 10px; border-bottom:1px solid var(--line);}
+td{padding:9px 10px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.callout{border-left:3px solid var(--term-c); background:var(--term-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:18px 0; font-size:.94rem;}
+.callout.b{border-color:var(--match-c); background:var(--match-c-soft);}
+.callout.c{border-color:var(--postings-c); background:var(--postings-c-soft);}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:22px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:700; font-size:.92rem;}
+.demo-body{padding:20px;}
+.shardgrid{display:grid; grid-template-columns:repeat(5,1fr); gap:8px; margin:14px 0;}
+@media (max-width:600px){.shardgrid{grid-template-columns:repeat(3,1fr);}}
+.shardbox{border:1.5px solid var(--line); border-radius:10px; padding:10px; background:var(--bg); min-height:100px;}
+.shardbox h5{margin:0 0 8px; font-size:.72rem; letter-spacing:.04em; color:var(--ink-dim); text-transform:uppercase; font-weight:700;}
+.doc{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; padding:3px 6px; border-radius:5px; background:var(--term-c-soft); color:var(--term-c); margin-bottom:3px; display:inline-block;}
+.fieldinput{width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88rem; background:var(--bg); color:var(--ink); margin-bottom:10px;}
+.demo-controls{display:flex; gap:10px; align-items:center; margin-bottom:14px; flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn.primary{background:var(--term-c); border-color:var(--term-c); color:#fff;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px 22px; margin-top:18px;}
+.refs h3{margin:0 0 10px; font-size:.98rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.86rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{display:flex; align-items:center; gap:10px; margin-bottom:22px; font-size:.86rem; color:var(--ink-dim); flex-wrap:wrap;}
+.prev-post a{font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--term-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:36px 24px 56px; text-align:center; color:var(--ink-dim); font-size:.82rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Elasticsearch 系列 · 第四篇</div>
+    <h1>一个索引拆成好几个分片,一条文档怎么知道自己该进哪一个?</h1>
+    <p>一个 Elasticsearch 索引通常会被切成多个分片(shard),分散存到不同节点上。这带来一个问题:写入一条文档的时候,它凭什么就知道该落进哪个分片?查询的时候,又是怎么知道该去哪几个分片找?这篇在本机真实的 5 分片索引上,用真实写入和真实查询把这套路由机制摸清楚。</p>
+    <div class="hero-fact">
+      <div><div class="num">221 / 202 / 185 / 193 / 199</div><div class="lbl">1000 条文档真实落到 5 个分片的分布(本机实测)</div></div>
+      <div><div class="num">1 个分片</div><div class="lbl">带上正确的路由参数,一次查询真实只需要碰这么多分片</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <div class="prev-post">← 接上篇 <a href="textkw.html" target="_blank" rel="noopener">text 和 keyword 到底有什么区别</a></div>
+  <h2>路由的基本规则</h2>
+  <p class="h2-sub">默认情况下,决定一条文档去哪个分片的,是它的 <span class="mono">_id</span>。</p>
+  <div class="cards">
+    <div class="card a">
+      <span class="tag">哈希</span>
+      <h3>对 routing 值做哈希</h3>
+      <p>默认 routing 值就是文档的 <span class="mono">_id</span>。Elasticsearch 对它算一个哈希值。</p>
+    </div>
+    <div class="card b">
+      <span class="tag">取模</span>
+      <h3>哈希值 mod 分片数</h3>
+      <p>把哈希结果对分片数量取模,得到一个 0 到"分片数-1"之间的编号,这就是目标分片。</p>
+    </div>
+    <div class="card c">
+      <span class="tag">分片数固定</span>
+      <h3>创建索引时就定死了</h3>
+      <p>因为分片数是公式的一部分,索引创建之后没法随便改分片数——改了,同一个 ID 算出来的分片编号就变了。</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>真实验证:同一个 ID,分片数一变,落点就变</h2>
+  <p class="h2-sub">建一个 5 分片的索引,插入 10 条文档,用 <span class="mono">_search_shards</span> API 直接问 Elasticsearch"这个 ID 该去哪个分片"。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cm">PUT /orders  { "settings": { "number_of_shards": 5 }}</span>
+<span class="cm">GET /orders/_search_shards?routing=1</span>
+<span class="ok">→ doc id=1  → shard 4
+   doc id=2  → shard 3
+   doc id=3  → shard 0
+   doc id=4  → shard 1
+   doc id=5  → shard 0
+   doc id=6  → shard 3
+   doc id=7  → shard 2
+   doc id=8  → shard 2
+   doc id=9  → shard 0
+   doc id=10 → shard 2</span>
+  </div>
+  <p>反复查同一个 ID 得到的分片编号完全一致(确认过 id=1 连续查两次都是 shard 4)——这是一个纯函数,不依赖任何运行时状态。现在把分片数从 5 改成 3,同样的 ID 会怎样:</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cm">PUT /orders3  { "settings": { "number_of_shards": 3 }}</span>
+<span class="cm">GET /orders3/_search_shards?routing=1</span>
+<span class="ok">→ doc id=1 → shard 2   (5 分片时是 shard 4)
+   doc id=2 → shard 1   (5 分片时是 shard 3)
+   doc id=3 → shard 1   (5 分片时是 shard 0)
+   doc id=4 → shard 1   (5 分片时是 shard 1,巧合一致)
+   doc id=5 → shard 0   (5 分片时是 shard 0,巧合一致)</span>
+  </div>
+  <div class="callout">
+    这就是"索引创建后不能改分片数"这条规则的根源——不是人为限制,是数学上必然的:分片数是取模运算的除数,除数一变,几乎所有 ID 的取模结果都会跟着变。真的需要扩容,Elasticsearch 提供的是 <span class="mono">_split</span>(把每个分片再拆细,分片数必须是原来的整数倍)和 reindex(整个重新写一份到新索引),都是绕开"就地改除数"这件事,而不是直接改。
+  </div>
+</section>
+
+<section>
+  <h2>1000 条文档,分布均不均匀</h2>
+  <p class="h2-sub">10 条数据的样本太小看不出规律,批量插入 1000 条,看真实分布。</p>
+  <table class="mono">
+    <tr><th>分片</th><th>文档数</th></tr>
+    <tr><td>shard 0</td><td>221</td></tr>
+    <tr><td>shard 1</td><td>202</td></tr>
+    <tr><td>shard 2</td><td>185</td></tr>
+    <tr><td>shard 3</td><td>193</td></tr>
+    <tr><td>shard 4</td><td>199</td></tr>
+  </table>
+  <p>1000 条平均下来每个分片该有 200 条,实测在 185~221 之间浮动——哈希函数保证了"差不多均匀",不是"绝对均匀"。这也是为什么分片数不能设得太大:分片数越多,每个分片装的数据量越少,当文档总数不够多的时候,分布不均匀的相对影响会更明显。</p>
+</section>
+
+<section>
+  <h2>自定义路由:把相关的数据摁在同一个分片</h2>
+  <p class="h2-sub">默认按 <span class="mono">_id</span> 路由是为了让文档尽量均匀撒开。但如果业务上经常要"查某个用户的所有订单",数据分散在 5 个分片里反而更慢——每次都要问全部 5 个分片。Elasticsearch 允许手动指定 routing 值,把相关文档摁在同一个分片。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cm">POST /orders/_doc/2001?routing=user42  { "order_id": 2001, "user": "user42" }
+POST /orders/_doc/2002?routing=user42  { "order_id": 2002, "user": "user42" }
+POST /orders/_doc/2003?routing=user42  { "order_id": 2003, "user": "user42" }</span>
+<span class="ok">→ 三条不同 ID 的文档,全部落进了 shard 0</span>
+
+<span class="cm">-- 带上同样的 routing 去查,只需要碰 1 个分片;不带 routing,得碰全部 5 个</span>
+<span class="cmd">GET /orders/_search_shards?routing=user42</span>  <span class="ok">→ 1 个分片</span>
+<span class="cmd">GET /orders/_search_shards</span>                 <span class="ok">→ 5 个分片</span>
+  </div>
+  <p>这是一个真实的权衡:自定义 routing 能让"按某个维度查询"变快(少碰几个分片),代价是如果这个维度本身分布不均匀(比如某个大客户订单量远超其他人),数据会在分片间产生热点,均匀性反而变差了——用哪种路由策略,取决于你的查询模式更看重"均匀"还是"局部性"。</p>
+</section>
+
+<section>
+  <h2>演示:文档怎么落进分片</h2>
+  <div class="demo">
+    <div class="demo-head">输入一个 ID(或路由值),看它落进哪个分片(用简化哈希还原真实规则的形状)</div>
+    <div class="demo-body">
+      <input class="fieldinput" id="rtInput" value="1,2,3,4,5,6,7,8,9,10" placeholder="逗号分隔多个 ID">
+      <div class="demo-controls">
+        <button class="btn primary" id="rtShards5">5 个分片</button>
+        <button class="btn" id="rtShards3">3 个分片</button>
+      </div>
+      <div class="shardgrid" id="rtGrid"></div>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">演示用的哈希函数是一个简化的字符串哈希(不是 Elasticsearch 真实使用的 Murmur3),只用来直观展示"同一个值 hash 后 mod 分片数 = 固定分片"这个规律的形状——换分片数时结果会大幅重排,这一点和真实规则一致;具体每个 ID 落在哪个编号,不代表真实 Elasticsearch 的结果(本文"真实验证"一节的数字才是真实结果)。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文所有分片分配结果均为本机真实运行的 Elasticsearch 8.15.0(单节点)通过 <span class="mono">_search_shards</span> API 真实查询得到,1000 条文档的分布统计来自真实的 <span class="mono">_cat/shards</span> 输出,未做任何删改。</li>
+      <li>真实的路由公式是 <span class="mono">shard = hash(_routing) % routing_num_shards / routing_factor</span>(Murmur3 哈希,<span class="mono">routing_num_shards</span> 是为将来支持 <span class="mono">_split</span> 预留的一个通常大于分片数的内部值,不直接等于分片数)。本文验证了这个公式最核心的可观察后果——同一个值哈希结果确定不变、换分片数结果大幅重排——但没有在 Python 里逐位复刻 Murmur3 + 精确的 <span class="mono">routing_num_shards</span> 推导过程,演示动画用的是形状相似的简化哈希,已在演示区明确说明。</li>
+      <li>没有涉及:副本分片(replica)如何参与读请求的负载均衡(下一篇话题的一部分)、<span class="mono">_split</span>/<span class="mono">_shrink</span> API 具体怎么在不停机的情况下改变分片数、分片过多/过少各自的运维代价。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="agg.html" target="_blank" rel="noopener" style="text-decoration:none; color:inherit;">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">聚合:为什么和"能搜到"是两件不相关的事</div>
+    </div>
+    <div style="font-size:1.5rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Elasticsearch 系列 · 第四篇 · 分片与路由 · 数据来自本机真实运行的 Elasticsearch 8.15.0</footer>
+
+<script>
+function simpleHash(s){
+  let h = 0;
+  for (let i=0;i<s.length;i++){ h = (h*31 + s.charCodeAt(i)) | 0; }
+  return Math.abs(h);
+}
+function render(numShards){
+  const raw = document.getElementById('rtInput').value;
+  const ids = raw.split(',').map(s=>s.trim()).filter(Boolean);
+  const buckets = Array.from({length:numShards}, ()=>[]);
+  ids.forEach(id=>{
+    const shard = simpleHash(id) % numShards;
+    buckets[shard].push(id);
+  });
+  const grid = document.getElementById('rtGrid');
+  grid.style.gridTemplateColumns = `repeat(${numShards}, 1fr)`;
+  grid.innerHTML = buckets.map((docs,i)=>`
+    <div class="shardbox">
+      <h5>shard ${i}</h5>
+      ${docs.map(d=>`<div class="doc">${d}</div>`).join('') || '<span style="color:var(--ink-dim); font-size:.75rem;">(空)</span>'}
+    </div>`).join('');
+}
+document.getElementById('rtShards5').onclick=()=>{ render(5); document.getElementById('rtShards5').classList.add('primary'); document.getElementById('rtShards3').classList.remove('primary'); };
+document.getElementById('rtShards3').onclick=()=>{ render(3); document.getElementById('rtShards3').classList.add('primary'); document.getElementById('rtShards5').classList.remove('primary'); };
+document.getElementById('rtInput').addEventListener('input', ()=>{
+  const active5 = document.getElementById('rtShards5').classList.contains('primary');
+  render(active5 ? 5 : 3);
+});
+render(5);
+</script>
+
+</body>
+</html>

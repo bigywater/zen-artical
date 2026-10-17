@@ -1,0 +1,496 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>controller / informer 模式:reconcile 循环到底在循环什么</title>
+<meta name="description" content="真实源码转写 client-go workqueue 的去重机制(dirty/processing 集合)与 resync 语义,Python 验证 4 次事件合并成 3 次真实处理,并证明 reconcile 循环的幂等性。">
+<link rel="canonical" href="https://bigywater.tech/k8s-controller-informer.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="controller / informer 模式:reconcile 循环到底在循环什么">
+<meta property="og:description" content="真实源码转写 client-go workqueue 的去重机制(dirty/processing 集合)与 resync 语义,Python 验证 4 次事件合并成 3 次真实处理,并证明 reconcile 循环的幂等性。">
+<meta property="og:url" content="https://bigywater.tech/k8s-controller-informer.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="controller / informer 模式:reconcile 循环到底在循环什么">
+<meta name="twitter:description" content="真实源码转写 client-go workqueue 的去重机制(dirty/processing 集合)与 resync 语义,Python 验证 4 次事件合并成 3 次真实处理,并证明 reconcile 循环的幂等性。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F6F5F8; --paper:#FFFFFF; --ink:#221E2C; --ink-dim:#655D71; --line:#E2DEEB;
+  --k8s-c:#5D4A9C; --k8s-c-soft:#ECE7F7;
+  --node-c:#1F7A6B; --node-c-soft:#E0F0EC;
+  --skip-c:#A8425E; --skip-c-soft:#F7E4EA;
+  --code-bg:#211C2E; --code-ink:#EDE9F5;
+  --shadow: 0 1px 2px rgba(30,20,45,.06), 0 8px 24px -12px rgba(30,20,45,.16);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#141019; --paper:#1E1928; --ink:#EDE9F5; --ink-dim:#B0A8C4; --line:#332C45;
+    --k8s-c:#9C87E0; --k8s-c-soft:#2C2447;
+    --node-c:#5FCBB4; --node-c-soft:#153330;
+    --skip-c:#E58AA3; --skip-c-soft:#3B1F28;
+    --code-bg:#120F1A; --code-ink:#E9E4F5;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#141019; --paper:#1E1928; --ink:#EDE9F5; --ink-dim:#B0A8C4; --line:#332C45;
+  --k8s-c:#9C87E0; --k8s-c-soft:#2C2447;
+  --node-c:#5FCBB4; --node-c-soft:#153330;
+  --skip-c:#E58AA3; --skip-c-soft:#3B1F28;
+  --code-bg:#120F1A; --code-ink:#E9E4F5;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--k8s-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--k8s-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--k8s-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--k8s-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.a .tag{background:var(--k8s-c-soft); color:var(--k8s-c);}
+.card.b .tag{background:var(--node-c-soft); color:var(--node-c);}
+.card.c .tag{background:var(--skip-c-soft); color:var(--skip-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#B0A8C4; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#C3B3F0;}
+
+.callout{border-left:3px solid var(--k8s-c); background:var(--k8s-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--node-c); background:var(--node-c-soft);}
+.callout.c{border-color:var(--skip-c); background:var(--skip-c-soft);}
+
+
+.stat-table{width:100%; border-collapse:collapse; margin:16px 0; font-size:.85rem;}
+.stat-table th,.stat-table td{border:1px solid var(--line); padding:8px 12px; text-align:left;}
+.stat-table th{background:var(--paper); font-weight:600; color:var(--ink-dim); font-size:.78rem; text-transform:uppercase; letter-spacing:.04em;}
+.stat-table td.mono, .stat-table th.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+.stat-table tr[data-noop="true"] td{color:var(--ink-dim);}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem; display:flex; justify-content:space-between; align-items:center;}
+.demo-head .step-badge{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; color:var(--k8s-c); background:var(--k8s-c-soft); padding:3px 9px; border-radius:6px; font-weight:600;}
+.demo-narration{min-height:52px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--k8s-c-soft); color:var(--k8s-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:20px;}
+.event-line{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.83rem; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px 14px; margin-bottom:16px;}
+.qstate-row{display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:16px;}
+.qstate-box{border:1.5px solid var(--line); border-radius:10px; padding:12px; background:var(--bg); text-align:center;}
+.qstate-box .lbl{font-size:.72rem; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-dim); margin-bottom:8px;}
+.qstate-box .val{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; min-height:20px;}
+.qstate-box[data-active="true"]{border-color:var(--k8s-c); background:var(--k8s-c-soft);}
+.qstate-box[data-active="true"] .val{font-weight:700; color:var(--k8s-c);}
+.evidence-line{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.78rem; color:var(--ink-dim); background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px 14px; white-space:pre-wrap; word-break:break-word;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--k8s-c); color:var(--k8s-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--k8s-c); border-color:var(--k8s-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--k8s-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Kubernetes 系列 · 第二篇</div>
+    <h1>controller / informer 模式:reconcile 循环到底在循环什么</h1>
+    <p>上一篇看到 scheduler、kubelet 都是靠 List-Watch 盯着 apiserver。这一篇往下钻一层:client-go 把 Watch 事件包了两层——<span class="mono">Informer</span> 把 Reflector 的原始事件流转成一份本地缓存加一串"发生了什么"的通知,<span class="mono">workqueue</span> 再把这些通知压缩成一串待处理的<b>字符串 key</b>。等真正跑到 controller 的业务代码时,你手里拿到的从来不是"发生了什么事件",只是一个"去看看这个东西现在什么样"的提醒。</p>
+    <p>这一篇继续沿用上一篇的方法:没有本机真实集群实验,而是直接读 client-go v1.37.0 的真实源码,把 workqueue 的去重逻辑原样转写成 Python,用真实断言验证每一条行为。</p>
+    <div class="hero-fact">
+      <div><div class="num">4 处真实源码</div><div class="lbl">key 的生成方式、workqueue 的去重机制、resync 的真实语义</div></div>
+      <div><div class="num">4 次真实事件 → 3 次实际处理</div><div class="lbl">workqueue 去重之后,reconcile 真正跑的次数比原始事件少</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <h2>三个部件,各管一段</h2>
+  <p class="h2-sub">Informer 不是一个东西,是三个部件接在一起。</p>
+  <div class="cards">
+    <div class="card a">
+      <span class="tag">Reflector + 本地缓存</span>
+      <h3>Informer 到底是什么</h3>
+      <p>上一篇的 Reflector 负责 List-Watch;Informer 在它前面加了一份线程安全的本地缓存(Indexer)——所有对象的最新状态都镜像在这里,业务代码读数据永远读这份本地缓存,不直接问 apiserver。</p>
+    </div>
+    <div class="card b">
+      <span class="tag">workqueue</span>
+      <h3>事件到达 ≠ 事件处理</h3>
+      <p>Informer 的事件回调不会直接跑业务逻辑,只做一件事:把对象的 <span class="mono">namespace/name</span> 塞进一个去重队列。真正的处理在另一组 worker goroutine 里,按自己的节奏从队列里取。</p>
+    </div>
+    <div class="card c">
+      <span class="tag">reconcile</span>
+      <h3>只认"现在什么样",不认"发生了什么"</h3>
+      <p>worker 拿到的只是一个 key,要用它重新去本地缓存查一遍对象<b>当前</b>的样子,再决定要不要做什么——这是"幂等"这个要求的直接来源。</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>真实源码:事件是怎么变成一个 key 的</h2>
+  <p class="h2-sub">Informer 的事件处理函数不会把整个对象塞进队列,而是先把它压缩成一个字符串。</p>
+  <blockquote class="src">
+    <span class="path">staging/src/k8s.io/client-go/tools/cache/store.go · <a href="https://github.com/kubernetes/kubernetes/blob/v1.37.0/staging/src/k8s.io/client-go/tools/cache/store.go#L144" target="_blank" rel="noopener">kubernetes @ v1.37.0, L144</a></span>
+// MetaNamespaceKeyFunc is a convenient default KeyFunc which knows how to make
+// keys for API objects which implement meta.Interface.
+// The key uses the format &lt;namespace&gt;/&lt;name&gt; unless &lt;namespace&gt; is empty, then
+// it's just &lt;name&gt;.
+func MetaNamespaceKeyFunc(obj interface{}) (string, error) {
+    ...
+}
+  </blockquote>
+  <p>一个 Pod 对象,不管它当时的 <span class="mono">phase</span>、<span class="mono">containerStatuses</span> 有多复杂,进队列前都被压成一句 <span class="mono">"default/web-1"</span> 这样的字符串。这个设计直接决定了后面所有行为:队列里存的是"谁需要被看一眼",不是"发生了什么"。</p>
+</section>
+
+<section>
+  <h2>真实源码:workqueue 怎么去重</h2>
+  <p class="h2-sub">同一个 key 短时间内被 Add 很多次,不会被处理很多次——靠两个集合(<span class="mono">dirty</span> / <span class="mono">processing</span>)配合实现。</p>
+  <blockquote class="src">
+    <span class="path">staging/src/k8s.io/client-go/util/workqueue/queue.go · <a href="https://github.com/kubernetes/kubernetes/blob/v1.37.0/staging/src/k8s.io/client-go/util/workqueue/queue.go#L196" target="_blank" rel="noopener">kubernetes @ v1.37.0, L196</a></span>
+// dirty defines all of the items that need to be processed.
+dirty sets.Set[t]
+
+// Things that are currently being processed are in the processing set.
+// These things may be simultaneously in the dirty set. When we finish
+// processing something and remove it from this set, we'll check if
+// it's in the dirty set, and if so, add it to the queue.
+processing sets.Set[t]
+  </blockquote>
+  <blockquote class="src">
+    <span class="path">staging/src/k8s.io/client-go/util/workqueue/queue.go · <a href="https://github.com/kubernetes/kubernetes/blob/v1.37.0/staging/src/k8s.io/client-go/util/workqueue/queue.go#L233" target="_blank" rel="noopener">kubernetes @ v1.37.0, L233</a></span>
+if q.dirty.Has(item) {
+    // the same item is added again before it is processed, call the Touch
+    // function if the queue cares about it (for e.g, reset its priority)
+    if !q.processing.Has(item) {
+        q.queue.Touch(item)
+    }
+    return
+}
+  </blockquote>
+  <p>逻辑分两半:一个 key 已经在排队等待(在 <span class="mono">dirty</span> 里但还没被取走),再 <span class="mono">Add</span> 一次直接跳过,不会排两条;一个 key 正在被处理(在 <span class="mono">processing</span> 里)的时候又被 <span class="mono">Add</span>,不会打断当前这次处理,但会在 <span class="mono">Done()</span> 的时候被发现"还是脏的",自动重新排回队尾——保证这次新变化不会被漏掉,但也不会让同一个 key 在队列里堆出好几份。</p>
+</section>
+
+<section>
+  <h2>真实源码:resync 到底在"重新同步"什么</h2>
+  <p class="h2-sub">周期性地,每个对象都会被当成"更新"重新丢回队列一次——即使它压根没变过。</p>
+  <blockquote class="src">
+    <span class="path">staging/src/k8s.io/client-go/tools/cache/shared_informer.go · <a href="https://github.com/kubernetes/kubernetes/blob/v1.37.0/staging/src/k8s.io/client-go/tools/cache/shared_informer.go#L156" target="_blank" rel="noopener">kubernetes @ v1.37.0, L156</a></span>
+// AddEventHandlerWithResyncPeriod adds an event handler to the
+// shared informer with the requested resync period; ... The resync operation
+// consists of delivering to the handler an update notification
+// for every object in the informer's local cache; it does not add
+// any interactions with the authoritative storage.
+  </blockquote>
+  <blockquote class="src">
+    <span class="path">staging/src/k8s.io/client-go/tools/cache/delta_fifo.go · <a href="https://github.com/kubernetes/kubernetes/blob/v1.37.0/staging/src/k8s.io/client-go/tools/cache/delta_fifo.go#L701" target="_blank" rel="noopener">kubernetes @ v1.37.0, L701</a></span>
+// Resync adds, with a Sync type of Delta, every object listed by
+// `f.knownObjects` whose key is not already queued for processing.
+func (f *DeltaFIFO) Resync() error {
+    ...
+}
+  </blockquote>
+  <p>两个关键点:第一,resync 的数据来源是<b>本地缓存</b>(<span class="mono">f.knownObjects</span>),完全不碰 apiserver,不是又去问了一遍集群现状;第二,它给缓存里<b>每一个</b>对象都造了一次"更新"通知。这不是为了发现"漏掉的变化"——Watch 本身(靠 resourceVersion)不会漏事件——而是给 reconcile 逻辑里可能存在的 bug 一次自我修复的机会:哪怕某次 reconcile 因为代码问题什么都没做成,resync 也会definitely再给它一次重跑的机会。</p>
+</section>
+
+<section>
+  <h2>交互演示:4 个事件,3 次真正的处理</h2>
+  <p class="h2-sub">同一个 key <span class="mono">default/web-1</span>:一次创建、两次更新(一次排队时到达,一次处理中到达)、一次 resync。跟着队列的 <span class="mono">queue / dirty / processing</span> 三个集合一步步看。</p>
+  <div class="demo" id="ctrlDemo">
+    <div class="demo-head"><span>workqueue 去重实录</span><span class="step-badge" id="ctStep">未开始</span></div>
+    <div class="demo-narration" id="ctNarration">点击"下一步"或"播放"开始。</div>
+    <div class="demo-body">
+      <div class="event-line" id="ctEvent">—</div>
+      <div class="qstate-row">
+        <div class="qstate-box" id="ctQueueBox"><div class="lbl">queue(待处理)</div><div class="val" id="ctQueueVal">—</div></div>
+        <div class="qstate-box" id="ctDirtyBox"><div class="lbl">dirty(脏)</div><div class="val" id="ctDirtyVal">—</div></div>
+        <div class="qstate-box" id="ctProcBox"><div class="lbl">processing(处理中)</div><div class="val" id="ctProcVal">—</div></div>
+      </div>
+      <div class="evidence-line" id="ctEvidence"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="ctReset">⏮ 重来</button>
+      <button class="btn" id="ctPrev">‹ 上一步</button>
+      <button class="btn primary" id="ctNext">下一步 ›</button>
+      <button class="btn" id="ctPlay">▶ 自动播放</button>
+      <span class="step-counter" id="ctCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">事件数据由 Python 脚本按上面两段真实源码逐行转写(<span class="mono">Add</span>/<span class="mono">Get</span>/<span class="mono">Done</span> 的 dirty/processing 集合操作跟真实实现一致),8 个事件里独立统计过"4 次会触发 Add 的事件"和"3 次真正的 Get()"这两个数字,并断言处理次数必须少于原始事件数——这正是去重生效的证据。</p>
+</section>
+
+<section>
+  <h2>reconcile 为什么必须幂等——用代码验证</h2>
+  <p class="h2-sub">既然同一个 key 可能被重复处理(排队去重的巧合、resync 的周期重跑、worker 重启后的重试),reconcile 函数就不能假设"这是我第一次看到这个变化"。</p>
+  <div class="term" style="background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75;">
+<pre class="code" style="margin:0; color:#8FE0D4; white-space:pre-wrap;">def reconcile(desired_replicas, observed_state):
+    # 只认"现在的差距",不认"这次事件具体是什么" —— 每次最多补一步
+    if observed_state["replicas"] < desired_replicas:
+        observed_state["replicas"] += 1
+        return True   # 这次做了改动
+    elif observed_state["replicas"] > desired_replicas:
+        observed_state["replicas"] -= 1
+        return True
+    return False       # 已经收敛,什么都不用做</pre>
+  </div>
+  <table class="stat-table">
+    <tr><th>第几次调用</th><th class="mono">replicas</th><th>是否做了改动</th></tr>
+    <tr><td>1</td><td class="mono">1</td><td>是</td></tr>
+    <tr><td>2</td><td class="mono">2</td><td>是</td></tr>
+    <tr><td>3</td><td class="mono">3(desired)</td><td>是</td></tr>
+    <tr data-noop="true"><td>4</td><td class="mono">3</td><td>否(no-op)</td></tr>
+    <tr data-noop="true"><td>5</td><td class="mono">3</td><td>否(no-op)</td></tr>
+    <tr data-noop="true"><td>6</td><td class="mono">3</td><td>否(no-op)</td></tr>
+  </table>
+  <p>不管这个 <span class="mono">reconcile</span> 是被上面演示里的哪一次 <span class="mono">Get()</span> 触发的——创建事件、合并后的更新、还是 resync——只要状态已经收敛到期望值,继续调用它就是纯粹的 no-op,不会因为"重复处理"而产生任何副作用。这正是幂等的定义:<span class="mono">reconcile(reconcile(x)) == reconcile(x)</span>。真实的 K8s controller(比如 ReplicaSet controller)遵循的是同一个模式,只是每一步补的是"创建/删除一个 Pod",不是简单的加减计数。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文源码引用(<span class="mono">MetaNamespaceKeyFunc</span>、<span class="mono">workqueue.Typed</span> 的 dirty/processing 机制、<span class="mono">SharedInformer</span> 的 resync 文档、<span class="mono">DeltaFIFO.Resync</span>)均取自 <span class="mono">kubernetes/kubernetes</span> 仓库 <span class="mono">v1.37.0</span> 标签(与上一篇同一个 tag),直接从 GitHub 拉取源文件核对过函数签名和关键逻辑。</li>
+      <li>沿用上一篇的方法论:本机 Docker 虚拟机没有外网,拉不了 <span class="mono">kind</span> 需要的节点镜像,继续用"真实源码 + Python 独立验证过的行为模拟"。workqueue 的 <span class="mono">Add</span>/<span class="mono">Get</span>/<span class="mono">Done</span> 逻辑是照着真实源码的 dirty/processing 集合操作逐行转写的,不是凭感觉编的简化版。</li>
+      <li>演示数据的自检:4 次会触发 <span class="mono">Add</span> 的事件,严格核对只产生了 3 次真正的 <span class="mono">Get()</span>;<span class="mono">Done()</span> 之后如果 key 仍然是脏的,必须精确重新入队一次,不多不少;<span class="mono">reconcile</span> 函数用真实断言验证过——收敛之后连续调用 3 次,状态和"是否做了改动"的返回值必须保持不变。</li>
+      <li>没有涉及:真实 controller(如 Deployment/ReplicaSet controller)reconcile 函数里具体的业务判断逻辑、Informer 的 Indexer 索引机制细节、多个 controller 共享同一个 Informer(SharedInformerFactory)时的资源复用、workqueue 的限速(RateLimiting)策略。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="k8s-etcd.html">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">etcd:控制平面的唯一真相,怎么保证不丢、不乱</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Kubernetes 系列 · 第二篇 · controller / informer 模式 · 源码引用自 kubernetes/kubernetes v1.37.0</footer>
+
+<script>
+const DATA = {"key": "default/web-1", "events": [{"type": "informer-event", "kind": "ADD", "key": "default/web-1", "note": "MetaNamespaceKeyFunc(obj) -> \"default/web-1\", then workqueue.Add(key)", "queue_len": 1, "dirty": true, "processing": false}, {"type": "informer-event", "kind": "UPDATE (before dequeue)", "key": "default/web-1", "note": "coalesced -- already in dirty set, not queued twice", "queue_len": 1, "dirty": true, "processing": false}, {"type": "worker-get", "kind": "Get()", "key": "default/web-1", "note": "worker dequeues the key, moves it dirty -> processing", "queue_len": 0, "dirty": false, "processing": true}, {"type": "informer-event", "kind": "UPDATE (during processing)", "key": "default/web-1", "note": "marked dirty again, but NOT requeued yet -- item is currently in `processing`", "queue_len": 0, "dirty": true, "processing": true}, {"type": "worker-done", "kind": "Done()", "key": "default/web-1", "note": "still dirty when Done() ran -> automatically pushed back onto the queue", "queue_len": 1, "dirty": true, "processing": false}, {"type": "worker-get", "kind": "Get() (coalesced re-run)", "key": "default/web-1", "note": "the worker calls reconcile() again, re-reading CURRENT state from the local cache", "queue_len": 0, "dirty": false, "processing": true}, {"type": "resync", "kind": "Resync()", "key": "default/web-1", "note": "delivered an update notification purely from the local cache -- no apiserver call", "queue_len": 1, "dirty": true, "processing": false}, {"type": "worker-get", "kind": "Get() (resync-triggered)", "key": "default/web-1", "note": "reconcile() runs again; state already converged, so it's a no-op", "queue_len": 0, "dirty": false, "processing": true}]};
+
+(function(){
+  const events = DATA.events;
+  const key = DATA.key;
+  const narration = document.getElementById('ctNarration');
+  const stepBadge = document.getElementById('ctStep');
+  const eventLine = document.getElementById('ctEvent');
+  const queueBox = document.getElementById('ctQueueBox');
+  const dirtyBox = document.getElementById('ctDirtyBox');
+  const procBox = document.getElementById('ctProcBox');
+  const queueVal = document.getElementById('ctQueueVal');
+  const dirtyVal = document.getElementById('ctDirtyVal');
+  const procVal = document.getElementById('ctProcVal');
+  const evidenceEl = document.getElementById('ctEvidence');
+  const counter = document.getElementById('ctCounter');
+  let idx = -1, playing = false, playTimer = null;
+
+  function render(){
+    idx = Math.max(-1, Math.min(events.length - 1, idx));
+    if(idx < 0){
+      narration.textContent = '点击"下一步"或"播放"开始。';
+      stepBadge.textContent = '未开始';
+      eventLine.textContent = '—';
+      [queueBox, dirtyBox, procBox].forEach(b => b.dataset.active = 'false');
+      queueVal.textContent = '(空)';
+      dirtyVal.textContent = '(空)';
+      procVal.textContent = '(空)';
+      evidenceEl.textContent = '';
+      counter.textContent = `0 / ${events.length}`;
+      document.getElementById('ctPrev').disabled = true;
+      document.getElementById('ctNext').disabled = false;
+      return;
+    }
+
+    const e = events[idx];
+    narration.innerHTML = `<span class="k">${e.kind}</span> — ${e.note}`;
+    stepBadge.textContent = `第 ${idx+1} / ${events.length} 步`;
+    eventLine.textContent = `event #${idx+1}: ${e.type} (${e.kind})  key=${e.key}`;
+
+    queueVal.textContent = e.queue_len > 0 ? `[${key}] × ${e.queue_len}` : '(空)';
+    dirtyVal.textContent = e.dirty ? key : '(空)';
+    procVal.textContent = e.processing ? key : '(空)';
+    queueBox.dataset.active = String(e.queue_len > 0);
+    dirtyBox.dataset.active = String(e.dirty);
+    procBox.dataset.active = String(e.processing);
+
+    evidenceEl.textContent = `queue_len=${e.queue_len}  dirty=${e.dirty}  processing=${e.processing}`;
+
+    counter.textContent = `${idx+1} / ${events.length}`;
+    document.getElementById('ctPrev').disabled = idx <= -1;
+    document.getElementById('ctNext').disabled = idx >= events.length - 1;
+  }
+
+  document.getElementById('ctNext').onclick = () => { idx++; render(); stopPlay(); };
+  document.getElementById('ctPrev').onclick = () => { idx--; render(); stopPlay(); };
+  document.getElementById('ctReset').onclick = () => { idx = -1; render(); stopPlay(); };
+  function stopPlay(){ playing = false; clearInterval(playTimer); document.getElementById('ctPlay').textContent = '▶ 自动播放'; }
+  document.getElementById('ctPlay').onclick = () => {
+    if(playing){ stopPlay(); return; }
+    playing = true; document.getElementById('ctPlay').textContent = '⏸ 暂停';
+    playTimer = setInterval(() => {
+      if(idx >= events.length - 1){ stopPlay(); return; }
+      idx++; render();
+    }, 1800);
+  };
+
+  render();
+})();
+</script>
+
+</body>
+</html>

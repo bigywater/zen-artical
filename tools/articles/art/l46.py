@@ -1,0 +1,26 @@
+from lib import *
+S = SS('l46')
+steps = [
+    step("git rebase -i HEAD~4 先给你一个 todo 列表:每个提交一行“命令 缩写hash # 说明”(pick <sha> # A 加功能 等四行),后面是注释形式的命令速查:p/pick 使用提交、r/reword 使用但改说明、e/edit 使用但停下来让你改、s/squash 合并进上一个、f/fixup 像 squash 但丢弃这个提交的说明、x/exec 运行命令、b/break 停在这里、d/drop 删除提交、l/label、t/reset、m/merge。注释里还写着 “Rebase f9b607e..8276f49 onto f9b607e (4 commands)”。你改完保存,git 才按这份清单重放。", t=tl(S(1)), mark=lidx(S(1), 'pick <sha> # A 加功能', '# p, pick', '# s, squash', '# f, fixup', '# d, drop'), done=lidx(S(1), 'Rebase f9b607e', '# r, reword', '# e, edit', '# x, exec'), kv=KV([['todo', '一行一个提交:命令 hash # 说明'], ['改顺序', '调换行'], ['丢弃', 'drop 或删掉这一行']], ['todo'])),
+    step("改顺序、丢弃:把 A 挪到 B 后面,C 改成 drop,保存之后 git log 变成 B 修 bug、A 加功能、D 调样式——C 不见了,A 和 B 对调。todo 里的顺序就是新历史的顺序。", t=tl(S(2)), mark=lidx(S(2), 'B 修 bug A 加功能 D 调样式'), done=lidx(S(2), 'rebase 之前', 'A 加功能 B 修 bug C 写文档'), kv=KV([['行的顺序', '就是新历史的顺序'], ['drop', '丢掉这个提交的改动'], ['风险', '后面的提交依赖被丢的内容就会冲突']], ['行的顺序'])),
+    step("squash 与 fixup 都把 B 合并进上一个提交 A,提交数从 5 变成 4,合并后提交的 tree 里同时有 f1 和 f2。区别在说明:squash 的完整说明是 “A 加功能 / (空行) / B 修 bug”——两份说明拼在一起(编辑器里让你改);fixup 的说明只有 “A 加功能”,B 的说明直接丢掉。", t=tl(S(3)), mark=lidx(S(3), '[squash]', '[fixup]'), done=lidx(S(3), '提交数 4'), kv=KV([['squash', '合并改动,说明拼接,让你编辑'], ['fixup', '合并改动,丢掉这个提交的说明'], ['结果', '提交数少 1']], ['fixup'])),
+    step("edit 让 rebase 在这个提交停下来:git status 显示 interactive rebase in progress; onto <sha>、Last commands done (2 commands done),最后一条是 edit <sha> # B 修 bug,HEAD 就是 B。这时可以改文件、git commit --amend(这里加了 extra.txt),再 git rebase --continue。reword 则只改说明:D 的说明变成“D 调样式(新说明)”。最后 B 的提交里文件数变成 2(f2 加 extra.txt)。", t=tl(S(4)), mark=lidx(S(4), 'edit <sha> # B 修 bug', 'Last commands done', 'D 调样式(新说明)'), done=lidx(S(4), 'interactive rebase in progress', '2 files changed'), kv=KV([['edit', '停下,可以 amend 或拆提交'], ['reword', '只改说明'], ['继续', 'git rebase --continue']], ['edit'])),
+    step("--exec:git rebase -i --exec '…' 在每个提交重放之后插入一行 exec,所以 4 个提交变成 8 个任务(进度显示 Rebasing (2/8)、(3/8)…)。命令是 test ! -f f3 || (echo 测试失败 && false):重放到 C 写文档(它新增了 f3)之后检查失败,输出“测试失败:f3 存在”和 warning: execution failed,rebase 停在第 6 个任务,Last commands done (6 commands done)。用 git rebase --abort 退出。典型用法是 --exec 'make test',逐个提交检查是否都能通过测试。", t=tl(S(5)), mark=lidx(S(5), '测试失败:f3 存在', 'execution failed', 'Last commands done'), done=lidx(S(5), 'Executing', 'Rebasing (2/8)'), kv=KV([['--exec', '每个提交后运行命令'], ['失败', '停在失败的位置'], ['用途', '逐个提交跑测试']], ['--exec'])),
+    step("--autosquash:对 A 做一次 git commit --fixup=<A 的 hash> 得到说明为“fixup! A 加功能”的提交。之后 git rebase -i --autosquash,todo 里这个提交被自动挪到 A 的后面并标成 fixup:pick # A 加功能、fixup # fixup! A 加功能、pick # B 修 bug、pick # C 写文档、pick # D 调样式。不用自己调整顺序。", t=tl(S(6)), mark=lidx(S(6), 'fixup # fixup! A 加功能'), done=lidx(S(6), 'fixup! A 加功能', 'pick # A 加功能'), kv=KV([['commit --fixup=<提交>', '做一个“fixup! 原说明”的提交'], ['--autosquash', '自动排序并标成 fixup'], ['配置', 'rebase.autoSquash=true 可以默认开启']], ['--autosquash'])),
+    step("没被修改的前缀不会被改写:这次只对 C 做 reword。A 加功能 30880d5 → 30880d5、B 修 bug 669626b → 669626b 都没变(没变就是同一个提交,rebase 直接快进过去);C 写文档 76c516a → 0dd55b2、D 调样式 8276f49 → dc37dfa 才有新 hash(C 的说明变了,D 的 parent 跟着变)。", t=tl(S(7)), mark=lidx(S(7), '新 hash'), done=lidx(S(7), '没变'), b=bars([['A', 0, '没变'], ['B', 0, '没变'], ['C(reword)', 1, '新 hash'], ['D(parent 变了)', 1, '新 hash']], 1, mark=[2, 3], done=[0, 1]), kv=KV([['第一个被改的提交', '之前的提交 hash 不变'], ['它之后的提交', 'parent 变了,hash 全变']], ['第一个被改的提交'])),
+]
+A = mkarti('l46', 46, 'Git,交互式 rebase,todo,squash,fixup,autosquash,真实验证,动画演示',
+    '实测 git rebase -i 的 todo 列表:pick/reword/edit/squash/fixup/exec/drop 等命令;改顺序和 drop;squash 拼接说明、fixup 丢弃说明;edit 停下来 amend 后继续;--exec 在每个提交后插入任务并在失败处停下;commit --fixup 加 --autosquash 自动排序;没被修改的前缀提交 hash 保持不变。',
+    '交互式 rebase 的 todo 列表里的每个命令到底做了什么?改顺序、squash、fixup、edit、exec、autosquash 各自的结果是什么,又有哪些提交会生成新 hash?这篇用脚本编辑 todo(而不是真的打开编辑器)逐个实测。',
+    [('8 个任务', '--exec 把 4 个提交扩成 4 个 pick 加 4 个 exec,共 8 个任务'), ('fixup vs squash', '都合并进上一个提交;squash 拼接两份说明,fixup 只保留上一个提交的说明'), ('前缀不变', '只有第一个被修改的提交及之后的提交才有新 hash')],
+    [('todo', '<p><code>git rebase -i</code> 先生成一份 todo:每个提交一行“命令 hash # 说明”,注释里是命令速查。你编辑这份清单,git 按它从上往下重放。</p>'),
+     ('改顺序与丢弃', '<p>todo 里行的顺序就是新历史的顺序:把 A 挪到 B 后面、把 C 改成 <code>drop</code>,结果是 B、A、D。被丢掉的提交的改动不再出现;后面的提交如果依赖它,重放时会冲突。</p>'),
+     ('squash 与 fixup', '<p>都把提交的改动合并进它上面的那个提交。<code>squash</code> 把两份说明拼起来交给你编辑,<code>fixup</code> 直接丢掉被合并提交的说明。</p>'),
+     ('edit 与 reword', '<p><code>edit</code> 在这个提交停下来,你可以改文件、<code>git commit --amend</code> 或者拆成多个提交,再 <code>git rebase --continue</code>;<code>reword</code> 只让你改说明。</p>'),
+     ('exec', '<p><code>exec</code> 是在重放序列里运行一条 shell 命令,<code>--exec</code> 会在每个提交后插入一个。失败就停下,适合逐个提交跑测试。</p>'),
+     ('autosquash', '<p><code>git commit --fixup=&lt;提交&gt;</code> 生成 “fixup! 说明” 的提交;<code>--autosquash</code> 把它自动挪到目标后面并标成 <code>fixup</code>。</p>'),
+     ('hash', '<p>rebase 会把没被改动的开头一段直接复用,所以第一个被修改的提交之前的提交 hash 不变;它自己和之后的都因为内容或 parent 变化而得到新 hash。</p>')],
+    steps,
+    [ENV_I_GIT + '。todo 的编辑不是手工的:GIT_SEQUENCE_EDITOR 指向我写的小 Python 脚本(按提交说明找行,改命令或调顺序),提交说明的编辑用 GIT_EDITOR 指向另一个脚本写入固定文字;rebase 的作者与时间固定,所以 hash 可复现(输出中 7 位 hash 为实验中的值)',
+     '没有验证:label / reset / merge 命令与 --rebase-merges;break 命令;fixup -C / -c 的用法;rebase.autoSquash 配置的默认值;squash 时编辑器里的完整注释文本;autostash;--root'],
+    '交互式 rebase 的 todo')

@@ -1,0 +1,20 @@
+from lib import *
+S = SS('g8')
+steps = [
+    step("a = [1 2 3 4 5](len 5、cap 5),b := a[1:3] = [2 3](len 2、cap 4),b 的数据地址比 a 大 8 个字节。b[0] = 99 之后 a = [1 99 3 4 5]。b = append(b, 100):容量够,原地写,b = [99 3 100],a = [1 99 3 100 5]——a[3] 被悄悄改成 100,b 仍与 a 共用数组。再追加 3 个(超过 cap 4):换了新数组,b = [99 3 100 200 300 400],不再共用,a 保持 [1 99 3 100 5]。", t=tl(S(1)), done=lidx(S(1), 'b := a[1:3]', 'b[0] = 99'), mark=lidx(S(1), 'a[3] 被悄悄改成 100', '再追加 3 个'), kv=KV([['b := a[1:3]', 'len 2、cap 4,数据地址 +8 字节'], ['b[0] = 99', '改到了 a:[1 99 3 4 5]'], ['append(b, 100)(容量够)', 'a[3] 被改成 100,仍共用数组'], ['再追加 3 个(超过 cap)', '换新数组,不再共用']], ['append(b, 100)(容量够)'])),
+    step("切断共享:c := a[1:3:3](三下标切片,len 2、cap 2)再 append(c, 100):c2 = [2 3 100],a 仍是 [1 2 3 4 5],c2 的数据地址与 c 不同(换了新数组);d := slices.Clone(a[1:3]),d[0] = -7 之后 d = [-7 3]、a 不变、d 的 cap 是 2;e := make([]int, 2); copy(e, a[1:3]) 拷贝了 2 个,e[1] = -8 之后 e = [2 -8]、a 不变。", t=tl(S(2)), done=lidx(S(2), 'c := a[1:3:3]'), mark=lidx(S(2), 'slices.Clone', 'copy(e'), kv=KV([['a[1:3:3]', 'cap 被限制成 2:append 必然换新数组'], ['slices.Clone(a[1:3])', '独立的副本,cap 2'], ['copy(e, a[1:3])', '拷贝 2 个,改 e 不影响 a']], ['a[1:3:3]'])),
+    step("函数参数:切片头(指针、长度、容量)按值传递,元素共享。fill(x) 里写 s[0] = -1:调用者的 x = [-1 2 3]。appendInside(x) 里 s = append(s, 9),x 的 cap 是 10:调用者的 x 仍是 [-1 2 3](len 3),但 x[:4] = [-1 2 3 9]——底层数组第 4 个位置被写成了 9。同样的调用,y 的 cap 只有 3:换了新数组,y[:3] = [0 0 0],原数组没有被写。", t=tl(S(3)), done=lidx(S(3), 'fill(x)'), mark=lidx(S(3), 'appendInside(x)', '同样的调用'), kv=KV([['fill(x) 里写元素', '调用者看得到'], ['appendInside(x),cap 10', 'len 不变,但 x[:4] 的第 4 个位置变成 9'], ['appendInside(y),cap 3', '换新数组,原数组没被写']], ['appendInside(x),cap 10'])),
+    step("经典错误:同一个 8 字节 buf 依次读入 alpha、beta、gamma,每次把 buf[:n] 存进 saved:最后 saved[0] = \"gamma\"、saved[1] = \"gamm\"、saved[2] = \"gamma\",saved[0] 与 saved[2] 的数据地址相同;每次存 slices.Clone(buf[:n]) 的 savedOK 是 \"alpha\"、\"beta\"、\"gamma\"。", t=tl(S(4)), done=lidx(S(4), 'savedOK[0]', 'saved[2] = '), mark=lidx(S(4), 'saved[0] = \"gamma\"', 'saved[1] = \"gamm\"', '数据地址相同'), kv=KV([['saved[0]', '\"gamma\"(应该是 alpha)'], ['saved[1]', '\"gamm\"(应该是 beta)'], ['saved[2]', '\"gamma\"'], ['savedOK(存 Clone)', 'alpha、beta、gamma 都正确']], ['saved[0]'])),
+]
+A = mkartg('g8', 8, 'Go,切片,append,别名,底层数组,真实验证,动画演示',
+    '用 Go 1.27.1 实测切片共享底层数组:子切片的写入会改到原切片,容量够时 append 原地写、悄悄改掉原切片后面的元素,容量不够才换新数组;三下标切片、slices.Clone 与 copy 能切断共享;函数里的 append 在容量够时会写到调用者的底层数组;复用缓冲区时存子切片会让所有结果变成最后一次的内容。',
+    '切片头是 {指针, 长度, 容量} 三个字,拷贝切片只拷贝这三个字,底层数组是共享的。这篇用真实输出验证几个最容易出事的场景:子切片被写、容量够时 append 悄悄改原切片、函数里 append、复用缓冲区。',
+    [('cap 4', 'a[1:3] 的容量:append 在容量内会直接覆盖 a[3]'), ('a[1:3:3]', '三下标切片把 cap 限制成 2,append 必然换新数组'), ('\"gamma\"、\"gamm\"', '复用 buf 并存 buf[:n] 的结果,三个词都被改写')],
+    [('子切片与 append', '<p><code>a[1:3]</code> 的数据指针指向 <code>a</code> 的第 2 个元素,容量一直延伸到 <code>a</code> 的末尾,所以对它 <code>append</code> 时,只要不超过容量,就会写进 <code>a</code> 后面的位置。这是 Go 里最典型的“别名”意外:代码看起来只改了 <code>b</code>,<code>a</code> 却变了。超过容量时运行时换一个新数组,别名关系才断开,而从外面看不出哪次 append 会换数组。</p>'),
+     ('怎么切断共享', '<p>三下标切片 <code>a[low:high:max]</code> 把容量限制在 <code>max - low</code>,所以之后的 <code>append</code> 一定换新数组,原切片不会被写。要独立的副本就用 <code>slices.Clone</code> 或 <code>copy</code> 到新切片。两者都拷贝了元素;如果元素本身是指针、切片或 map,拷贝的只是它们的头,里面的内容仍是共享的(本文没有展示这一点)。</p>'),
+     ('函数参数', '<p>切片按值传递,所以函数里 <code>s = append(s, x)</code> 不会改变调用者的长度。但如果容量够,元素已经写进了共享的底层数组:调用者的 <code>x</code> 看不到(长度没变),<code>x[:cap(x)]</code> 能看到。这是“append 不能直接用返回值以外的方式”这条规则背后的原因:要把新切片返回或通过指针传回。</p>'),
+     ('复用缓冲区', '<p>读取循环里复用同一块缓冲区是常见的性能优化,但要保存数据就必须拷贝。标准库里返回内部缓冲区切片的方法在文档里都有提醒:<code>go doc bufio.Scanner.Bytes</code> 写的是“The underlying array may point to data that will be overwritten by a subsequent call to Scan”,<code>bufio.Reader.Peek</code> 写的是“The bytes stop being valid at the next read call”(这两段是我用 go doc 读到的,没有运行这两个方法)。这里用一个手写的 <code>buf</code> 重现同样的后果:三个存下来的切片指向同一个数组。</p>')],
+    steps,
+    [ENV_G + '。用 unsafe.SliceData 比较切片的数据地址(只比较相等与偏移);实验里所有切片都是 []int(第四节是 []byte)',
+     '没有验证:bufio.Scanner.Bytes 与 bufio.Reader.Peek 的实际行为(只引用了 go doc 的说法,没有运行)、切片元素是指针时拷贝的深浅、并发读写同一个底层数组的数据竞争(见竞态检测一篇)、go vet 或其它工具能否发现这类别名问题'],
+    '切片共享底层数组')

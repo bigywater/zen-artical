@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>Buffer Pool 为什么不怕你扫全表</title>
+<meta name="description" content="LRU 冷热分区如何防止一次全表扫描冲垮缓存命中率。">
+<link rel="canonical" href="https://bigywater.tech/bufferpool.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Buffer Pool 为什么不怕你扫全表">
+<meta property="og:description" content="LRU 冷热分区如何防止一次全表扫描冲垮缓存命中率。">
+<meta property="og:url" content="https://bigywater.tech/bufferpool.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Buffer Pool 为什么不怕你扫全表">
+<meta name="twitter:description" content="LRU 冷热分区如何防止一次全表扫描冲垮缓存命中率。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#EFF1F3; --paper:#FFFFFF; --ink:#1B1F24; --ink-dim:#5B6470; --line:#D8DCE1;
+  --node-c:#1F6FA8; --node-c-soft:#E4EFF6;
+  --key-c:#8B5A2B; --key-c-soft:#F3E9DD;
+  --io-c:#A13D3D; --io-c-soft:#F7E7E5;
+  --code-bg:#1B1F24; --code-ink:#E7EAED;
+  --shadow: 0 1px 2px rgba(20,25,30,.06), 0 8px 24px -12px rgba(20,25,30,.15);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#12151A; --paper:#1A1E24; --ink:#E7EAED; --ink-dim:#9AA4B0; --line:#2B3138;
+    --node-c:#5FA8DE; --node-c-soft:#1D2C38;
+    --key-c:#D6A15C; --key-c-soft:#332619;
+    --io-c:#E27A7A; --io-c-soft:#3A2323;
+    --code-bg:#0E1013; --code-ink:#DCE1E6;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#12151A; --paper:#1A1E24; --ink:#E7EAED; --ink-dim:#9AA4B0; --line:#2B3138;
+  --node-c:#5FA8DE; --node-c-soft:#1D2C38;
+  --key-c:#D6A15C; --key-c-soft:#332619;
+  --io-c:#E27A7A; --io-c-soft:#3A2323;
+  --code-bg:#0E1013; --code-ink:#DCE1E6;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--node-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--node-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--node-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.4rem; font-weight:600; color:var(--node-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.node .tag{background:var(--node-c-soft); color:var(--node-c);}
+.card.key .tag{background:var(--key-c-soft); color:var(--key-c);}
+.card.io .tag{background:var(--io-c-soft); color:var(--io-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#8B95A1; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#8FC7EA;}
+
+.callout{border-left:3px solid var(--node-c); background:var(--node-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.io{border-color:var(--io-c); background:var(--io-c-soft);}
+.callout.key{border-color:var(--key-c); background:var(--key-c-soft);}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;}
+.demo-title{font-weight:600; font-size:.95rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--key-c-soft); color:var(--key-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:22px 20px;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--node-c); color:var(--node-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--node-c); border-color:var(--node-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.lru-track{display:flex; align-items:center; gap:6px; overflow-x:auto; padding:10px 4px 18px;}
+.lru-slot{
+  flex:0 0 auto; width:64px; height:56px; border-radius:8px; border:1.5px solid var(--line);
+  display:flex; flex-direction:column; align-items:center; justify-content:center; background:var(--paper);
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.78rem; position:relative; transition:all .2s;
+}
+.lru-slot.young{background:var(--node-c-soft); border-color:var(--node-c);}
+.lru-slot.old{background:var(--key-c-soft); border-color:var(--key-c);}
+.lru-slot.active{outline:3px solid var(--io-c); outline-offset:2px;}
+.lru-slot .pid{font-weight:600;}
+.lru-slot .k{font-size:.62rem; color:var(--ink-dim); margin-top:2px;}
+.lru-arrow{color:var(--ink-dim); font-size:1.1rem;}
+.lru-legend{display:flex; gap:16px; font-size:.78rem; color:var(--ink-dim); margin-top:6px; flex-wrap:wrap;}
+.lru-legend span{display:inline-flex; align-items:center; gap:6px;}
+.lru-legend i{width:10px; height:10px; border-radius:3px; display:inline-block;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{display:flex; align-items:center; gap:10px; margin-bottom:24px; font-size:.88rem; color:var(--ink-dim); flex-wrap:wrap;}
+.prev-post a{font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--node-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>MySQL / InnoDB 存储引擎系列 · 第三篇</div>
+    <h1>为什么一次全表扫描,不会把缓存里的热数据挤出去?</h1>
+    <p>前两篇讲的都是"页要访问几次"。这一篇往回退一步:页被访问之后<b>放在哪</b>——InnoDB 的 Buffer Pool 用一份内存,同时服务两种完全不同的访问模式:反复被查的热数据,和一次性扫过去就再也不碰的冷数据。它们不能用同一套淘汰规则,否则一次 <span class="mono">SELECT * FROM 大表</span> 就能把所有热数据全部冲出内存。</p>
+    <p>这篇同样不是背答案:下面所有默认值和现象,都在本机 MySQL 9.7.1 上用的 <span class="mono">information_schema.INNODB_BUFFER_PAGE_LRU</span> 查出来的——包括一次"预期落空"的实验,也如实写了出来。</p>
+    <div class="hero-fact">
+      <div><div class="num">37%</div><div class="lbl"><span class="mono">innodb_old_blocks_pct</span> 实测默认值</div></div>
+      <div><div class="num">1000ms</div><div class="lbl"><span class="mono">innodb_old_blocks_time</span> 实测默认值</div></div>
+      <div><div class="num">512 页</div><div class="lbl">LRU 分段机制启用的最小长度(源码常量)</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <div class="prev-post">← 接上篇 <a href="btree2.html" target="_blank" rel="noopener">回表与覆盖索引</a></div>
+  <h2>不是纯 LRU,是两段 LRU</h2>
+  <p class="h2-sub">Buffer Pool 是 InnoDB 用来缓存页的一块内存。它的淘汰链表看起来像 LRU,但被人为切成了两段。</p>
+  <div class="cards">
+    <div class="card node">
+      <span class="tag">Young 段</span>
+      <h3>被反复访问的页</h3>
+      <p>链表靠前的部分,约占 <b>63%</b>(1 − old_blocks_pct)。真正的热数据——被查过不止一次——最终都会沉淀在这里。</p>
+    </div>
+    <div class="card key">
+      <span class="tag">Old 段</span>
+      <h3>刚从磁盘读进来的页</h3>
+      <p>链表靠后的部分,约占 <b>37%</b>。任何一次磁盘读入的页,第一次都<b>只能</b>进这里,而不是直接冲到最前面。</p>
+    </div>
+    <div class="card io">
+      <span class="tag">淘汰</span>
+      <h3>永远先淘汰 old 段末尾</h3>
+      <p>内存不够时,被牺牲的永远是 old 段最老的那个——不管 young 段有多少页,都不会被一次扫描波及。</p>
+    </div>
+  </div>
+  <blockquote class="src">
+    <span class="path">storage/innobase/buf/buf0lru.cc · <a href="https://github.com/mysql/mysql-server/blob/mysql-9.7.1/storage/innobase/buf/buf0lru.cc#L1656" target="_blank" rel="noopener">mysql-server @ mysql-9.7.1, L1656</a></span>
+/** Adds a block to the LRU list. ...
+@param[in]  old   true if should be put to the old blocks in the LRU list,
+                  else put to the start; if the LRU list is very short,
+                  the block is added to the start, regardless of this
+                  parameter */
+static inline void buf_LRU_add_block_low(buf_page_t *bpage, bool old) {
+  ...
+  if (!old || (UT_LIST_GET_LEN(buf_pool->LRU) &lt; BUF_LRU_OLD_MIN_LEN)) {
+    UT_LIST_ADD_FIRST(buf_pool->LRU, bpage);   // 进 young 端
+  } else {
+    UT_LIST_INSERT_AFTER(buf_pool->LRU, buf_pool->LRU_old, bpage);  // 进 old 段
+  }
+  </blockquote>
+  <p>注意源码注释里那句"if the LRU list is very short"——<span class="mono">BUF_LRU_OLD_MIN_LEN</span> 在源码里被定义为 <span class="mono">8*1024/16 = 512</span>,也就是说,整个 young/old 分段机制要等链表攒够 <b>512 页</b>才会真正启动;链表还很短的时候(比如刚启动、数据量很小),所有页都直接进最前面,和普通 LRU 没有区别。这也是本文后面一个实验"没按预期表现"的根本原因。</p>
+</section>
+
+<section>
+  <h2>不是所有页都要"排队"——新建的页可以插队</h2>
+  <p class="h2-sub">同样是"加入缓冲池",源码里其实走的是两条不同的路径,取决于这个页是<b>读进来的</b>还是<b>刚创建的</b>。</p>
+  <blockquote class="src">
+    <span class="path">storage/innobase/buf/buf0buf.cc</span>
+// 磁盘读入路径(比如 SELECT 触发的页面缺失):
+buf_LRU_add_block(bpage, true /* to old blocks */);   // L4969, L5052
+
+// 新建页路径(比如 INSERT 导致的 B+树页分裂,产生一个全新的空页):
+buf_LRU_add_block(&block->page, false);               // buf_page_create, L5172
+  </blockquote>
+  <p>逻辑其实很直白:一个刚从磁盘读进来的页,你不知道它是不是"用完就扔"的扫描产物,所以先当嫌疑犯,进 old 段观察;而一个<b>刚创建、正在被写入</b>的新页,当下就在被使用,没有"用完就扔"的嫌疑,直接放行到 young 端——这在上一篇的回表实验里其实已经间接验证过:插入数据时新分裂出来的叶子页,从来不需要"熬资历"。</p>
+</section>
+
+<section>
+  <h2>演示:一次大扫描,冲不走真正的热页</h2>
+  <p class="h2-sub"> 512 页的分段阈值没法在屏幕上演示,这里用一个容量 12、阈值缩小到"链表≥4页才分段"的玩具池子——分段比例(37%)、"插队"规则、淘汰顺序,和规则完全一致。</p>
+  <div class="demo" id="lruDemo">
+    <div class="demo-head"><div class="demo-title">场景:4 个热页反复被查 → 一次扫 10 个新页 → 检查热页是否还在</div></div>
+    <div class="demo-narration" id="lruNarration"></div>
+    <div class="demo-body">
+      <div class="lru-track" id="lruTrack"></div>
+      <div class="lru-legend">
+        <span><i style="background:var(--node-c-soft); border:1.5px solid var(--node-c);"></i>young 段</span>
+        <span><i style="background:var(--key-c-soft); border:1.5px solid var(--key-c);"></i>old 段</span>
+        <span>← 链表最前(MRU)　　链表末尾(即将被淘汰)→</span>
+      </div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="lruReset">⏮ 重来</button>
+      <button class="btn" id="lruPrev">‹ 上一步</button>
+      <button class="btn primary" id="lruNext">下一步 ›</button>
+      <button class="btn" id="lruPlay">▶ 自动播放</button>
+      <span class="step-counter" id="lruCounter"></span>
+    </div>
+  </div>
+  <div class="callout" id="lruResultCallout"></div>
+</section>
+
+<section>
+  <h2>数据库里量出来的样子</h2>
+  <p class="h2-sub">回到本机运行的 MySQL,新建一张 20 万行的表,重启服务清空缓冲池,再做几次读取。</p>
+  <blockquote class="src">
+    <span class="path">SELECT PAGE_NUMBER, PAGE_TYPE, IS_OLD FROM information_schema.INNODB_BUFFER_PAGE_LRU WHERE TABLE_NAME='`bpdemo`.`t`';</span>
+第一次 SELECT * FROM t WHERE id = 170000;  之后:
+
+PAGE_NUMBER  PAGE_TYPE  IS_OLD
+4  (根页)      INDEX      NO   ← 每次查询都会经过,早就被反复访问、晋升过了
+1208 (内部页)  INDEX      NO   ← 同上
+2032 (叶子页)  INDEX      YES  ← 第一次被这个查询碰到,老老实实进 old 段
+  </blockquote>
+  <p>这和理论完全对得上:根页、内部页几乎参与<b>每一次</b>查询,所以永远处于"刚被访问过"的状态,早早晋升 young 并留在那里;只有叶子页——只有查询命中它对应的那个 key 范围时才会被碰——第一次读入时老老实实排在 old 段。</p>
+
+  <div class="callout key">
+    <b>一次没按预期表现的实验,如实记录:</b>原本想接着验证"同一个叶子页,过 1 秒后再查一次,应该会晋升到 young"——实测发现<b>没有晋升</b>,哪怕连查好几次都还是 <span class="mono">IS_OLD=YES</span>。翻源码才找到真正原因:晋升判断函数 <span class="mono">buf_page_peek_if_too_old()</span> 里第一行就是<br><span class="mono" style="display:block; margin-top:8px; padding:10px; background:var(--code-bg); color:var(--code-ink); border-radius:6px; font-size:.82rem;">if (buf_pool->freed_page_clock == 0) { /* 尚未开始淘汰页面,说明还在预热阶段或者纯内存工作负载,不必更新统计或搬动链表 */ return false; }</span>
+    <span style="display:block; margin-top:8px;">我的测试表加上系统开销远没有填满 128MB 的缓冲池,从没触发过真正的淘汰(<span class="mono">freed_page_clock</span> 一直是 0)——这套"该不该晋升"的判断,本身就只在内存吃紧、真的需要精确排队时才会启动。内存够用的时候,系统压根不操这个心。这也是为什么上一节的动画要用玩具规模演示——环境里想亲眼看到晋升,得先把缓冲池填满到真正开始淘汰页面为止。</span>
+  </div>
+</section>
+
+<section>
+  <h2>脏页:内存和磁盘不一致的那一刻</h2>
+  <p class="h2-sub">页被修改后,内存里的版本领先磁盘上的版本——这个状态叫"脏"。脏页不是错误,是常态;但脏页什么时候变干净,决定了崩溃恢复要做多少事。</p>
+  <p>InnoDB 不会每改一行就立刻把整个 16KB 页刷回磁盘——那样随机 I/O 会把系统拖垮。策略是:先把这次修改<b>写进日志</b>(redo log,下一篇要展开的话题),页本身留在内存里继续脏着,由后台的 page cleaner 线程按节奏慢慢刷。这样做的前提是:只要日志写盘了,哪怕页最终没刷,崩溃后也能靠日志把它重放回来。</p>
+  <p>下面是本机测出来的一次脏页生命周期:</p>
+  <table class="mono">
+    <tr><th>动作</th><th>全局脏页数</th><th>本表(t)脏页数</th></tr>
+    <tr><td>UPDATE 前</td><td>0</td><td>0</td></tr>
+    <tr><td>UPDATE 10,001 行后</td><td>239</td><td>119</td></tr>
+    <tr><td>调低刷盘阈值、等待 3 秒后</td><td>0</td><td>0</td></tr>
+  </table>
+  <p style="font-size:.85rem; color:var(--ink-dim);">数据来自 <span class="mono">SHOW STATUS LIKE 'Innodb_buffer_pool_pages_dirty'</span> 与 <span class="mono">information_schema.INNODB_BUFFER_PAGE_LRU</span> 里 <span class="mono">OLDEST_MODIFICATION &gt; 0</span> 的页数——这个字段就是"这个页第一次被弄脏时的日志位点(LSN)",非零就意味着脏。</p>
+  <p>触发这次快速刷盘用的是两个存在的阈值——<span class="mono">innodb_max_dirty_pages_pct</span>(默认 <b>90</b>)和 <span class="mono">innodb_max_dirty_pages_pct_lwm</span>(默认 <b>10</b>):脏页比例超过前者,后台线程会**拼命**刷;超过后者(更低的水位线)就已经开始**提前**加速刷,不等真到 90% 才手忙脚乱。实验里把两个阈值都调到 0,相当于告诉 InnoDB"我一点脏页都不想留",3 秒内它就照做了。</p>
+  <div class="callout io">
+    脏页机制和上一节的 young/old 分段其实是同一种设计哲学:<b>把"正确性"和"性能"解耦</b>。young/old 保证"记录去哪不影响正确性,只影响谁先被挤出去";脏页保证"什么时候刷盘不影响正确性(有日志兜底),只影响 I/O 节奏"。两者都是在不牺牲正确性的前提下,把"什么时候做"这件事的决定权,尽量往后推、往批量里合并。
+  </div>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>演示动画的容量(12)、分段生效阈值(4)、晋升延迟(3 步)全部是缩小版玩具参数,已在正文中说明;默认值是容量随 <span class="mono">innodb_buffer_pool_size</span> 变化、分段阈值 512 页、晋升延迟 1000ms——比例(37%)和淘汰顺序规则是完全一致的,不是简化过的。</li>
+      <li>所有源码引用(<span class="mono">buf0lru.cc</span>、<span class="mono">buf0buf.cc</span>、<span class="mono">buf0buf.ic</span>)取自 <span class="mono">mysql/mysql-server</span> 仓库 <span class="mono">mysql-9.7.1</span> 标签(commit <span class="mono">a26ea1a2</span>),与本机安装的 MySQL 9.7.1 完全一致。</li>
+      <li>"数据库里量出来的样子"一节的实验,是先重启本机 mysqld(并清空 <span class="mono">innodb_buffer_pool_dump_at_shutdown</span> 产生的转储文件)以获得一个真正干净的缓冲池,再做的读取——否则重启前残留的缓存会干扰观察结果。</li>
+      <li>没有涉及:多个 Buffer Pool 实例(<span class="mono">innodb_buffer_pool_instances</span> &gt; 1 时每个实例独立维护自己的 LRU,本机因为池子只有 128MB,默认只有 1 个实例,没有触发分片逻辑)、压缩页的 unzip_LRU、自适应哈希索引对页驻留的影响。</li>
+      <li>redo log 如何保证"页还没刷、日志已经写盘"这件事在崩溃后依然安全,是这个系列下一篇的内容。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="redolog.html" target="_blank" rel="noopener" style="text-decoration:none; color:inherit;">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">redo log:为什么断电不会丢数据</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>InnoDB B+树系列 · 第三篇 · Buffer Pool 与刷脏 · 数据来自本机 MySQL 9.7.1 真实实测</footer>
+
+<script>
+const DATA = {"capacity": 12, "oldRatio": 0.37, "oldBlocksTime": 3, "events": [{"pid": "root", "kind": "read", "reason": "首次从磁盘读入,先放进 old 段", "type": "insert-old", "snapshot": {"list": [{"pid": "root", "kind": "read", "isOld": true}], "oldBoundary": 1, "step": 1}}, {"pid": "A", "kind": "read", "reason": "首次从磁盘读入,先放进 old 段", "type": "insert-old", "snapshot": {"list": [{"pid": "root", "kind": "read", "isOld": true}, {"pid": "A", "kind": "read", "isOld": true}], "oldBoundary": 2, "step": 2}}, {"pid": "B", "kind": "read", "reason": "首次从磁盘读入,先放进 old 段", "type": "insert-old", "snapshot": {"list": [{"pid": "root", "kind": "read", "isOld": true}, {"pid": "A", "kind": "read", "isOld": true}, {"pid": "B", "kind": "read", "isOld": true}], "oldBoundary": 3, "step": 3}}, {"pid": "C", "kind": "read", "reason": "首次从磁盘读入,先放进 old 段", "type": "insert-old", "snapshot": {"list": [{"pid": "root", "kind": "read", "isOld": true}, {"pid": "A", "kind": "read", "isOld": true}, {"pid": "B", "kind": "read", "isOld": true}, {"pid": "C", "kind": "read", "isOld": true}], "oldBoundary": 3, "step": 4}}, {"pid": "root", "gap": 4, "reason": "距首次访问已过 4 步(>= 阈值 3),晋升 young", "type": "promote", "snapshot": {"list": [{"pid": "root", "kind": "read", "isOld": false}, {"pid": "A", "kind": "read", "isOld": true}, {"pid": "B", "kind": "read", "isOld": true}, {"pid": "C", "kind": "read", "isOld": true}], "oldBoundary": 3, "step": 5}}, {"pid": "A", "gap": 4, "reason": "距首次访问已过 4 步(>= 阈值 3),晋升 young", "type": "promote", "snapshot": {"list": [{"pid": "A", "kind": "read", "isOld": false}, {"pid": "root", "kind": "read", "isOld": false}, {"pid": "B", "kind": "read", "isOld": true}, {"pid": "C", "kind": "read", "isOld": true}], "oldBoundary": 3, "step": 6}}, {"pid": "B", "gap": 4, "reason": "距首次访问已过 4 步(>= 阈值 3),晋升 young", "type": "promote", "snapshot": {"list": [{"pid": "B", "kind": "read", "isOld": false}, {"pid": "A", "kind": "read", "isOld": false}, {"pid": "root", "kind": "read", "isOld": false}, {"pid": "C", "kind": "read", "isOld": true}], "oldBoundary": 3, "step": 7}}, {"pid": "C", "gap": 4, "reason": "距首次访问已过 4 步(>= 阈值 3),晋升 young", "type": "promote", "snapshot": {"list": [{"pid": "C", "kind": "read", "isOld": false}, {"pid": "B", "kind": "read", "isOld": false}, {"pid": "A", "kind": "read", "isOld": false}, {"pid": "root", "kind": "read", "isOld": false}], "oldBoundary": 3, "step": 8}}, {"pid": "root", "reason": "已经在 young 段,移到最前", "type": "touch-young", "snapshot": {"list": [{"pid": "root", "kind": "read", "isOld": false}, {"pid": "C", "kind": "read", "isOld": false}, {"pid": "B", "kind": "read", "isOld": false}, {"pid": "A", "kind": "read", "isOld": false}], "oldBoundary": 3, "step": 9}}, {"pid": "A", "reason": "已经在 young 段,移到最前", "type": "touch-young", "snapshot": {"list": [{"pid": "A", "kind": "read", "isOld": false}, {"pid": "root", "kind": "read", "isOld": false}, {"pid": "C", "kind": "read", "isOld": false}, {"pid": "B", "kind": "read", "isOld": false}], "oldBoundary": 3, "step": 10}}, {"pid": "B", "reason": "已经在 young 段,移到最前", "type": "touch-young", "snapshot": {"list": [{"pid": "B", "kind": "read", "isOld": false}, {"pid": "A", "kind": "read", "isOld": false}, {"pid": "root", "kind": "read", "isOld": false}, {"pid": "C", "kind": "read", "isOld": false}], "oldBoundary": 3, "step": 11}}, {"pid": "C", "reason": "已经在 young 段,移到最前", "type": "touch-young", "snapshot": {"list": [{"pid": "C", "kind": "read", "isOld": false}, {"pid": "B", "kind": "read", "isOld": false}, {"pid": "A", "kind": "read", "isOld": false}, {"pid": "root", "kind": "read", "isOld": false}], "oldBoundary": 3, "step": 12}}, {"pid": "scan0", "kind": "read", "reason": "首次从磁盘读入,先放进 old 段", "type": "insert-old", "snapshot": {"list": [{"pid": "C", "kind": "read", "isOld": false}, {"pid": "B", "kind": "read", "isOld": false}, {"pid": "A", "kind": "read", "isOld": false}, {"pid": "scan0", "kind": "read", "isOld": true}, {"pid": "root", "kind": "read", "isOld": false}], "oldBoundary": 3, "step": 13}}, {"pid": "scan1", "kind": "read", "reason": "首次从磁盘读入,先放进 old 段", "type": "insert-old", "snapshot": {"list": [{"pid": "C", "kind": "read", "isOld": false}, {"pid": "B", "kind": "read", "isOld": false}, {"pid": "A", "kind": "read", "isOld": false}, {"pid": "scan1", "kind": "read", "isOld": true}, {"pid": "scan0", "kind": "read", "isOld": true}, {"pid": "root", "kind": "read", "isOld": false}], "oldBoundary": 4, "step": 14}}, {"pid": "scan2", "kind": "read", "reason": "首次从磁盘读入,先放进 old 段", "type": "insert-old", "snapshot": {"list": [{"pid": "C", "kind": "read", "isOld": false}, {"pid": "B", "kind": "read", "isOld": false}, {"pid": "A", "kind": "read", "isOld": false}, {"pid": "scan1", "kind": "read", "isOld": true}, {"pid": "scan2", "kind": "read", "isOld": true}, {"pid": "scan0", "kind": "read", "isOld": true}, {"pid": "root", "kind": "read", "isOld": false}], "oldBoundary": 4, "step": 15}}, {"pid": "scan3", "kind": "read", "reason": "首次从磁盘读入,先放进 old 段", "type": "insert-old", "snapshot": {"list": [{"pid": "C", "kind": "read", "isOld": false}, {"pid": "B", "kind": "read", "isOld": false}, {"pid": "A", "kind": "read", "isOld": false}, {"pid": "scan1", "kind": "read", "isOld": true}, {"pid": "scan3", "kind": "read", "isOld": true}, {"pid": "scan2", "kind": "read", "isOld": true}, {"pid": "scan0", "kind": "read", "isOld": true}, {"pid": "root", "kind": "read", "isOld": false}], "oldBoundary": 5, "step": 16}}, {"pid": "scan4", "kind": "read", "reason": "首次从磁盘读入,先放进 old 段", "type": "insert-old", "snapshot": {"list": [{"pid": "C", "kind": "read", "isOld": false}, {"pid": "B", "kind": "read", "isOld": false}, {"pid": "A", "kind": "read", "isOld": false}, {"pid": "scan1", "kind": "read", "isOld": true}, {"pid": "scan3", "kind": "read", "isOld": true}, {"pid": "scan4", "kind": "read", "isOld": true}, {"pid": "scan2", "kind": "read", "isOld": true}, {"pid": "scan0", "kind": "read", "isOld": true}, {"pid": "root", "kind": "read", "isOld": false}], "oldBoundary": 6, "step": 17}}, {"pid": "scan5", "kind": "read", "reason": "首次从磁盘读入,先放进 old 段", "type": "insert-old", "snapshot": {"list": [{"pid": "C", "kind": "read", "isOld": false}, {"pid": "B", "kind": "read", "isOld": false}, {"pid": "A", "kind": "read", "isOld": false}, {"pid": "scan1", "kind": "read", "isOld": true}, {"pid": "scan3", "kind": "read", "isOld": true}, {"pid": "scan4", "kind": "read", "isOld": true}, {"pid": "scan5", "kind": "read", "isOld": true}, {"pid": "scan2", "kind": "read", "isOld": true}, {"pid": "scan0", "kind": "read", "isOld": true}, {"pid": "root", "kind": "read", "isOld": false}], "oldBoundary": 6, "step": 18}}, {"pid": "scan6", "kind": "read", "reason": "首次从磁盘读入,先放进 old 段", "type": "insert-old", "snapshot": {"list": [{"pid": "C", "kind": "read", "isOld": false}, {"pid": "B", "kind": "read", "isOld": false}, {"pid": "A", "kind": "read", "isOld": false}, {"pid": "scan1", "kind": "read", "isOld": true}, {"pid": "scan3", "kind": "read", "isOld": true}, {"pid": "scan4", "kind": "read", "isOld": true}, {"pid": "scan6", "kind": "read", "isOld": true}, {"pid": "scan5", "kind": "read", "isOld": true}, {"pid": "scan2", "kind": "read", "isOld": true}, {"pid": "scan0", "kind": "read", "isOld": true}, {"pid": "root", "kind": "read", "isOld": false}], "oldBoundary": 7, "step": 19}}, {"pid": "scan7", "kind": "read", "reason": "首次从磁盘读入,先放进 old 段", "type": "insert-old", "snapshot": {"list": [{"pid": "C", "kind": "read", "isOld": false}, {"pid": "B", "kind": "read", "isOld": false}, {"pid": "A", "kind": "read", "isOld": false}, {"pid": "scan1", "kind": "read", "isOld": true}, {"pid": "scan3", "kind": "read", "isOld": true}, {"pid": "scan4", "kind": "read", "isOld": true}, {"pid": "scan6", "kind": "read", "isOld": true}, {"pid": "scan7", "kind": "read", "isOld": true}, {"pid": "scan5", "kind": "read", "isOld": true}, {"pid": "scan2", "kind": "read", "isOld": true}, {"pid": "scan0", "kind": "read", "isOld": true}, {"pid": "root", "kind": "read", "isOld": false}], "oldBoundary": 8, "step": 20}}, {"pid": "scan8", "kind": "read", "reason": "首次从磁盘读入,先放进 old 段", "type": "insert-old", "snapshot": {"list": [{"pid": "C", "kind": "read", "isOld": false}, {"pid": "B", "kind": "read", "isOld": false}, {"pid": "A", "kind": "read", "isOld": false}, {"pid": "scan1", "kind": "read", "isOld": true}, {"pid": "scan3", "kind": "read", "isOld": true}, {"pid": "scan4", "kind": "read", "isOld": true}, {"pid": "scan6", "kind": "read", "isOld": true}, {"pid": "scan7", "kind": "read", "isOld": true}, {"pid": "scan8", "kind": "read", "isOld": true}, {"pid": "scan5", "kind": "read", "isOld": true}, {"pid": "scan2", "kind": "read", "isOld": true}, {"pid": "scan0", "kind": "read", "isOld": true}, {"pid": "root", "kind": "read", "isOld": false}], "oldBoundary": 8, "step": 21}}, {"pid": "root", "reason": "容量已满,淘汰 old 段末尾的页", "type": "evict", "snapshot": {"list": [{"pid": "C", "kind": "read", "isOld": false}, {"pid": "B", "kind": "read", "isOld": false}, {"pid": "A", "kind": "read", "isOld": false}, {"pid": "scan1", "kind": "read", "isOld": true}, {"pid": "scan3", "kind": "read", "isOld": true}, {"pid": "scan4", "kind": "read", "isOld": true}, {"pid": "scan6", "kind": "read", "isOld": true}, {"pid": "scan7", "kind": "read", "isOld": true}, {"pid": "scan8", "kind": "read", "isOld": true}, {"pid": "scan5", "kind": "read", "isOld": true}, {"pid": "scan2", "kind": "read", "isOld": true}, {"pid": "scan0", "kind": "read", "isOld": true}], "oldBoundary": 8, "step": 21}}, {"pid": "scan9", "kind": "read", "reason": "首次从磁盘读入,先放进 old 段", "type": "insert-old", "snapshot": {"list": [{"pid": "C", "kind": "read", "isOld": false}, {"pid": "B", "kind": "read", "isOld": false}, {"pid": "A", "kind": "read", "isOld": false}, {"pid": "scan1", "kind": "read", "isOld": true}, {"pid": "scan3", "kind": "read", "isOld": true}, {"pid": "scan4", "kind": "read", "isOld": true}, {"pid": "scan6", "kind": "read", "isOld": true}, {"pid": "scan7", "kind": "read", "isOld": true}, {"pid": "scan9", "kind": "read", "isOld": true}, {"pid": "scan8", "kind": "read", "isOld": true}, {"pid": "scan5", "kind": "read", "isOld": true}, {"pid": "scan2", "kind": "read", "isOld": true}, {"pid": "scan0", "kind": "read", "isOld": true}], "oldBoundary": 8, "step": 22}}, {"pid": "scan0", "reason": "容量已满,淘汰 old 段末尾的页", "type": "evict", "snapshot": {"list": [{"pid": "C", "kind": "read", "isOld": false}, {"pid": "B", "kind": "read", "isOld": false}, {"pid": "A", "kind": "read", "isOld": false}, {"pid": "scan1", "kind": "read", "isOld": true}, {"pid": "scan3", "kind": "read", "isOld": true}, {"pid": "scan4", "kind": "read", "isOld": true}, {"pid": "scan6", "kind": "read", "isOld": true}, {"pid": "scan7", "kind": "read", "isOld": true}, {"pid": "scan9", "kind": "read", "isOld": true}, {"pid": "scan8", "kind": "read", "isOld": true}, {"pid": "scan5", "kind": "read", "isOld": true}, {"pid": "scan2", "kind": "read", "isOld": true}], "oldBoundary": 8, "step": 22}}, {"note": "大扫描结束,检查 hot 页是否还在池子里", "type": "checkpoint", "snapshot": {"list": [{"pid": "C", "kind": "read", "isOld": false}, {"pid": "B", "kind": "read", "isOld": false}, {"pid": "A", "kind": "read", "isOld": false}, {"pid": "scan1", "kind": "read", "isOld": true}, {"pid": "scan3", "kind": "read", "isOld": true}, {"pid": "scan4", "kind": "read", "isOld": true}, {"pid": "scan6", "kind": "read", "isOld": true}, {"pid": "scan7", "kind": "read", "isOld": true}, {"pid": "scan9", "kind": "read", "isOld": true}, {"pid": "scan8", "kind": "read", "isOld": true}, {"pid": "scan5", "kind": "read", "isOld": true}, {"pid": "scan2", "kind": "read", "isOld": true}], "oldBoundary": 8, "step": 22}}, {"pid": "newleaf", "kind": "created", "reason": "新创建的页,直接进入 young 端", "type": "insert-young-new", "snapshot": {"list": [{"pid": "newleaf", "kind": "created", "isOld": false}, {"pid": "C", "kind": "read", "isOld": false}, {"pid": "B", "kind": "read", "isOld": false}, {"pid": "A", "kind": "read", "isOld": false}, {"pid": "scan1", "kind": "read", "isOld": true}, {"pid": "scan3", "kind": "read", "isOld": true}, {"pid": "scan4", "kind": "read", "isOld": true}, {"pid": "scan6", "kind": "read", "isOld": true}, {"pid": "scan7", "kind": "read", "isOld": true}, {"pid": "scan9", "kind": "read", "isOld": true}, {"pid": "scan8", "kind": "read", "isOld": true}, {"pid": "scan5", "kind": "read", "isOld": true}, {"pid": "scan2", "kind": "read", "isOld": true}], "oldBoundary": 8, "step": 23}}, {"pid": "scan2", "reason": "容量已满,淘汰 old 段末尾的页", "type": "evict", "snapshot": {"list": [{"pid": "newleaf", "kind": "created", "isOld": false}, {"pid": "C", "kind": "read", "isOld": false}, {"pid": "B", "kind": "read", "isOld": false}, {"pid": "A", "kind": "read", "isOld": false}, {"pid": "scan1", "kind": "read", "isOld": true}, {"pid": "scan3", "kind": "read", "isOld": true}, {"pid": "scan4", "kind": "read", "isOld": true}, {"pid": "scan6", "kind": "read", "isOld": true}, {"pid": "scan7", "kind": "read", "isOld": true}, {"pid": "scan9", "kind": "read", "isOld": true}, {"pid": "scan8", "kind": "read", "isOld": true}, {"pid": "scan5", "kind": "read", "isOld": true}], "oldBoundary": 8, "step": 23}}], "hotPages": ["root", "A", "B", "C"], "scanPages": ["scan0", "scan1", "scan2", "scan3", "scan4", "scan5", "scan6", "scan7", "scan8", "scan9"], "hotSurvived": ["A", "B", "C"]};
+
+(function(){
+  const events = DATA.events;
+  const track = document.getElementById('lruTrack');
+  const narration = document.getElementById('lruNarration');
+  const counter = document.getElementById('lruCounter');
+  const resultCallout = document.getElementById('lruResultCallout');
+  let idx = 0, playing=false, playTimer=null;
+
+  function describe(e){
+    switch(e.type){
+      case 'insert-old': return `读入页 <span class="k">${e.pid}</span>:${e.reason}。`;
+      case 'insert-young-new': return `创建页 <span class="k">${e.pid}</span>:${e.reason}。`;
+      case 'promote': return `再次访问 <span class="k">${e.pid}</span>:${e.reason}。`;
+      case 'touch-too-soon': return `再次访问 <span class="k">${e.pid}</span>:${e.reason}。`;
+      case 'touch-young': return `再次访问 <span class="k">${e.pid}</span>:${e.reason}。`;
+      case 'evict': return `淘汰页 <span class="k">${e.pid}</span>:${e.reason}。`;
+      case 'checkpoint': return e.note;
+      default: return e.type;
+    }
+  }
+
+  function render(){
+    idx = Math.max(0, Math.min(events.length-1, idx));
+    const e = events[idx];
+    narration.innerHTML = describe(e);
+    const snap = e.snapshot;
+    let html = '';
+    snap.list.forEach((p, i)=>{
+      const seg = i < snap.oldBoundary ? 'young' : 'old';
+      const active = (e.pid===p.pid) ? ' active' : '';
+      html += `<div class="lru-slot ${seg}${active}"><div class="pid">${p.pid}</div><div class="k">${seg}</div></div>`;
+      if(i < snap.list.length-1) html += `<span class="lru-arrow">·</span>`;
+    });
+    track.innerHTML = html || '<span style="color:var(--ink-dim); font-size:.85rem;">(空)</span>';
+    counter.textContent = `${idx+1} / ${events.length}`;
+    document.getElementById('lruPrev').disabled = idx===0;
+    document.getElementById('lruNext').disabled = idx===events.length-1;
+
+    if(e.type==='checkpoint'){
+      resultCallout.innerHTML = `扫描了 <b>${DATA.scanPages.length}</b> 个一次性页面之后,原来 4 个热页里,<b>${DATA.hotSurvived.length}</b> 个(${DATA.hotSurvived.join(', ')})还留在池子里——因为它们早就晋升到了 young 段,扫描产生的新页只能挤占 old 段的空间,淘汰时也只从 old 段末尾拿人,young 段完全没受影响。`;
+      resultCallout.className = 'callout node';
+    } else if(idx > events.findIndex(ev=>ev.type==='checkpoint') && events.findIndex(ev=>ev.type==='checkpoint')>=0){
+      resultCallout.innerHTML = `扫描了 <b>${DATA.scanPages.length}</b> 个一次性页面之后,原来 4 个热页里,<b>${DATA.hotSurvived.length}</b> 个(${DATA.hotSurvived.join(', ')})还留在池子里——因为它们早就晋升到了 young 段,扫描产生的新页只能挤占 old 段的空间,淘汰时也只从 old 段末尾拿人,young 段完全没受影响。`;
+      resultCallout.className = 'callout node';
+    } else {
+      resultCallout.textContent = '继续播放,看热页能不能在大扫描之后存活下来。';
+      resultCallout.className = 'callout';
+    }
+  }
+  document.getElementById('lruPrev').onclick=()=>{idx--;render();stopPlay();};
+  document.getElementById('lruNext').onclick=()=>{idx++;render();stopPlay();};
+  document.getElementById('lruReset').onclick=()=>{idx=0;render();stopPlay();};
+  function stopPlay(){ playing=false; clearInterval(playTimer); document.getElementById('lruPlay').textContent='▶ 自动播放'; }
+  document.getElementById('lruPlay').onclick=()=>{
+    if(playing){ stopPlay(); return; }
+    playing=true; document.getElementById('lruPlay').textContent='⏸ 暂停';
+    playTimer = setInterval(()=>{
+      if(idx>=events.length-1){ stopPlay(); return; }
+      idx++; render();
+    }, 800);
+  };
+  render();
+})();
+</script>
+
+</body>
+</html>

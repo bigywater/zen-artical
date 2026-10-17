@@ -1,0 +1,20 @@
+from lib import *
+S = SS('p5')
+steps = [
+    step("用 POST(请求体 7 字节)请求会重定向的地址:301、302、303 之后,目标地址收到的是 GET、请求体 0 字节、没有 Content-Length——requests 把方法改成了 GET 并丢掉请求体;307 和 308 之后,目标地址收到的仍然是 POST、7 字节、Content-Length=7。每种情况服务器都收到 2 个请求,history 里是那一跳的状态码。这里 POST 没带 Content-Type 是因为我传的是裸字节。", t=tl(S(1)), done=lidx(S(1), 'POST /r307', 'POST /r308'), mark=lidx(S(1), 'POST /r301', 'POST /r302', 'POST /r303'), b=bars([['301 / 302 / 303 → 目标收到的请求体字节', 0, '0'], ['307 / 308 → 目标收到的请求体字节', 7, '7']], 8, mark=[0], done=[1]), kv=KV([['301、302、303', 'POST 变 GET,请求体丢掉'], ['307、308', '保持 POST,请求体照发'], ['服务器收到', '每种都是 2 个请求']], ['301、302、303'])),
+    step("allow_redirects=False 能看到原始的 302 响应:Location=/final,is_redirect=True,r.next.url 已经是拼好的完整地址。默认跟随时,r.history 按顺序记着每一跳:/chain/3 经过 3 个 302(依次来自 /chain/3、/chain/2、/chain/1),最终落在 /chain/0 返回 200。相对路径的 Location 也会被解析:/rel 回 301 Location: sub/page,最终 URL 是 /sub/page(基于 /rel 所在的目录)。", t=tl(S(2)), done=lidx(S(2), '/chain/3 逐跳', '/rel 回 301'), mark=lidx(S(2), 'allow_redirects=False'), kv=KV([['allow_redirects=False', '拿到 302 + Location'], ['r.history', '每一跳的响应,按顺序'], ['相对 Location', '被解析成完整 URL']], ['r.history'])),
+    step("跳转上限默认是 Session.max_redirects=30。一直 302 到自己的 /loop:抛 TooManyRedirects(Exceeded 30 redirects.),服务器共收到 31 个请求(第 1 次请求加 30 次跳转);max_redirects=5 时服务器收到 6 个请求。边界实测:链长 29、30 跳都成功(服务器分别收到 30、31 个请求),31 跳抛 TooManyRedirects,服务器同样收到 31 个请求就停了。", t=tl(S(3)), done=lidx(S(3), '链长 29 跳', '链长 30 跳'), mark=lidx(S(3), '/loop(一直 302', '链长 31 跳'), b=bars([['/loop 服务器收到', 31, '31'], ['max_redirects=5 服务器收到', 6, '6'], ['30 跳链服务器收到', 31, '31']], 32, mark=[0], done=[2]), kv=KV([['默认上限', '30 跳'], ['抛异常时服务器收到', '31 个请求'], ['链长 31 跳', 'TooManyRedirects']], ['默认上限'])),
+    step("从 A 重定向到 B(同一台机器、端口不同,对 requests 来说就是另一个主机):手写的三个头 Authorization、X-Token、Cookie 到 A 时都在;到 B 时 Authorization 和 Cookie 没有了,但自定义的 X-Token 被原样带到了 B。用 auth=(user, pass) 时 Authorization 同样被去掉。requests.Session.should_strip_auth 的判断:换主机、换端口(8000→9000)、https 降到 http 都去掉;http→https 且都是默认端口不去掉;http:8080→https:8443 去掉。", t=tl(S(4)), done=lidx(S(4), '手写 Authorization、X-Token、Cookie:B 收到', 'auth=(user, pass):B'), mark=lidx(S(4), '手写 Authorization、X-Token、Cookie:A 收到', 'X-Token'), kv=KV([['Authorization', '换主机/端口时被去掉'], ['Cookie(手写)', '也被去掉'], ['X-Token(自定义头)', '原样带到另一个主机']], ['X-Token(自定义头)'])),
+]
+A = mkartp('p5', 5, '爬虫,requests,重定向,301,302,307,308,Authorization,Python,真实验证,动画演示',
+    '实测 requests 的重定向:POST 遇到 301/302/303 变成 GET 并丢掉请求体,307/308 保持 POST 和请求体;默认最多跳 30 次(第 31 跳抛 TooManyRedirects,服务器收到 31 个请求);跳到另一个主机时 Authorization 和 Cookie 被去掉,但自定义的 X-Token 头会原样带过去。',
+    '重定向看起来是客户端库替你处理的小事,但它决定了 POST 请求体会不会丢、一个死循环会让服务器多挨多少下、你的令牌会不会被带到别的主机。这篇在本机用 301、302、303、307、308 逐个试。',
+    [('0 对 7', '301/302/303 与 307/308 之后,目标地址收到的请求体字节数(请求体原本 7 字节)'), ('31 个', '一个一直 302 到自己的地址,服务器在客户端放弃前收到的请求数'), ('X-Token', '自定义请求头,跳到另一个主机时被原样带过去')],
+    [('状态码决定方法和请求体', '<p>301、302、303 之后 requests 把 POST 改成 GET 并丢掉请求体;307、308 保持方法和请求体。服务器想让客户端重发表单,要用 307/308,否则 POST 的数据会悄悄消失,目标地址只会收到一个没有 Content-Length 的 GET。</p>'),
+     ('history 与 allow_redirects', '<p><code>allow_redirects=False</code> 可以拿到原始的 302 响应和 <code>Location</code>(<code>r.next</code> 是拼好的下一个请求)。默认跟随时,<code>r.history</code> 按顺序保存每一跳的响应;相对路径的 <code>Location</code> 会被解析成完整 URL。爬虫要记录“最终 URL”时看 <code>r.url</code>,要记录来路看 <code>r.history</code>。</p>'),
+     ('跳转上限', '<p><code>max_redirects</code> 默认 30。服务器在客户端放弃前会收到 31 个请求(第一次加 30 次跳转);链长 30 跳的重定向还能成功,31 跳抛 <code>TooManyRedirects</code>。爬虫遇到重定向环时,上限就是它给目标服务器多添的请求数,可以调小。</p>'),
+     ('跨主机时的请求头', '<p>跳到另一个主机(这里是不同端口)时,requests 会去掉 <code>Authorization</code> 和手写的 <code>Cookie</code> 头,但自定义的 <code>X-Token</code> 之类的头原样转发。如果你的令牌放在自定义头里,跳转到第三方主机就会一起带过去——这是实测结果,需要自己在跳转前处理(例如 <code>allow_redirects=False</code> 手动判断)。</p>')],
+    steps,
+    [ENV_P + '。服务器按路径返回指定状态码的重定向、无限循环重定向、定长重定向链、相对 Location 的重定向,并记录目标地址收到的方法、请求体和全部请求头(按收到的顺序);跨主机用两个本机端口模拟;should_strip_auth 是直接调用 requests 的函数,没有发请求',
+     '没有验证:浏览器对同样状态码的处理(这里只测了 requests);HEAD、PUT、DELETE 等其它方法遇到重定向的表现;Referer 头在跳转时的处理;代理环境下的重定向;aiohttp 等库的默认行为(它们的默认值不同,这里没有测)'],
+    '重定向')

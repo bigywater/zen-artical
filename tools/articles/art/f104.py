@@ -1,0 +1,16 @@
+from lib import *
+S = SS('f104')
+R = J('f104'); of = R['offset']; ks = R['keyset']
+steps = [
+    step(f"OFFSET 分页的耗时随页码增大(20 万行、每页 20 条,每个位置 7 次中位数):第 1 页 {of['1']:.2f} ms,第 1000 页 {of['1000']:.2f} ms,第 5000 页 {of['5000']:.2f} ms,第 9999 页 {of['9999']:.2f} ms——数据库要先数过前面所有的行再丢掉,越翻越慢。", b=bars([['第 1 页', of['1'], f"{of['1']:.2f} ms"], ['第 1000 页', of['1000'], f"{of['1000']:.2f} ms"], ['第 5000 页', of['5000'], f"{of['5000']:.2f} ms"], ['第 9999 页', of['9999'], f"{of['9999']:.2f} ms"]], of['9999'], mark=[3], done=[0]), t=tl(S(1)), mark=lidx(S(1), '9999'), done=lidx(S(1), '第     1 页'), kv=KV([['OFFSET 0', f"{of['1']:.2f} ms"], ['OFFSET 199960', f"{of['9999']:.2f} ms"]], ['OFFSET 199960'])),
+    step(f"键集(keyset)分页用 WHERE id > 上一页最后一个 id ORDER BY id LIMIT 20:同样的四个位置耗时 {ks['1']:.2f}、{ks['1000']:.2f}、{ks['5000']:.2f}、{ks['9999']:.2f} ms,不随位置变化。EXPLAIN 估算的成本:OFFSET 199980 约 7728,id > 199980 约 4.6。顺便,select count(*) 取总数就要 {R['count']:.1f} ms(20 万行),offset 分页要显示总页数就得付这笔钱。", b=bars([['OFFSET 第 9999 页', of['9999'], f"{of['9999']:.2f} ms"], ['keyset 同一位置', ks['9999'], f"{ks['9999']:.2f} ms"]], of['9999'], mark=[0], done=[1]), t=tl(S(2)), done=lidx(S(2), 'id>'), mark=lidx(S(2), 'EXPLAIN'), kv=KV([['keyset', '耗时与位置无关'], ['代价', '不能跳到任意页']], ['keyset'])),
+    step("翻页过程中数据变化:按 id 升序、每页 3 条,看完第 1 页 [1, 2, 3] 后删掉 id=1。OFFSET 的第 2 页变成 [5, 6, 7]——漏掉了 4(前面少了一行,整体前移);keyset 的下一页是 [4, 5, 6],没有漏。插入也会造成 OFFSET 翻页时重复看到同一行。", t=tl(S(3)), mark=lidx(S(3), '漏掉了 4'), kv=KV([['OFFSET', '数据变化会漏行或重复'], ['keyset', '以上次位置为锚,不受影响']], ['OFFSET'])),
+    step("游标把 {\"after\": 20} 做 base64 编码成 eyJhZnRlciI6IDIwfQ==,客户端原样传回,服务端解码后取 id > 20 的 21、22、23……。被篡改的游标('###' 或 after 不是整数)服务端返回 400。游标只是编码,不是加密:客户端可读可伪造,服务端必须校验,也不要把敏感值放进去。", t=tl(S(4)), done=lidx(S(4), 'next', '第二页'), mark=lidx(S(4), '篡改的游标'), kv=KV([['游标', 'base64(JSON),服务端校验'], ['非法游标', '400']], ['游标'])),
+    step("db.paginate() 的行为:默认 page=1、per_page=20,返回 total=200000、pages=10000;per_page=1000 被夹到 max_per_page=100;page=0、page=99999(超出范围)、page=abc、per_page=0 都是 404(error_out 默认为真,默认的 404 页面是 HTML)。它用的是 OFFSET 加 count(*),大表的深翻页同样会慢。", t=tl(S(5)), done=lidx(S(5), '/paginate', 'per_page=1000'), mark=lidx(S(5), 'page=0', '99999', 'abc', 'per_page=0'), kv=KV([['max_per_page', '夹到上限'], ['越界 / 非法', '404']], ['越界 / 非法'])),
+]
+A = mkartf('f104', 104, 'Flask,API,分页,keyset,OFFSET,真实验证,动画演示',
+    f'在 20 万行的 PostgreSQL 表上实测 API 分页:OFFSET 分页第 1 页 {of["1"]:.2f} ms 到第 9999 页 {of["9999"]:.2f} ms,键集分页稳定在约 {ks["9999"]:.2f} ms;翻页时删行造成 OFFSET 漏行;游标的编码与校验;db.paginate 的 max_per_page 与越界 404。',
+    'API 分页用 OFFSET 还是游标?翻到后面会慢多少?翻页时数据变了会怎样?db.paginate() 对非法参数怎么处理?这篇在真实的 20 万行数据上把耗时和一致性逐项量出来。',
+    [(f'{of["1"]:.1f} → {of["9999"]:.1f} ms', 'OFFSET 分页从第 1 页翻到第 9999 页的耗时'), (f'{ks["9999"]:.2f} ms', '键集分页在同样位置的耗时'), ('漏掉 4', '翻页时删掉前面一行,OFFSET 的第 2 页漏掉的 id')],
+    [('OFFSET 越翻越慢', '<p>上一篇:<a href="flask-request-validation.html">请求参数校验</a>;下一篇:<a href="flask-api-versioning.html">API 版本控制</a>。</p>'), ('键集分页', None), ('翻页时数据变化', None), ('游标', None), ('db.paginate()', None)],
+    steps, [ENV_F + '。Flask-SQLAlchemy 3.1.1、psycopg 3.3.6、自己起的 PostgreSQL(非默认端口)', '没有验证:按非唯一列(如时间戳)排序的键集分页(要加主键做并列排序)、反向翻页、Link 头与 HATEOAS 风格的响应格式、total 的近似计数(pg_class.reltuples)、缓存分页结果'], 'API 分页', panels=[('t', 'term', '实验输出'), ('b', 'bars', '耗时'), ('kv', 'kv', '要点')])

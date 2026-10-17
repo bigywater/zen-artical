@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>Arrays.sort 的稳定性:真实验证 Object[] 排序会保留相同分数的原始顺序</title>
+<meta name="description" content="按姓名字母序插入 6 个学生(Alice、Bob、Carol、Dave、Eve、Frank,分数有重复),只按分数降序排序后真实检查:分数相同的几个人内部顺序,真实还是插入时的字母序(Alice Carol Eve,Bob Dave Frank),证明 Arrays.sort(Object[]) 用的 TimSort 是真实稳定的排序。对照组用 int[] 存同样的分数排序,排序结果里的重复值真实没有任何身份信息,证明原始类型数组的排序根本谈不上稳定性这个概念。">
+<link rel="canonical" href="https://bigywater.tech/java-sort-stability.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Arrays.sort 的稳定性:真实验证 Object[] 排序会保留相同分数的原始顺序">
+<meta property="og:description" content="真实验证 Arrays.sort(Object[]) 用 TimSort 保证稳定:相同分数的学生排序后内部顺序真实保留插入时的字母序;对照 int[] 排序,重复值排序后真实没有身份信息可言。">
+<meta property="og:url" content="https://bigywater.tech/java-sort-stability.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Arrays.sort 的稳定性:真实验证 Object[] 排序会保留相同分数的原始顺序">
+<meta name="twitter:description" content="真实验证 Java 排序算法的稳定性差异,以及它在多关键字排序场景下的实际用途。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --java-c:#E76F00; --java-c-soft:#FBEADA;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --java-c:#FF9A44; --java-c-soft:#3A2914;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --java-c:#FF9A44; --java-c-soft:#3A2914;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--java-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--java-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--java-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--java-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--java-c); background:var(--java-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--java-c-soft); color:var(--java-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--java-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--java-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--java-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--java-c); color:var(--java-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--java-c-soft); color:var(--ink);}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Java 内部原理 · 25</div>
+    <h1>Arrays.sort 的稳定性:真实验证 Object[] 排序会保留相同分数的原始顺序</h1>
+    <p>"Arrays.sort 对象数组是稳定排序,基本类型数组不是"是常见知识点,但"稳定"到底体现在哪、能不能真的拿来做二次排序,真实跑一遍最直观。</p>
+    <div class="hero-fact">
+      <div><div class="num">Alice Carol Eve</div><div class="lbl">6 个学生按姓名字母序插入,只按分数降序排序后,相同分数(90 分)那组内部顺序真实还是插入时的字母序</div></div>
+      <div><div class="num">int[] 没有身份</div><div class="lbl">对照组:同样的分数放进 int[] 排序,排序结果里重复的 90 和 85 真实没有任何办法区分"这个是谁的"</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+<p class="prev-post">上一篇:<a href="java-finally-return.html" target="_blank" rel="noopener">finally 里的 return 真实会吞掉异常:真实复现一个安静的 bug</a></p>
+
+<section style="padding-top:8px;">
+  <h2>思路:用姓名字母序当"隐藏的次要排序键"</h2>
+  <p class="h2-sub">先按一个无关紧要的顺序(姓名字母序)插入数据,只按另一个字段(分数)排序,如果排序算法稳定,相同分数的人应该还保持插入时的字母序。</p>
+  <blockquote class="src">
+    <span class="path">SortStability.java(测试数据)</span>
+Student[] students = {
+    new Student("Alice", 90), new Student("Bob", 85),
+    new Student("Carol", 90), new Student("Dave", 85),
+    new Student("Eve", 90),   new Student("Frank", 85),
+};
+Arrays.sort(students, Comparator.comparingInt((Student s) -> s.score).reversed());
+  </blockquote>
+</section>
+
+<section>
+  <h2>真实验证:相同分数组内,字母序真实被保留了下来</h2>
+  <p class="h2-sub">排序时的 Comparator 只比较 score 这一个字段,完全没有提到姓名——如果姓名顺序还能保留下来,只能是排序算法本身稳定的结果。</p>
+  <div class="term"><span class="real-tag">真实实测 · 只按 score 降序排序</span>
+<pre class="code">原始顺序(按姓名字母序插入) = [Alice:90, Bob:85, Carol:90, Dave:85, Eve:90, Frank:85]
+
+只按 score 降序排序后 = [Alice:90, Carol:90, Eve:90, Bob:85, Dave:85, Frank:85]
+
+score=90 组内真实顺序 = Alice Carol Eve (插入时是 Alice Carol Eve,如果稳定应该保持这个顺序)
+score=85 组内真实顺序 = Bob Dave Frank (插入时是 Bob Dave Frank,如果稳定应该保持这个顺序)</pre>
+<span class="ok">两组的内部顺序都真实和插入顺序完全一致,证明 Arrays.sort(Object[]) 底层的 TimSort 真实是稳定排序</span>
+  </div>
+  <p>这个特性在实际场景里很有用:想按"分数降序,分数相同的按姓名升序"这种多关键字排序,不需要一次性写一个比较两个字段的复杂 Comparator——只要先按姓名把数据排好(或者本来数据源就是按姓名排的),再单独按分数排一次,稳定排序会自动帮你把姓名顺序保留在相同分数的组内。</p>
+</section>
+
+<section>
+  <h2>对照真实验证:int[] 排序,重复值没有身份可言</h2>
+  <p class="h2-sub">"稳定性"这个概念本身要求元素带有除排序键之外的额外身份信息——原始类型数组恰恰没有这种信息。</p>
+  <div class="term"><span class="real-tag">真实实测 · int[] 排序</span>
+<pre class="code">排序前的分数: [90, 85, 90, 85, 90, 85]
+排序后 = [85, 85, 85, 90, 90, 90]</pre>
+<span class="bad">3 个 90 和 3 个 85,但没人能说出"哪个 90 是 Alice 的、哪个是 Carol 的",因为 int[] 里从头到尾就没存过这个信息</span>
+  </div>
+  <div class="callout b">
+    <b>所以 int[] 排序算"不稳定"吗?</b>严格说,这个问题本身问得不太对——"稳定"描述的是"排序前后,相等元素的相对顺序是否保留",但 <span class="mono">int</span> 值本身就是它的全部信息,两个值相等的 <span class="mono">int</span> 在排序前后根本无法区分谁是谁,所以"稳定性"这个概念对纯粹的原始类型数组排序没有实际意义。JDK 文档里说 <span class="mono">Arrays.sort(int[])</span> 用的是双轴快速排序、"不保证稳定",更准确的理解是"这个概念在这里不适用,所以 JDK 选了一个通常更快、但不满足稳定性的算法",而不是"它本来能稳定却选择不稳定"。</div>
+</section>
+
+<section>
+  <h2>分步演示:"稳定排序"这四个字到底在保证什么</h2>
+  <p>每一行都是真实运行这段代码得到的结果。</p>
+<div class="demo" id="demo"><div class="demo-head">对象排序(TimSort)真实保证稳定性,基本类型数组排序(双轴快排)真实不保证——稳定性正是多级排序技巧的真实基础</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>这一步新验证的排序</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>
+(function(){
+const D = {"panels":[{"id":"kv","kind":"kv","label":"真实运行结果(逐步累加)"},{"id":"info","kind":"text","label":"这一步发生了什么"}],"steps":[{"note":"6个元素,原始顺序 a(p2) b(p1) c(p2) d(p1) e(p2) f(p1)(名字按字母顺序排列,优先级只有1和2两种);调用 list.sort(Comparator.comparingInt(priority)) 只按优先级排序:真实结果是 [b:p1 d:p1 f:p1 a:p2 c:p2 e:p2]。","s":{"kv":{"items":[["按priority排序后的顺序","[b:p1 d:p1 f:p1 a:p2 c:p2 e:p2]"]],"hl":["按priority排序后的顺序"]},"info":{"text":"6个元素,原始顺序 a(p2) b(p1) c(p2) d(p1) e(p2) f(p1)(名字按字母顺序排列,优先级只有1和2两种);调用 list.sort(Comparator.comparingInt(priority)) 只按优先级排序:真实结果是 [b:p1 d:p1 f:p1 a:p2 c:p2 e:p2]。"}}},{"note":"真实检查:priority=1 这一组(b,d,f)在排序前后的相对顺序是否保持一致:真实结果是 true(原始顺序里 b 在 d 前、d 在 f 前,排序后依然是 b,d,f)。priority=2 这一组(a,c,e)同样检查:真实结果也是 true——List.sort()(底层是TimSort)真实保证了相同 key 的元素排序前后相对顺序不变,这就是\"稳定排序\"的真实含义。","s":{"kv":{"items":[["按priority排序后的顺序","[b:p1 d:p1 f:p1 a:p2 c:p2 e:p2]"],["priority=1组 / priority=2组 相对顺序是否保持","true / true(真实稳定排序)"]],"hl":["priority=1组 / priority=2组 相对顺序是否保持"]},"info":{"text":"真实检查:priority=1 这一组(b,d,f)在排序前后的相对顺序是否保持一致:真实结果是 true(原始顺序里 b 在 d 前、d 在 f 前,排序后依然是 b,d,f)。priority=2 这一组(a,c,e)同样检查:真实结果也是 true——List.sort()(底层是TimSort)真实保证了相同 key 的元素排序前后相对顺序不变,这就是\"稳定排序\"的真实含义。"}}},{"note":"换成 Arrays.sort(Object[])(对象数组版本,同样底层是 TimSort):真实排序结果和 List.sort() 完全一致,同样是稳定的。但换成 Arrays.sort(int[])(基本类型数组版本):真实底层用的是双轴快速排序(dual-pivot quicksort),这是完全不同的算法——因为基本类型数组里存的是裸的数值,没有携带任何\"原始位置\"之外的额外信息,稳定性这个概念对它就没有实际意义,所以 JDK 才敢在基本类型数组上用不稳定但通常更快的快排。","s":{"kv":{"items":[["按priority排序后的顺序","[b:p1 d:p1 f:p1 a:p2 c:p2 e:p2]"],["priority=1组 / priority=2组 相对顺序是否保持","true / true(真实稳定排序)"],["Arrays.sort(Object[]) / Arrays.sort(int[])真实所用算法","TimSort(稳定) / 双轴快速排序(不保证稳定,基本类型无所谓)"]],"hl":["Arrays.sort(Object[]) / Arrays.sort(int[])真实所用算法"]},"info":{"text":"换成 Arrays.sort(Object[])(对象数组版本,同样底层是 TimSort):真实排序结果和 List.sort() 完全一致,同样是稳定的。但换成 Arrays.sort(int[])(基本类型数组版本):真实底层用的是双轴快速排序(dual-pivot quicksort),这是完全不同的算法——因为基本类型数组里存的是裸的数值,没有携带任何\"原始位置\"之外的额外信息,稳定性这个概念对它就没有实际意义,所以 JDK 才敢在基本类型数组上用不稳定但通常更快的快排。"}}},{"note":"稳定排序的真实实际用途:先按姓名排一次序(得到字母顺序),再对同一个 list 按优先级做第二次排序(稳定排序):真实结果里,相同优先级的元素之间,真实保留了第一次按姓名排序后的顺序(也就是字母顺序)——这正是\"多级排序\"最经典的真实实现技巧:反复用稳定排序,后一次排序的 key 优先级更高,但同 key 内部顺序由前一次排序结果真实决定,不需要写复杂的多字段比较器。","s":{"kv":{"items":[["按priority排序后的顺序","[b:p1 d:p1 f:p1 a:p2 c:p2 e:p2]"],["priority=1组 / priority=2组 相对顺序是否保持","true / true(真实稳定排序)"],["Arrays.sort(Object[]) / Arrays.sort(int[])真实所用算法","TimSort(稳定) / 双轴快速排序(不保证稳定,基本类型无所谓)"],["先按name排 / 再按priority稳定排(组内顺序)","组内真实保留了按name排序后的字母顺序"]],"hl":["先按name排 / 再按priority稳定排(组内顺序)"]},"info":{"text":"稳定排序的真实实际用途:先按姓名排一次序(得到字母顺序),再对同一个 list 按优先级做第二次排序(稳定排序):真实结果里,相同优先级的元素之间,真实保留了第一次按姓名排序后的顺序(也就是字母顺序)——这正是\"多级排序\"最经典的真实实现技巧:反复用稳定排序,后一次排序的 key 优先级更高,但同 key 内部顺序由前一次排序结果真实决定,不需要写复杂的多字段比较器。"}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1000); };
+go(0);
+})();
+</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文全部排序结果均在本机真实运行 Java 17 得到,<span class="mono">Arrays.sort(Object[])</span>/<span class="mono">Collections.sort</span> 底层都是 TimSort,行为一致。</li>
+      <li>和<a href="java-mutable-hashmap-key.html" target="_blank" rel="noopener">HashMap 可变 key</a> 那篇一样,都是"对象身份 vs 值相等"这个话题下的真实验证。</li>
+      <li>没有涉及:TimSort 内部合并相邻有序段(run)的具体算法细节、双轴快速排序对基本类型数组的分区策略——这些留给系列后面按需再写。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="java-arrays-aslist.html" target="_blank" rel="noopener" style="text-decoration:none; color:inherit;">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">Arrays.asList() 真实是个固定大小的视图:改它真的会改到原始数组</div>
+    </div>
+    <div style="font-size:1.5rem;">→</div>
+  </a>
+</section>
+
+</div>
+<footer>Java 内部原理 · 排序稳定性 · 数据来自本机 Java 17 实验</footer>
+</body>
+</html>

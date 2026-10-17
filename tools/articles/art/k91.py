@@ -1,0 +1,25 @@
+from lib import *
+S = SS('k91')
+F1 = [['基线', 'dbSize 0.8 MiB'], ['写 200 个 100KB key', '+20.3 MiB'], ['revision', '144664 → 144893']]
+F2 = [['覆盖写 3 遍', 'dbSize 79.2 MiB'], ['有效数据', '约 19.1 MiB'], ['--rev 旧版本', '还能读到']]
+F3 = [['compact 145573', ''], ['读旧 rev', 'required revision has been compacted'], ['dbSizeInUse', '77.7 → 20.0 MiB'], ['dbSize', '79.5 MiB 不变']]
+F4 = [['defrag', '0.3 秒'], ['dbSize', '79.5 → 20.0 MiB'], ['删测试 key + compact + defrag', '回到 0.8 MiB']]
+PANELS = [('f', 'flow', 'etcd 空间回收'), ('t', 'term', '实测输出'), ('kv', 'kv', '要点')]
+steps = [
+    step("先清空测试 key、compact、defrag 得到基线:dbSize=0.8 MiB、dbSizeInUse=0.7 MiB(开头先清空测试 key、compact、defrag)。往 etcd 里写 200 个 100KB 的 key(17 秒):dbSize 涨到 21.0 MiB(+20.3 MiB),dbSizeInUse=20.3 MiB;revision 144664 → 144893(+229:200 次写,其余是集群自己的写入)。kube-apiserver 记下的最近压缩位置 compact_rev_key=142537,落后于当前 revision。", f=fl(F1, cur=[1], done=[0, 2]), t=tl(S(1), mark=lidx(S(1), '写 200 个 100KB'), done=lidx(S(1), 'revision 144664')), kv=KV([['revision', '全局递增,每次写 +1'], ['dbSize', 'bbolt 文件大小'], ['dbSizeInUse', '文件里实际在用的部分']], ['revision'])),
+    step("把同一批 key 覆盖写 3 遍:dbSize=79.2 MiB(+58.2 MiB),dbSizeInUse=77.7 MiB,revision 144893 → 145573。有效数据其实只有 200 个 key 约 19.1 MiB,其余都是旧版本。用 --rev=144694(第一遍写入时)读 /k91/0000 还能读到 100000 字节——旧版本都在,这是 watch 与一致性读的基础,也是空间的来源。", f=fl(F2, cur=[0], mark=[1], done=[2]), t=tl(S(2), mark=lidx(S(2), '覆盖写 3 遍后'), done=lidx(S(2), '--rev=')), b=bars([['有效数据', 19.1, '19.1 MiB'], ['dbSizeInUse', 77.7, '77.7 MiB']], 80, done=[0], mark=[1]), kv=KV([['MVCC', '写一次留一个版本'], ['旧版本', '在 compact 之前一直占空间'], ['频繁更新的对象', 'Lease、Event、Node status 都是空间大户']], ['MVCC'])),
+    step("etcdctl compact 145573:compacted revision 145573。再读 --rev=144694:required revision has been compacted。dbSizeInUse 从 77.7 降到 20.0 MiB(降了 57.7 MiB),但 dbSize 仍是 79.5 MiB——旧版本占的页被标记为空闲、可复用,但 bbolt 文件本身不会缩小。", f=fl(F3, cur=[0], done=[1, 2], mark=[3]), t=tl(S(3), mark=lidx(S(3), 'etcdctl compact', '再读'), done=lidx(S(3), 'compact 之后')), kv=KV([['compact', '丢弃旧版本,不缩文件'], ['空闲页可复用', '新写入先填满它们'], ['dbSize 不降', '所以监控要看 dbSizeInUse']], ['compact'])),
+    step("etcdctl defrag(0.3 秒;大库会明显更久,期间这个成员读写会被阻塞):dbSize 79.5 → 20.0 MiB,与 dbSizeInUse 一致。把测试 key 删掉再 compact + defrag,dbSize 回到 0.8 MiB。etcd 的启动参数里没有设 quota-backend-bytes 和 auto-compaction,用默认值(db 配额 2 GiB;etcd 自己不自动压缩,由 kube-apiserver 每 5 分钟压缩一次)。", f=fl(F4, cur=[0], done=[1, 2]), t=tl(S(4), mark=lidx(S(4), 'etcdctl defrag'), done=lidx(S(4), '把测试 key 删掉后', 'quota-backend-bytes')), kv=KV([['defrag', '重写 db 文件,真正归还空间'], ['代价', '会阻塞该成员,逐个成员做'], ['配额', '超过 quota 会进入只读告警(本文未验证)']], ['defrag'])),
+]
+A = mkartk('k91', 91, 'Kubernetes,etcd,compaction,defrag,MVCC,存储,真实验证,动画演示',
+    '在 kind 控制面的 etcd 上实测空间回收:写 200 个 100KB 的 key 后 dbSize 涨 20.3 MiB;同一批 key 覆盖写 3 遍后 dbSize 79.2 MiB 而有效数据只有约 19.1 MiB,旧版本还能用 --rev 读到;compact 之后旧版本读不到(required revision has been compacted),dbSizeInUse 降到 20.0 MiB 但 dbSize 不变;defrag 才把 dbSize 缩回 20.0 MiB。',
+    'etcd 为什么越用越大?删了数据文件却不变小?compact 和 defrag 各做什么?这篇往 etcd 里写入 100KB 的 key,覆盖三遍,再依次 compact、defrag,把 dbSize 和 dbSizeInUse 的变化逐步量出来。',
+    [('79.5 → 20.0 MiB', 'defrag 之后 dbSize 的变化;compact 之前 dbSize 保持 79.5 MiB 不变'), ('77.7 → 20.0 MiB', 'compact 之后 dbSizeInUse 的变化'), ('19.1 MiB', '200 个 100KB 的 key 的有效数据量,覆盖写 3 遍后文件却是 79.2 MiB')],
+    [('写入:revision 与文件一起长', '<p>基线(清空测试 key、compact、defrag 之后)<code>dbSize=0.8 MiB</code>。往 etcd 写 200 个 100KB 的 key(17 秒):<code>dbSize</code> 涨到 21.0 MiB(+20.3 MiB),<code>revision</code> 从 144664 到 144893(+229,其中 200 次是我们的写,其余是集群自己的写入)。kube-apiserver 记下的最近压缩位置 <code>compact_rev_key</code> 是 142537,落后于当前 revision 一小段。</p>'),
+     ('MVCC:写一次留一个版本', '<p>把同一批 key 覆盖写 3 遍:<code>dbSize</code> 79.2 MiB,<code>dbSizeInUse</code> 77.7 MiB,<code>revision</code> 到 145573,而有效数据其实只有约 19.1 MiB——其余都是旧版本。用 <code>--rev</code> 读第一遍写入时的 <code>/k91/0000</code> 还能读到 100000 字节:旧版本都在,这是 watch 与一致性读的基础,也是空间的来源。Lease、Event、Node status 这类频繁更新的对象最容易吃空间。</p>'),
+     ('compact:丢旧版本,不缩文件', '<p><code>etcdctl compact 145573</code> 之后,再读旧 revision 得到 <code>required revision has been compacted</code>。<code>dbSizeInUse</code> 从 77.7 降到 20.0 MiB,但 <code>dbSize</code> 仍是 79.5 MiB——旧版本占的页被标记为空闲、可以复用,可是 bbolt 文件本身不会缩小。监控磁盘空间时要看 <code>dbSizeInUse</code> 与 <code>dbSize</code> 的差。kube-apiserver 默认每 5 分钟做一次压缩,etcd 自己没有开自动压缩。</p>'),
+     ('defrag:真正归还', '<p><code>etcdctl defrag</code>(0.3 秒;大库会久得多,期间该成员的读写会被阻塞)之后 <code>dbSize</code> 从 79.5 缩到 20.0 MiB,和 <code>dbSizeInUse</code> 一致。把测试 key 删掉再 compact + defrag,<code>dbSize</code> 回到 0.8 MiB。etcd 启动参数里没设 <code>quota-backend-bytes</code>(默认配额 2 GiB),超过配额会进入告警、只读状态,所以磁盘空间要靠定期 compact 与 defrag 来管理。</p>')],
+    steps,
+    [ENV_K + '。三节点 kind 集群 kx-main(Kubernetes v1.37.0)的单成员 etcd;测试 key 写在 /k91/ 前缀下,不是 Kubernetes 的 key,实验结束后已删除并 compact + defrag;值是 100000 个随机字母数字字符,用 kubectl exec -i 的标准输入传给 etcdctl put;etcdctl endpoint status -w json 读 dbSize / dbSizeInUse / revision;每种情形各一次',
+     '没有验证:多成员 etcd 的逐个 defrag 与 leader 影响;quota 超限后的 NOSPACE 告警与 alarm disarm;etcd 的 --auto-compaction-mode / retention;kube-apiserver 压缩的 --etcd-compaction-interval 调整;大库(GB 级)defrag 的耗时;快照备份与 compaction 的关系;watch 过期(见 k7)与压缩的关系'],
+    'etcd 空间回收', PANELS)

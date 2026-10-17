@@ -1,0 +1,550 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>Authenticator:集中处理网络认证挑战</title>
+<meta name="description" content="在 JDK 21 上用本机 HTTP 服务与代理验证 java.net.Authenticator:HttpURLConnection 的凭证按主机缓存、错误口令 20 次后 401、URL 里的 userinfo 不被使用;HttpClient 限制 3 次并抛 IOException,不使用全局 Authenticator;Digest 的 MD5 默认被拒绝(需要 http.auth.digest.reEnabledAlgorithms),HttpClient 不支持 Digest;代理认证的请求者类型 PROXY。">
+<link rel="canonical" href="https://bigywater.tech/java-authenticator.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Authenticator:集中处理网络认证挑战">
+<meta property="og:description" content="在 JDK 21 上用本机 HTTP 服务与代理验证 java.net.Authenticator:HttpURLConnection 的凭证按主机缓存、错误口令 20 次后 401、URL 里的 userinfo 不被使用;HttpClient 限制 3 次并抛 IOException,不使用全局 Authenticator;Digest 的 MD5 默认被拒绝(需要 http.auth.digest.reEnabledAlgorithms),HttpClient 不支持 Digest;代理认证的请求者类型 PROXY。">
+<meta property="og:url" content="https://bigywater.tech/java-authenticator.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Authenticator:集中处理网络认证挑战">
+<meta name="twitter:description" content="在 JDK 21 上用本机 HTTP 服务与代理验证 java.net.Authenticator:HttpURLConnection 的凭证按主机缓存、错误口令 20 次后 401、URL 里的 userinfo 不被使用;HttpClient 限制 3 次并抛 IOException,不使用全局 Authenticator;Digest 的 MD5 默认被拒绝(需要 http.auth.digest.reEnabledAlgorithms),HttpClient 不支持 Digest;代理认证的请求者类型 PROXY。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">1867</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">364</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#B85C00; --series-c-soft:#FBE7D1;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#F29A4A; --series-c-soft:#3B2208;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#F29A4A; --series-c-soft:#3B2208;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Java · 364</div>
+  <h1>Authenticator:集中处理网络认证挑战</h1>
+  <p>遇到 401 或 407 时 Java 会怎么处理?谁来提供口令、会重试几次、凭证被缓存多久、全局设置会影响谁?这篇用本机的真实 HTTP 服务逐项验证。</p>
+  <div class="hero-fact">
+<div><div class="num">20 vs 4</div><div class="lbl">错误口令时 Authenticator 被调用的次数:HttpURLConnection(之后返回 401)与 HttpClient(之后抛 IOException,限制 3 次重试)</div></div><div><div class="num">MD5 被拒绝</div><div class="lbl">JDK 21 默认拒绝 algorithm=MD5 的 Digest 认证(Authenticator 仍被调用,但不发送凭证)</div></div><div><div class="num">HttpClient 不用</div><div class="lbl">Authenticator.setDefault 对 java.net.http.HttpClient 无效,需要 HttpClient.Builder.authenticator</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="java-sasl.html">Java SASL:可插拔的认证与安全层</a></div>
+<section>
+  <h2>HttpURLConnection + Authenticator</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [urlconn]
+    没有设置 Authenticator:401
+          服务端记录:GET /secret → 无凭证 → 401
+    Authenticator 返回正确口令:200;getPasswordAuthentication 被调用 1 次
+        请求者信息:type=SERVER,scheme=basic,prompt(realm)=realm-b,host=127.0.0.1,port&gt;0=true,protocol=http,site=&lt;addr&gt;,url=/secret,thread=main
+          服务端记录:GET /secret → 无凭证 → 401
+          服务端记录:GET /secret → Basic 凭证正确 → 200
+    同一个 URL 再请求一次:200;累计调用 1 次
+          服务端记录:GET /secret → Basic 凭证正确 → 200
+    同一主机另一个路径 /other/x:200;累计调用 1 次
+          服务端记录:GET /other/x → Basic 凭证正确 → 200
+    (新服务)Authenticator 一直返回错误口令:最终状态 401;getPasswordAuthentication 被调用 20 次
+          服务端记录:GET /secret → 无凭证 → 401
+          服务端记录:GET /secret → Basic 凭证错误 → 401
+          服务端记录:GET /secret → Basic 凭证错误 → 401
+          服务端记录:GET /secret → Basic 凭证错误 → 401
+          服务端记录:GET /secret → Basic 凭证错误 → 401
+          服务端记录:GET /secret → Basic 凭证错误 → 401
+          服务端记录:GET /secret → Basic 凭证错误 → 401
+          服务端记录:GET /secret → Basic 凭证错误 → 401
+          服务端记录:GET /secret → Basic 凭证错误 → 401
+          服务端记录:GET /secret → Basic 凭证错误 → 401
+          服务端记录:GET /secret → Basic 凭证错误 → 401
+          服务端记录:GET /secret → Basic 凭证错误 → 401
+          服务端记录:GET /secret → Basic 凭证错误 → 401
+          服务端记录:GET /secret → Basic 凭证错误 → 401
+          服务端记录:GET /secret → Basic 凭证错误 → 401
+          服务端记录:GET /secret → Basic 凭证错误 → 401
+          服务端记录:GET /secret → Basic 凭证错误 → 401
+          服务端记录:GET /secret → Basic 凭证错误 → 401
+          服务端记录:GET /secret → Basic 凭证错误 → 401
+          服务端记录:GET /secret → Basic 凭证错误 → 401
+    (新服务)Authenticator 返回 null:最终状态 401;调用 1 次
+          服务端记录:GET /secret → 无凭证 → 401
+    (新服务)URL 里带 userinfo(amy:s3cret@):401
+          服务端记录:GET /userinfo → 无凭证 → 401
+    手工设置 Authorization 头:200
+          服务端记录:GET /secret4 → Basic 凭证正确 → 200
+    (新服务)先用正确口令认证成功,再换成返回错误口令的 Authenticator,请求 /b:200
+          服务端记录:GET /a → 无凭证 → 401
+          服务端记录:GET /a → Basic 凭证正确 → 200
+          服务端记录:GET /b → Basic 凭证正确 → 200</pre></div>
+</section>
+<section>
+  <h2>HttpClient + authenticator</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [client]
+    HttpClient(authenticator):200;调用 1 次;请求者:type=SERVER,scheme=basic,prompt(realm)=realm-b,host=127.0.0.1,port&gt;0=true,protocol=http,site=null,url=/secret,thread=HttpClient-N-Worker-N
+          服务端记录:GET /secret → 无凭证 → 401
+          服务端记录:GET /secret → Basic 凭证正确 → 200
+    同一个 HttpClient 同一个 URL 再请求:200;累计调用 1 次
+          服务端记录:GET /secret → Basic 凭证正确 → 200
+    同一个 HttpClient 更深的路径 /secret/sub/deeper:200;累计调用 1 次
+          服务端记录:GET /secret/sub/deeper → Basic 凭证正确 → 200
+    同一个 HttpClient 兄弟路径 /elsewhere:200;累计调用 1 次
+          服务端记录:GET /elsewhere → Basic 凭证正确 → 200
+    没有 authenticator 的 HttpClient:401
+          服务端记录:GET /secret → 无凭证 → 401
+    只有 Authenticator.setDefault、HttpClient 没设 authenticator:401(HttpClient 不使用全局默认 Authenticator)
+          服务端记录:GET /secret → 无凭证 → 401
+    手工加 Authorization 头(预先认证):200
+          服务端记录:GET /secret → Basic 凭证正确 → 200
+    sendAsync 时 getPasswordAuthentication 所在线程:HttpClient-N-Worker-N
+    (新服务)authenticator 一直返回错误口令:IOException: too many authentication attempts. Limit: 3;调用 4 次;耗时 4 ms
+          服务端记录:GET /x → 无凭证 → 401
+          服务端记录:GET /x → Basic 凭证错误 → 401
+          服务端记录:GET /x → Basic 凭证错误 → 401
+          服务端记录:GET /x → Basic 凭证错误 → 401
+          服务端记录:GET /x → Basic 凭证错误 → 401
+    (新服务)authenticator 返回 null:IOException: No credentials provided;调用 1 次
+          服务端记录:GET /x → 无凭证 → 401</pre></div>
+</section>
+<section>
+  <h2>Digest 认证</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [digest]
+    HttpURLConnection + Digest(服务端 algorithm=MD5):401;Authenticator 调用 1 次;请求者:type=SERVER,scheme=digest,prompt(realm)=realm-d,host=127.0.0.1,port&gt;0=true,protocol=http,site=&lt;addr&gt;,url=/d1,thread=main
+          服务端记录:GET /d1 → 无凭证 → 401
+        HttpClient + 同一个 Digest 服务:401;authenticator 调用 0 次
+          服务端记录:GET /hc → 无凭证 → 401
+    HttpURLConnection + Digest(服务端 algorithm=SHA-256):200;Authenticator 调用 1 次;请求者:type=SERVER,scheme=digest,prompt(realm)=realm-d,host=127.0.0.1,port&gt;0=true,protocol=http,site=&lt;addr&gt;,url=/d1,thread=main
+          服务端记录:GET /d1 → 无凭证 → 401
+          服务端记录:GET /d1 → Digest 凭证(algorithm=SHA-256)正确(nc=00000001) → 200
+        同一服务再请求 /d2:200;累计调用 1 次
+          服务端记录:GET /d2 → 无凭证 → 401
+          服务端记录:GET /d2 → Digest 凭证(algorithm=SHA-256)正确(nc=00000002) → 200
+        再请求 /d3:200
+          服务端记录:GET /d3 → 无凭证 → 401
+          服务端记录:GET /d3 → Digest 凭证(algorithm=SHA-256)正确(nc=00000003) → 200
+        HttpClient + 同一个 Digest 服务:401;authenticator 调用 0 次
+          服务端记录:GET /hc → 无凭证 → 401
+  Oct 04, 2026 3:50:08 AM sun.net.www.protocol.http.DigestAuthentication log
+  INFO: Rejecting digest authentication with insecure algorithm: MD5 This constraint may be relaxed by setting the "http.auth.digest.reEnabledAlgorithms" system property.
+  [digest](JVM 参数 -Dhttp.auth.digest.reEnabledAlgorithms=MD5)
+    HttpURLConnection + Digest(服务端 algorithm=MD5):200;Authenticator 调用 1 次;请求者:type=SERVER,scheme=digest,prompt(realm)=realm-d,host=127.0.0.1,port&gt;0=true,protocol=http,site=&lt;addr&gt;,url=/d1,thread=main
+          服务端记录:GET /d1 → 无凭证 → 401
+          服务端记录:GET /d1 → Digest 凭证(algorithm=MD5)正确(nc=00000001) → 200
+        HttpClient + 同一个 Digest 服务:401;authenticator 调用 0 次
+          服务端记录:GET /hc → 无凭证 → 401
+    HttpURLConnection + Digest(服务端 algorithm=SHA-256):200;Authenticator 调用 1 次;请求者:type=SERVER,scheme=digest,prompt(realm)=realm-d,host=127.0.0.1,port&gt;0=true,protocol=http,site=&lt;addr&gt;,url=/d1,thread=main
+          服务端记录:GET /d1 → 无凭证 → 401
+          服务端记录:GET /d1 → Digest 凭证(algorithm=SHA-256)正确(nc=00000001) → 200
+        同一服务再请求 /d2:200;累计调用 1 次
+          服务端记录:GET /d2 → 无凭证 → 401
+          服务端记录:GET /d2 → Digest 凭证(algorithm=SHA-256)正确(nc=00000002) → 200
+        再请求 /d3:200
+          服务端记录:GET /d3 → 无凭证 → 401
+          服务端记录:GET /d3 → Digest 凭证(algorithm=SHA-256)正确(nc=00000003) → 200
+        HttpClient + 同一个 Digest 服务:401;authenticator 调用 0 次
+          服务端记录:GET /hc → 无凭证 → 401</pre></div>
+</section>
+<section>
+  <h2>代理认证</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [proxy]
+    经代理、没有 Authenticator:407
+          服务端记录:代理收到 GET http://127.0.0.1:62395/via-proxy,Proxy-Authorization = 无 → 407
+    经代理、Authenticator 提供代理口令:200;调用 1 次;请求者:type=PROXY,scheme=basic,prompt(realm)=proxy-realm,host=127.0.0.1,port&gt;0=true,protocol=http,site=&lt;addr&gt;,url=/via-proxy2,thread=main
+          服务端记录:代理收到 GET http://127.0.0.1:62395/via-proxy2,Proxy-Authorization = 无 → 407
+          服务端记录:代理收到 GET http://127.0.0.1:62395/via-proxy2,Proxy-Authorization = 正确 → 转发
+          服务端记录:目标服务器收到 GET /via-proxy2,Proxy-Authorization = null
+    按 RequestorType 区分(PROXY 返回代理口令,SERVER 返回别的)请求 /via-proxy3:200
+          服务端记录:代理收到 GET http://127.0.0.1:62395/via-proxy3,Proxy-Authorization = 正确 → 转发
+          服务端记录:目标服务器收到 GET /via-proxy3,Proxy-Authorization = null
+    HttpClient 经代理 + authenticator:200;调用 1 次;请求者:type=PROXY,scheme=basic,prompt(realm)=proxy-realm,host=127.0.0.1,port&gt;0=true,protocol=http,site=null,url=/via-proxy4,thread=HttpClient-N-Worker-N
+          服务端记录:代理收到 GET http://127.0.0.1:62395/via-proxy4,Proxy-Authorization = 无 → 407
+          服务端记录:代理收到 GET http://127.0.0.1:62395/via-proxy4,Proxy-Authorization = 正确 → 转发
+          服务端记录:目标服务器收到 GET /via-proxy4,Proxy-Authorization = null
+    HttpClient 第二次经代理请求:200;累计调用 1 次
+          服务端记录:代理收到 GET http://127.0.0.1:62395/via-proxy5,Proxy-Authorization = 正确 → 转发
+          服务端记录:目标服务器收到 GET /via-proxy5,Proxy-Authorization = null</pre></div>
+</section>
+<section>
+  <h2>作用范围</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [scope]
+    全局 Authenticator 按端口返回不同口令:服务 1 → 200;服务 2 → 200
+          服务端记录:GET /a → 无凭证 → 401
+          服务端记录:GET /a → Basic 凭证正确 → 200
+          服务端记录:GET /b → 无凭证 → 401
+          服务端记录:GET /b → Basic 凭证正确 → 200
+    两个线程并发访问两个服务(路径 /t 与之前同主机,可能已有缓存):200 / 200(全局 Authenticator 对所有线程生效)
+    两个 HttpClient 各带自己的 authenticator:200 / 200
+    用 c1 的 authenticator(amy)访问服务 6(要 bob):IOException: too many authentication attempts. Limit: 3
+          服务端记录:GET /d → 无凭证 → 401
+          服务端记录:GET /d → Basic 凭证错误 → 401
+          服务端记录:GET /d → Basic 凭证错误 → 401
+          服务端记录:GET /d → Basic 凭证错误 → 401
+          服务端记录:GET /d → Basic 凭证错误 → 401
+    静态方法 Authenticator.requestPasswordAuthentication(JDK 9 起 deprecated):x
+    Authenticator.getDefault()(JDK 14+)= null</pre></div>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">Authenticator</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "本机用 com.sun.net.httpserver 起一个要求 Basic 认证的服务,HttpURLConnection + Authenticator.setDefault:没有 Authenticator → 401(服务端只收到一次「无凭证」请求)。设置返回正确口令的 Authenticator:服务端先收到无凭证的 401,再收到带 Basic 凭证的请求得到 200,getPasswordAuthentication 被调用 1 次,请求者信息是 type=SERVER、scheme=basic、prompt(realm)=realm-b、host=127.0.0.1、protocol=http、url=/secret、线程 main。同一个 URL 再请求一次、同一主机的另一个路径 /other/x:服务端都直接收到带凭证的请求(预先发送),累计调用仍是 1 次——凭证按主机缓存。", "s": {"t": {"lines": ["  [urlconn]", "    没有设置 Authenticator:401", "          服务端记录:GET /secret → 无凭证 → 401", "    Authenticator 返回正确口令:200;getPasswordAuthentication 被调用 1 次", "        请求者信息:type=SERVER,scheme=basic,prompt(realm)=realm-b,host=127.0.0.1,port>0=true,protocol=http,site=<addr>,url=/secret,thread=main", "          服务端记录:GET /secret → 无凭证 → 401", "          服务端记录:GET /secret → Basic 凭证正确 → 200", "    同一个 URL 再请求一次:200;累计调用 1 次", "          服务端记录:GET /secret → Basic 凭证正确 → 200", "    同一主机另一个路径 /other/x:200;累计调用 1 次", "          服务端记录:GET /other/x → Basic 凭证正确 → 200", "    (新服务)Authenticator 一直返回错误口令:最终状态 401;getPasswordAuthentication 被调用 20 次", "          服务端记录:GET /secret → 无凭证 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "    (新服务)Authenticator 返回 null:最终状态 401;调用 1 次", "          服务端记录:GET /secret → 无凭证 → 401", "    (新服务)URL 里带 userinfo(amy:s3cret@):401", "          服务端记录:GET /userinfo → 无凭证 → 401", "    手工设置 Authorization 头:200", "          服务端记录:GET /secret4 → Basic 凭证正确 → 200", "    (新服务)先用正确口令认证成功,再换成返回错误口令的 Authenticator,请求 /b:200", "          服务端记录:GET /a → 无凭证 → 401", "          服务端记录:GET /a → Basic 凭证正确 → 200", "          服务端记录:GET /b → Basic 凭证正确 → 200"], "cur": [], "mark": [], "done": []}, "done": [1, 3, 4], "mark": [7, 9], "kv": {"items": [["首次请求", "401 → Authenticator → 带凭证重试 → 200"], ["同主机后续请求", "预先带凭证,Authenticator 不再被调用"]], "hl": ["同主机后续请求"]}}}, {"note": "Authenticator 一直返回错误口令(新服务):HttpURLConnection 最终状态 401,getPasswordAuthentication 被调用 20 次,服务端收到 1 次无凭证 + 20 次错误凭证的请求,不会无限循环。Authenticator 返回 null → 立刻 401,只调用 1 次。URL 里写 amy:s3cret@ 的 userinfo 没有被用于认证(服务端收到的是「无凭证」,状态 401);手工设置 Authorization 头 → 200。先用正确口令认证成功,再换成返回错误口令的 Authenticator,请求同主机 /b 仍是 200——用的是缓存的旧凭证,没有再调用新的 Authenticator。", "s": {"t": {"lines": ["  [urlconn]", "    没有设置 Authenticator:401", "          服务端记录:GET /secret → 无凭证 → 401", "    Authenticator 返回正确口令:200;getPasswordAuthentication 被调用 1 次", "        请求者信息:type=SERVER,scheme=basic,prompt(realm)=realm-b,host=127.0.0.1,port>0=true,protocol=http,site=<addr>,url=/secret,thread=main", "          服务端记录:GET /secret → 无凭证 → 401", "          服务端记录:GET /secret → Basic 凭证正确 → 200", "    同一个 URL 再请求一次:200;累计调用 1 次", "          服务端记录:GET /secret → Basic 凭证正确 → 200", "    同一主机另一个路径 /other/x:200;累计调用 1 次", "          服务端记录:GET /other/x → Basic 凭证正确 → 200", "    (新服务)Authenticator 一直返回错误口令:最终状态 401;getPasswordAuthentication 被调用 20 次", "          服务端记录:GET /secret → 无凭证 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "          服务端记录:GET /secret → Basic 凭证错误 → 401", "    (新服务)Authenticator 返回 null:最终状态 401;调用 1 次", "          服务端记录:GET /secret → 无凭证 → 401", "    (新服务)URL 里带 userinfo(amy:s3cret@):401", "          服务端记录:GET /userinfo → 无凭证 → 401", "    手工设置 Authorization 头:200", "          服务端记录:GET /secret4 → Basic 凭证正确 → 200", "    (新服务)先用正确口令认证成功,再换成返回错误口令的 Authenticator,请求 /b:200", "          服务端记录:GET /a → 无凭证 → 401", "          服务端记录:GET /a → Basic 凭证正确 → 200", "          服务端记录:GET /b → Basic 凭证正确 → 200"], "cur": [], "mark": [], "done": []}, "done": [11, 32], "mark": [11, 34, 36, 38], "b": {"items": [["错误口令:Authenticator 调用", 20, "20 次"], ["返回 null:调用", 1, "1 次"]], "max": 20, "cur": [], "mark": [], "done": [0, 1]}, "kv": {"items": [["一直返回错误口令", "20 次后放弃,最终 401"], ["URL 里的 userinfo", "不用于认证"], ["缓存", "认证成功后换 Authenticator 仍用旧凭证"]], "hl": ["URL 里的 userinfo"]}}}, {"note": "java.net.http.HttpClient + 自己的 authenticator:首次 401 → 调用 authenticator(请求者 type=SERVER、scheme=basic、realm-b、线程 HttpClient-N-Worker-N,site 为 null)→ 带凭证重试 200,共 2 个请求;同一个 HttpClient 再请求同一个 URL、更深的路径 /secret/sub/deeper、兄弟路径 /elsewhere:都是预先带凭证的一次请求,累计调用 1 次。没有 authenticator 的 HttpClient → 401;只有 Authenticator.setDefault 而 HttpClient 没设 authenticator → 401,HttpClient 不使用全局默认 Authenticator。sendAsync 同样在 HttpClient 的 Worker 线程里调用 authenticator。", "s": {"t": {"lines": ["  [client]", "    HttpClient(authenticator):200;调用 1 次;请求者:type=SERVER,scheme=basic,prompt(realm)=realm-b,host=127.0.0.1,port>0=true,protocol=http,site=null,url=/secret,thread=HttpClient-N-Worker-N", "          服务端记录:GET /secret → 无凭证 → 401", "          服务端记录:GET /secret → Basic 凭证正确 → 200", "    同一个 HttpClient 同一个 URL 再请求:200;累计调用 1 次", "          服务端记录:GET /secret → Basic 凭证正确 → 200", "    同一个 HttpClient 更深的路径 /secret/sub/deeper:200;累计调用 1 次", "          服务端记录:GET /secret/sub/deeper → Basic 凭证正确 → 200", "    同一个 HttpClient 兄弟路径 /elsewhere:200;累计调用 1 次", "          服务端记录:GET /elsewhere → Basic 凭证正确 → 200", "    没有 authenticator 的 HttpClient:401", "          服务端记录:GET /secret → 无凭证 → 401", "    只有 Authenticator.setDefault、HttpClient 没设 authenticator:401(HttpClient 不使用全局默认 Authenticator)", "          服务端记录:GET /secret → 无凭证 → 401", "    手工加 Authorization 头(预先认证):200", "          服务端记录:GET /secret → Basic 凭证正确 → 200", "    sendAsync 时 getPasswordAuthentication 所在线程:HttpClient-N-Worker-N", "    (新服务)authenticator 一直返回错误口令:IOException: too many authentication attempts. Limit: 3;调用 4 次;耗时 4 ms", "          服务端记录:GET /x → 无凭证 → 401", "          服务端记录:GET /x → Basic 凭证错误 → 401", "          服务端记录:GET /x → Basic 凭证错误 → 401", "          服务端记录:GET /x → Basic 凭证错误 → 401", "          服务端记录:GET /x → Basic 凭证错误 → 401", "    (新服务)authenticator 返回 null:IOException: No credentials provided;调用 1 次", "          服务端记录:GET /x → 无凭证 → 401"], "cur": [], "mark": [], "done": []}, "done": [1, 4, 6, 8], "mark": [10, 12, 16], "kv": {"items": [["首次", "401 → authenticator → 重试 200(2 个请求)"], ["之后", "预先带凭证,authenticator 调用累计 1 次"], ["全局 Authenticator.setDefault", "HttpClient 不用"]], "hl": ["全局 Authenticator.setDefault"]}}}, {"note": "HttpClient 的错误口令与 null:authenticator 一直返回错误口令 → IOException: too many authentication attempts. Limit: 3,getPasswordAuthentication 被调用 4 次,服务端收到 1 次无凭证 + 4 次错误凭证(共 5 个请求),4 ms 结束;authenticator 返回 null → IOException: No credentials provided,调用 1 次。与 HttpURLConnection 的 20 次后返回 401 不同:HttpClient 限制 3 次并抛异常而不是返回 401 响应。", "s": {"t": {"lines": ["  [client]", "    HttpClient(authenticator):200;调用 1 次;请求者:type=SERVER,scheme=basic,prompt(realm)=realm-b,host=127.0.0.1,port>0=true,protocol=http,site=null,url=/secret,thread=HttpClient-N-Worker-N", "          服务端记录:GET /secret → 无凭证 → 401", "          服务端记录:GET /secret → Basic 凭证正确 → 200", "    同一个 HttpClient 同一个 URL 再请求:200;累计调用 1 次", "          服务端记录:GET /secret → Basic 凭证正确 → 200", "    同一个 HttpClient 更深的路径 /secret/sub/deeper:200;累计调用 1 次", "          服务端记录:GET /secret/sub/deeper → Basic 凭证正确 → 200", "    同一个 HttpClient 兄弟路径 /elsewhere:200;累计调用 1 次", "          服务端记录:GET /elsewhere → Basic 凭证正确 → 200", "    没有 authenticator 的 HttpClient:401", "          服务端记录:GET /secret → 无凭证 → 401", "    只有 Authenticator.setDefault、HttpClient 没设 authenticator:401(HttpClient 不使用全局默认 Authenticator)", "          服务端记录:GET /secret → 无凭证 → 401", "    手工加 Authorization 头(预先认证):200", "          服务端记录:GET /secret → Basic 凭证正确 → 200", "    sendAsync 时 getPasswordAuthentication 所在线程:HttpClient-N-Worker-N", "    (新服务)authenticator 一直返回错误口令:IOException: too many authentication attempts. Limit: 3;调用 4 次;耗时 4 ms", "          服务端记录:GET /x → 无凭证 → 401", "          服务端记录:GET /x → Basic 凭证错误 → 401", "          服务端记录:GET /x → Basic 凭证错误 → 401", "          服务端记录:GET /x → Basic 凭证错误 → 401", "          服务端记录:GET /x → Basic 凭证错误 → 401", "    (新服务)authenticator 返回 null:IOException: No credentials provided;调用 1 次", "          服务端记录:GET /x → 无凭证 → 401"], "cur": [], "mark": [], "done": []}, "done": [17, 23], "mark": [17, 23], "b": {"items": [["HttpURLConnection 错误口令:Authenticator 调用", 20, "20 次"], ["HttpClient 错误口令:调用", 4, "4 次"]], "max": 20, "cur": [], "mark": [], "done": [0, 1]}, "kv": {"items": [["HttpClient 错误口令", "IOException: too many authentication attempts. Limit: 3"], ["返回 null", "IOException: No credentials provided"]], "hl": ["HttpClient 错误口令"]}}}, {"note": "Digest 认证(服务端自己实现 RFC 2617,qop=auth):服务端 algorithm=MD5 时 HttpURLConnection 最终是 401——Authenticator 被调用了 1 次(请求者 scheme=digest),但服务端只收到一次无凭证请求,没有带 Digest 凭证的第二次请求;JDK 打出 INFO “Rejecting digest authentication with insecure algorithm: MD5 … http.auth.digest.reEnabledAlgorithms”。加 -Dhttp.auth.digest.reEnabledAlgorithms=MD5 后 200(nc=00000001)。服务端 algorithm=SHA-256 默认就能认证:200;之后请求 /d2、/d3,每个请求都是「先无凭证 401、再带 Digest 凭证」两次往返(nc 递增为 00000002、00000003),Authenticator 累计只调用 1 次——Digest 没有预先认证。HttpClient 遇到 Digest 挑战:401,authenticator 调用 0 次(不支持 Digest)。", "s": {"t": {"lines": ["  [digest]", "    HttpURLConnection + Digest(服务端 algorithm=MD5):401;Authenticator 调用 1 次;请求者:type=SERVER,scheme=digest,prompt(realm)=realm-d,host=127.0.0.1,port>0=true,protocol=http,site=<addr>,url=/d1,thread=main", "          服务端记录:GET /d1 → 无凭证 → 401", "        HttpClient + 同一个 Digest 服务:401;authenticator 调用 0 次", "          服务端记录:GET /hc → 无凭证 → 401", "    HttpURLConnection + Digest(服务端 algorithm=SHA-256):200;Authenticator 调用 1 次;请求者:type=SERVER,scheme=digest,prompt(realm)=realm-d,host=127.0.0.1,port>0=true,protocol=http,site=<addr>,url=/d1,thread=main", "          服务端记录:GET /d1 → 无凭证 → 401", "          服务端记录:GET /d1 → Digest 凭证(algorithm=SHA-256)正确(nc=00000001) → 200", "        同一服务再请求 /d2:200;累计调用 1 次", "          服务端记录:GET /d2 → 无凭证 → 401", "          服务端记录:GET /d2 → Digest 凭证(algorithm=SHA-256)正确(nc=00000002) → 200", "        再请求 /d3:200", "          服务端记录:GET /d3 → 无凭证 → 401", "          服务端记录:GET /d3 → Digest 凭证(algorithm=SHA-256)正确(nc=00000003) → 200", "        HttpClient + 同一个 Digest 服务:401;authenticator 调用 0 次", "          服务端记录:GET /hc → 无凭证 → 401", "  Oct 04, 2026 3:50:08 AM sun.net.www.protocol.http.DigestAuthentication log", "  INFO: Rejecting digest authentication with insecure algorithm: MD5 This constraint may be relaxed by setting the \"http.auth.digest.reEnabledAlgorithms\" system property.", "  [digest](JVM 参数 -Dhttp.auth.digest.reEnabledAlgorithms=MD5)", "    HttpURLConnection + Digest(服务端 algorithm=MD5):200;Authenticator 调用 1 次;请求者:type=SERVER,scheme=digest,prompt(realm)=realm-d,host=127.0.0.1,port>0=true,protocol=http,site=<addr>,url=/d1,thread=main", "          服务端记录:GET /d1 → 无凭证 → 401", "          服务端记录:GET /d1 → Digest 凭证(algorithm=MD5)正确(nc=00000001) → 200", "        HttpClient + 同一个 Digest 服务:401;authenticator 调用 0 次", "          服务端记录:GET /hc → 无凭证 → 401", "    HttpURLConnection + Digest(服务端 algorithm=SHA-256):200;Authenticator 调用 1 次;请求者:type=SERVER,scheme=digest,prompt(realm)=realm-d,host=127.0.0.1,port>0=true,protocol=http,site=<addr>,url=/d1,thread=main", "          服务端记录:GET /d1 → 无凭证 → 401", "          服务端记录:GET /d1 → Digest 凭证(algorithm=SHA-256)正确(nc=00000001) → 200", "        同一服务再请求 /d2:200;累计调用 1 次", "          服务端记录:GET /d2 → 无凭证 → 401", "          服务端记录:GET /d2 → Digest 凭证(algorithm=SHA-256)正确(nc=00000002) → 200", "        再请求 /d3:200", "          服务端记录:GET /d3 → 无凭证 → 401", "          服务端记录:GET /d3 → Digest 凭证(algorithm=SHA-256)正确(nc=00000003) → 200", "        HttpClient + 同一个 Digest 服务:401;authenticator 调用 0 次", "          服务端记录:GET /hc → 无凭证 → 401"], "cur": [], "mark": [], "done": []}, "done": [1, 5, 24], "mark": [3, 10, 14, 17, 18, 22, 29, 33], "kv": {"items": [["Digest MD5(默认)", "被 JDK 拒绝,Authenticator 被调用但不发凭证"], ["加 reEnabledAlgorithms=MD5", "200"], ["Digest SHA-256", "默认可用,每个请求 2 次往返"], ["HttpClient + Digest", "401,不调用 authenticator"]], "hl": ["Digest MD5(默认)"]}}}, {"note": "代理认证:本机起一个要求 Proxy-Authorization 的 HTTP 代理(返回 407 + Proxy-Authenticate: Basic realm=\"proxy-realm\")。HttpURLConnection 经代理、没有 Authenticator → 407。设置 Authenticator 后:代理先收到无凭证的请求返回 407,再收到正确的 Proxy-Authorization 转发,请求者信息 type=PROXY、scheme=basic、prompt(realm)=proxy-realm;在 Authenticator 里按 getRequestorType() 区分(PROXY 返回代理口令,SERVER 返回别的)后,下一个请求代理直接收到正确凭证、没有 407(代理凭证已缓存)。HttpClient 经代理 + authenticator:代理先返回 407 → 同样 type=PROXY 的请求者信息,第二次经代理请求预先带凭证,累计调用 1 次。", "s": {"t": {"lines": ["  [proxy]", "    经代理、没有 Authenticator:407", "          服务端记录:代理收到 GET http://127.0.0.1:62395/via-proxy,Proxy-Authorization = 无 → 407", "    经代理、Authenticator 提供代理口令:200;调用 1 次;请求者:type=PROXY,scheme=basic,prompt(realm)=proxy-realm,host=127.0.0.1,port>0=true,protocol=http,site=<addr>,url=/via-proxy2,thread=main", "          服务端记录:代理收到 GET http://127.0.0.1:62395/via-proxy2,Proxy-Authorization = 无 → 407", "          服务端记录:代理收到 GET http://127.0.0.1:62395/via-proxy2,Proxy-Authorization = 正确 → 转发", "          服务端记录:目标服务器收到 GET /via-proxy2,Proxy-Authorization = null", "    按 RequestorType 区分(PROXY 返回代理口令,SERVER 返回别的)请求 /via-proxy3:200", "          服务端记录:代理收到 GET http://127.0.0.1:62395/via-proxy3,Proxy-Authorization = 正确 → 转发", "          服务端记录:目标服务器收到 GET /via-proxy3,Proxy-Authorization = null", "    HttpClient 经代理 + authenticator:200;调用 1 次;请求者:type=PROXY,scheme=basic,prompt(realm)=proxy-realm,host=127.0.0.1,port>0=true,protocol=http,site=null,url=/via-proxy4,thread=HttpClient-N-Worker-N", "          服务端记录:代理收到 GET http://127.0.0.1:62395/via-proxy4,Proxy-Authorization = 无 → 407", "          服务端记录:代理收到 GET http://127.0.0.1:62395/via-proxy4,Proxy-Authorization = 正确 → 转发", "          服务端记录:目标服务器收到 GET /via-proxy4,Proxy-Authorization = null", "    HttpClient 第二次经代理请求:200;累计调用 1 次", "          服务端记录:代理收到 GET http://127.0.0.1:62395/via-proxy5,Proxy-Authorization = 正确 → 转发", "          服务端记录:目标服务器收到 GET /via-proxy5,Proxy-Authorization = null"], "cur": [], "mark": [], "done": []}, "done": [1, 3, 7], "mark": [3, 10, 14], "kv": {"items": [["请求者类型", "RequestorType.PROXY(代理)与 SERVER(源服务器)要区分"], ["代理凭证", "同样被缓存,后续请求预先带上"]], "hl": ["请求者类型"]}}}, {"note": "作用范围:全局 Authenticator.setDefault 按 getRequestingPort() 对两个服务返回不同的口令,两个服务都 200,且两个线程并发访问时同样生效(全局、所有线程共用)。每个 HttpClient 各带自己的 authenticator:c1(amy)访问服务 5、c2(bob)访问服务 6 都是 200;用 c1 去访问需要 bob 的服务 6 → IOException: too many authentication attempts. Limit: 3(服务端收到 1 次无凭证 + 4 次错误凭证)。", "s": {"t": {"lines": ["  [scope]", "    全局 Authenticator 按端口返回不同口令:服务 1 → 200;服务 2 → 200", "          服务端记录:GET /a → 无凭证 → 401", "          服务端记录:GET /a → Basic 凭证正确 → 200", "          服务端记录:GET /b → 无凭证 → 401", "          服务端记录:GET /b → Basic 凭证正确 → 200", "    两个线程并发访问两个服务(路径 /t 与之前同主机,可能已有缓存):200 / 200(全局 Authenticator 对所有线程生效)", "    两个 HttpClient 各带自己的 authenticator:200 / 200", "    用 c1 的 authenticator(amy)访问服务 6(要 bob):IOException: too many authentication attempts. Limit: 3", "          服务端记录:GET /d → 无凭证 → 401", "          服务端记录:GET /d → Basic 凭证错误 → 401", "          服务端记录:GET /d → Basic 凭证错误 → 401", "          服务端记录:GET /d → Basic 凭证错误 → 401", "          服务端记录:GET /d → Basic 凭证错误 → 401", "    静态方法 Authenticator.requestPasswordAuthentication(JDK 9 起 deprecated):x", "    Authenticator.getDefault()(JDK 14+)= null"], "cur": [], "mark": [], "done": []}, "done": [1, 6], "mark": [7, 8], "kv": {"items": [["Authenticator.setDefault", "进程全局,所有线程与 HttpURLConnection 共用"], ["HttpClient.authenticator", "每个 HttpClient 独立"]], "hl": ["Authenticator.setDefault"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / OpenJDK(Temurin 17.0.20、Homebrew 21.0.12 与 27,每篇注明实际用的版本);用 javac 编译、java 直接运行,需要第三方库时用 Maven 解析依赖;计时用 System.nanoTime,数字每次运行会有小幅抖动。JDK 21.0.12;服务端与代理是本实验用 com.sun.net.httpserver 写的,Digest 的服务端按 RFC 2617(qop=auth)自行实现,不是真实的生产服务器</li><li>没有验证:HTTPS 隧道(CONNECT)时的 Basic 认证(jdk.http.auth.tunneling.disabledSchemes 默认禁用 Basic)、NTLM 与 Negotiate(需要域环境)、jdk.http.auth.proxying.disabledSchemes、HttpClient 的 jdk.httpclient.auth.retrylimit 属性调整、Authenticator 在 HTTP/2 下的行为、凭证缓存的失效时间(只观察到进程内持续有效)</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="java-database-metadata.html">
+    <div>
+      <div class="t1">下一篇 · JAVA 365</div>
+      <div class="t2">DatabaseMetaData:查询数据库与驱动能力</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Java · Authenticator:集中处理网络认证挑战 · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

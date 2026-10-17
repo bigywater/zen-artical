@@ -1,0 +1,655 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>sync:Mutex 怎么从"不公平"切换到"公平",WaitGroup 和 Once 又是怎么实现的</title>
+<meta name="description" content="本机真实 Go 1.26.6 程序,用 unsafe.Pointer 直接观测 sync.Mutex 内部状态字从正常模式翻转到饥饿模式再翻转回来的完整过程,并验证 WaitGroup 的并发耗时与 Once 的阻塞语义,对照本机标准库真实源码。">
+<link rel="canonical" href="https://bigywater.tech/go-sync.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="sync:Mutex 怎么从&quot;不公平&quot;切换到&quot;公平&quot;,WaitGroup 和 Once 又是怎么实现的">
+<meta property="og:description" content="本机真实 Go 1.26.6 程序,用 unsafe.Pointer 直接观测 sync.Mutex 内部状态字从正常模式翻转到饥饿模式再翻转回来的完整过程,并验证 WaitGroup 的并发耗时与 Once 的阻塞语义,对照本机标准库真实源码。">
+<meta property="og:url" content="https://bigywater.tech/go-sync.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="sync:Mutex 怎么从&quot;不公平&quot;切换到&quot;公平&quot;,WaitGroup 和 Once 又是怎么实现的">
+<meta name="twitter:description" content="本机真实 Go 1.26.6 程序,用 unsafe.Pointer 直接观测 sync.Mutex 内部状态字从正常模式翻转到饥饿模式再翻转回来的完整过程,并验证 WaitGroup 的并发耗时与 Once 的阻塞语义,对照本机标准库真实源码。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F5F8F9; --paper:#FFFFFF; --ink:#17232A; --ink-dim:#5C7078; --line:#DCE7EA;
+  --go-c:#0097B2; --go-c-soft:#DCF1F4;
+  --warn-c:#C9762E; --warn-c-soft:#F7EADB;
+  --live-c:#2E8B57; --live-c-soft:#E1F2E7;
+  --code-bg:#0F1B20; --code-ink:#E6F2F4;
+  --shadow: 0 1px 2px rgba(10,30,35,.06), 0 8px 24px -12px rgba(10,30,35,.16);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0D1518; --paper:#151F23; --ink:#E6F2F4; --ink-dim:#9DB4BB; --line:#293C42;
+    --go-c:#3FC9E0; --go-c-soft:#123138;
+    --warn-c:#E0A15C; --warn-c-soft:#3A2A16;
+    --live-c:#6FC996; --live-c-soft:#173327;
+    --code-bg:#0A1215; --code-ink:#E2F0F2;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0D1518; --paper:#151F23; --ink:#E6F2F4; --ink-dim:#9DB4BB; --line:#293C42;
+  --go-c:#3FC9E0; --go-c-soft:#123138;
+  --warn-c:#E0A15C; --warn-c-soft:#3A2A16;
+  --live-c:#6FC996; --live-c-soft:#173327;
+  --code-bg:#0A1215; --code-ink:#E2F0F2;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--go-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--go-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--go-c);}
+h1{font-size:2.1rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--go-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#9DB4BB; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--go-c-soft); color:var(--go-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .ok{color:#7DD0A0;}
+.term pre.code{margin:0 0 10px; color:#8FE0D4; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem; display:flex; justify-content:space-between; align-items:center;}
+.demo-head .step-badge{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; color:var(--go-c); background:var(--go-c-soft); padding:3px 9px; border-radius:6px; font-weight:600;}
+.demo-narration{min-height:52px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-body{padding:20px;}
+.tree-row{display:grid; grid-template-columns:repeat(5,1fr); gap:8px; margin-bottom:16px;}
+@media (max-width:700px){.tree-row{grid-template-columns:repeat(2,1fr);}}
+.tree-box{border:1.5px solid var(--line); border-radius:10px; padding:10px; background:var(--bg); text-align:center; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.76rem;}
+.tree-box .nt{font-weight:700; margin-bottom:4px;}
+.tree-box[data-state="set"]{border-color:var(--warn-c); background:var(--warn-c-soft); color:var(--warn-c); font-weight:700;}
+.tree-box[data-state="clear"]{border-color:var(--line); background:var(--bg);}
+.tree-box[data-state="done"]{border-color:var(--live-c); background:var(--live-c-soft); color:var(--live-c); font-weight:700;}
+.tree-box[data-state="pending"]{border-color:var(--line); background:var(--bg);}
+.query-line{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.83rem; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px 14px; margin-bottom:16px; overflow-x:auto; white-space:pre;}
+.checks{display:flex; flex-direction:column; gap:8px; margin-bottom:16px;}
+.check{border:1.5px solid var(--line); border-radius:10px; padding:10px 14px; background:var(--bg); font-size:.85rem; display:flex; justify-content:space-between; align-items:center; gap:10px; transition:background .2s,border-color .2s;}
+.check .label{flex:1;}
+.check .verdict{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; font-weight:700; padding:2px 9px; border-radius:6px;}
+.check[data-verdict="pass"]{border-color:var(--go-c); background:var(--go-c-soft);}
+.check[data-verdict="pass"] .verdict{background:var(--go-c); color:#fff;}
+.check[data-verdict="fail"]{border-color:var(--warn-c); background:var(--warn-c-soft);}
+.check[data-verdict="fail"] .verdict{background:var(--warn-c); color:#fff;}
+.result-row{display:flex; align-items:center; gap:10px; margin-bottom:14px; flex-wrap:wrap;}
+.result-badge{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; font-weight:700; padding:6px 14px; border-radius:8px;}
+.result-badge.good{background:var(--go-c); color:#fff;}
+.result-badge.warn{background:var(--warn-c); color:#fff;}
+.evidence-line{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.78rem; color:var(--ink-dim); background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px 14px; white-space:pre-wrap; word-break:break-word;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--go-c); color:var(--go-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--go-c); border-color:var(--go-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--go-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Go 标准库与生态 · 第二篇</div>
+    <h1>sync:Mutex 怎么从"不公平"切换到"公平",WaitGroup 和 Once 又是怎么实现的</h1>
+    <p><span class="mono">sync.Mutex</span> 的文档里有一句话很容易被跳过:"Mutex 有正常模式和饥饿模式两种"。这一篇不满足于"知道有这么回事",而是直接读了 <span class="mono">internal/sync/mutex.go</span> 的真实源码,找到 <span class="mono">sync.Mutex</span> 内部那个未导出的 <span class="mono">state</span> 字段在内存里的真实偏移量,用 <span class="mono">unsafe.Pointer</span> 在一个真实运行的 Go 程序里,把这个状态字从"正常"翻转到"饥饿"再翻转回来的全过程,原原本本地录了下来。另外还搞清楚了 <span class="mono">WaitGroup</span> 的计数器到底是怎么塞进一个 <span class="mono">uint64</span> 里的,以及 <span class="mono">Once</span> 为什么必须用一把锁,而不能只是一个原子 CAS。</p>
+    <p>延续上一篇的方法论:本机装的就是真实 Go 1.26.6,标准库源码就是本机 <span class="mono">go run</span> 时真正在跑的那份代码。全部实验都是本机真实执行的 Go 程序,没有伪代码。</p>
+    <div class="hero-fact">
+      <div><div class="num">5 个真实 Go 程序</div><div class="lbl">本机真实 go run,包含一次对 Mutex 内部状态字的真实运行时探测</div></div>
+      <div><div class="num">4 处真实源码</div><div class="lbl">internal/sync/mutex.go、sync/waitgroup.go、sync/once.go,跟本机 go1.26.6 完全同版本</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <h2>真实源码:Mutex 的真身其实在 internal/sync 里</h2>
+  <p class="h2-sub">Go 1.26 把 <span class="mono">sync.Mutex</span> 的算法整个挪到了 <span class="mono">internal/sync.Mutex</span>,<span class="mono">sync.Mutex</span> 只是一层薄薄的转发。</p>
+  <blockquote class="src">
+    <span class="path">$GOROOT/src/sync/mutex.go(go1.26.6 本机源码) · L30</span>
+type Mutex struct {
+    _ noCopy
+
+    mu isync.Mutex // internal/sync.Mutex,真正的算法在这里
+}
+  </blockquote>
+  <blockquote class="src">
+    <span class="path">$GOROOT/src/internal/sync/mutex.go(go1.26.6 本机源码) · L20</span>
+type Mutex struct {
+    state int32
+    sema  uint32
+}
+
+const (
+    mutexLocked = 1 &lt;&lt; iota // bit 0
+    mutexWoken               // bit 1
+    mutexStarving            // bit 2
+    mutexWaiterShift = iota  // 剩下的高位是等待者计数
+
+    starvationThresholdNs = 1e6 // 1ms
+)
+  </blockquote>
+  <p><span class="mono">state</span> 是一个 <span class="mono">int32</span>,低 3 位是三个标志位(是否已锁、是否有人被唤醒、是否处于饥饿模式),剩下的高位记录当前排队等待的 goroutine 数量。<span class="mono">noCopy</span> 是个零大小类型,不占内存,所以 <span class="mono">sync.Mutex</span> 这个结构体的第一个字节,就是 <span class="mono">internal/sync.Mutex.state</span> 的第一个字节——这意味着可以用 <span class="mono">unsafe.Pointer</span> 直接把一个正在使用中的 <span class="mono">sync.Mutex</span> 强转成 <span class="mono">*int32</span> 来只读地观测它的真实内部状态,不需要改标准库、不需要 <span class="mono">go:linkname</span>。</p>
+</section>
+
+<section>
+  <h2>真实源码:1ms 阈值和"谁能不排队直接抢"</h2>
+  <blockquote class="src">
+    <span class="path">$GOROOT/src/internal/sync/mutex.go(go1.26.6 本机源码) · L129</span>
+// 当前 goroutine 把 mutex 切换到饥饿模式。
+// 但如果 mutex 现在是解锁状态,就不要做这个切换。
+if starving && old&mutexLocked != 0 {
+    new |= mutexStarving
+}
+  </blockquote>
+  <blockquote class="src">
+    <span class="path">$GOROOT/src/internal/sync/mutex.go(go1.26.6 本机源码) · L150</span>
+runtime_SemacquireMutex(&amp;m.sema, queueLifo, 2)
+starving = starving || runtime_nanotime()-waitStartTime &gt; starvationThresholdNs
+  </blockquote>
+  <p>一个排队等锁的 goroutine,每次被唤醒后都会检查"我这次排队总共等了多久";只要超过 <span class="mono">starvationThresholdNs</span>(1ms),<span class="mono">starving</span> 标志就会永久置真,下一次它有机会修改 <span class="mono">state</span> 时,就会把 <span class="mono">mutexStarving</span> 位真正设置到共享状态上。饥饿模式下解锁的 goroutine 不再靠"谁先抢到 CPU 谁赢"这种正常模式的竞争方式,而是直接把 mutex 的所有权移交给队列最前面的等待者(<span class="mono">unlockSlow</span> 里对应的分支,不再新开一段贴代码)。</p>
+</section>
+
+<section>
+  <h2>真实实验:亲眼看着这个内部状态字翻转</h2>
+  <p class="h2-sub">起两个 goroutine:一个 <span class="mono">hammer</span> 在紧循环里反复 <span class="mono">Lock() → sleep 100µs → Unlock()</span>(跟标准库自己的 <span class="mono">TestMutexFairness</span> 测试用的是同一个模式);一个 <span class="mono">victim</span> 延迟 2ms 后只调用一次 <span class="mono">Lock()</span>。第三个 goroutine 每 5µs 用 <span class="mono">unsafe.Pointer</span> 读一次 <span class="mono">state</span> 字段,只在值变化时记录。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">func rawState(mu *sync.Mutex) int32 {
+    return atomic.LoadInt32((*int32)(unsafe.Pointer(mu)))
+}</pre>
+<span class="ok">t=27µs    locked=true  woken=false  starving=false  waiters=0   // hammer 拿到锁
+t=2064µs  locked=true  woken=false  starving=false  waiters=1   // victim 开始排队
+t=3146µs  locked=true  woken=false  starving=true   waiters=1   // 排队满 1082µs,饥饿模式开启!
+t=3251µs  locked=true  woken=false  starving=false  waiters=0   // victim 拿到锁,饥饿模式退出
+victim 实测等待: 1194µs</span>
+  </div>
+  <p>这 4 条状态变化全部来自同一次真实运行,不是拼凑的示意图。第 2 条到第 3 条之间隔了 1082µs——超过了源码里写死的 1ms 阈值,<span class="mono">starving</span> 位应声而起;第 4 条里 <span class="mono">waiters</span> 归零的那一刻,<span class="mono">starving</span> 位立刻又被清掉,跟源码里"最后一个等待者拿到锁后退出饥饿模式"的注释完全对应。而且这一刻(t=3251µs,距离 victim 开始排队 1187µs)跟另一个独立测量的 <span class="mono">victim 实测等待 1194µs</span> 只差 7µs——两种完全不同的测量方式(内部状态轮询 vs 外部 <span class="mono">time.Since</span> 计时)相互印证。</p>
+</section>
+
+<section>
+  <h2>真实实验:饥饿模式把尾延迟摁死在阈值附近</h2>
+  <p class="h2-sub">还是同一个 hammer,让 victim 循环调用 400 次 <span class="mono">Lock()</span>,记录每一次真实的等待延迟。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">for i := 0; i &lt; 400; i++ {
+    t0 := time.Now()
+    mu.Lock()
+    waits[i] = time.Since(t0)
+    mu.Unlock()
+}</pre>
+<span class="ok">mean=14.4µs  p50=41ns  p99=1.119ms  max=1.168ms
+等待超过 1ms 的调用: 5/400
+(第二次独立运行: mean=20.1µs p50=42ns p99=1.141ms max=1.193ms, 7/400)</span>
+  </div>
+  <p>p50 只有 41 纳秒——绝大多数时候 victim 靠正常模式的快速路径,几乎瞬间抢到锁;但尾部延迟被死死摁在 1ms 出头,两次独立运行的 <span class="mono">max</span> 分别是 1.168ms 和 1.193ms,没有一次显著超过阈值太多。这正是源码注释里说的"饥饿模式的意义在于防止病态的尾延迟"——如果没有这个机制,victim 有可能在正常模式下被 hammer 无限期地抢跑。</p>
+</section>
+
+<section>
+  <h2>真实实验:WaitGroup 的计数确实是并发的,不是排队执行</h2>
+  <blockquote class="src">
+    <span class="path">$GOROOT/src/sync/waitgroup.go(go1.26.6 本机源码) · L51</span>
+// Bits (high to low):
+//   bits[0:32]  counter
+//   bits[32]    flag: synctest bubble membership
+//   bits[33:64] wait count
+state atomic.Uint64
+  </blockquote>
+  <p><span class="mono">WaitGroup</span> 把"任务计数器"和"等待者计数"打包进同一个 <span class="mono">atomic.Uint64</span>,这样 <span class="mono">Add</span> 和 <span class="mono">Wait</span> 之间的协调可以用一次原子操作完成,不需要额外加锁。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">sleeps := []time.Duration{90*ms, 30*ms, 60*ms, 10*ms, 50*ms, 20*ms}
+for i, d := range sleeps {
+    wg.Go(func() { time.Sleep(d); ... })
+}
+wg.Wait()</pre>
+<span class="ok">task3(10ms) 完成于 11ms
+task5(20ms) 完成于 21ms
+task1(30ms) 完成于 31ms
+task4(50ms) 完成于 51ms
+task2(60ms) 完成于 61ms
+task0(90ms) 完成于 91ms
+全部完成,总耗时=91ms(6 个任务的 sleep 加总是 260ms)
+
+wg2.Wait() 在计数器已经是 0 时立即返回,耗时 208ns
+wg3.Add(-1) 在空 WaitGroup 上真实 panic: "sync: negative WaitGroup counter"</span>
+  </div>
+  <p>6 个任务的完成时间点跟各自的 sleep 时长严丝合缝对上——总耗时 91ms 约等于最长的那个任务(90ms),而不是 6 个任务加总的 260ms,证明它们真的是并发跑的。<span class="mono">Wait()</span> 在计数器已经为 0 时有一条快速路径,208 纳秒就返回,完全不涉及信号量;而 <span class="mono">Add</span> 一个负值让计数器跌破 0 会真实触发 panic,这是源码里显式检查过的。</p>
+</section>
+
+<section>
+  <h2>真实源码 + 真实实验:Once 为什么必须是锁,不能只是 CAS</h2>
+  <blockquote class="src">
+    <span class="path">$GOROOT/src/sync/once.go(go1.26.6 本机源码) · L52</span>
+// Do 保证:当它返回时,f 一定已经执行完毕。
+// 如果只用 CAS——先 CAS 成功的那个 goroutine 去跑 f(),
+// 其它 goroutine CAS 失败就立刻返回——那就不满足这个保证了。
+func (o *Once) Do(f func()) {
+    if !o.done.Load() {
+        o.doSlow(f)
+    }
+}
+
+func (o *Once) doSlow(f func()) {
+    o.m.Lock()
+    defer o.m.Unlock()
+    if !o.done.Load() {
+        defer o.done.Store(true)
+        f()
+    }
+}
+  </blockquote>
+  <p><span class="mono">doSlow</span> 用一把真正的 <span class="mono">Mutex</span>:没抢到执行权的 goroutine 不是"CAS 失败就走人",而是阻塞在 <span class="mono">o.m.Lock()</span> 上,直到执行 <span class="mono">f()</span> 的那个 goroutine 跑完并 <span class="mono">Unlock()</span>——这样每一个调用 <span class="mono">Do()</span> 的 goroutine,拿到的返回值都保证 <span class="mono">f()</span> 已经跑完了。另外 <span class="mono">defer o.done.Store(true)</span> 在 <span class="mono">f()</span> panic 时依然会执行,所以"<span class="mono">f</span> panic 了"也被算作"已经执行过"。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">// 20 个 goroutine 并发调用同一个 once.Do(f),f 内部 sleep 60ms
+for i := 0; i &lt; 20; i++ {
+    go func() { once.Do(f); returnedAt[i] = time.Since(start) }()
+}</pre>
+<span class="ok">f() 实际执行次数: 1
+20 个 goroutine 里最早返回和最晚返回都是 61ms(不是"赢家跑完立刻返回,输家瞬间返回")
+
+// f() panic 的情况
+once2.Do(func(){ panic("init failed") })  → panic 冒泡出 Do(),值为 "init failed"
+once2.Do(func(){ ranSecond = true })      → ranSecond 仍然是 false,f 没有再跑第二次</span>
+  </div>
+  <p>20 个并发调用者的返回时间全部聚集在 61ms 附近,跟"赢家 60ms 跑完之后大家才一起返回"完全吻合——如果 <span class="mono">Once</span> 只是一个 CAS,19 个"输家"应该在接近 0ms 时就返回了。<span class="mono">panic</span> 这一段也验证了源码注释说的"panic 算作已完成":<span class="mono">f</span> 炸了一次,第二次 <span class="mono">Do()</span> 依然不会再跑它。</p>
+</section>
+
+<section>
+  <h2>交互演示:从状态字翻转到 WaitGroup/Once 的真实数据回放</h2>
+  <p class="h2-sub">把上面几组真实实验按发生顺序串成一条演示。</p>
+  <div class="demo" id="syncDemo">
+    <div class="demo-head"><span>sync 实录</span><span class="step-badge" id="syStep">未开始</span></div>
+    <div class="demo-narration" id="syNarration">点击"下一步"或"播放"开始。</div>
+    <div class="demo-body">
+      <div class="query-line" id="syQuery">—</div>
+      <div class="tree-row" id="syTree"></div>
+      <div class="checks" id="syChecks"></div>
+      <div class="result-row">
+        <span class="result-badge" id="syResultBadge">—</span>
+      </div>
+      <div class="evidence-line" id="syEvidence"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="syReset">⏮ 重来</button>
+      <button class="btn" id="syPrev">‹ 上一步</button>
+      <button class="btn primary" id="syNext">下一步 ›</button>
+      <button class="btn" id="syPlay">▶ 自动播放</button>
+      <span class="step-counter" id="syCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">全部数据来自本机真实 <span class="mono">go run</span> 的输出(<span class="mono">starve_trace.go</span> 的 4 条状态变化、<span class="mono">tail_latency.go</span> 的 400 次延迟统计、<span class="mono">waitgroup_demo.go</span>/<span class="mono">once_demo.go</span> 的真实完成时间),Python 脚本逐项断言核对,并且用状态字第 3 条跟第 2 条的时间差(1082µs)独立验证了"超过 1ms 才会饥饿"这条规则,再用第 4 条相对第 2 条的时间差(1187µs)跟另一个独立测量的 victim 等待时间(1194µs)交叉核对,两者只差 7µs。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文源码引用(<span class="mono">sync.Mutex</span>/<span class="mono">internal/sync.Mutex</span> 结构体与 <span class="mono">lockSlow</span>/<span class="mono">unlockSlow</span>、<span class="mono">WaitGroup.state</span> 的位布局、<span class="mono">Once.Do</span>/<span class="mono">doSlow</span>)均取自本机安装的 Go 1.26.6 自带标准库源码(<span class="mono">$GOROOT/src/sync/</span>、<span class="mono">$GOROOT/src/internal/sync/</span>),跟本机 <span class="mono">go run</span> 实际执行的是同一份代码。</li>
+      <li>全部实验(<span class="mono">starve_trace.go</span>、<span class="mono">tail_latency.go</span>、<span class="mono">waitgroup_demo.go</span>、<span class="mono">once_demo.go</span>)均为本机真实 <span class="mono">go run</span> 产生的输出,未做删改。读取 <span class="mono">sync.Mutex</span> 内部状态字用的是只读的 <span class="mono">unsafe.Pointer</span> 转换,没有修改标准库、没有用 <span class="mono">go:linkname</span>,纯粹的运行时观测。</li>
+      <li>演示数据的自检:starve_trace.go 的 4 条真实状态变化被 Python 脚本逐项校验(等待者出现的时机、饥饿位翻转前必须等待 &gt; 1ms、饥饿位清除必须发生在 waiters 归零那一刻),并跟外部独立测得的等待时长在 150µs 容差内交叉核对(实际只差 7µs);WaitGroup 的并发模型(耗时=max(sleep) 而非 sum(sleep))跟真实测得的 91ms 吻合;Once 的状态机模型(锁 + done 标志,panic 也算完成)逐项匹配真实输出。</li>
+      <li>没有涉及:<span class="mono">sync.RWMutex</span>(读写锁的实现,尤其是它如何复用 <span class="mono">Mutex</span> 防止写者饿死)、<span class="mono">sync.Map</span> 的分段/无锁读路径、<span class="mono">sync.Pool</span> 跟 GC 的协作机制、<span class="mono">sync.Cond</span>。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="go-encoding-json.html">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">encoding/json:反射怎么把结构体变成 JSON,struct tag 是怎么被解析和缓存的</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Go 标准库与生态 · 第二篇 · sync · 源码取自本机 Go 1.26.6 标准库,实验数据来自本机真实 go run</footer>
+
+<script>
+const DATA = {"scenarios": [
+  {
+    "narration": "hammer goroutine 在紧循环里反复 Lock()/Unlock()(每次持锁 100µs),此刻它刚拿到锁。三个标志位里只有 LOCKED 是真,STARVING 还没被碰过。",
+    "query_display": "t=27µs   state: LOCKED=1 WOKEN=0 STARVING=0 waiters=0",
+    "tree": [
+      {"name":"LOCKED","state":"set"},{"name":"WOKEN","state":"clear"},
+      {"name":"STARVING","state":"clear"}
+    ],
+    "check_label": "此刻 mutex 是否处于正常模式(STARVING=0)?",
+    "verdict": "pass",
+    "result_badge": "正常模式,hammer 持锁",
+    "result_class": "good",
+    "evidence": "真实探测: t=27µs, LOCKED=true STARVING=false waiters=0"
+  },
+  {
+    "narration": "victim goroutine(延迟 2ms 后)第一次调用 Lock(),抢不过持续在跑的 hammer,进入排队。waiters 从 0 变成 1。",
+    "query_display": "t=2064µs  state: LOCKED=1 WOKEN=0 STARVING=0 waiters=1",
+    "tree": [
+      {"name":"LOCKED","state":"set"},{"name":"WOKEN","state":"clear"},
+      {"name":"STARVING","state":"clear"}
+    ],
+    "check_label": "victim 排队后,mutex 是否仍然是正常模式?",
+    "verdict": "pass",
+    "result_badge": "victim 开始排队,waiters=1",
+    "result_class": "good",
+    "evidence": "真实探测: t=2064µs(约等于代码里写死的 2ms 延迟),waiters 从 0 变为 1"
+  },
+  {
+    "narration": "victim 排队排了 1082µs(t=3146-2064),超过源码里 starvationThresholdNs 定义的 1ms 阈值——STARVING 位被真实设置。",
+    "query_display": "t=3146µs  state: LOCKED=1 WOKEN=0 STARVING=1 waiters=1",
+    "tree": [
+      {"name":"LOCKED","state":"set"},{"name":"WOKEN","state":"clear"},
+      {"name":"STARVING","state":"set"}
+    ],
+    "check_label": "排队时间是否确实超过了源码里写死的 1ms 阈值?",
+    "verdict": "pass",
+    "result_badge": "饥饿模式开启",
+    "result_class": "warn",
+    "evidence": "真实探测: 距 victim 开始排队已过 1082µs (> starvationThresholdNs=1000µs)"
+  },
+  {
+    "narration": "victim 拿到锁,waiters 归零——源码规定'最后一个等待者拿到锁后退出饥饿模式',STARVING 位在这一刻立刻被清掉。",
+    "query_display": "t=3251µs  state: LOCKED=1 WOKEN=0 STARVING=0 waiters=0",
+    "tree": [
+      {"name":"LOCKED","state":"set"},{"name":"WOKEN","state":"clear"},
+      {"name":"STARVING","state":"clear"}
+    ],
+    "check_label": "waiters 归零时,STARVING 位是否被清除(退出饥饿模式)?",
+    "verdict": "pass",
+    "result_badge": "victim 拿到锁,退出饥饿模式",
+    "result_class": "good",
+    "evidence": "真实探测: t=3251µs,STARVING 清零;另一路独立测得 victim 等待 1194µs,跟本次状态翻转(1187µs)只差 7µs"
+  },
+  {
+    "narration": "换一个实验:victim 循环调用 400 次 Lock(),记录每次真实等待延迟——大多数时候靠正常模式的快速路径瞬间拿锁,只有极少数会撞上 1ms 阈值。",
+    "query_display": "400 次 Lock() 延迟统计",
+    "tree": [],
+    "check_label": "尾延迟(max)是否被摁在阈值附近,而不是无限增长?",
+    "verdict": "pass",
+    "result_badge": "p50=41ns, max=1.168ms",
+    "result_class": "good",
+    "evidence": "真实测得: mean=14.4µs p50=41ns p99=1.119ms max=1.168ms;超过 1ms 的调用仅 5/400"
+  },
+  {
+    "narration": "换成 WaitGroup:6 个任务 sleep 时长不同(90/30/60/10/50/20 ms),用 wg.Go 并发启动,wg.Wait() 等全部完成。",
+    "query_display": "wg.Go(task0..5); wg.Wait()",
+    "tree": [
+      {"name":"task0","state":"done"},{"name":"task1","state":"done"},
+      {"name":"task2","state":"done"},{"name":"task3","state":"done"},
+      {"name":"task4","state":"done"},{"name":"task5","state":"done"}
+    ],
+    "check_label": "总耗时是否约等于最长任务(90ms),而不是 6 个任务的加总(260ms)?",
+    "verdict": "pass",
+    "result_badge": "wall=91ms(sum=260ms)",
+    "result_class": "good",
+    "evidence": "真实测得: 全部完成于 91ms,证明真正并发;task3(10ms)最先在 11ms 完成,task0(90ms)最后在 91ms 完成"
+  },
+  {
+    "narration": "WaitGroup 的两个边界情况:计数器已经是 0 时调用 Wait();对一个空 WaitGroup 调用 Add(-1)。",
+    "query_display": "wg2.Wait()  // 计数器已是0\\nwg3.Add(-1) // 计数器会变负",
+    "tree": [],
+    "check_label": "Wait() 是否立即返回,Add(-1) 是否真的 panic?",
+    "verdict": "pass",
+    "result_badge": "Wait()=208ns 返回;Add(-1) panic",
+    "result_class": "good",
+    "evidence": "真实测得: Wait() 208ns 内返回(快速路径,不涉及信号量);Add(-1) panic: \\\"sync: negative WaitGroup counter\\\""
+  },
+  {
+    "narration": "换成 Once:20 个 goroutine 并发调用同一个 once.Do(f),f 内部 sleep 60ms——验证 f 是否真的只跑一次,以及'输家'是否真的等 f 跑完才返回。",
+    "query_display": "for i:=0;i<20;i++ { go once.Do(f) }",
+    "tree": [],
+    "check_label": "f() 是否只执行了 1 次,且全部 20 个调用者都等到 f 跑完才返回?",
+    "verdict": "pass",
+    "result_badge": "f() 执行 1 次,20 个返回都聚集在 61ms",
+    "result_class": "good",
+    "evidence": "真实测得: calls=1;20 个 goroutine 里最早返回=61ms,最晚返回=61ms(不是有的立刻返回)"
+  },
+  {
+    "narration": "最后验证 panic 的情况:f() 第一次调用就 panic,第二次 Do() 还会不会再跑一次 f?",
+    "query_display": "once2.Do(func(){ panic(\\\"init failed\\\") })\\nonce2.Do(func(){ ranSecond = true })",
+    "tree": [],
+    "check_label": "f() panic 之后,第二次 Do() 是否还会再跑一次 f?",
+    "verdict": "pass",
+    "result_badge": "不会再跑,panic 算作已完成",
+    "result_class": "good",
+    "evidence": "真实测得: 第一次 Do() 里 panic 冒泡到调用者(值为 \\\"init failed\\\");第二次 Do() 后 ranSecond 仍为 false"
+  }
+]};
+
+(function(){
+  const scenarios = DATA.scenarios;
+  const narration = document.getElementById('syNarration');
+  const stepBadge = document.getElementById('syStep');
+  const queryLine = document.getElementById('syQuery');
+  const treeEl = document.getElementById('syTree');
+  const checksEl = document.getElementById('syChecks');
+  const resultBadge = document.getElementById('syResultBadge');
+  const evidenceEl = document.getElementById('syEvidence');
+  const counter = document.getElementById('syCounter');
+  let idx = -1, playing = false, playTimer = null;
+
+  function render(){
+    idx = Math.max(-1, Math.min(scenarios.length - 1, idx));
+    if(idx < 0){
+      narration.textContent = '点击"下一步"或"播放"开始。';
+      stepBadge.textContent = '未开始';
+      queryLine.textContent = '—';
+      treeEl.innerHTML = '';
+      checksEl.innerHTML = '';
+      resultBadge.textContent = '—';
+      resultBadge.className = 'result-badge';
+      evidenceEl.textContent = '';
+      counter.textContent = `0 / ${scenarios.length}`;
+      document.getElementById('syPrev').disabled = true;
+      document.getElementById('syNext').disabled = false;
+      return;
+    }
+
+    const s = scenarios[idx];
+    narration.textContent = s.narration;
+    stepBadge.textContent = `第 ${idx+1} / ${scenarios.length} 步`;
+    queryLine.textContent = s.query_display;
+
+    treeEl.innerHTML = '';
+    s.tree.forEach(n => {
+      const box = document.createElement('div');
+      box.className = 'tree-box';
+      box.dataset.state = n.state;
+      const nt = document.createElement('div');
+      nt.className = 'nt';
+      nt.textContent = n.name;
+      const st = document.createElement('div');
+      st.textContent = n.state;
+      box.appendChild(nt); box.appendChild(st);
+      treeEl.appendChild(box);
+    });
+
+    checksEl.innerHTML = '';
+    const row = document.createElement('div');
+    row.className = 'check';
+    row.dataset.verdict = s.verdict;
+    const label = document.createElement('span');
+    label.className = 'label';
+    label.textContent = s.check_label;
+    const verdict = document.createElement('span');
+    verdict.className = 'verdict';
+    verdict.textContent = s.verdict === 'pass' ? '成立' : '不成立';
+    row.appendChild(label); row.appendChild(verdict);
+    checksEl.appendChild(row);
+
+    resultBadge.textContent = s.result_badge;
+    resultBadge.className = 'result-badge ' + s.result_class;
+    evidenceEl.textContent = s.evidence;
+
+    counter.textContent = `${idx+1} / ${scenarios.length}`;
+    document.getElementById('syPrev').disabled = idx <= -1;
+    document.getElementById('syNext').disabled = idx >= scenarios.length - 1;
+  }
+
+  document.getElementById('syNext').onclick = () => { idx++; render(); stopPlay(); };
+  document.getElementById('syPrev').onclick = () => { idx--; render(); stopPlay(); };
+  document.getElementById('syReset').onclick = () => { idx = -1; render(); stopPlay(); };
+  function stopPlay(){ playing = false; clearInterval(playTimer); document.getElementById('syPlay').textContent = '▶ 自动播放'; }
+  document.getElementById('syPlay').onclick = () => {
+    if(playing){ stopPlay(); return; }
+    playing = true; document.getElementById('syPlay').textContent = '⏸ 暂停';
+    playTimer = setInterval(() => {
+      if(idx >= scenarios.length - 1){ stopPlay(); return; }
+      idx++; render();
+    }, 2200);
+  };
+
+  render();
+})();
+</script>
+
+</body>
+</html>

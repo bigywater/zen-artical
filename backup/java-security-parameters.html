@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>Java Security Parameters:算法限制如何影响兼容性</title>
+<meta name="description" content="逐个打印 JDK 17、21、27 的默认安全参数并真实验证效果:TLSv1/1.1 与 TLS_RSA_* 默认握手失败、用 -Djava.security.properties 覆盖后成功;证书路径里 512 位 RSA 被拒绝、SHA1 的限制只对 JDK CA 锚定的链生效、收紧后 SHA1 与 1024 位失败。">
+<link rel="canonical" href="https://bigywater.tech/java-security-parameters.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Java Security Parameters:算法限制如何影响兼容性">
+<meta property="og:description" content="逐个打印 JDK 17、21、27 的默认安全参数并真实验证效果:TLSv1/1.1 与 TLS_RSA_* 默认握手失败、用 -Djava.security.properties 覆盖后成功;证书路径里 512 位 RSA 被拒绝、SHA1 的限制只对 JDK CA 锚定的链生效、收紧后 SHA1 与 1024 位失败。">
+<meta property="og:url" content="https://bigywater.tech/java-security-parameters.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Java Security Parameters:算法限制如何影响兼容性">
+<meta name="twitter:description" content="逐个打印 JDK 17、21、27 的默认安全参数并真实验证效果:TLSv1/1.1 与 TLS_RSA_* 默认握手失败、用 -Djava.security.properties 覆盖后成功;证书路径里 512 位 RSA 被拒绝、SHA1 的限制只对 JDK CA 锚定的链生效、收紧后 SHA1 与 1024 位失败。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">1767</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">264</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#B85C00; --series-c-soft:#FBE7D1;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#F29A4A; --series-c-soft:#3B2208;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#F29A4A; --series-c-soft:#3B2208;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Java · 265</div>
+  <h1>Java Security Parameters:算法限制如何影响兼容性</h1>
+  <p>jdk.tls.disabledAlgorithms 与 jdk.certpath.disabledAlgorithms 决定了 Java 拒绝哪些协议、套件和证书算法。三个 JDK 版本的默认值有什么不同?放宽或收紧会发生什么?这篇逐项真实运行,包括 JDK 17、21、27 的对比。</p>
+  <div class="hero-fact">
+<div><div class="num">TLSv1.1</div><div class="lbl">默认配置下握手失败的协议(覆盖 jdk.tls.disabledAlgorithms 后成功)</div></div><div><div class="num">31 个</div><div class="lbl">默认启用的 TLS 套件(JDK 17、21、27 相同)</div></div><div><div class="num">jdkCA & usage TLSServer</div><div class="lbl">默认 SHA1 限制的适用范围——自建 CA 的链不受它限制</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="java-key-rotation.html">密钥轮换:Java 服务如何平滑切换加密材料</a></div>
+<section>
+  <h2>三个 JDK 的默认安全参数</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  --- JDK 17 ---
+  jdk.tls.disabledAlgorithms = SSLv3, TLSv1, TLSv1.1, DTLSv1.0, RC4, DES, MD5withRSA, DH keySize &lt; 1024, EC keySize &lt; 224, 3DES_EDE_CBC, anon, NULL, ECDH, TLS_RSA_*, rsa_pkcs1_sha1 usage HandshakeSignature, ecdsa_sha1 usage HandshakeSignature, dsa_sha1 usage HandshakeSignature
+  jdk.certpath.disabledAlgorithms = MD2, MD5, SHA1 jdkCA &amp; usage TLSServer, RSA keySize &lt; 1024, DSA keySize &lt; 1024, EC keySize &lt; 224, SHA1 usage SignedJAR &amp; denyAfter 2019-01-01
+  jdk.security.legacyAlgorithms = SHA1, RSA keySize &lt; 2048, DSA keySize &lt; 2048
+  jdk.jar.disabledAlgorithms = MD2, MD5, RSA keySize &lt; 1024, DSA keySize &lt; 1024, SHA1 denyAfter 2019-01-01
+  crypto.policy = unlimited
+  jdk.tls.legacyAlgorithms = NULL, anon, RC4, DES, 3DES_EDE_CBC
+  JDK 17.0.20.1:支持的协议 [TLSv1.3, TLSv1.2, TLSv1.1, TLSv1, SSLv3, SSLv2Hello];默认启用的协议(客户端)[TLSv1.3, TLSv1.2];支持的套件 31 个,默认启用 31 个
+  默认启用的套件里 CBC 套件 16 个,AEAD(GCM/ChaCha20)套件 14 个;含 3DES 的 0 个,含 RC4 的 0 个
+  --- JDK 21 ---
+  jdk.tls.disabledAlgorithms = SSLv3, TLSv1, TLSv1.1, DTLSv1.0, RC4, DES, MD5withRSA, DH keySize &lt; 1024, EC keySize &lt; 224, 3DES_EDE_CBC, anon, NULL, ECDH, TLS_RSA_*, rsa_pkcs1_sha1 usage HandshakeSignature, ecdsa_sha1 usage HandshakeSignature, dsa_sha1 usage HandshakeSignature
+  jdk.certpath.disabledAlgorithms = MD2, MD5, SHA1 jdkCA &amp; usage TLSServer, RSA keySize &lt; 1024, DSA keySize &lt; 1024, EC keySize &lt; 224, SHA1 usage SignedJAR &amp; denyAfter 2019-01-01
+  jdk.security.legacyAlgorithms = SHA1, RSA keySize &lt; 2048, DSA keySize &lt; 2048, DES, DESede, MD5, RC2, ARCFOUR
+  jdk.jar.disabledAlgorithms = MD2, MD5, RSA keySize &lt; 1024, DSA keySize &lt; 1024, SHA1 denyAfter 2019-01-01
+  crypto.policy = unlimited
+  jdk.tls.legacyAlgorithms = NULL, anon, RC4, DES, 3DES_EDE_CBC
+  JDK 21.0.12.1:支持的协议 [TLSv1.3, TLSv1.2, TLSv1.1, TLSv1, SSLv3, SSLv2Hello];默认启用的协议(客户端)[TLSv1.3, TLSv1.2];支持的套件 31 个,默认启用 31 个
+  默认启用的套件里 CBC 套件 16 个,AEAD(GCM/ChaCha20)套件 14 个;含 3DES 的 0 个,含 RC4 的 0 个
+  --- JDK 27 ---
+  jdk.tls.disabledAlgorithms = SSLv3, TLSv1, TLSv1.1, DTLSv1.0, RC4, DES, MD5withRSA, DH keySize &lt; 1024, EC keySize &lt; 224, 3DES_EDE_CBC, anon, NULL, ECDH, TLS_RSA_*, rsa_pkcs1_sha1 usage HandshakeSignature, ecdsa_sha1 usage HandshakeSignature, dsa_sha1 usage HandshakeSignature
+  jdk.certpath.disabledAlgorithms = MD2, MD5, SHA1 jdkCA &amp; usage TLSServer, RSA keySize &lt; 1024, DSA keySize &lt; 1024, EC keySize &lt; 224, SHA1 usage SignedJAR &amp; denyAfter 2019-01-01
+  jdk.security.legacyAlgorithms = SHA1, RSA keySize &lt; 2048, DSA keySize &lt; 2048, DES, DESede, MD5, RC2, ARCFOUR
+  jdk.jar.disabledAlgorithms = MD2, MD5, RSA keySize &lt; 1024, DSA keySize &lt; 1024, SHA1 denyAfter 2019-01-01
+  crypto.policy = unlimited
+  jdk.tls.legacyAlgorithms = NULL, anon, RC4, DES, 3DES_EDE_CBC
+  JDK 27:支持的协议 [TLSv1.3, TLSv1.2, TLSv1.1, TLSv1, SSLv3, SSLv2Hello];默认启用的协议(客户端)[TLSv1.3, TLSv1.2];支持的套件 31 个,默认启用 31 个
+  默认启用的套件里 CBC 套件 16 个,AEAD(GCM/ChaCha20)套件 14 个;含 3DES 的 0 个,含 RC4 的 0 个</pre></div>
+</section>
+<section>
+  <h2>协议与套件的禁用</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  TLSv1.3  → 握手成功:TLSv1.3 TLS_AES_256_GCM_SHA384
+  TLSv1.2  → 握手成功:TLSv1.2 TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+  TLSv1.1  → 握手失败:SSLHandshakeException: No appropriate protocol (protocol is disabled or cipher suites are inappropriate)
+  TLSv1    → 握手失败:SSLHandshakeException: No appropriate protocol (protocol is disabled or cipher suites are inappropriate)
+  TLSv1.2 + 套件 TLS_RSA_WITH_AES_128_CBC_SHA(RSA 密钥交换,无前向保密)→ 握手失败:SSLHandshakeException: No appropriate protocol (protocol is disabled or cipher suites are inappropriate)
+  TLSv1.2 + 套件 TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA → 握手成功:TLSv1.2 TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA
+  TLSv1.2 + 套件 TLS_RSA_WITH_3DES_EDE_CBC_SHA → 握手失败:SSLHandshakeException: No appropriate protocol (protocol is disabled or cipher suites are inappropriate)
+  --- 用 -Djava.security.properties 覆盖 jdk.tls.disabledAlgorithms 为:SSLv3, RC4, DES, MD5withRSA, DH keySize &lt; 1024, EC keySize &lt; 224, anon, NULL(去掉了 TLSv1、TLSv1.1、3DES_EDE_CBC、TLS_RSA_* 等)---
+  TLSv1.3  → 握手成功:TLSv1.3 TLS_AES_256_GCM_SHA384
+  TLSv1.2  → 握手成功:TLSv1.2 TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+  TLSv1.1  → 握手成功:TLSv1.1 TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA
+  TLSv1    → 握手成功:TLSv1 TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA
+  TLSv1.2 + 套件 TLS_RSA_WITH_AES_128_CBC_SHA(RSA 密钥交换,无前向保密)→ 握手成功:TLSv1.2 TLS_RSA_WITH_AES_128_CBC_SHA
+  TLSv1.2 + 套件 TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA → 握手成功:TLSv1.2 TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA
+  TLSv1.2 + 套件 TLS_RSA_WITH_3DES_EDE_CBC_SHA → 握手失败:SSLHandshakeException: (handshake_failure) Received fatal alert: handshake_failure</pre></div>
+</section>
+<section>
+  <h2>证书路径的算法限制</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  正常链 [leaf_sha256, ica] 信任 root → 通过
+  叶子用 SHA1withRSA 签名 [leaf_sha1, ica] → 通过
+  中间证书用 SHA1withRSA 签名 [leaf_viasha1, ica_sha1] → 通过
+  512 位 RSA 的叶子 [leaf_rsa512, ica] → 失败:Algorithm constraints check failed on keysize limits: RSA 512 bit key used with certificate: CN=localhost(原因 ALGORITHM_CONSTRAINED)
+  1024 位 RSA 的叶子 [leaf_rsa1024, ica] → 通过
+  根证书(信任锚)自己的签名算法是 SHA1withRSA 时(root_sha1 作为锚,链 [leaf_underroot_sha1root])→ 通过(信任锚自身的签名算法不被检查)
+  --- 用 -Djava.security.properties 收紧:jdk.certpath.disabledAlgorithms=MD2, MD5, SHA1, RSA keySize &lt; 2048 ---
+  正常链 [leaf_sha256, ica] 信任 root → 通过
+  叶子用 SHA1withRSA 签名 [leaf_sha1, ica] → 失败:Algorithm constraints check failed on disabled algorithm: SHA1 used with certificate: CN=localhost(原因 ALGORITHM_CONSTRAINED)
+  中间证书用 SHA1withRSA 签名 [leaf_viasha1, ica_sha1] → 失败:Algorithm constraints check failed on disabled algorithm: SHA1 used with certificate: CN=Sec ICA SHA1(原因 ALGORITHM_CONSTRAINED)
+  512 位 RSA 的叶子 [leaf_rsa512, ica] → 失败:Algorithm constraints check failed on keysize limits: RSA 512 bit key used with certificate: CN=localhost(原因 ALGORITHM_CONSTRAINED)
+  1024 位 RSA 的叶子 [leaf_rsa1024, ica] → 失败:Algorithm constraints check failed on keysize limits: RSA 1024 bit key used with certificate: CN=localhost(原因 ALGORITHM_CONSTRAINED)
+  根证书(信任锚)自己的签名算法是 SHA1withRSA 时(root_sha1 作为锚,链 [leaf_underroot_sha1root])→ 通过(信任锚自身的签名算法不被检查)</pre></div>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">Java 安全参数</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "默认安全参数(JDK 17、21、27 逐个打印):jdk.tls.disabledAlgorithms 在三个版本里相同,= SSLv3, TLSv1, TLSv1.1, DTLSv1.0, RC4, DES, MD5withRSA, DH keySize < 1024, EC keySize < 224, 3DES_EDE_CBC, anon, NULL, ECDH, TLS_RSA_*, rsa_pkcs1_sha1 …,即默认禁用 SSLv3、TLSv1、TLSv1.1、RC4、DES、3DES_EDE_CBC、匿名套件、TLS_RSA_* 等;jdk.certpath.disabledAlgorithms 三个版本也相同(MD2、MD5、SHA1 jdkCA & usage TLSServer、RSA keySize < 1024 …);jdk.security.legacyAlgorithms 有差别:JDK 17 是 SHA1, RSA keySize < 2048, DSA keySize < 2048,JDK 21 与 27 是 SHA1, RSA keySize < 2048, DSA keySize < 2048, DES, DESede, MD5, RC2, ARCFOUR(多了 DES、DESede、MD5、RC2、ARCFOUR)。三个版本都是:支持的协议 [TLSv1.3, TLSv1.2, TLSv1.1, TLSv1, SSLv3, SSLv2Hello],默认启用 [TLSv1.3, TLSv1.2];支持的套件 31 个、默认启用 31 个,其中 CBC 16 个、AEAD 14 个,3DES 与 RC4 的 0 个。crypto.policy = unlimited。", "s": {"t": {"lines": ["  --- JDK 17 ---", "  jdk.tls.disabledAlgorithms = SSLv3, TLSv1, TLSv1.1, DTLSv1.0, RC4, DES, MD5withRSA, DH keySize < 1024, EC keySize < 224, 3DES_EDE_CBC, anon, NULL, ECDH, TLS_RSA_*, rsa_pkcs1_sha1 usage HandshakeSignature, ecdsa_sha1 usage HandshakeSignature, dsa_sha1 usage HandshakeSignature", "  jdk.certpath.disabledAlgorithms = MD2, MD5, SHA1 jdkCA & usage TLSServer, RSA keySize < 1024, DSA keySize < 1024, EC keySize < 224, SHA1 usage SignedJAR & denyAfter 2019-01-01", "  jdk.security.legacyAlgorithms = SHA1, RSA keySize < 2048, DSA keySize < 2048", "  jdk.jar.disabledAlgorithms = MD2, MD5, RSA keySize < 1024, DSA keySize < 1024, SHA1 denyAfter 2019-01-01", "  crypto.policy = unlimited", "  jdk.tls.legacyAlgorithms = NULL, anon, RC4, DES, 3DES_EDE_CBC", "  JDK 17.0.20.1:支持的协议 [TLSv1.3, TLSv1.2, TLSv1.1, TLSv1, SSLv3, SSLv2Hello];默认启用的协议(客户端)[TLSv1.3, TLSv1.2];支持的套件 31 个,默认启用 31 个", "  默认启用的套件里 CBC 套件 16 个,AEAD(GCM/ChaCha20)套件 14 个;含 3DES 的 0 个,含 RC4 的 0 个", "  --- JDK 21 ---", "  jdk.tls.disabledAlgorithms = SSLv3, TLSv1, TLSv1.1, DTLSv1.0, RC4, DES, MD5withRSA, DH keySize < 1024, EC keySize < 224, 3DES_EDE_CBC, anon, NULL, ECDH, TLS_RSA_*, rsa_pkcs1_sha1 usage HandshakeSignature, ecdsa_sha1 usage HandshakeSignature, dsa_sha1 usage HandshakeSignature", "  jdk.certpath.disabledAlgorithms = MD2, MD5, SHA1 jdkCA & usage TLSServer, RSA keySize < 1024, DSA keySize < 1024, EC keySize < 224, SHA1 usage SignedJAR & denyAfter 2019-01-01", "  jdk.security.legacyAlgorithms = SHA1, RSA keySize < 2048, DSA keySize < 2048, DES, DESede, MD5, RC2, ARCFOUR", "  jdk.jar.disabledAlgorithms = MD2, MD5, RSA keySize < 1024, DSA keySize < 1024, SHA1 denyAfter 2019-01-01", "  crypto.policy = unlimited", "  jdk.tls.legacyAlgorithms = NULL, anon, RC4, DES, 3DES_EDE_CBC", "  JDK 21.0.12.1:支持的协议 [TLSv1.3, TLSv1.2, TLSv1.1, TLSv1, SSLv3, SSLv2Hello];默认启用的协议(客户端)[TLSv1.3, TLSv1.2];支持的套件 31 个,默认启用 31 个", "  默认启用的套件里 CBC 套件 16 个,AEAD(GCM/ChaCha20)套件 14 个;含 3DES 的 0 个,含 RC4 的 0 个", "  --- JDK 27 ---", "  jdk.tls.disabledAlgorithms = SSLv3, TLSv1, TLSv1.1, DTLSv1.0, RC4, DES, MD5withRSA, DH keySize < 1024, EC keySize < 224, 3DES_EDE_CBC, anon, NULL, ECDH, TLS_RSA_*, rsa_pkcs1_sha1 usage HandshakeSignature, ecdsa_sha1 usage HandshakeSignature, dsa_sha1 usage HandshakeSignature", "  jdk.certpath.disabledAlgorithms = MD2, MD5, SHA1 jdkCA & usage TLSServer, RSA keySize < 1024, DSA keySize < 1024, EC keySize < 224, SHA1 usage SignedJAR & denyAfter 2019-01-01", "  jdk.security.legacyAlgorithms = SHA1, RSA keySize < 2048, DSA keySize < 2048, DES, DESede, MD5, RC2, ARCFOUR", "  jdk.jar.disabledAlgorithms = MD2, MD5, RSA keySize < 1024, DSA keySize < 1024, SHA1 denyAfter 2019-01-01", "  crypto.policy = unlimited", "  jdk.tls.legacyAlgorithms = NULL, anon, RC4, DES, 3DES_EDE_CBC", "  JDK 27:支持的协议 [TLSv1.3, TLSv1.2, TLSv1.1, TLSv1, SSLv3, SSLv2Hello];默认启用的协议(客户端)[TLSv1.3, TLSv1.2];支持的套件 31 个,默认启用 31 个", "  默认启用的套件里 CBC 套件 16 个,AEAD(GCM/ChaCha20)套件 14 个;含 3DES 的 0 个,含 RC4 的 0 个"], "cur": [], "mark": [], "done": []}, "done": [0, 1, 10, 19], "mark": [3, 6, 9, 12, 15, 18, 21, 24], "kv": {"items": [["jdk.tls.disabledAlgorithms", "JDK 17 / 21 / 27 相同"], ["jdk.security.legacyAlgorithms", "21 与 27 多了 DES、DESede、MD5、RC2、ARCFOUR"], ["默认启用的协议", "TLSv1.3、TLSv1.2"], ["默认启用套件", "31 个(AEAD 14、CBC 16)"]], "hl": ["jdk.security.legacyAlgorithms"]}}}, {"note": "协议与套件被禁用时的握手(服务器与客户端都是 JDK 21,默认配置):TLSv1.3、TLSv1.2 握手成功;TLSv1.1、TLSv1 → SSLHandshakeException: No appropriate protocol (protocol is disabled or cipher suites are inappropriate);TLSv1.2 + TLS_RSA_WITH_AES_128_CBC_SHA(RSA 密钥交换)失败;TLSv1.2 + TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA 成功;TLS_RSA_WITH_3DES_EDE_CBC_SHA 失败。用 -Djava.security.properties 覆盖 jdk.tls.disabledAlgorithms(去掉 TLSv1、TLSv1.1、3DES_EDE_CBC、TLS_RSA_* 等):TLSv1.1 与 TLSv1 握手成功,TLS_RSA_WITH_AES_128_CBC_SHA 成功;3DES 套件仍然失败(收到 handshake_failure,默认就没有启用这个套件)。", "s": {"t": {"lines": ["  TLSv1.3  → 握手成功:TLSv1.3 TLS_AES_256_GCM_SHA384", "  TLSv1.2  → 握手成功:TLSv1.2 TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384", "  TLSv1.1  → 握手失败:SSLHandshakeException: No appropriate protocol (protocol is disabled or cipher suites are inappropriate)", "  TLSv1    → 握手失败:SSLHandshakeException: No appropriate protocol (protocol is disabled or cipher suites are inappropriate)", "  TLSv1.2 + 套件 TLS_RSA_WITH_AES_128_CBC_SHA(RSA 密钥交换,无前向保密)→ 握手失败:SSLHandshakeException: No appropriate protocol (protocol is disabled or cipher suites are inappropriate)", "  TLSv1.2 + 套件 TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA → 握手成功:TLSv1.2 TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA", "  TLSv1.2 + 套件 TLS_RSA_WITH_3DES_EDE_CBC_SHA → 握手失败:SSLHandshakeException: No appropriate protocol (protocol is disabled or cipher suites are inappropriate)", "  --- 用 -Djava.security.properties 覆盖 jdk.tls.disabledAlgorithms 为:SSLv3, RC4, DES, MD5withRSA, DH keySize < 1024, EC keySize < 224, anon, NULL(去掉了 TLSv1、TLSv1.1、3DES_EDE_CBC、TLS_RSA_* 等)---", "  TLSv1.3  → 握手成功:TLSv1.3 TLS_AES_256_GCM_SHA384", "  TLSv1.2  → 握手成功:TLSv1.2 TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384", "  TLSv1.1  → 握手成功:TLSv1.1 TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA", "  TLSv1    → 握手成功:TLSv1 TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA", "  TLSv1.2 + 套件 TLS_RSA_WITH_AES_128_CBC_SHA(RSA 密钥交换,无前向保密)→ 握手成功:TLSv1.2 TLS_RSA_WITH_AES_128_CBC_SHA", "  TLSv1.2 + 套件 TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA → 握手成功:TLSv1.2 TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA", "  TLSv1.2 + 套件 TLS_RSA_WITH_3DES_EDE_CBC_SHA → 握手失败:SSLHandshakeException: (handshake_failure) Received fatal alert: handshake_failure"], "cur": [], "mark": [], "done": []}, "done": [0, 1, 2, 8, 9, 10], "mark": [4, 6, 7, 12, 14], "kv": {"items": [["默认", "TLSv1.1 / TLSv1 / TLS_RSA_* / 3DES 全部被拒绝"], ["覆盖 jdk.tls.disabledAlgorithms", "TLSv1.1、TLSv1、TLS_RSA_* 可用"], ["3DES 套件", "即使去掉禁用,默认也没有启用"]], "hl": ["覆盖 jdk.tls.disabledAlgorithms"]}}}, {"note": "证书路径验证被算法限制拒绝(自建的 root、ica 与各种叶子,JDK 21 默认):正常链通过;叶子或中间证书用 SHA1withRSA 签名仍然通过——默认规则是「SHA1 jdkCA & usage TLSServer」,只对由 JDK 自带 CA 锚定的 TLS 服务器链禁用 SHA1,自建的信任锚不受限;512 位 RSA 的叶子 → Algorithm constraints check failed on keysize limits: RSA 512 bit key(ALGORITHM_CONSTRAINED);1024 位通过;信任锚自己用 SHA1withRSA 签名也通过(信任锚自身的签名算法不检查)。覆盖成 MD2, MD5, SHA1, RSA keySize < 2048 之后:SHA1 签名的叶子、SHA1 签名的中间证书、1024 位叶子都失败(Algorithm constraints check failed on disabled algorithm: SHA1 …),SHA1 签名的信任锚仍然通过。", "s": {"t": {"lines": ["  正常链 [leaf_sha256, ica] 信任 root → 通过", "  叶子用 SHA1withRSA 签名 [leaf_sha1, ica] → 通过", "  中间证书用 SHA1withRSA 签名 [leaf_viasha1, ica_sha1] → 通过", "  512 位 RSA 的叶子 [leaf_rsa512, ica] → 失败:Algorithm constraints check failed on keysize limits: RSA 512 bit key used with certificate: CN=localhost(原因 ALGORITHM_CONSTRAINED)", "  1024 位 RSA 的叶子 [leaf_rsa1024, ica] → 通过", "  根证书(信任锚)自己的签名算法是 SHA1withRSA 时(root_sha1 作为锚,链 [leaf_underroot_sha1root])→ 通过(信任锚自身的签名算法不被检查)", "  --- 用 -Djava.security.properties 收紧:jdk.certpath.disabledAlgorithms=MD2, MD5, SHA1, RSA keySize < 2048 ---", "  正常链 [leaf_sha256, ica] 信任 root → 通过", "  叶子用 SHA1withRSA 签名 [leaf_sha1, ica] → 失败:Algorithm constraints check failed on disabled algorithm: SHA1 used with certificate: CN=localhost(原因 ALGORITHM_CONSTRAINED)", "  中间证书用 SHA1withRSA 签名 [leaf_viasha1, ica_sha1] → 失败:Algorithm constraints check failed on disabled algorithm: SHA1 used with certificate: CN=Sec ICA SHA1(原因 ALGORITHM_CONSTRAINED)", "  512 位 RSA 的叶子 [leaf_rsa512, ica] → 失败:Algorithm constraints check failed on keysize limits: RSA 512 bit key used with certificate: CN=localhost(原因 ALGORITHM_CONSTRAINED)", "  1024 位 RSA 的叶子 [leaf_rsa1024, ica] → 失败:Algorithm constraints check failed on keysize limits: RSA 1024 bit key used with certificate: CN=localhost(原因 ALGORITHM_CONSTRAINED)", "  根证书(信任锚)自己的签名算法是 SHA1withRSA 时(root_sha1 作为锚,链 [leaf_underroot_sha1root])→ 通过(信任锚自身的签名算法不被检查)"], "cur": [], "mark": [], "done": []}, "done": [0, 1, 2, 7, 8, 9], "mark": [3, 4, 5, 6, 10, 11, 12], "kv": {"items": [["默认:SHA1 签名的叶子 / 中间证书", "通过(规则只对 JDK CA 的 TLS 链)"], ["默认:512 位 RSA", "ALGORITHM_CONSTRAINED"], ["收紧到 SHA1 与 < 2048", "SHA1 与 1024 位都失败"], ["信任锚自身的 SHA1 签名", "不检查,通过"]], "hl": ["收紧到 SHA1 与 < 2048"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / OpenJDK(Temurin 17.0.20、Homebrew 21.0.12 与 27,每篇注明实际用的版本);用 javac 编译、java 直接运行,需要第三方库时用 Maven 解析依赖;计时用 System.nanoTime,数字每次运行会有小幅抖动。JDK 17.0.20、21.0.12、27(Homebrew/Temurin 构建);证书由 keytool 在本机生成;覆盖用 -Djava.security.properties</li><li>没有验证:通过 $JAVA_HOME/conf/security/java.security 直接修改的效果与风险、jdk.tls.disabledAlgorithms 的 usage 与 denyAfter 语法的全部取值、DTLS、jdk.jar.disabledAlgorithms 对签名 JAR 的影响、FIPS 模式、其它发行版(OpenJDK 厂商构建)在默认值上的差异;放宽这些限制仅用于兼容旧系统,存在安全风险</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="java-jlink.html">
+    <div>
+      <div class="t1">下一篇 · JAVA 266</div>
+      <div class="t2">jlink:裁剪出应用需要的 Java 运行时</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Java · Java Security Parameters:算法限制如何影响兼容性 · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

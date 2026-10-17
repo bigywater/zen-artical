@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>Hash 和 ZSet 什么时候换编码</title>
+<meta name="description" content="listpack 到 hashtable/skiplist 的转换阈值实测。">
+<link rel="canonical" href="https://bigywater.tech/hashzset.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Hash 和 ZSet 什么时候换编码">
+<meta property="og:description" content="listpack 到 hashtable/skiplist 的转换阈值实测。">
+<meta property="og:url" content="https://bigywater.tech/hashzset.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Hash 和 ZSet 什么时候换编码">
+<meta name="twitter:description" content="listpack 到 hashtable/skiplist 的转换阈值实测。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F7F5F3; --paper:#FFFFFF; --ink:#211A19; --ink-dim:#6B5D5A; --line:#E3DAD6;
+  --redis-c:#C6302B; --redis-c-soft:#FBE7E5;
+  --mem-c:#B8791E; --mem-c-soft:#F6ECD9;
+  --type-c:#2C6E49; --type-c-soft:#E1EFE6;
+  --code-bg:#241C1B; --code-ink:#F0E7E4;
+  --shadow: 0 1px 2px rgba(40,20,18,.06), 0 8px 24px -12px rgba(40,20,18,.16);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#17100F; --paper:#231A19; --ink:#F0E7E4; --ink-dim:#B3A19D; --line:#3A2C29;
+    --redis-c:#F0736A; --redis-c-soft:#3A211F;
+    --mem-c:#E0AC5C; --mem-c-soft:#382C18;
+    --type-c:#6FC492; --type-c-soft:#1B3327;
+    --code-bg:#120D0C; --code-ink:#EFE4E1;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#17100F; --paper:#231A19; --ink:#F0E7E4; --ink-dim:#B3A19D; --line:#3A2C29;
+  --redis-c:#F0736A; --redis-c-soft:#3A211F;
+  --mem-c:#E0AC5C; --mem-c-soft:#382C18;
+  --type-c:#6FC492; --type-c-soft:#1B3327;
+  --code-bg:#120D0C; --code-ink:#EFE4E1;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--redis-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--redis-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--redis-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--redis-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.a .tag{background:var(--redis-c-soft); color:var(--redis-c);}
+.card.b .tag{background:var(--mem-c-soft); color:var(--mem-c);}
+.card.c .tag{background:var(--type-c-soft); color:var(--type-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#B3A19D; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#F0A6A0;}
+
+.callout{border-left:3px solid var(--redis-c); background:var(--redis-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+.callout.c{border-color:var(--type-c); background:var(--type-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--redis-c-soft); color:var(--redis-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#F0A6A0;}
+.term .ok{color:#7DD0A0;}
+.term .cm{color:#8B7F7C;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;}
+.demo-title{font-weight:600; font-size:.95rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--mem-c-soft); color:var(--mem-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:22px 20px;}
+.itemrow{display:flex; gap:6px; flex-wrap:wrap; margin:12px 0;}
+.itembox{border:1.5px solid var(--line); border-radius:7px; padding:6px 10px; background:var(--bg); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.78rem;}
+.itembox.listpack{border-color:var(--type-c); background:var(--type-c-soft);}
+.itembox.big{border-color:var(--redis-c); background:var(--redis-c-soft);}
+.enc-badge{display:inline-block; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.78rem; padding:4px 10px; border-radius:6px; font-weight:600;}
+.enc-badge.listpack{background:var(--type-c-soft); color:var(--type-c);}
+.enc-badge.big{background:var(--redis-c-soft); color:var(--redis-c);}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--redis-c); color:var(--redis-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--redis-c); border-color:var(--redis-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{display:flex; align-items:center; gap:10px; margin-bottom:24px; font-size:.88rem; color:var(--ink-dim); flex-wrap:wrap;}
+.prev-post a{font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--redis-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Redis 系列 · 第二篇</div>
+    <h1>一个 Hash 只有 3 个字段和有 3 万个字段,底层存的是同一种结构吗?</h1>
+    <p>不是。Redis 里 Hash 和 ZSet(还有 List、Set)都有两副面孔:数据量小的时候,用一种极其紧凑、省内存的结构存;数据量一大,自动换成另一套更适合大规模查找的结构。这篇讲清楚这次切换具体在什么时候发生、切换之后能不能再换回来,以及 Hash 和 ZSet 换的目标结构为什么不一样。</p>
+    <p>接上一篇 SDS,继续用本机运行的 Redis 8.10.1 做实验。</p>
+    <div class="hero-fact">
+      <div><div class="num">512 / 64</div><div class="lbl">测出的 Hash 编码切换阈值(entries / 单值字节数)</div></div>
+      <div><div class="num">单向</div><div class="lbl">编码只会变大,验证过——删到只剩 3 个元素也不会变回去</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <div class="prev-post">← 接上篇 <a href="sds.html" target="_blank" rel="noopener">SDS:Redis 自己的字符串</a></div>
+  <h2>小的时候,大家都是 listpack</h2>
+  <p class="h2-sub">Hash、ZSet(以及 List)在元素很少的时候,底层都用同一种紧凑结构——<span class="mono">listpack</span>:一段连续内存,元素挨个紧密排列,没有指针、没有哈希桶的开销。</p>
+  <div class="cards">
+    <div class="card a">
+      <span class="tag">listpack</span>
+      <h3>省内存,但查找是线性的</h3>
+      <p>找一个字段要从头挨个比较——元素少的时候这完全不是问题,順序扫描比维护一整套哈希表/跳表的开销还小。</p>
+    </div>
+    <div class="card b">
+      <span class="tag">两个独立阈值</span>
+      <h3>元素个数,或单个值的长度</h3>
+      <p>只要触碰到其中一个上限——哪怕另一个远没到——就会转换,两个条件是"或"的关系,不是"且"。</p>
+    </div>
+    <div class="card c">
+      <span class="tag">转换目标</span>
+      <h3>Hash → hashtable,ZSet → skiplist</h3>
+      <p>都是"从紧凑结构换成大规模结构",但换成的具体结构不一样——因为 Hash 和 ZSet 要支持的操作不一样。</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>真实实测:两个独立的触发条件</h2>
+  <p class="h2-sub">本机默认阈值:<span class="mono">hash-max-listpack-entries=512</span>,<span class="mono">hash-max-listpack-value=64</span>。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cmd">HSET myhash field1 value1 ... (10 个字段)</span>
+<span class="cmd">OBJECT ENCODING myhash</span>              <span class="ok">→ "listpack"</span>
+
+<span class="cmd">HSET myhash2 f1 v1 ... (513 个字段)</span>
+<span class="cmd">OBJECT ENCODING myhash2</span>             <span class="ok">→ "hashtable"</span>   <span class="cm"># 超过 512 这一条,触发转换</span>
+
+<span class="cmd">HSET myhash3 field1 "short"</span>
+<span class="cmd">OBJECT ENCODING myhash3</span>             <span class="ok">→ "listpack"</span>
+<span class="cmd">HSET myhash3 field2 (一个 65 字节的值)</span>
+<span class="cmd">OBJECT ENCODING myhash3</span>             <span class="ok">→ "hashtable"</span>   <span class="cm"># 只有 2 个字段,单纯因为值太长就转换了</span>
+  </div>
+  <p>第三组实验最能说明"或"关系:整个 Hash 只有 2 个字段,远没到 512 这条线,但因为其中一个值超过了 64 字节,照样触发转换。ZSet 是完全对称的行为(阈值 <span class="mono">zset-max-listpack-entries=128</span>,<span class="mono">zset-max-listpack-value=64</span>,针对的是 member 而不是 score 的长度):</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cmd">ZADD myzset 1 alice 2 bob 3 carol</span>
+<span class="cmd">OBJECT ENCODING myzset</span>              <span class="ok">→ "listpack"</span>
+
+<span class="cmd">ZADD myzset3 1 short</span>
+<span class="cmd">OBJECT ENCODING myzset3</span>             <span class="ok">→ "listpack"</span>
+<span class="cmd">ZADD myzset3 2 (一个 65 字节的 member)</span>
+<span class="cmd">OBJECT ENCODING myzset3</span>             <span class="ok">→ "skiplist"</span>
+  </div>
+  <p>源码里两个类型的判断逻辑结构几乎一模一样:</p>
+  <blockquote class="src">
+    <span class="path">src/t_hash.c · <a href="https://github.com/redis/redis/blob/8.10.1/src/t_hash.c#L1577" target="_blank" rel="noopener">redis @ 8.10.1, L1577</a></span>
+size_t new_fields = (end - start + 1) / 2;
+if (new_fields > server.hash_max_listpack_entries) {
+    hashTypeConvert(db, o, OBJ_ENCODING_HT);
+    ...
+}
+...
+if (len > server.hash_max_listpack_value) {
+    hashTypeConvert(db, o, target_enc);
+    ...
+}
+  </blockquote>
+  <blockquote class="src">
+    <span class="path">src/t_zset.c · <a href="https://github.com/redis/redis/blob/8.10.1/src/t_zset.c#L1655" target="_blank" rel="noopener">redis @ 8.10.1, L1655</a></span>
+if (zzlLength(zobj->ptr)+1 > server.zset_max_listpack_entries ||
+    sdslen(ele) > server.zset_max_listpack_value ||
+    !lpSafeToAdd(zobj->ptr, sdslen(ele)))
+{
+    zsetConvertAndExpand(zobj, OBJ_ENCODING_SKIPLIST, zsetLength(zobj) + 1);
+}
+  </blockquote>
+  <p>还多了一条本文实验没有专门覆盖的第三重保险:<span class="mono">lpSafeToAdd</span>——即使前两个阈值都没超,如果这次写入会让 listpack 自身的总字节数超出安全上限,同样会触发转换。</p>
+</section>
+
+<section>
+  <h2>验证:转换是单向的</h2>
+  <p class="h2-sub">从 513 个字段的 hashtable 编码 Hash 里,删掉 510 个,只剩 3 个字段——编码会不会变回 listpack?</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cmd">OBJECT ENCODING myhash2</span>   <span class="ok">→ "hashtable"</span>   <span class="cm"># 513 个字段时的状态</span>
+<span class="cmd">HDEL myhash2 f1 f2 ... (删除 510 个)</span>
+<span class="cmd">HLEN myhash2</span>              <span class="ok">→ 3</span>
+<span class="cmd">OBJECT ENCODING myhash2</span>   <span class="ok">→ "hashtable"</span>   <span class="cm"># 还是 hashtable,没有变回去</span>
+  </div>
+  <p>只剩 3 个字段,远低于 512 这条线,编码依然是 hashtable。翻遍 <span class="mono">t_hash.c</span> 和 <span class="mono">t_zset.c</span> 也找不到任何一条"hashtable/skiplist 转回 listpack"的代码路径——这不是没测全,是压根不存在这个方向的转换。</p>
+  <div class="callout">
+    这个设计是故意的:反复在 listpack 和 hashtable 之间来回转换的开销(每次转换都要重新分配、重新组织全部数据)可能比"多占一点内存、始终用大结构"还贵,尤其是数据量在阈值附近反复增删的场景。Redis 选择了"宁可多占内存,也不做双向转换"这个简单但可预测的策略。
+  </div>
+</section>
+
+<section>
+  <h2>演示:元素一个个加进去,编码什么时候变</h2>
+  <p class="h2-sub">用小得多的玩具阈值复现规则的形状(规则和代码一致,数字缩小方便看清楚)。</p>
+  <div class="demo" id="hzDemo">
+    <div class="demo-head">
+      <div class="demo-title">选择要演示的类型</div>
+      <div>
+        <button class="btn primary" id="btnHash">Hash(阈值:4 个字段 / 6 字节)</button>
+        <button class="btn" id="btnZset">ZSet(阈值:5 个成员 / 6 字节)</button>
+      </div>
+    </div>
+    <div class="demo-narration" id="hzNarration"></div>
+    <div class="demo-body">
+      <div style="margin-bottom:10px;">当前编码:<span class="enc-badge listpack" id="hzEncBadge">listpack</span></div>
+      <div class="itemrow" id="hzItems"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="hzReset">⏮ 重来</button>
+      <button class="btn" id="hzPrev">‹ 上一步</button>
+      <button class="btn primary" id="hzNext">下一步 ›</button>
+      <span class="step-counter" id="hzCounter"></span>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>为什么 Hash 和 ZSet 换的目标结构不一样</h2>
+  <p class="h2-sub">Hash 只需要"通过 field 查 value",换成普通哈希表(dict)就够了。ZSet 除了"通过 member 查 score",还要支持"按 score 排序取范围"——这是哈希表完全做不到的能力,所以 ZSet 换的是跳表,而且结构是跳表和哈希表<b>一起用</b>:</p>
+  <blockquote class="src">
+    <span class="path">src/server.h · <a href="https://github.com/redis/redis/blob/8.10.1/src/server.h#L1816" target="_blank" rel="noopener">redis @ 8.10.1, L1816</a></span>
+typedef struct zset {
+    dict *dict;      /* 支持 O(1) 按 member 查 score,给 ZSCORE 用 */
+    zskiplist *zsl;  /* 支持 O(log n) 按 score 排序/范围查询,给 ZRANGE、ZRANK 用 */
+} zset;
+  </blockquote>
+  <p>两个结构指向的是同一份 member/score 数据,不是各存一份——<span class="mono">dict</span> 负责"这个成员的分数是多少"这类精确查找,<span class="mono">zsl</span> 负责"分数在某个范围内的都有谁"这类范围查询。这也是为什么小规模的 ZSet 用 listpack 反而更合适:数据量小的时候,维护两套索引结构的开销,比直接线性扫一遍还贵。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文所有 <span class="mono">OBJECT ENCODING</span>/<span class="mono">HLEN</span>/<span class="mono">ZCARD</span>/<span class="mono">CONFIG GET</span> 结果均在本机运行的 Redis 8.10.1 上通过 <span class="mono">redis-cli</span> 执行得到,未做任何删改;"转换是单向的"一节额外用的 <span class="mono">HDEL</span> 操作验证过,不是只看了源码就下结论。</li>
+      <li>源码引用(<span class="mono">t_hash.c</span> 的 <span class="mono">hashTypeTryConversion</span>、<span class="mono">t_zset.c</span> 的转换检查、<span class="mono">server.h</span> 的 <span class="mono">zset</span> 结构体)取自 <span class="mono">redis/redis</span> 仓库 <span class="mono">8.10.1</span> 标签,与本机安装的 Redis 8.10.1 完全一致。</li>
+      <li>演示动画用的阈值(Hash:4 个字段/6 字节,ZSet:5 个成员/6 字节)是缩小版玩具参数,判定规则(个数超限或长度超限任一命中即转换)和代码完全一致,只是数字方便在屏幕上演示。</li>
+      <li>没有涉及:List 类型的编码切换(<span class="mono">list-max-listpack-size</span>,规则和这里类似但控制粒度略有不同)、Set 类型的 <span class="mono">intset</span>/<span class="mono">listpack</span>/<span class="mono">hashtable</span> 三级编码、<span class="mono">lpSafeToAdd</span> 具体的安全阈值计算方式。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="io.html" target="_blank" rel="noopener" style="text-decoration:none; color:inherit;">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">Redis 一个线程,怎么同时管几万个连接</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Redis 系列 · 第二篇 · Hash 与 ZSet 的编码切换 · 数据来自本机运行的 Redis 8.10.1</footer>
+
+<script>
+const DATA = {"hashEvents": [{"kind": "hash", "key": "f1", "value": "v1", "count": 1, "encoding": "listpack", "type": "add-listpack"}, {"kind": "hash", "key": "f2", "value": "v2", "count": 2, "encoding": "listpack", "type": "add-listpack"}, {"kind": "hash", "key": "f3", "value": "v3", "count": 3, "encoding": "listpack", "type": "add-listpack"}, {"kind": "hash", "key": "f4", "value": "v4", "count": 4, "encoding": "listpack", "type": "add-listpack"}, {"kind": "hash", "key": "f5", "value": "v5", "newEncoding": "hashtable", "reason": "元素个数将变成 5,超过阈值 4", "type": "convert"}, {"kind": "hash", "key": "f5", "remainingCount": 4, "encoding": "hashtable", "reason": "删除元素不会让编码退回 listpack,即使数量已经很少", "type": "remove"}, {"kind": "hash", "key": "f4", "remainingCount": 3, "encoding": "hashtable", "reason": "删除元素不会让编码退回 listpack,即使数量已经很少", "type": "remove"}, {"kind": "hash", "key": "f3", "remainingCount": 2, "encoding": "hashtable", "reason": "删除元素不会让编码退回 listpack,即使数量已经很少", "type": "remove"}], "zsetEvents": [{"kind": "zset", "key": "alice", "value": "10", "count": 1, "encoding": "listpack", "type": "add-listpack"}, {"kind": "zset", "key": "bob", "value": "20", "count": 2, "encoding": "listpack", "type": "add-listpack"}, {"kind": "zset", "key": "carol", "value": "30", "count": 3, "encoding": "listpack", "type": "add-listpack"}, {"kind": "zset", "key": "dave-longname", "value": "40", "newEncoding": "skiplist", "reason": "member长度 13 超过阈值 6", "type": "convert"}]};
+
+(function(){
+  const itemsBox = document.getElementById('hzItems');
+  const encBadge = document.getElementById('hzEncBadge');
+  const narration = document.getElementById('hzNarration');
+  const counter = document.getElementById('hzCounter');
+  let currentEvents = DATA.hashEvents;
+  let idx = 0;
+
+  function describe(e){
+    switch(e.type){
+      case 'add-listpack': return `写入 <span class="k">${e.key}=${e.value}</span>,当前共 ${e.count} 个元素,还在 listpack。`;
+      case 'convert': return `写入 <span class="k">${e.key}=${e.value}</span> 触发转换:${e.reason} —— 编码变成 <b>${e.newEncoding}</b>。`;
+      case 'add-direct': return `写入 <span class="k">${e.key}=${e.value}</span>:${e.reason}。`;
+      case 'remove': return `删除 <span class="k">${e.key}</span>,剩余 ${e.remainingCount} 个——${e.reason}。`;
+      default: return e.type;
+    }
+  }
+
+  function render(){
+    idx = Math.max(0, Math.min(currentEvents.length-1, idx));
+    const e = currentEvents[idx];
+    narration.innerHTML = describe(e);
+
+    const items = {};
+    let encoding = 'listpack';
+    for (let i=0;i<=idx;i++){
+      const ev = currentEvents[i];
+      if (ev.type==='add-listpack' || ev.type==='convert' || ev.type==='add-direct'){
+        items[ev.key] = ev.value;
+      }
+      if (ev.type==='convert') encoding = ev.newEncoding;
+      if (ev.type==='remove') delete items[ev.key];
+    }
+    encBadge.textContent = encoding;
+    encBadge.className = 'enc-badge ' + (encoding==='listpack' ? 'listpack' : 'big');
+
+    let html = '';
+    for (const k in items){
+      html += `<div class="itembox ${encoding==='listpack'?'listpack':'big'}">${k}=${items[k]}</div>`;
+    }
+    itemsBox.innerHTML = html || '<span style="color:var(--ink-dim); font-size:.85rem;">(空)</span>';
+
+    counter.textContent = `${idx+1} / ${currentEvents.length}`;
+    document.getElementById('hzPrev').disabled = idx===0;
+    document.getElementById('hzNext').disabled = idx===currentEvents.length-1;
+  }
+  document.getElementById('hzPrev').onclick=()=>{idx--;render();};
+  document.getElementById('hzNext').onclick=()=>{idx++;render();};
+  document.getElementById('hzReset').onclick=()=>{idx=0;render();};
+  const btnHash = document.getElementById('btnHash'), btnZset = document.getElementById('btnZset');
+  btnHash.onclick=()=>{ currentEvents = DATA.hashEvents; idx=0; render(); btnHash.classList.add('primary'); btnZset.classList.remove('primary'); };
+  btnZset.onclick=()=>{ currentEvents = DATA.zsetEvents; idx=0; render(); btnZset.classList.add('primary'); btnHash.classList.remove('primary'); };
+  render();
+})();
+</script>
+
+</body>
+</html>

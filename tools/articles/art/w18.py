@@ -1,0 +1,22 @@
+from lib import *
+S = SS('w18')
+steps = [
+    step("IP 头里的 TOS 字节 = 高 6 位 DSCP + 低 2 位 ECN。用 IP_TOS 设不同的值发 UDP,线上抓到的字节和设置的完全一致,lo0 和 en0 都是:CS0 = 0x00、CS1 = 0x20、AF11 = 0x28、AF21 = 0x48、AF31 = 0x68、AF41 = 0x88、EF = 0xb8、CS6 = 0xc0、CS7 = 0xe0(DSCP 乘以 4)。在 EF 上叠加 ECN 位:ECT(0) = 0xba、ECT(1) = 0xb9、CE = 0xbb,也都原样出现(DSCP 46,ECN 2 / 1 / 3)。getsockopt 读回的值与设置的相同。在 lo0 上,接收方打开 IP_RECVTOS 后,从辅助数据里读到的 TOS 字节与发送的完全相同。", t=tl(S(1)), mark=lidx(S(1), 'EF         设置', 'EF+ECT(0)', 'EF+ECT(1)', 'EF+CE'), done=lidx(S(1), 'CS0        设置', 'CS1        设置', 'AF11       设置', 'AF41       设置', 'CS6        设置', 'CS7        设置'), kv=KV([['TOS 字节', 'DSCP(6 位)+ ECN(2 位)'], ['EF', 'DSCP 46 → 0xb8'], ['AF41', 'DSCP 34 → 0x88'], ['ECN', '00 不支持 / 10 ECT(0) / 01 ECT(1) / 11 CE'], ['IP_RECVTOS', '接收方能读到原值']], ['EF'])),
+    step("DSCP 在公网路径上会被改吗:带不同 TOS 的 UDP 探测,TTL 从 1 到 12,用每一跳回的 ICMP 超时报文里引用的原包头看它收到时的 TOS。发出 0xb8、0x88、0x28(EF、AF41、AF11)的探测,凡是有回应的跳(8、6、8 个),看到的都是 0x00——DSCP 被清掉了;第 1 跳(默认网关)的回应这一轮对这三种值缺失,所以清除发生在第 2 跳或之前,具体是不是网关没有逐跳确认。发出 0x00 的探测始终是 0x00。发出 0xba(EF + ECT(0))的探测:第 1 跳(网关)看到的是 0xba,从第 2 跳起看到 0x02——DSCP 被清掉了,ECN 位保留了。这条路径上 DSCP 标记没能传到目的地;“--”是该跳没有回超时报文。", t=tl(S(2)), mark=lidx(S(2), '发出 0xb8', '发出 0x88', '发出 0x28', '发出 0xba'), done=lidx(S(2), '发出 0x00', '         1  ', '         2  '), b=bars([['发 0xb8 · 与原值不同的跳', 8, '8 / 8'], ['发 0x88 · 与原值不同的跳', 6, '6 / 6'], ['发 0x28 · 与原值不同的跳', 8, '8 / 8'], ['发 0x00 · 与原值不同的跳', 0, '0 / 7'], ['发 0xba · 与原值不同的跳', 8, '8 / 9']], 9, mark=[0, 1, 2, 4], done=[3]), kv=KV([['DSCP', '从第 2 跳起全是 0:被清掉'], ['ECN 位', '0xba → 0x02,ECT(0) 保留'], ['TOS = 0', '全程不变'], ['结论', 'DSCP 只在内网内有效']], ['DSCP'])),
+    step("不设 IP_TOS,只用 SO_TRAFFIC_CLASS 告诉系统流量类别(后台 200、默认 0、视频 700、语音 800、控制 900):getsockopt 读回的就是设置的值,但 lo0 和 en0 上抓到的 UDP 包的 TOS 字节全部是 0x00——系统没有因为流量类别替应用打 DSCP(至少在这个测试里)。它对本机队列或 Wi-Fi 发送优先级有没有影响,这里没有测量。", t=tl(S(3)), mark=lidx(S(3), 'en0:BK', 'lo0:BK'), done=lidx(S(3), 'en0:BK', 'lo0:BK'), kv=KV([['SO_TRAFFIC_CLASS', '设置后能读回'], ['线上 TOS', '5 种类别全部是 0x00'], ['想要 DSCP', '必须自己 IP_TOS']], ['想要 DSCP'])),
+    step("ECN 在 TCP 里:net.inet.tcp.ecn = 1,本机主动连接的 SYN 标志是 SEW(ECE + CWR)。连了 5 个公网主机,4 个连通,SYN-ACK 标志都是 S.E(带 ECE,表示接受 ECN)。接受之后本机发出的数据包 IP 头里的 ECN 位是 2(ECT(0)),主机 B 有 3 个有数据的包,取值 0 和 2 都有(为什么有 0 没有深查);对方发来的有数据的包 ECN 位全是 0——它们没有标 ECT,路径上也没有 CE。CE 没有观察到,这一机制的实际触发没有验证。", t=tl(S(4)), mark=lidx(S(4), '主机 A', '主机 B', '主机 C', '主机 E'), done=lidx(S(4), 'net.inet.tcp.ecn', 'ECN 位含义'), b=bars([['连通的主机', 4, '4'], ['SYN-ACK 接受 ECN', 4, '4'], ['观察到 CE 标记', 0, '0']], 4, mark=[1], done=[0, 2]), kv=KV([['本机 SYN', 'SEW(ECE + CWR)'], ['SYN-ACK', 'S.E:接受'], ['本机数据包', 'ECN = 2(ECT(0))'], ['对方数据包', 'ECN = 0,没有 CE']], ['SYN-ACK'])),
+    step("TCP 套接字上设 IP_TOS = 0xb8(在 lo0 上):客户端发出的 SYN 1 个、FIN 1 个、带数据 / ACK 的 4 个包,TOS 字节都是 0xb8;服务端没设,它回的 SYN-ACK、FIN 和 4 个数据 / ACK 包全是 0x00。也就是说 TOS 是每个套接字自己设的,连接另一端不会继承。要让双向都带标记,两端都要设。", t=tl(S(5)), mark=lidx(S(5), '客户端(IP_TOS=0xb8)'), done=lidx(S(5), '服务端(没设 TOS)'), kv=KV([['客户端设 0xb8', 'SYN / 数据 / FIN 全带'], ['服务端没设', '回包全是 0x00'], ['结论', 'TOS 按套接字,不随连接继承']], ['结论'])),
+]
+A = mkartw('w18', 18, '网络协议,DSCP,ECN,TOS,QoS,IP_TOS,真实验证,动画演示',
+    'TOS 字节 = DSCP + ECN,IP_TOS 设的值在 lo0 和 en0 上原样出现;公网路径上 DSCP 被清成 0 而 ECN 位保留;SO_TRAFFIC_CLASS 不会自动打 DSCP;TCP 主动连接的 SYN 带 SEW,4 个主机全部接受 ECN;TOS 按套接字设置,不随连接继承。',
+    'IP 头里的服务类型字段到底是什么?DSCP 和 ECN 各占几位?标了 DSCP 的包到了公网上会怎样?这篇用 IP_TOS 把各种 DSCP/ECN 值发到线上,抓包验证,再沿着一条真实公网路径看每一跳收到的 TOS,以及 TCP 的 ECN 协商。',
+    [('0xb8', 'EF(DSCP 46)对应的 TOS 字节;发出后线上原样出现,但公网路径从第 2 跳起看到的是 0x00'), ('0xba → 0x02', '发出 EF + ECT(0),第 2 跳起 DSCP 被清掉而 ECN 位保留'), ('4 / 4', '连通的公网主机里接受本机 ECN 请求的个数(SYN-ACK 带 ECE)')],
+    [('TOS 字节', '<p>高 6 位是 DSCP(服务等级,EF = 46、AF41 = 34 等),低 2 位是 ECN。IP_TOS 设的字节在线上原样出现,接收方可以用 IP_RECVTOS 读出来。</p>'),
+     ('公网路径', '<p>实验的这条路径上,DSCP 标记被清成 0 之后才到后面的路由器,说明 DSCP 通常只在自己管辖的网络内有意义;ECN 位没被清掉。</p>'),
+     ('流量类别', '<p>SO_TRAFFIC_CLASS 告诉系统数据的类别,但不会替你写 DSCP;想让包带标记要自己设 IP_TOS。</p>'),
+     ('ECN', '<p>TCP 主动连接时 SYN 带 ECE + CWR,对方回只带 ECE 的 SYN-ACK 表示接受;之后双方的数据包 IP 头里设 ECT(0),路由器拥塞时可以改成 CE 代替丢包。这个实验看到了协商成功和 ECT(0),没有看到 CE。</p>'),
+     ('套接字设置', '<p>IP_TOS 按套接字设置,连接的另一端不会继承;TCP 的 SYN、数据、FIN 都带这个值。</p>')],
+    steps,
+    [ENV_W + '。第一、五节在 lo0 / en0 上抓包;第二节沿一条真实公网路径用 TTL 逐跳探测,靠 ICMP 超时报文引用的原包头读取每一跳收到的 TOS(同一跳有时不回,表中用 -- 表示),设备地址不写出;第四节连了 5 个公网主机,其中 1 个没有连通',
+     '没有验证:DSCP 被清除的确切位置(第 1 跳的回应这一轮缺失);Wi-Fi 的 WMM / 802.11e 队列优先级实际如何映射 DSCP 或 SO_TRAFFIC_CLASS;路由器在拥塞时打 CE 的行为;TCP 的 ECN 回应流程(ECE / CWR 的收发);其它运营商网络是否保留 DSCP;IPv6 的流量类别字段'],
+    'DSCP 与 ECN')

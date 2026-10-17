@@ -1,0 +1,36 @@
+import sys, os, time, json, re; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from dj import *
+tee('d54'); R = {}
+m = "from django.db import models\nclass P(models.Model):\n    name = models.CharField(max_length=20)\n"
+d = proj('d54', files={'lab/models.py': m}, apps=['django.contrib.contenttypes', 'lab'])
+manage(d, 'makemigrations', 'lab'); manage(d, 'migrate')
+def sql(q): rc, out = pyscript(d, "from django.db import connection\nc = connection.cursor(); c.execute(%r); print(c.fetchall())" % q); return out.strip()
+def write(name, ops, deps="[('lab', '0001_initial')]", extra=''):
+    (d / 'lab' / 'migrations' / f'{name}.py').write_text(f"from django.db import migrations, models\n{extra}\nclass Migration(migrations.Migration):\n    dependencies = {deps}\n    operations = [{ops}]\n")
+print('== 一:RunPython 没有 reverse_code:回退时 IrreversibleError')
+write('0002_data', "migrations.RunPython(lambda apps, se: None)")
+rc, out = manage(d, 'migrate'); rc, out = manage(d, 'migrate', 'lab', '0001'); print('  migrate lab 0001 →', out.strip().splitlines()[-1][:120]); R['irr'] = out.strip().splitlines()[-1][:120]
+print('  加 RunPython.noop 作为 reverse_code:')
+write('0002_data', "migrations.RunPython(lambda apps, se: None, migrations.RunPython.noop)"); rc, out = manage(d, 'migrate', 'lab', '0001'); print('  →', [l.strip() for l in out.strip().splitlines() if 'Unapplying' in l or 'Error' in l][:2]); R['noop'] = [l.strip() for l in out.strip().splitlines() if 'Unapplying' in l or 'Error' in l][:2]
+(d / 'lab' / 'migrations' / '0002_data.py').unlink()
+print()
+print('== 二:RunPython 的正向 / 反向必须是「互逆」的——Django 不检查:正向改数据、反向什么也不做')
+rc, out = manage(d, 'migrate', 'lab', '0001')
+manage(d, 'migrate', 'lab', '0001'); rc, out = pyscript(d, "from lab.models import P\nP.objects.all().delete(); P.objects.create(name='keep')")
+write('0002_upper', "migrations.RunPython(fwd, migrations.RunPython.noop)", extra="def fwd(apps, se):\n    P = apps.get_model('lab', 'P')\n    for p in P.objects.all(): p.name = p.name.upper(); p.save()\n")
+manage(d, 'migrate'); print('  正向后:', sql('select name from lab_p'))
+manage(d, 'migrate', 'lab', '0001'); print('  反向(noop)后:', sql('select name from lab_p'), ' ← 数据没有还原'); R['upper'] = sql('select name from lab_p')
+print()
+print('== 三:自动生成的迁移的反向:AddField 反向是 DROP COLUMN;RemoveField 反向重新加列,但数据不会回来')
+(d / 'lab' / 'migrations' / '0002_upper.py').unlink(); manage(d, 'migrate', 'lab', '0001')
+(d / 'lab' / 'models.py').write_text(m + "    extra = models.IntegerField(default=7)\n"); manage(d, 'makemigrations', 'lab', '--noinput', '-n', 'add_extra'); manage(d, 'migrate')
+rc, o = pyscript(d, "from django.db import connection\nc = connection.cursor(); c.execute('update lab_p set extra = 99'); print('ok')")
+print('  加列后把 extra 改成 99:', sql('select name, extra from lab_p'))
+(d / 'lab' / 'models.py').write_text(m); manage(d, 'makemigrations', 'lab', '--noinput', '-n', 'remove_extra'); manage(d, 'migrate'); print('  删列后:', sql('select * from lab_p'))
+manage(d, 'migrate', 'lab', '0002_add_extra'); print('  回退「删列」之后(列回来了):', sql('select name, extra from lab_p'), ' ← 数据是 default(7),不是删除前的 99'); R['readd'] = sql('select name, extra from lab_p')
+print()
+print('== 四:DeleteModel 的反向:表重建,数据全部丢失')
+manage(d, 'migrate'); print('  删除前行数:', sql('select count(*) from lab_p'))
+(d / 'lab' / 'models.py').write_text(""); manage(d, 'makemigrations', 'lab', '--noinput', '-n', 'delete_p'); rc, o = manage(d, 'migrate'); print('  删除模型后表还在吗(0=不在):', sql("select count(*) from sqlite_master where name='lab_p'"))
+manage(d, 'migrate', 'lab', '0003_remove_extra'); print('  回退 DeleteModel 后:表在吗(1=在)', sql("select count(*) from sqlite_master where name='lab_p'"), ' 行数', sql('select count(*) from lab_p')); R['delmodel'] = sql('select count(*) from lab_p')
+save('d54', R)

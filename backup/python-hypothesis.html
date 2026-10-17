@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>Hypothesis：基于属性的测试如何发现边界 bug</title>
+<meta name="description" content="本机 hypothesis 6.168.3 真实测一个行程编码函数:手写 7 个例子全部通过,而 property「decode(encode(s)) == s」在第 7 个随机输入 Ö7 就失败并缩小到最小反例 &quot;0&quot;;第一次「修复」排除 Nd 类别仍被发现 &quot;²&quot;(isdigit 为真但类别是 No)引起 ValueError;失败例子被记入 .hypothesis 数据库,第二次运行只调用 2 次就复现。">
+<link rel="canonical" href="https://bigywater.tech/python-hypothesis.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Hypothesis：基于属性的测试如何发现边界 bug">
+<meta property="og:description" content="本机 hypothesis 6.168.3 真实测一个行程编码函数:手写 7 个例子全部通过,而 property「decode(encode(s)) == s」在第 7 个随机输入 Ö7 就失败并缩小到最小反例 &quot;0&quot;;第一次「修复」排除 Nd 类别仍被发现 &quot;²&quot;(isdigit 为真但类别是 No)引起 ValueError;失败例子被记入 .hypothesis 数据库,第二次运行只调用 2 次就复现。">
+<meta property="og:url" content="https://bigywater.tech/python-hypothesis.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Hypothesis：基于属性的测试如何发现边界 bug">
+<meta name="twitter:description" content="本机 hypothesis 6.168.3 真实测一个行程编码函数:手写 7 个例子全部通过,而 property「decode(encode(s)) == s」在第 7 个随机输入 Ö7 就失败并缩小到最小反例 &quot;0&quot;;第一次「修复」排除 Nd 类别仍被发现 &quot;²&quot;(isdigit 为真但类别是 No)引起 ValueError;失败例子被记入 .hypothesis 数据库,第二次运行只调用 2 次就复现。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">1937</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#306998; --series-c-soft:#E3EBF5;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#5B9BD5; --series-c-soft:#1B2F4D;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#5B9BD5; --series-c-soft:#1B2F4D;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Python · 99</div>
+  <h1>Hypothesis：基于属性的测试如何发现边界 bug</h1>
+  <p>手写测试只能覆盖你想到的输入。基于属性的测试(property-based testing)换了个思路:你描述「对任何输入都应成立的规律」,让 Hypothesis 去生成成百上千个输入,找到反例后还会自动把它缩到最小。这篇用一个看上去没问题的行程编码函数,亲眼看它怎么被找出毛病。</p>
+  <div class="hero-fact">
+<div><div class="num">7 / 7 通过</div><div class="lbl">手写的 7 个例子全部通过——bug 依然在</div></div><div><div class="num">'0'</div><div class="lbl">Hypothesis 缩小得到的最小反例,只有 1 个字符</div></div><div><div class="num">2 次</div><div class="lbl">失败被记入数据库后,重跑只调用了 2 次 property 就复现</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="python-pytest-parametrize.html">pytest 参数化：一组测试如何覆盖几十种输入</a></div>
+<section>
+  <h2>做的事:一个「看起来没问题」的行程编码</h2>
+  
+  <blockquote class="src"><span class="path">rle.py</span>
+def rle_encode(s):               # "aaabcc" → "3a1b2c"
+    out = []; i = 0
+    while i &lt; len(s):
+        j = i
+        while j &lt; len(s) and s[j] == s[i]: j += 1
+        out.append(f"{j - i}{s[i]}"); i = j
+    return "".join(out)
+
+def rle_decode(t):
+    out = []; num = ""
+    for ch in t:
+        if ch.isdigit(): num += ch
+        else: out.append(ch * int(num)); num = ""
+    return "".join(out)</blockquote>
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">1 passed in 0.07s</pre></div>
+  <p>7 个手写例子(<code>"aaabcc"</code>、空串、<code>"hello world"</code>……)全部通过。这些都是「合理的输入」,恰好绕开了 bug。</p>
+</section>
+<section>
+  <h2>验证一:告诉 Hypothesis 一条规律</h2>
+  
+  <blockquote class="src"><span class="path">property</span>
+@given(st.text(max_size=30))
+def prop(s):
+    assert rle_decode(rle_encode(s)) == s</blockquote>
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">Hypothesis 报告失败。最终(最小)反例 = '0'
+  note: Failing test case: prop(
+    s='0',
+)
+  note: Explanation:
+  note:     These lines were always and only run by failing test cases:
+  note:         prop.py:14
+property 被调用了 18 次; 其中失败 6 次
+被调用的前 12 个输入: ['', '\x89\U0001b622vîZ\U00089a4f!ü\U0007d364\U0008b1c5@\x1dà\U000b779e\x96{\U000ce570\x84\U000e7cc8', '\x1fç\U00063ce4\x9d', 'ü', 'J\x03', 'a\x14"±\U000644ffQ', 'Ö7', '\U0009684fu\U000b07e1\U00102305~\x8eJNâP\U00101fb4=ùX', 'læ9\x01Ñ\U000a39ee\x00)', 'ñ', 'È\x8e=', '¸\x9d#']
+首次失败的输入: 'Ö7' (长度 2)
+缩小(shrinking)过程中依次出现的失败输入(去重, 按出现顺序):
+    'Ö7' 长度 2
+    'læ9\x01Ñ\U000a39ee\x00)' 长度 8
+    '00' 长度 2
+    '0' 长度 1</pre></div>
+  <p>不到 20 次调用就失败了:第 7 个随机输入 <code>'Ö7'</code>(含数字字符)就让往返不成立。Hypothesis 报告的不是这个随机串,而是<b>缩小之后的最小反例 <code>'0'</code></b>——「note」里给出的 <code>s='0'</code> 就是你可以直接拿去写回归测试的输入。整个过程 property 被调用了 18 次,其中 6 次失败(都是缩小阶段的试探)。仔细看被调用的前 12 个输入:空串、单字符、带控制字符和各种 Unicode 的字符串——它们不是随便乱来的,Hypothesis 会偏向边界值(空串排第一个)。</p><p>原因:<code>encode("0")</code> 得到 <code>"10"</code>,解码时 <code>1</code> 和 <code>0</code> 都被当成数字累积成重复次数,没有后续字符可重复,返回空串。行程编码没有为「输入本身含数字」留出转义,这是设计上的漏洞。</p>
+</section>
+<section>
+  <h2>验证二:「修复」得不彻底,它会再次找到</h2>
+  <div class="h2-sub">只排除 Unicode 类别 Nd 的字符</div>
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">Hypothesis 发现 2 种不同的失败:
+    ValueError: invalid literal for int() with base 10: '1²1' | Failing test case: prop( s='²:', )
+    AssertionError:  | Failing test case: prop( s='²', )
+   调用次数 104
+  '²'.isdigit() = True | unicodedata.category('²') = No | '²'.isdecimal() = False</pre></div>
+  <p>我第一次的修复思路是:输入里不要出现十进制数字字符(类别 <code>Nd</code>)。Hypothesis 立刻又找到两种失败:<code>'²'</code>(上标 2)的 <code>isdigit()</code> 是 True——而它的类别是 <code>No</code>、<code>isdecimal()</code> 却是 False,所以既躲过了我的类别过滤,又骗过了 <code>decode</code> 里的 <code>isdigit()</code> 判断,最后 <code>int('1²1')</code> 抛出 <code>ValueError</code>。一个手写例子里很难想到「上标数字」。</p>
+</section>
+<section>
+  <h2>验证三:用真正的判据过滤</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">过滤掉所有 isdigit() 为真的字符后, 300 个随机输入全部通过</pre></div>
+  <p>直接用 <code>str.isdigit</code> 本身当条件过滤,300 个随机输入全部通过。要注意:这只是把「有 bug 的输入范围」排除了——真正的修法是给编码格式加上转义或改用长度前缀,让含数字的输入也能正确往返。</p>
+</section>
+<section>
+  <h2>验证四:失败会被记住</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">第 1 次运行:
+失败: AssertionError
+  本次运行 property 被调用 16 次
+第 2 次运行:
+失败: AssertionError
+  本次运行 property 被调用 2 次
+  .hypothesis 目录里: ['.gitignore', 'constants', 'examples', 'unicode_data']</pre></div>
+  <p>默认情况下 Hypothesis 会把找到的失败例子存进当前目录的 <code>.hypothesis/examples</code>。第一次运行调用了十几次才碰到反例;第二次运行,它先回放数据库里的旧反例,只调用 2 次就再次失败——所以修 bug 期间每次重跑都是立刻复现,不必再等随机碰运气。这个目录不要提交进版本库(它自带 <code>.gitignore</code>)。</p>
+</section>
+<section>
+  <h2>验证五:生成的输入会偏向边界</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">st.integers() 100 个样本里: 0 出现 1 次; 绝对值 &lt; 10 的占 1 个; 超过 2**32 的占 20 个; 最大 = 7033059631192095236290872385462075392 最小 = -5975142986778338865702764544
+  st.text() 100 个样本里: 空串 1 个; 含非 ASCII 的 91 个; 含数字字符的 20 个</pre></div>
+  <p>100 个 <code>st.integers()</code> 样本里既有 0、也有远超 <code>2**32</code> 的大整数(20 个),最大的有 37 位;100 个 <code>st.text()</code> 里有空串、91 个含非 ASCII 字符、20 个含数字字符。这种「刻意覆盖极端值」的分布,是它比随机数更容易撞出 bug 的原因。</p>
+</section>
+<section>
+  <h2>分步演示:从随机输入到最小反例</h2>
+  <div class="h2-sub">输入序列取自上面实验的真实记录(带 derandomize=True,可重复)</div>
+  <div class="demo" id="demo"><div class="demo-head">Hypothesis 找到并缩小反例</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>当前输入</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "fl", "kind": "flow", "label": "阶段"}, {"id": "inp", "kind": "chips", "label": "输入(小字是结果)"}, {"id": "kv", "kind": "kv", "label": "计数"}], "steps": [{"note": "第 1 个随机输入 '':通过。", "s": {"fl": {"nodes": [["生成输入", "st.text()"], ["执行 property", "decode(encode(s)) == s"], ["发现失败", ""], ["缩小(shrink)", "找最小反例"], ["最终反例", ""]], "cur": [1], "done": [0]}, "inp": {"values": [["''", "通过"]], "cur": [], "done": [], "mark": []}, "kv": {"items": [["已调用", "1 次"], ["失败", "0 次"]], "hl": []}}}, {"note": "第 2 个随机输入 '\\x89\\U0001b62…:通过。", "s": {"fl": {"nodes": [["生成输入", "st.text()"], ["执行 property", "decode(encode(s)) == s"], ["发现失败", ""], ["缩小(shrink)", "找最小反例"], ["最终反例", ""]], "cur": [1], "done": [0]}, "inp": {"values": [["''", "通过"], ["'\\x89\\U0001b62…", "通过"]], "cur": [], "done": [0], "mark": []}, "kv": {"items": [["已调用", "2 次"], ["失败", "0 次"]], "hl": []}}}, {"note": "第 3 个随机输入 '\\x1fç\\U00063c…:通过。", "s": {"fl": {"nodes": [["生成输入", "st.text()"], ["执行 property", "decode(encode(s)) == s"], ["发现失败", ""], ["缩小(shrink)", "找最小反例"], ["最终反例", ""]], "cur": [1], "done": [0]}, "inp": {"values": [["''", "通过"], ["'\\x89\\U0001b62…", "通过"], ["'\\x1fç\\U00063c…", "通过"]], "cur": [], "done": [0, 1], "mark": []}, "kv": {"items": [["已调用", "3 次"], ["失败", "0 次"]], "hl": []}}}, {"note": "第 4 个随机输入 'ü':通过。", "s": {"fl": {"nodes": [["生成输入", "st.text()"], ["执行 property", "decode(encode(s)) == s"], ["发现失败", ""], ["缩小(shrink)", "找最小反例"], ["最终反例", ""]], "cur": [1], "done": [0]}, "inp": {"values": [["''", "通过"], ["'\\x89\\U0001b62…", "通过"], ["'\\x1fç\\U00063c…", "通过"], ["'ü'", "通过"]], "cur": [], "done": [0, 1, 2], "mark": []}, "kv": {"items": [["已调用", "4 次"], ["失败", "0 次"]], "hl": []}}}, {"note": "第 5 个随机输入 'J\\x03':通过。", "s": {"fl": {"nodes": [["生成输入", "st.text()"], ["执行 property", "decode(encode(s)) == s"], ["发现失败", ""], ["缩小(shrink)", "找最小反例"], ["最终反例", ""]], "cur": [1], "done": [0]}, "inp": {"values": [["''", "通过"], ["'\\x89\\U0001b62…", "通过"], ["'\\x1fç\\U00063c…", "通过"], ["'ü'", "通过"], ["'J\\x03'", "通过"]], "cur": [], "done": [0, 1, 2, 3], "mark": []}, "kv": {"items": [["已调用", "5 次"], ["失败", "0 次"]], "hl": []}}}, {"note": "第 6 个随机输入 'a\\x14\"±\\U0006…:通过。", "s": {"fl": {"nodes": [["生成输入", "st.text()"], ["执行 property", "decode(encode(s)) == s"], ["发现失败", ""], ["缩小(shrink)", "找最小反例"], ["最终反例", ""]], "cur": [1], "done": [0]}, "inp": {"values": [["''", "通过"], ["'\\x89\\U0001b62…", "通过"], ["'\\x1fç\\U00063c…", "通过"], ["'ü'", "通过"], ["'J\\x03'", "通过"], ["'a\\x14\"±\\U0006…", "通过"]], "cur": [], "done": [0, 1, 2, 3, 4], "mark": []}, "kv": {"items": [["已调用", "6 次"], ["失败", "0 次"]], "hl": []}}}, {"note": "第 7 个随机输入 'Ö7':包含数字字符 → 编码后无法还原 → property 失败。", "s": {"fl": {"nodes": [["生成输入", "st.text()"], ["执行 property", "decode(encode(s)) == s"], ["发现失败", ""], ["缩小(shrink)", "找最小反例"], ["最终反例", ""]], "cur": [2], "done": [0]}, "inp": {"values": [["''", "通过"], ["'\\x89\\U0001b62…", "通过"], ["'\\x1fç\\U00063c…", "通过"], ["'ü'", "通过"], ["'J\\x03'", "通过"], ["'a\\x14\"±\\U0006…", "通过"], ["'Ö7'", "失败"]], "cur": [6], "done": [0, 1, 2, 3, 4, 5], "mark": [6]}, "kv": {"items": [["已调用", "7 次"], ["失败", "1 次"]], "hl": []}}}, {"note": "第 8 个随机输入 '\\U0009684fu\\U…:通过。", "s": {"fl": {"nodes": [["生成输入", "st.text()"], ["执行 property", "decode(encode(s)) == s"], ["发现失败", ""], ["缩小(shrink)", "找最小反例"], ["最终反例", ""]], "cur": [1], "done": [0]}, "inp": {"values": [["''", "通过"], ["'\\x89\\U0001b62…", "通过"], ["'\\x1fç\\U00063c…", "通过"], ["'ü'", "通过"], ["'J\\x03'", "通过"], ["'a\\x14\"±\\U0006…", "通过"], ["'Ö7'", "失败"], ["'\\U0009684fu\\U…", "通过"]], "cur": [], "done": [0, 1, 2, 3, 4, 5], "mark": [6]}, "kv": {"items": [["已调用", "8 次"], ["失败", "1 次"]], "hl": []}}}, {"note": "第 9 个随机输入 'læ9\\x01Ñ\\U000…:包含数字字符 → 编码后无法还原 → property 失败。", "s": {"fl": {"nodes": [["生成输入", "st.text()"], ["执行 property", "decode(encode(s)) == s"], ["发现失败", ""], ["缩小(shrink)", "找最小反例"], ["最终反例", ""]], "cur": [2], "done": [0]}, "inp": {"values": [["''", "通过"], ["'\\x89\\U0001b62…", "通过"], ["'\\x1fç\\U00063c…", "通过"], ["'ü'", "通过"], ["'J\\x03'", "通过"], ["'a\\x14\"±\\U0006…", "通过"], ["'Ö7'", "失败"], ["'\\U0009684fu\\U…", "通过"], ["'læ9\\x01Ñ\\U000…", "失败"]], "cur": [8], "done": [0, 1, 2, 3, 4, 5, 7], "mark": [6, 8]}, "kv": {"items": [["已调用", "9 次"], ["失败", "2 次"]], "hl": []}}}, {"note": "第 10 个随机输入 'ñ':通过。", "s": {"fl": {"nodes": [["生成输入", "st.text()"], ["执行 property", "decode(encode(s)) == s"], ["发现失败", ""], ["缩小(shrink)", "找最小反例"], ["最终反例", ""]], "cur": [1], "done": [0]}, "inp": {"values": [["''", "通过"], ["'\\x89\\U0001b62…", "通过"], ["'\\x1fç\\U00063c…", "通过"], ["'ü'", "通过"], ["'J\\x03'", "通过"], ["'a\\x14\"±\\U0006…", "通过"], ["'Ö7'", "失败"], ["'\\U0009684fu\\U…", "通过"], ["'læ9\\x01Ñ\\U000…", "失败"], ["'ñ'", "通过"]], "cur": [], "done": [0, 1, 2, 3, 4, 5, 7], "mark": [6, 8]}, "kv": {"items": [["已调用", "10 次"], ["失败", "2 次"]], "hl": []}}}, {"note": "第 11 个随机输入 'È\\x8e=':通过。", "s": {"fl": {"nodes": [["生成输入", "st.text()"], ["执行 property", "decode(encode(s)) == s"], ["发现失败", ""], ["缩小(shrink)", "找最小反例"], ["最终反例", ""]], "cur": [1], "done": [0]}, "inp": {"values": [["''", "通过"], ["'\\x89\\U0001b62…", "通过"], ["'\\x1fç\\U00063c…", "通过"], ["'ü'", "通过"], ["'J\\x03'", "通过"], ["'a\\x14\"±\\U0006…", "通过"], ["'Ö7'", "失败"], ["'\\U0009684fu\\U…", "通过"], ["'læ9\\x01Ñ\\U000…", "失败"], ["'ñ'", "通过"], ["'È\\x8e='", "通过"]], "cur": [], "done": [0, 1, 2, 3, 4, 5, 7, 9], "mark": [6, 8]}, "kv": {"items": [["已调用", "11 次"], ["失败", "2 次"]], "hl": []}}}, {"note": "第 12 个随机输入 '¸\\x9d#':通过。", "s": {"fl": {"nodes": [["生成输入", "st.text()"], ["执行 property", "decode(encode(s)) == s"], ["发现失败", ""], ["缩小(shrink)", "找最小反例"], ["最终反例", ""]], "cur": [1], "done": [0]}, "inp": {"values": [["''", "通过"], ["'\\x89\\U0001b62…", "通过"], ["'\\x1fç\\U00063c…", "通过"], ["'ü'", "通过"], ["'J\\x03'", "通过"], ["'a\\x14\"±\\U0006…", "通过"], ["'Ö7'", "失败"], ["'\\U0009684fu\\U…", "通过"], ["'læ9\\x01Ñ\\U000…", "失败"], ["'ñ'", "通过"], ["'È\\x8e='", "通过"], ["'¸\\x9d#'", "通过"]], "cur": [], "done": [0, 1, 2, 3, 4, 5, 7, 9, 10], "mark": [6, 8]}, "kv": {"items": [["已调用", "12 次"], ["失败", "2 次"]], "hl": []}}}, {"note": "Hypothesis 有了失败的输入,开始缩小:把它变短、把字符换成「更简单」的字符,每次重新跑一遍 property,只要还失败就接受。整个过程 property 又被调用了 6 次。", "s": {"fl": {"nodes": [["生成输入", "st.text()"], ["执行 property", "decode(encode(s)) == s"], ["发现失败", ""], ["缩小(shrink)", "找最小反例"], ["最终反例", ""]], "cur": [3], "done": [0, 1, 2]}, "inp": {"values": [["'Ö7'", "长度 2"], ["'læ9\\x01Ñ\\U000…", "长度 8"], ["'00'", "长度 2"], ["'0'", "长度 1"]], "cur": [], "mark": [], "done": []}, "kv": {"items": [["总调用", "18 次"], ["其中失败", "6 次"]], "hl": ["总调用"]}}}, {"note": "缩小过程中依次留下的失败输入:'Ö7' → 'læ9\\x01Ñ\\U000… → '00' → '0'。最终反例是 '0'——一个字符。编码得到 '10',解码时把 '1' '0' 都当成了重复次数,没有字符可重复,返回空串,不等于原来的 '0'。", "s": {"fl": {"nodes": [["生成输入", "st.text()"], ["执行 property", "decode(encode(s)) == s"], ["发现失败", ""], ["缩小(shrink)", "找最小反例"], ["最终反例", ""]], "cur": [4], "done": [0, 1, 2, 3]}, "inp": {"values": [["'Ö7'", "长度 2"], ["'læ9\\x01Ñ\\U000…", "长度 8"], ["'00'", "长度 2"], ["'0'", "长度 1"]], "cur": [3], "mark": [], "done": [0, 1, 2]}, "kv": {"items": [["最小反例", "'0'"], ["encode(\"0\")", "'10'"], ["decode(\"10\")", "''(空串)"]], "hl": ["最小反例"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 / Python 3.14.7,hypothesis 6.168.3、pytest 9.1.1(临时虚拟环境);演示部分用 <code>derandomize=True</code>、<code>database=None</code> 保证可重复,验证四没有关闭随机和数据库</li><li>没有验证:stateful 测试、<code>st.builds</code>/<code>st.composite</code> 的组合策略、<code>@example</code> 固定用例、profile 设置对 CI 的影响</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="python-coverage.html">
+    <div>
+      <div class="t1">下一篇 · PYTHON 100</div>
+      <div class="t2">coverage.py：覆盖率数字到底说明了什么</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Python · Hypothesis：基于属性的测试如何发现边界 bug · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

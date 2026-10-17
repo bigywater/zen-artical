@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>Group Coordinator：Kafka 如何管理消费组</title>
+<meta name="description" content="每个消费组都由集群里的某一个 Broker 担任 Group Coordinator，负责成员管理、rebalance 和 offset 存储。这个&quot;某一个&quot;是怎么选出来的、offset 到底存在哪、这个 Broker 挂了会怎样，都能用数据回答。这次做了三件事：把 6 个组的 Coordina">
+<link rel="canonical" href="https://bigywater.tech/kafka-group-coordinator.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Group Coordinator：Kafka 如何管理消费组">
+<meta property="og:description" content="每个消费组都由集群里的某一个 Broker 担任 Group Coordinator，负责成员管理、rebalance 和 offset 存储。这个&quot;某一个&quot;是怎么选出来的、offset 到底存在哪、这个 Broker 挂了会怎样，都能用数据回答。这次做了三件事：把 6 个组的 Coordina">
+<meta property="og:url" content="https://bigywater.tech/kafka-group-coordinator.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Group Coordinator：Kafka 如何管理消费组">
+<meta name="twitter:description" content="每个消费组都由集群里的某一个 Broker 担任 Group Coordinator，负责成员管理、rebalance 和 offset 存储。这个&quot;某一个&quot;是怎么选出来的、offset 到底存在哪、这个 Broker 挂了会怎样，都能用数据回答。这次做了三件事：把 6 个组的 Coordina">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#2F6F8F; --series-c-soft:#E5F1F7;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#72B7D6; --series-c-soft:#173444;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#72B7D6; --series-c-soft:#173444;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Kafka 内部原理 · 27</div>
+  <h1>Group Coordinator：Kafka 如何管理消费组</h1>
+  <p>每个消费组都由集群里的某一个 Broker 担任 Group Coordinator，负责成员管理、rebalance 和 offset 存储。这个&quot;某一个&quot;是怎么选出来的、offset 到底存在哪、这个 Broker 挂了会怎样，都能用数据回答。这次做了三件事：把 6 个组的 Coordinator 和 <span class="mono">__consumer_offsets</span> 的分区 Leader 对照；直接读 <span class="mono">__consumer_offsets</span> 里的提交记录；在持续消费时杀掉 Coordinator 所在的 Broker。</p>
+  <div class="hero-fact">
+    <div><div class="num">验证：Coordinator 是 <span class="mono">abs(group.id.hashCode()) % 50</span> 号 <span class="mono">__consumer_offsets</span> 分区的 Leader</div><div class="lbl">6 个消费组，用组名的哈希取模 50 得到分区号，该分区的 Leader 所在 Broker 就是 --state 查到</div></div>
+    <div><div class="num">验证：消费组提交的 offset，就存在这个分区里，别的分区没有</div><div class="lbl">每个组的提交记录都恰好出现在预测的分区里，不在别的分区。</div></div>
+  </div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="kafka-assignment-strategies.html">Range、RoundRobin、Sticky 和 Cooperative 分配策略</a></div>
+<section style="padding-top:8px;">
+  <h2>验证：Coordinator 是 <span class="mono">abs(group.id.hashCode()) % 50</span> 号 <span class="mono">__consumer_offsets</span> 分区的 Leader</h2>
+  <blockquote class="src">
+    <span class="path">命令 · shell</span>
+$ kafka-consumer-groups.sh --describe --group coord-g1 --state     # 显示 COORDINATOR
+$ kafka-topics.sh --describe --topic __consumer_offsets            # 50 分区，3 副本，各分区 Leader
+# 用 Java String.hashCode 算出每个组名对应的分区号，再查该分区的 Leader
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测 · 本机执行输出</span>
+<pre class="code">coord-g1: hashCode=-540632446  abs(hash)%50=46  __consumer_offsets-46 的 Leader=broker1(19192)  实测 COORDINATOR=19192  一致
+coord-g2: hashCode=-540632445  abs(hash)%50=45  __consumer_offsets-45 的 Leader=broker3(19392)  实测 COORDINATOR=19392  一致
+coord-g3: hashCode=-540632444  abs(hash)%50=44  __consumer_offsets-44 的 Leader=broker1(19192)  实测 COORDINATOR=19192  一致
+coord-g4: hashCode=-540632443  abs(hash)%50=43  __consumer_offsets-43 的 Leader=broker3(19392)  实测 COORDINATOR=19392  一致
+coord-g5: hashCode=-540632442  abs(hash)%50=42  __consumer_offsets-42 的 Leader=broker2(19292)  实测 COORDINATOR=19292  一致
+coord-g6: hashCode=-540632441  abs(hash)%50=41  __consumer_offsets-41 的 Leader=broker3(19392)  实测 COORDINATOR=19392  一致</pre></div>
+  <p>6 个消费组，用组名的哈希取模 50 得到分区号，该分区的 Leader 所在 Broker 就是 <span class="mono">--state</span> 查到的 Coordinator，6 个全部吻合。所以 Coordinator 不需要单独选举，谁是 <span class="mono">__consumer_offsets</span> 对应分区的 Leader，谁就是这个组的 Coordinator；这个 topic 的分区数就是 <span class="mono">offsets.topic.num.partitions</span>，这个集群里是 50，<span class="mono">kafka-topics.sh --describe</span> 显示 <span class="mono">PartitionCount: 50, ReplicationFactor: 3</span>。</p>
+</section>
+<section>
+  <h2>验证：消费组提交的 offset，就存在这个分区里，别的分区没有</h2>
+  <blockquote class="src">
+    <span class="path">命令 · java</span>
+// 三个新组 coordx-a/b/c 各读 7 条并 commitSync，预测分区分别是 21、20、19
+// 用 OffsetsMessageFormatter 读取 __consumer_offsets 的 19、20、21、22 号分区
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测 · 本机执行输出</span>
+<pre class="code">__consumer_offsets-19: 共 2 条; 其中 coordx-* 的 1 条
+   group=coordx-c topic=poll-demo partition=0 提交的 offset=7
+__consumer_offsets-20: 共 14587 条; 其中 coordx-* 的 1 条
+   group=coordx-b topic=poll-demo partition=0 提交的 offset=7
+__consumer_offsets-21: 共 1 条; 其中 coordx-* 的 1 条
+   group=coordx-a topic=poll-demo partition=0 提交的 offset=7
+__consumer_offsets-22: 共 0 条; 其中 coordx-* 的 0 条</pre></div>
+  <p>每个组的提交记录都恰好出现在预测的分区里，不在别的分区。也就是说 Coordinator 管理的组状态和 offset 是持久化在这个内部 topic 的分区日志中的，并且随分区做 3 副本复制，所以换一个 Broker 当 Coordinator 时数据是现成的。20 号分区里有 14587 条记录，是之前实验遗留的其他消费组的提交，与本文无关。中间我还遇到一个坑：最初用 <span class="mono">kafka-console-consumer.sh --group ... --max-messages 5</span> 创建的组，<span class="mono">--describe</span> 显示没有提交任何 offset，<span class="mono">__consumer_offsets</span> 里也查不到记录（组虽然存在，Coordinator 也能查到，但没提交），后来改用 Java Consumer 显式 <span class="mono">commitSync()</span> 才有记录。</p>
+</section>
+<section>
+  <h2>验证：Coordinator 所在 Broker 被杀，消费不重新分配分区，只是提交被卡住约 9 秒</h2>
+  <blockquote class="src">
+    <span class="path">命令 · java</span>
+// topic coord-fail2: 1 分区，Leader 在 broker1；组 coordy-2 的 Coordinator 是 broker2
+// Producer 每 10ms 一条；Consumer 每次 poll 拿到数据后 commitSync；第 9 秒 kill -9 broker2
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测 · 本机执行输出</span>
+<pre class="code">共消费 1823 条，commitSync 成功 937 次，失败 0 次；最长消费间隔 9291ms（起点 9006ms，正是 kill 的时刻）
+  [8539ms] assigned 1
+  [9007ms] &gt;&gt;&gt; kill -9 67339
+  [30011ms] revoked 1            &lt;- 只有我结束程序时的 revoke，中间没有 rebalance
+kill 之后再查 coordinator = 127.0.0.1:19392（broker3，原来是 broker2）</pre></div>
+  <p>这次数据分区的 Leader（broker1）没有受影响，被杀的只是 Coordinator（broker2）。结果：消费者没有经历任何 rebalance（没有 revoke、lost、assigned 事件），937 次 <span class="mono">commitSync</span> 全部成功，没有一次失败；最长的一次消费间隔是 9291 毫秒，起点就是 kill 的时刻。因为我的消费循环是&quot;poll 一批、commitSync 一次&quot;，提交要等新的 Coordinator 出现才能成功，所以整个循环被卡住了约 9 秒，量级与《Broker 崩溃后，副本如何接管 Leader》里查到的 <span class="mono">broker.session.timeout.ms=9000</span> 吻合（这只是量级吻合，我没有单独验证两者的因果）。之后 Coordinator 变成了 broker3——<span class="mono">__consumer_offsets-7</span> 分区 Leader 切换到了另一个副本。我没有对比&quot;改成 commitAsync&quot;时数据消费能不能不受影响，所以这里的&quot;卡住 9 秒&quot;是同步提交带来的，不能直接说成&quot;消费本身停了 9 秒&quot;。</p>
+</section>
+<section>
+  <h2>结论</h2>
+  <p>Group Coordinator 就是 <span class="mono">abs(group.id.hashCode()) % 50</span> 号 <span class="mono">__consumer_offsets</span> 分区的 Leader，组的成员状态和提交的 offset 都存放在这个分区的日志里，随分区复制。Coordinator 所在 Broker 宕机时，分区 Leader 切换即完成 Coordinator 切换，消费者不需要 rebalance，代价是同步提交在切换期间会被阻塞（这个实验里约 9 秒）。</p>
+</section>
+<section>
+  <h2>分步演示：6个消费组的Coordinator，是怎么用哈希算出来的</h2>
+  <p>每一步都是本文上面几节计算哈希、查询__consumer_offsets分区Leader得到的原始结果。</p>
+<div class="demo" id="demo"><div class="demo-head">Coordinator不需要单独选举，就是哈希算出的那个分区的Leader</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>这一步新验证的组/事件</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>
+(function(){
+const D = {"panels":[{"id":"kv","kind":"kv","label":"实验结果（逐步累加）"},{"id":"info","kind":"text","label":"这一步发生了什么"}],"steps":[{"note":"计算：coord-g1的hashCode=-540632446，abs(hash)%50=46。查__consumer_offsets-46的Leader是broker1；用--state查这个组的COORDINATOR：也是broker1——完全一致。","s":{"kv":{"items":[["coord-g1","预测分区46的Leader=broker1，COORDINATOR=broker1（一致）"]],"hl":["coord-g1"]},"info":{"text":"计算：coord-g1的hashCode=-540632446，abs(hash)%50=46。查__consumer_offsets-46的Leader是broker1；用--state查这个组的COORDINATOR：也是broker1——完全一致。"}}},{"note":"计算：coord-g2的hashCode=-540632445，abs(hash)%50=45。查__consumer_offsets-45的Leader是broker3；用--state查这个组的COORDINATOR：也是broker3——完全一致。","s":{"kv":{"items":[["coord-g1","预测分区46的Leader=broker1，COORDINATOR=broker1（一致）"],["coord-g2","预测分区45的Leader=broker3，COORDINATOR=broker3（一致）"]],"hl":["coord-g2"]},"info":{"text":"计算：coord-g2的hashCode=-540632445，abs(hash)%50=45。查__consumer_offsets-45的Leader是broker3；用--state查这个组的COORDINATOR：也是broker3——完全一致。"}}},{"note":"计算：coord-g3的hashCode=-540632444，abs(hash)%50=44。查__consumer_offsets-44的Leader是broker1；用--state查这个组的COORDINATOR：也是broker1——完全一致。","s":{"kv":{"items":[["coord-g1","预测分区46的Leader=broker1，COORDINATOR=broker1（一致）"],["coord-g2","预测分区45的Leader=broker3，COORDINATOR=broker3（一致）"],["coord-g3","预测分区44的Leader=broker1，COORDINATOR=broker1（一致）"]],"hl":["coord-g3"]},"info":{"text":"计算：coord-g3的hashCode=-540632444，abs(hash)%50=44。查__consumer_offsets-44的Leader是broker1；用--state查这个组的COORDINATOR：也是broker1——完全一致。"}}},{"note":"计算：coord-g4的hashCode=-540632443，abs(hash)%50=43。查__consumer_offsets-43的Leader是broker3；用--state查这个组的COORDINATOR：也是broker3——完全一致。","s":{"kv":{"items":[["coord-g1","预测分区46的Leader=broker1，COORDINATOR=broker1（一致）"],["coord-g2","预测分区45的Leader=broker3，COORDINATOR=broker3（一致）"],["coord-g3","预测分区44的Leader=broker1，COORDINATOR=broker1（一致）"],["coord-g4","预测分区43的Leader=broker3，COORDINATOR=broker3（一致）"]],"hl":["coord-g4"]},"info":{"text":"计算：coord-g4的hashCode=-540632443，abs(hash)%50=43。查__consumer_offsets-43的Leader是broker3；用--state查这个组的COORDINATOR：也是broker3——完全一致。"}}},{"note":"计算：coord-g5的hashCode=-540632442，abs(hash)%50=42。查__consumer_offsets-42的Leader是broker2；用--state查这个组的COORDINATOR：也是broker2——完全一致。","s":{"kv":{"items":[["coord-g1","预测分区46的Leader=broker1，COORDINATOR=broker1（一致）"],["coord-g2","预测分区45的Leader=broker3，COORDINATOR=broker3（一致）"],["coord-g3","预测分区44的Leader=broker1，COORDINATOR=broker1（一致）"],["coord-g4","预测分区43的Leader=broker3，COORDINATOR=broker3（一致）"],["coord-g5","预测分区42的Leader=broker2，COORDINATOR=broker2（一致）"]],"hl":["coord-g5"]},"info":{"text":"计算：coord-g5的hashCode=-540632442，abs(hash)%50=42。查__consumer_offsets-42的Leader是broker2；用--state查这个组的COORDINATOR：也是broker2——完全一致。"}}},{"note":"计算：coord-g6的hashCode=-540632441，abs(hash)%50=41。查__consumer_offsets-41的Leader是broker3；用--state查这个组的COORDINATOR：也是broker3——完全一致。","s":{"kv":{"items":[["coord-g1","预测分区46的Leader=broker1，COORDINATOR=broker1（一致）"],["coord-g2","预测分区45的Leader=broker3，COORDINATOR=broker3（一致）"],["coord-g3","预测分区44的Leader=broker1，COORDINATOR=broker1（一致）"],["coord-g4","预测分区43的Leader=broker3，COORDINATOR=broker3（一致）"],["coord-g5","预测分区42的Leader=broker2，COORDINATOR=broker2（一致）"],["coord-g6","预测分区41的Leader=broker3，COORDINATOR=broker3（一致）"]],"hl":["coord-g6"]},"info":{"text":"计算：coord-g6的hashCode=-540632441，abs(hash)%50=41。查__consumer_offsets-41的Leader是broker3；用--state查这个组的COORDINATOR：也是broker3——完全一致。"}}},{"note":"换个角度验证：三个新组各自提交offset后，去读__consumer_offsets的19/20/21号分区：每个组的提交记录都恰好出现在预测的那个分区里，不在别的分区。","s":{"kv":{"items":[["coord-g1","预测分区46的Leader=broker1，COORDINATOR=broker1（一致）"],["coord-g2","预测分区45的Leader=broker3，COORDINATOR=broker3（一致）"],["coord-g3","预测分区44的Leader=broker1，COORDINATOR=broker1（一致）"],["coord-g4","预测分区43的Leader=broker3，COORDINATOR=broker3（一致）"],["coord-g5","预测分区42的Leader=broker2，COORDINATOR=broker2（一致）"],["coord-g6","预测分区41的Leader=broker3，COORDINATOR=broker3（一致）"],["提交记录位置验证","全部落在各自预测的分区里，不在别处"]],"hl":["提交记录位置验证"]},"info":{"text":"换个角度验证：三个新组各自提交offset后，去读__consumer_offsets的19/20/21号分区：每个组的提交记录都恰好出现在预测的那个分区里，不在别的分区。"}}},{"note":"kill -9杀掉Coordinator所在的Broker（不是数据分区的Leader）：消费者没有经历任何rebalance（没有revoke/assigned事件），937次commitSync全部成功，0次失败。","s":{"kv":{"items":[["coord-g1","预测分区46的Leader=broker1，COORDINATOR=broker1（一致）"],["coord-g2","预测分区45的Leader=broker3，COORDINATOR=broker3（一致）"],["coord-g3","预测分区44的Leader=broker1，COORDINATOR=broker1（一致）"],["coord-g4","预测分区43的Leader=broker3，COORDINATOR=broker3（一致）"],["coord-g5","预测分区42的Leader=broker2，COORDINATOR=broker2（一致）"],["coord-g6","预测分区41的Leader=broker3，COORDINATOR=broker3（一致）"],["提交记录位置验证","全部落在各自预测的分区里，不在别处"],["kill Coordinator后的rebalance","0次rebalance（Coordinator故障不触发分区重分配）"]],"hl":["kill Coordinator后的rebalance"]},"info":{"text":"kill -9杀掉Coordinator所在的Broker（不是数据分区的Leader）：消费者没有经历任何rebalance（没有revoke/assigned事件），937次commitSync全部成功，0次失败。"}}},{"note":"但整个消费循环被卡住了约9291毫秒——因为提交要等新Coordinator选出来才能成功，量级和之前测过的broker.session.timeout.ms=9000吻合。之后Coordinator切换成了另一个Broker。","s":{"kv":{"items":[["coord-g1","预测分区46的Leader=broker1，COORDINATOR=broker1（一致）"],["coord-g2","预测分区45的Leader=broker3，COORDINATOR=broker3（一致）"],["coord-g3","预测分区44的Leader=broker1，COORDINATOR=broker1（一致）"],["coord-g4","预测分区43的Leader=broker3，COORDINATOR=broker3（一致）"],["coord-g5","预测分区42的Leader=broker2，COORDINATOR=broker2（一致）"],["coord-g6","预测分区41的Leader=broker3，COORDINATOR=broker3（一致）"],["提交记录位置验证","全部落在各自预测的分区里，不在别处"],["kill Coordinator后的rebalance","0次rebalance（Coordinator故障不触发分区重分配）"],["提交卡顿时长","9291ms（量级与9秒会话超时吻合）"]],"hl":["提交卡顿时长"]},"info":{"text":"但整个消费循环被卡住了约9291毫秒——因为提交要等新Coordinator选出来才能成功，量级和之前测过的broker.session.timeout.ms=9000吻合。之后Coordinator切换成了另一个Broker。"}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1000); };
+go(0);
+})();
+</script>
+</section>
+<section>
+  <div class="refs"><h3>参考与说明</h3><ul>
+    <li>数据来自本机 3 节点 Kafka 4.3.1 集群，<span class="mono">group.protocol=classic</span>。</li>
+    <li>我先做过一次同样的实验：杀掉的 broker3 既是组 coordy-1 的 Coordinator，也恰好是被消费 topic（3 分区）中某个分区的 Leader，结果最长间隔 12531ms，同样没有 rebalance、0 次提交失败。这次实验里两个角色重叠在同一个 Broker 上，没法区分间隔来自哪一方，所以没有采用，改成上面把数据分区 Leader 放在另一个 Broker 的对照版本。</li>
+    <li>和《Consumer Rebalance：为什么加一个实例会暂停消费》《Broker 崩溃后，副本如何接管 Leader》一起看：前者说明成员变化触发 rebalance，后者说明 9 秒切换的来源，这里看到两者在 Coordinator 故障时的交集。</li>
+    <li>没有验证：<span class="mono">group.protocol=consumer</span>（KIP-848）下 Coordinator 的行为；<span class="mono">offsets.topic.num.partitions</span> 的改动对映射的影响；<span class="mono">commitAsync</span> 下的表现；Coordinator 切换过程中消费者的心跳与 session 超时的关系。</li>
+  </ul></div>
+</section>
+<section>
+  <a class="next-post" href="kafka-offset-commit.html">
+    <div>
+      <div class="t1">下一篇 · KAFKA 内部原理 28</div>
+      <div class="t2">Offset 提交：自动提交和手动提交有什么区别</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Kafka 内部原理 · Group Coordinator：Kafka 如何管理消费组 · 数据来自本机 3 节点 Kafka 4.3.1 集群，核对 Coordinator 与 __consumer_offsets 分区 Leader 并 kill -9 Coordinator</footer>
+</body>
+</html>

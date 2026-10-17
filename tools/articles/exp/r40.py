@@ -1,0 +1,62 @@
+import sys, time, random, os, json; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import rl
+from rl import *
+tee('r40'); R = {}
+n = Node(7140).start(); c = n.c()
+print('== 一:自动生成 ID(<毫秒时间戳>-<序号>)')
+for i in range(3): sh(c, 'XADD', 'a', '*', 'i', i)
+print()
+print('== 二:同一毫秒内连续 XADD 5000 条(管道),序号最大到多少?')
+c.do('DEL', 'burst')
+ids = [x for x in c.pipeline([['XADD', 'burst', '*', 'i', i] for i in range(5000)])]
+ms = {}
+for x in ids:
+    a, b = x.split('-'); ms.setdefault(a, []).append(int(b))
+mx = max(len(v) for v in ms.values())
+print(f'5000 条落在 {len(ms)} 个不同毫秒;同一毫秒最多 {mx} 条(序号 0..{mx-1})')
+R['burst'] = dict(n=5000, ms=len(ms), mx=mx)
+print()
+print('== 三:显式 ID 必须比当前最大 ID 大')
+c.do('DEL', 'e')
+sh(c, 'XADD', 'e', '1000-1', 'k', 'v')
+sh(c, 'XADD', 'e', '1000-1', 'k', 'v')
+sh(c, 'XADD', 'e', '1000-0', 'k', 'v')
+sh(c, 'XADD', 'e', '999-99', 'k', 'v')
+sh(c, 'XADD', 'e', '0-0', 'k', 'v')
+sh(c, 'XADD', 'e', '1000-2', 'k', 'v')
+sh(c, 'XADD', 'e', '1001-*', 'k', 'v')
+sh(c, 'XADD', 'e', '1001-*', 'k', 'v')
+print()
+print('== 四:时钟被拨回去了怎么办?——把最后一个 ID 设成"未来",再用 * 追加')
+c.do('DEL', 'fut')
+now = int(time.time() * 1000)
+sh(c, 'XADD', 'fut', f'{now + 3600_000}-0', 'k', 'v')
+r1 = sh(c, 'XADD', 'fut', '*', 'k', 'v'); r2 = sh(c, 'XADD', 'fut', '*', 'k', 'v')
+print(f'(当前毫秒时间戳 {now};last-generated-id 比它大 3600000 ms,* 生成的 ID 一直沿着最后一个 ID 的 seq 往上加)')
+R['future'] = [now, r1, r2]
+print()
+print('== 五:范围查询的 ID 写法')
+c.do('DEL', 'r')
+for t in (10, 20, 20, 30):
+    pass
+sh(c, 'XADD', 'r', '10-0', 'v', 'a'); sh(c, 'XADD', 'r', '20-0', 'v', 'b'); sh(c, 'XADD', 'r', '20-1', 'v', 'c'); sh(c, 'XADD', 'r', '30-0', 'v', 'd')
+sh(c, 'XRANGE', 'r', '20', '20')
+sh(c, 'XRANGE', 'r', '(20-0', '+')
+sh(c, 'XRANGE', 'r', '-', '20-0')
+sh(c, 'XREVRANGE', 'r', '+', '-', 'COUNT', 2)
+print()
+print('== 六:ID 上限——64 位毫秒 + 64 位序号')
+c.do('DEL', 'max')
+sh(c, 'XADD', 'max', '18446744073709551615-18446744073709551615', 'k', 'v')
+sh(c, 'XADD', 'max', '*', 'k', 'v')
+sh(c, 'XADD', 'max', '18446744073709551616-0', 'k', 'v')
+print()
+print('== 七:XINFO STREAM 里和 ID 有关的字段')
+c.do('DEL', 'i'); c.do('XADD', 'i', '5-0', 'k', 'v'); c.do('XADD', 'i', '6-0', 'k', 'v'); c.do('XADD', 'i', '7-0', 'k', 'v'); c.do('XDEL', 'i', '7-0')
+inf = c.do('XINFO', 'STREAM', 'i')
+for k in ('length', 'last-generated-id', 'max-deleted-entry-id', 'entries-added', 'recorded-first-entry-id'):
+    print(f'{k:>24} = {kv(inf)[k]}')
+sh(c, 'XADD', 'i', '*', 'k', 'v') if False else None
+sh(c, 'XADD', 'i', '7-0', 'k', 'v')
+print('(XDEL 不会让 last-generated-id 回退,被删掉的 7-0 也不能再用)')
+save('r40', R); cleanup([n])

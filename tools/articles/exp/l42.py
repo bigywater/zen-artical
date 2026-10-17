@@ -1,0 +1,32 @@
+import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from ll import *
+tee('l42')
+BASE = ''.join(f'第 {i} 行\n' for i in range(1, 9))
+OURS = '第 1 行\n第 2 行\n第 3 行\n第 4 行 ours 的修改\n共同新增的一行\n第 5 行\n第 6 行\n第 7 行\n第 8 行\n'
+THEIRS = '第 1 行\n第 2 行\n第 3 行\n第 4 行 theirs 的修改\n共同新增的一行\n第 5 行\n第 6 行\n第 7 行\n第 8 行\n'
+def mk(name, style=None):
+    d = lab(name); ci(d, '基础', {'f.txt': BASE}, t=0); run(d, 'git checkout -q -b theirs'); ci(d, 'theirs', {'f.txt': THEIRS}, t=1); run(d, 'git checkout -q main'); ci(d, 'ours', {'f.txt': OURS}, t=2)
+    if style: run(d, f'git config merge.conflictStyle {style}')
+    return d
+def show(d, rng='3,12'): sh(d, f'git merge theirs >/dev/null 2>&1; sed -n {rng}p f.txt', n=20)
+print('== 一:merge 样式(默认):只有 ours 和 theirs 两段;双方共同新增的那一行在冲突块外面')
+d = mk('l42a'); show(d)
+print('== 二:diff3 样式:多出一段 ||||||| 基础版本,能看到改之前是什么;共同新增的那一行被重复写进了 ours 和 theirs 两边')
+d = mk('l42b', 'diff3'); show(d)
+print('== 三:zdiff3 样式:保留基础版本那一段,同时把两边共同的行挪到冲突块外')
+d = mk('l42c', 'zdiff3'); show(d)
+print('== 四:冲突解决到一半想换样式:git checkout --conflict=<样式> 用 index 里的三个阶段重新生成标记(之前手工做的编辑会丢)')
+d = mk('l42d'); run(d, 'git merge theirs')
+sh(d, 'git checkout --conflict=diff3 f.txt; grep -n -E "^(<<<<<<<|\\|\\|\\|\\|\\|\\|\\||=======|>>>>>>>)" f.txt')
+sh(d, 'git checkout --conflict=merge f.txt; grep -c "^|||||||" f.txt || true')
+print('== 五:冲突期间的 git diff 是 combined diff(diff --cc):每行前有两列,分别对应 ours 和 theirs 相对结果的变化')
+d = mk('l42e'); run(d, 'git merge theirs')
+sh(d, 'git diff | sed -n 1,16p')
+sh(d, 'git diff --base f.txt | grep -E "^[+-][^+-]" | head -4; echo "--- --ours:"; git diff --ours f.txt | grep -E "^[+-][^+-]" | head -4; echo "--- --theirs:"; git diff --theirs f.txt | grep -E "^[+-][^+-]" | head -4')
+print('== 六:rebase 里 ours/theirs 的含义调转:HEAD 一侧是正在 rebase 到的新基础,另一侧是你自己的提交')
+d = lab('l42f'); ci(d, '基础', {'f.txt': BASE}, t=0); run(d, 'git checkout -q -b feature'); ci(d, '我的提交', {'f.txt': THEIRS}, t=1); run(d, 'git checkout -q main'); ci(d, '上游的提交', {'f.txt': OURS}, t=2); run(d, 'git checkout -q feature')
+sh(d, 'git rebase main 2>&1 | head -2; sed -n 4,10p f.txt')
+run(d, 'git rebase --abort')
+print('== 七:git log --merge 只列出与冲突文件相关、两边各自的提交')
+d = mk('l42g'); run(d, 'git merge theirs')
+sh(d, 'git log --merge --oneline --left-right | sed -E "s/^(.)[0-9a-f]{7} /\\1 /"')

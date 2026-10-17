@@ -1,0 +1,874 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>defer / panic / recover 内部原理</title>
+<meta name="description" content="defer 链表、panic 传播路径与 recover 生效范围的真实机制。">
+<link rel="canonical" href="https://bigywater.tech/defer.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="defer / panic / recover 内部原理">
+<meta property="og:description" content="defer 链表、panic 传播路径与 recover 生效范围的真实机制。">
+<meta property="og:url" content="https://bigywater.tech/defer.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="defer / panic / recover 内部原理">
+<meta name="twitter:description" content="defer 链表、panic 传播路径与 recover 生效范围的真实机制。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#FAF8F5; --surface:#FFFFFF; --surface-2:#F1EEE8; --surface-3:#E9E4D8;
+  --ink:#201C2B; --ink-soft:#55506A; --ink-faint:#8B85A0;
+  --line:#E4DFD5; --line-soft:#EDE9DF;
+  --defer-c:#2F8659; --defer-soft:#DCF0E4;
+  --frame-c:#3D5A99; --frame-soft:#DCE6F5;
+  --panic-c:#C23B3B; --panic-soft:#FAE0DE;
+  --warn:#B8791A; --warn-soft:#FBEBD3;
+  --code-bg:#211D30; --code-ink:#E7E2F5; --code-comment:#8D84AE; --code-kw:#7FD4C7; --code-str:#E3B368;
+  --shadow:0 1px 2px rgba(32,28,43,.06),0 10px 28px -14px rgba(32,28,43,.16);
+  --radius:12px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#15121F; --surface:#1D1930; --surface-2:#241F3B; --surface-3:#2C2647;
+    --ink:#EDE9F7; --ink-soft:#B5AECB; --ink-faint:#756D91;
+    --line:#332C4D; --line-soft:#2A2440;
+    --defer-c:#5CC98C; --defer-soft:#173829;
+    --frame-c:#8CA9E8; --frame-soft:#20304F;
+    --panic-c:#E8817A; --panic-soft:#3B211F;
+    --warn:#E3A94C; --warn-soft:#3A2A16;
+    --code-bg:#0F0D1A; --code-ink:#E7E2F5; --code-comment:#786F9C; --code-kw:#7FD4C7; --code-str:#E3B368;
+    --shadow:0 1px 2px rgba(0,0,0,.35),0 14px 32px -16px rgba(0,0,0,.55);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#15121F; --surface:#1D1930; --surface-2:#241F3B; --surface-3:#2C2647;
+  --ink:#EDE9F7; --ink-soft:#B5AECB; --ink-faint:#756D91;
+  --line:#332C4D; --line-soft:#2A2440;
+  --defer-c:#5CC98C; --defer-soft:#173829;
+  --frame-c:#8CA9E8; --frame-soft:#20304F;
+  --panic-c:#E8817A; --panic-soft:#3B211F;
+  --warn:#E3A94C; --warn-soft:#3A2A16;
+  --code-bg:#0F0D1A; --code-ink:#E7E2F5; --code-comment:#786F9C; --code-kw:#7FD4C7; --code-str:#E3B368;
+  --shadow:0 1px 2px rgba(0,0,0,.35),0 14px 32px -16px rgba(0,0,0,.55);
+}
+*{box-sizing:border-box;}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;}
+.wide{max-width:1080px;margin:0 auto;padding:0 22px;}
+.prose{max-width:1080px;margin:0 auto;padding:0 22px;}
+h1,h2,h3{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;letter-spacing:-.01em;text-wrap:balance;}
+
+header.hero{padding:64px 0 30px;}
+.eyebrow{font-size:12.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-faint);margin:0 0 14px;}
+h1{font-size:clamp(30px,5vw,44px);margin:0 0 16px;line-height:1.12;}
+.hero-sub{font-size:17px;color:var(--ink-soft);margin:0 0 22px;}
+.meta-row{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--ink-faint);}
+.meta-row span{display:inline-flex;align-items:center;gap:6px;}
+
+.legend-row{display:flex;gap:10px;flex-wrap:wrap;margin:28px 0 4px;}
+.legend-chip{display:inline-flex;align-items:center;gap:8px;padding:7px 13px;border-radius:999px;border:1px solid var(--line);background:var(--surface);font-size:13px;font-weight:600;}
+.legend-dot{width:11px;height:11px;border-radius:50%;flex:none;}
+.legend-chip .defer-dot{background:var(--defer-c);} .legend-chip .frame-dot{background:var(--frame-c);} .legend-chip .panic-dot{background:var(--panic-c);}
+
+section{padding:40px 0;}
+section.divider-top{border-top:1px solid var(--line);}
+h2{font-size:22px;margin:0 0 4px;}
+.section-kicker{font-size:12.5px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.08em;font-weight:700;margin:0 0 8px;}
+p{font-size:15.5px;color:var(--ink-soft);margin:0 0 16px;}
+.prose p b, .prose li b{color:var(--ink);font-weight:700;}
+.prose ul{padding-left:22px;font-size:15.5px;color:var(--ink-soft);}
+.prose li{margin-bottom:8px;}
+.defer-tag{color:var(--defer-c);font-weight:700;}
+.frame-tag{color:var(--frame-c);font-weight:700;}
+.panic-tag{color:var(--panic-c);font-weight:700;}
+
+.entity-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:22px 0;}
+@media (max-width:760px){.entity-cards{grid-template-columns:1fr;}}
+.ecard{border:1px solid var(--line);border-radius:var(--radius);padding:18px;background:var(--surface);box-shadow:var(--shadow);}
+.ecard .etitle{font-family:ui-monospace,monospace;font-size:18px;font-weight:700;display:flex;align-items:center;gap:9px;margin-bottom:8px;}
+.ecard.defer .etitle{color:var(--defer-c);} .ecard.frame .etitle{color:var(--frame-c);} .ecard.panic .etitle{color:var(--panic-c);}
+.ecard p{font-size:14px;margin:0;}
+.edot{width:13px;height:13px;border-radius:50%;flex:none;}
+.ecard.defer .edot{background:var(--defer-c);} .ecard.frame .edot{background:var(--frame-c);} .ecard.panic .edot{background:var(--panic-c);}
+
+.code-quote{background:var(--code-bg);border-radius:var(--radius);overflow:hidden;margin:20px 0;box-shadow:var(--shadow);}
+.code-head{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;background:rgba(255,255,255,.04);border-bottom:1px solid rgba(255,255,255,.08);}
+.code-path{font-family:ui-monospace,monospace;font-size:12.5px;color:var(--code-comment);}
+.code-link{font-family:ui-monospace,monospace;font-size:12px;color:var(--code-kw);text-decoration:none;white-space:nowrap;}
+.code-link:hover{text-decoration:underline;}
+.code-quote pre{margin:0;padding:16px;overflow-x:auto;}
+.code-quote code{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;font-size:12.8px;line-height:1.6;color:var(--code-ink);white-space:pre;}
+
+.callout{border-left:3px solid var(--warn);background:var(--warn-soft);border-radius:0 8px 8px 0;padding:12px 16px;font-size:14px;color:var(--ink);margin:18px 0;}
+.callout b{color:var(--warn);}
+.callout.bad{border-left-color:var(--panic-c);background:var(--panic-soft);}
+.callout.bad b{color:var(--panic-c);}
+
+/* ---- simulator ---- */
+.sim-panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px;margin:22px 0;}
+.sim-controls{display:flex;align-items:center;gap:8px;margin-bottom:18px;flex-wrap:wrap;}
+button.ctrl{appearance:none;border:1px solid var(--line);background:var(--surface-2);color:var(--ink);padding:8px 14px;border-radius:8px;font-size:14px;cursor:pointer;font-weight:600;transition:background .15s,border-color .15s;font-family:ui-monospace,monospace;}
+button.ctrl:hover:not(:disabled){background:var(--surface-3);}
+button.ctrl:disabled{opacity:.4;cursor:not-allowed;}
+button.ctrl.primary{background:var(--ink);color:var(--bg);border-color:var(--ink);}
+button.ctrl:focus-visible{outline:2px solid var(--frame-c);outline-offset:2px;}
+.sim-progress{font-size:12.5px;color:var(--ink-faint);margin-left:2px;font-family:ui-monospace,monospace;}
+.spacer{flex:1;}
+select.ctrl{padding:6px 10px;font-family:ui-monospace,monospace;}
+
+.tabs{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;}
+.tab{appearance:none;border:1px solid var(--line);background:var(--surface-2);color:var(--ink-soft);padding:8px 16px;border-radius:999px;font-size:13.5px;cursor:pointer;font-weight:600;transition:background .15s,color .15s,border-color .15s;font-family:ui-monospace,monospace;}
+.tab[data-active="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink);}
+.tab:focus-visible{outline:2px solid var(--frame-c);outline-offset:2px;}
+
+.panic-banner{border:1.5px solid var(--panic-c);background:var(--panic-soft);border-radius:10px;padding:10px 14px;margin-bottom:16px;font-family:ui-monospace,monospace;font-size:13.5px;color:var(--ink);display:none;}
+.panic-banner[data-show="true"]{display:block;}
+.panic-banner b{color:var(--panic-c);}
+.panic-chain-item{opacity:.6;text-decoration:line-through;}
+.panic-chain-item:last-child{opacity:1;text-decoration:none;font-weight:700;}
+
+.stack-col{display:flex;flex-direction:column-reverse;gap:8px;margin-bottom:16px;min-height:60px;}
+.frame-card{border:2px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--surface-2);transition:border-color .25s,background .25s;}
+.frame-card[data-status="panicking"]{border-color:var(--panic-c);background:var(--panic-soft);}
+.frame-card[data-status="recovered"]{border-color:var(--defer-c);background:var(--defer-soft);}
+.frame-card-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:7px;}
+.frame-name{font-family:ui-monospace,monospace;font-weight:700;color:var(--frame-c);font-size:14px;}
+.frame-status{font-size:10.5px;font-family:ui-monospace,monospace;color:var(--ink-faint);text-transform:uppercase;}
+.defer-chips{display:flex;gap:6px;flex-wrap:wrap;min-height:26px;}
+.defer-chip{border:1.5px solid var(--line);border-radius:7px;padding:4px 9px;font-size:11.5px;font-family:ui-monospace,monospace;background:var(--surface);color:var(--ink-faint);transition:border-color .2s,background .2s,color .2s;}
+.defer-chip[data-next="true"]{border-color:var(--defer-c);background:var(--defer-soft);color:var(--ink);font-weight:700;}
+.defer-empty{font-size:11.5px;color:var(--ink-faint);font-style:italic;}
+
+.terminal{background:var(--code-bg);border-radius:10px;padding:12px 14px;margin-bottom:16px;min-height:60px;max-height:180px;overflow-y:auto;}
+.terminal-line{font-family:ui-monospace,monospace;font-size:12.5px;color:var(--code-ink);line-height:1.7;}
+.terminal-line::before{content:"❯ ";color:var(--defer-c);}
+.terminal-empty{font-family:ui-monospace,monospace;font-size:12.5px;color:var(--code-comment);}
+
+.sim-desc{background:var(--surface-2);border-radius:8px;padding:12px 14px;font-size:13.5px;color:var(--ink-soft);margin-bottom:14px;min-height:44px;border:1px solid var(--line-soft);}
+.sim-desc b{color:var(--ink);}
+.sim-formula{font-family:ui-monospace,monospace;font-size:13px;color:var(--ink-faint);margin-bottom:8px;}
+
+.sim-log{max-height:190px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:8px;}
+.log-item{padding:6px 9px;border-radius:6px;font-size:12.5px;color:var(--ink-faint);cursor:pointer;font-family:ui-monospace,monospace;display:flex;gap:8px;}
+.log-item:hover{background:var(--surface-2);}
+.log-item[data-active="true"]{background:var(--frame-soft);color:var(--ink);font-weight:600;}
+.log-idx{min-width:22px;color:var(--ink-faint);}
+
+.refs{font-size:14px;color:var(--ink-soft);}
+.refs li{margin-bottom:10px;}
+.refs a{color:var(--frame-c);}
+footer.endnote{border-top:1px solid var(--line);padding:26px 0 60px;font-size:13px;color:var(--ink-faint);}
+
+.legend2{display:flex;gap:16px;flex-wrap:wrap;margin-top:14px;font-size:12.5px;color:var(--ink-faint);}
+.legend2 span{display:inline-flex;align-items:center;gap:6px;}
+.lg-box{width:14px;height:14px;border-radius:5px;border:2px solid var(--line);display:inline-block;}
+.lg-box.panicking{border-color:var(--panic-c);background:var(--panic-soft);}
+.lg-box.recovered{border-color:var(--defer-c);background:var(--defer-soft);}
+.lg-chip{border:1.5px solid var(--defer-c);background:var(--defer-soft);border-radius:5px;width:14px;height:14px;display:inline-block;}
+
+@media (prefers-reduced-motion:reduce){*{transition:none !important;}}
+</style>
+
+<article>
+<header class="hero prose">
+  <p class="eyebrow">GO 运行时内部原理</p>
+  <h1>defer / panic / recover 内部原理</h1>
+  <p class="hero-sub">defer 看起来是"函数返回前执行"这么简单一句话,但只要涉及嵌套 defer、跨函数的 panic、以及 recover 到底能不能接住,直觉就很容易出错。这篇文章配了两个<b>逐步播放且和真实 <code class="mono">go run</code> 输出逐行比对过</b>的调用栈模拟场景,以及若干条直接引用自 Go 运行时源码的片段。</p>
+  <div class="meta-row">
+    <span>· 引用 Go 源码 commit <code class="mono">72aa6db7</code>,文件 <code class="mono">src/runtime/panic.go</code> 与 <code class="mono">runtime2.go</code></span>
+    <span>· 源码遵循 BSD-3-Clause 协议,版权归 The Go Authors 所有,下文均为简短引用并附原文链接</span>
+  </div>
+  <div class="legend-row">
+    <span class="legend-chip"><span class="legend-dot defer-dot"></span>defer · 每个函数调用自己的一条 LIFO 链</span>
+    <span class="legend-chip"><span class="legend-dot frame-dot"></span>调用栈 · panic 沿着它一帧一帧往上问</span>
+    <span class="legend-chip"><span class="legend-dot panic-dot"></span>panic → recover · 只在直接 defer 里当场有效</span>
+  </div>
+</header>
+
+<section class="prose">
+  <p class="section-kicker">01 · 一个反直觉的例子</p>
+  <h2>defer 到底属于谁</h2>
+  <p>先看一段代码,不运行,自己猜输出顺序:</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">nested-defer.go</span><span class="code-path">猜猜输出顺序</span></div>
+    <pre><code>func f() {
+    defer fmt.Println("D")
+    defer func() {
+        fmt.Println("A")
+        defer fmt.Println("B")
+        fmt.Println("C")
+    }()
+}</code></pre>
+  </div>
+  <p>直觉上很多人会猜 <code class="mono">A D B</code> 或者 <code class="mono">A B C D</code>,但真实运行(<code class="mono">go run</code> 验证过)的结果是 <code class="mono">A C B D</code>。原因是 defer 语句永远注册到<b>"当前正在执行的这个函数"自己的 defer 链上</b>——外层匿名函数被 <code class="mono">f</code> 的 defer 触发执行后,它内部新出现的 <code class="mono">defer fmt.Println("B")</code> 注册的是<b>匿名函数自己</b>的链,不是 <code class="mono">f</code> 的;这个匿名函数必须先把自己的 defer(B)跑完、真正返回,<code class="mono">f</code> 的 defer 循环才会继续弹出下一个(D)。defer 本质上是"每次函数调用自己的一个 LIFO 栈",嵌套 defer 只是让这个"栈的栈"结构递归了一层。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">02 · 三个核心概念</p>
+  <h2>defer 链 / 调用栈 / panic-recover</h2>
+  <div class="entity-cards">
+    <div class="ecard defer"><div class="etitle"><span class="edot"></span>_defer</div><p>每次执行 <code class="mono">defer f()</code>,运行时就把一个 <code class="mono">_defer</code> 结构体插到这个 goroutine 的链表头部——包括要调用的函数、注册时的栈指针 <code class="mono">sp</code>,和指向下一个 <code class="mono">_defer</code> 的 <code class="mono">link</code>。函数返回时沿着链表逐个弹出、逐个执行,天然就是 LIFO。</p></div>
+    <div class="ecard frame"><div class="etitle"><span class="edot"></span>调用栈</div><p>panic 不知道"该找谁处理",它只会不断问:当前帧还有没有没跑完的 defer?有就跑;没有就翻到调用者继续问;一直问到某个 defer 里调用了 recover(),或者问到栈底还没人接住。</p></div>
+    <div class="ecard panic"><div class="etitle"><span class="edot"></span>panic → recover</div><p>recover() 不是"抓住任何地方抛出的异常",它只在<b>被 panic 帧直接 defer 的那个函数内部、当场调用</b>时才生效——多包一层函数调用,或者写成 <code class="mono">defer recover()</code>,都不行。</p></div>
+  </div>
+
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">runtime2.go · L1154-L1165</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/runtime/runtime2.go#L1154-L1165" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>type _defer struct {
+	heap      bool
+	rangefunc bool    // true for rangefunc list
+	sp        uintptr // sp at time of defer
+	pc        uintptr // pc at time of defer
+	fn        func()  // can be nil for open-coded defers
+	link      *_defer // next defer on G; can point to either heap or stack!
+
+	// If rangefunc is true, *head is the head of the atomic linked list
+	// during a range-over-func execution.
+	head *atomic.Pointer[_defer]
+}</code></pre>
+  </div>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">runtime2.go · L1175-L1201(节选)</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/runtime/runtime2.go#L1175-L1201" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>type _panic struct {
+	arg  any     // argument to panic
+	link *_panic // link to earlier panic
+
+	// startPC and startSP track where _panic.start was called.
+	// (These are the SP and PC of the gopanic frame itself.)
+	startPC uintptr
+	startSP unsafe.Pointer
+
+	// The current stack frame that we're running deferred calls for.
+	pc uintptr
+	sp unsafe.Pointer
+	fp unsafe.Pointer
+
+	// retpc stores the PC where the panic should jump back to, if the
+	// function last returned by _panic.nextDefer() recovers the panic.
+	retpc uintptr
+
+	// Extra state for handling open-coded defers.
+	deferBitsPtr *uint8
+	slotsPtr     unsafe.Pointer
+
+	recovered   bool // whether this panic has been recovered
+	repanicked  bool // whether this panic repanicked
+	goexit      bool
+	deferreturn bool
+}</code></pre>
+  </div>
+  <p>注意 <code class="mono">_panic</code> 也有一个 <code class="mono">link</code> 字段——这意味着 panic 本身也能连成链表。如果一个 deferred 函数在处理上一个 panic 的过程中<b>自己又 panic 了</b>,新的 <code class="mono">_panic</code> 会挂在旧的前面,后面第 07 节会专门验证这件事。</p>
+</section>
+
+<section class="prose divider-top" id="sim-section">
+  <p class="section-kicker">03 · 现场直播</p>
+  <h2>两个真实验证过的调用栈场景</h2>
+  <p>下面两个场景都是<b>先用 <code class="mono">go run</code> 跑出真实输出,再逐行比对生成的轨迹</b>——不是凭感觉画的动画。场景一是"跨三层函数调用的 panic → recover",顺带验证 defer 参数的求值时机;场景二是"defer 里再次 panic",验证前一个 panic 的值会发生什么。</p>
+</section>
+
+<section class="wide">
+  <div class="sim-panel">
+    <div class="tabs" id="tabs">
+      <button class="tab" data-scenario="scenario1">场景一:跨函数 panic → recover</button>
+      <button class="tab" data-scenario="scenario2">场景二:defer 里再次 panic</button>
+    </div>
+
+    <div class="panic-banner" id="panicBanner"></div>
+
+    <div class="stack-col" id="stackCol"></div>
+
+    <div class="terminal" id="terminal"></div>
+
+    <div class="sim-desc">
+      <div class="sim-formula" id="simFormula">&mdash;</div>
+      <div id="simDesc">点击"下一步"或"播放"开始。</div>
+    </div>
+
+    <div class="sim-controls">
+      <button class="ctrl" id="btnReset">重置</button>
+      <button class="ctrl" id="btnPrev">上一步</button>
+      <button class="ctrl primary" id="btnPlay">播放</button>
+      <button class="ctrl" id="btnNext">下一步</button>
+      <span class="sim-progress" id="simProgress">0 / 0</span>
+      <div class="spacer"></div>
+      <label class="sim-progress" for="simSpeed">速度</label>
+      <select class="ctrl" id="simSpeed">
+        <option value="2000">慢</option>
+        <option value="1200" selected>中</option>
+        <option value="550">快</option>
+      </select>
+    </div>
+
+    <div class="sim-log" id="simLog"></div>
+
+    <div class="legend2">
+      <span><span class="lg-box"></span>正常帧</span>
+      <span><span class="lg-box panicking"></span>正在展开 panic</span>
+      <span><span class="lg-box recovered"></span>已 recover,准备正常返回</span>
+      <span><span class="lg-chip"></span>下一个要弹出执行的 defer</span>
+    </div>
+  </div>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">04 · panic 的核心循环</p>
+  <h2>gopanic 在问什么</h2>
+  <p>抛开各种前置的安全检查(比如不能在系统栈上 panic、持锁时不能 panic),<code class="mono">gopanic</code> 的核心逻辑短得惊人——就是一个"要 defer 就跑,跑完了再要"的循环:</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">panic.go · L848-L860</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/runtime/panic.go#L848-L860" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>	var p _panic
+	p.arg = e
+
+	runningPanicDefers.Add(1)
+
+	p.start(sys.GetCallerPC(), unsafe.Pointer(sys.GetCallerSP()))
+	for {
+		fn, ok := p.nextDefer()
+		if !ok {
+			break
+		}
+		fn()
+	}</code></pre>
+  </div>
+  <p><code class="mono">p.nextDefer()</code> 每次返回"下一个该跑的 defer 函数",这个函数可能在<b>当前帧</b>,也可能在<b>翻过好几层调用者之后的某一帧</b>——具体怎么翻,下一节细说。如果这个循环把整个 goroutine 里所有的 defer 都跑完了,还是没人调用 recover(),就轮到程序崩溃:</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">panic.go · L871-L880</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/runtime/panic.go#L871-L880" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>
+	// ran out of deferred calls - old-school panic now
+	// Because it is unsafe to call arbitrary user code after freezing
+	// the world, we call preprintpanics to invoke all necessary Error
+	// and String methods to prepare the panic strings before startpanic.
+	preprintpanics(&amp;p)
+
+	fatalpanic(&amp;p)   // should not return
+	*(*int)(nil) = 0 // not reached
+}</code></pre>
+  </div>
+  <p>这也是为什么"未处理的 panic"会打印出完整的调用栈——<code class="mono">fatalpanic</code> 就是那个最终打印 <code class="mono">panic: xxx</code> 加 goroutine 堆栈然后退出进程的地方。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">05 · defer 链是怎么被消费的</p>
+  <h2>沿着调用栈一帧一帧问下去</h2>
+  <p><code class="mono">nextDefer</code>(略去开放编码 defer 那部分优化路径)做的事情很直接:看这个 goroutine 头上的 <code class="mono">_defer</code> 是不是属于"当前正在处理的这一帧"(靠比较 <code class="mono">sp</code>),是就摘下来执行;不是,说明这一帧已经没有 defer 了,翻到调用者的帧继续问:</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">panic.go · L926-L929, L971-L987(节选)</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/runtime/panic.go#L926-L987" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>// nextDefer returns the next deferred function to invoke, if any.
+//
+// Note: The "ok bool" result is necessary to correctly handle when
+// the deferred function itself was nil (e.g., "defer (func())(nil)").
+	...
+	Recheck:
+		if d := gp._defer; d != nil &amp;&amp; d.sp == uintptr(p.sp) {
+			if d.rangefunc {
+				deferconvert(d)
+				popDefer(gp)
+				goto Recheck
+			}
+
+			fn := d.fn
+
+			p.retpc = d.pc
+
+			// Unlink and free.
+			popDefer(gp)
+
+			return fn, true
+		}</code></pre>
+  </div>
+  <p>模拟器场景一里,<code class="mono">b()</code> panic 之后,先跑完 <code class="mono">b</code> 自己剩下的两个 defer,发现 <code class="mono">b</code> 没有更多 defer 了,才"翻页"翻到调用者 <code class="mono">a</code> 继续跑 <code class="mono">a</code> 的 defer——这一步在模拟器里对应"unwind"这一条日志。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">06 · recover 为什么必须"当场、直接"调用</p>
+  <h2>gorecover 的三张图</h2>
+  <p>这是整个 <code class="mono">panic.go</code> 里注释写得最用心的一段,直接把"能 recover"和"不能 recover"的调用栈画了出来:</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">panic.go · L1083-L1133</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/runtime/panic.go#L1083-L1133" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>func gorecover() any {
+	gp := getg()
+	p := gp._panic
+	if p == nil || p.goexit || p.recovered {
+		return nil
+	}
+
+	// Check to see if the function that called recover() was
+	// deferred directly from the panicking function.
+	// For code like:
+	//     func foo() {
+	//         defer bar()
+	//         panic("panic")
+	//     }
+	//     func bar() {
+	//         recover()
+	//     }
+	// Normally the stack would look like this:
+	//     foo
+	//     runtime.gopanic
+	//     bar
+	//     runtime.gorecover
+	//
+	// However, if the function we deferred requires a wrapper
+	// of some sort, we need to ignore the wrapper. In that case,
+	// the stack looks like:
+	//     foo
+	//     runtime.gopanic
+	//     wrapper
+	//     bar
+	//     runtime.gorecover
+	// And we should also successfully recover.
+	//
+	// Finally, in the weird case "defer recover()", the stack looks like:
+	//     foo
+	//     runtime.gopanic
+	//     wrapper
+	//     runtime.gorecover
+	// And we should not recover in that case.
+	//
+	// So our criteria is, there must be exactly one non-wrapper
+	// frame between gopanic and gorecover.
+	//
+	// We don't recover this:
+	//     defer func() { func() { recover() }() }()
+	// because there are 2 non-wrapper frames.
+	//
+	// We don't recover this:
+	//     defer recover()
+	// because there are 0 non-wrapper frames.
+	canRecover := false</code></pre>
+  </div>
+  <p>翻译一下判定标准:<b>gopanic 和 gorecover 之间必须恰好隔着一个"非包装"帧</b>。正常的 <code class="mono">defer bar()</code> 里 <code class="mono">bar</code> 直接调用 <code class="mono">recover()</code>,中间只隔着 <code class="mono">bar</code> 自己这一帧,能recover;如果写成 <code class="mono">defer func(){ func(){ recover() }() }()</code>,中间隔了两层,不行;如果写成 <code class="mono">defer recover()</code>,压根没有额外的帧,也不行。这就是为什么教程里反复强调"recover 必须写在 defer 的函数体里直接调用",而不能包在另一层函数或者放进 <code class="mono">if</code> 判断之外的辅助函数里。</p>
+  <p class="callout"><b>模拟器里对应的位置:</b>场景一的 <code class="mono">a</code> 里那个 defer 是 <code class="mono">func(){ ...; recover(); ... }()</code>——recover() 前面只隔着这一层匿名函数,满足"恰好一个非包装帧",所以能成功接住。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">07 · recover 之后,当前帧剩下的 defer 还跑不跑</p>
+  <h2>会,而且必须跑完</h2>
+  <p>模拟器场景一里一个容易被忽略的细节:<code class="mono">a</code> 里的 defer 注册顺序是 <code class="mono">a defer 1</code> → <code class="mono">recover 函数</code> → <code class="mono">a defer 2</code>,LIFO 弹出顺序反过来,recover 发生在中间那一个。<b>recover 只是拦住了"继续往上层传播"这件事,不会打断当前帧自己 defer 链的执行</b>——所以 recover 成功之后,<code class="mono">a defer 1</code> 依然会正常执行,才轮到 <code class="mono">a()</code> 真正返回。真实输出(已用 <code class="mono">go run</code> 验证)里 <code class="mono">a defer 1</code> 排在 <code class="mono">a: recovered: boom</code> 后面就是这个原因。</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">panic.go · L1310-L1326(recovery 节选)</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/runtime/panic.go#L1310-L1326" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>func recovery(gp *g) {
+	p := gp._panic
+	pc, sp, fp := p.retpc, uintptr(p.sp), uintptr(p.fp)
+	p0, saveOpenDeferState := p, p.deferBitsPtr != nil &amp;&amp; *p.deferBitsPtr != 0
+
+	// The linker records the f-relative address of a call to deferreturn in f's funcInfo.
+	// Assuming a "normal" call to recover() inside one of f's deferred functions
+	// invoked for a panic, that is the desired PC for exiting f.
+	f := findfunc(pc)
+	if f.deferreturn == 0 {
+		throw("no deferreturn")
+	}
+	gotoPc := f.entry() + uintptr(f.deferreturn)
+
+	// Unwind the panic stack.
+	for ; p != nil &amp;&amp; uintptr(p.startSP) &lt; sp; p = p.link {
+		// Don't allow jumping past a pending Goexit.</code></pre>
+  </div>
+  <p>recover 触发后,运行时会算出 <code class="mono">a</code> 里 <code class="mono">deferreturn</code> 这个"退出点"的地址,直接跳过去继续正常执行——而不是简单地从 gopanic 那个循环里 return。<code class="mono">deferreturn</code> 是编译器在每个函数末尾插入的"跑完剩下的 defer 再真正返回"代码,场景一里 <code class="mono">a defer 1</code> 正是被这一段跑掉的。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">08 · 再 panic 一次会怎样</p>
+  <h2>后一个 panic 会盖掉前一个</h2>
+  <p>如果一个 deferred 函数在处理某次 panic 的过程中<b>自己又 panic 了</b>,会发生什么?模拟器场景二验证了这件事——<code class="mono">c()</code> 先 <code class="mono">panic("first panic")</code>,它的一个 defer 又紧接着 <code class="mono">panic("second panic")</code>,另一个 defer 里调用 <code class="mono">recover()</code>。真实运行结果是:</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">go run 真实输出</span><span class="code-path">已验证</span></div>
+    <pre><code>c: about to repanic
+c: recovered: second panic
+main: after c()
+main defer</code></pre>
+  </div>
+  <p><code class="mono">recover()</code> 拿到的是 <b>"second panic"</b>,"first panic" 就这样悄悄消失了——只有在<b>完全不 recover</b>、任由程序崩溃的情况下,才能在最终的崩溃信息里看到两个 panic 被串起来:</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">go run 真实输出(去掉 recover 之后)</span><span class="code-path">已验证</span></div>
+    <pre><code>panic: first panic
+	panic: second panic</code></pre>
+  </div>
+  <p>这就对应上面 <code class="mono">_panic.link</code> 那个链表:第二次 panic 时,新的 <code class="mono">_panic</code> 被插到链表最前面,<code class="mono">gp._panic</code> 永远指向"最新这一个"。一次成功的 recover 会把从当前帧往下(<code class="mono">startSP</code> 小于恢复点的那些)整条链一起清空,而不是一次只清一层——所以场景二里<b>一次 recover 就够了</b>,不需要对 "first panic" 再 recover 一次。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">09 · 两个经典的坑</p>
+  <h2>顺手提两个常见错误</h2>
+  <ul>
+    <li><b>defer 参数在 <code class="mono">defer</code> 这一行就已经被求值了,不是等到真正执行时才求值。</b> 模拟器场景一里 <code class="mono">b()</code> 的 <code class="mono">defer fmt.Println("...", x)</code> 在 <code class="mono">x</code> 还是 10 的时候就把它复制进了 <code class="mono">_defer</code> 结构体,即使紧接着把 <code class="mono">x</code> 改成 20,最终打印出来的还是 10。想在执行时才读取最新值,得用 <code class="mono">defer func(){ fmt.Println(x) }()</code> 把 <code class="mono">x</code> 包进闭包里,让它在真正调用的那一刻才读。</li>
+    <li><b>不要在循环里堆 defer。</b> 下面这种写法在函数返回之前,文件描述符<b>一个都不会被释放</b>——所有 defer 都挂在同一个函数帧上,统一等到整个函数返回才执行:</li>
+  </ul>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">循环里的 defer:资源会攒到函数返回才释放</span></div>
+    <pre><code>func processAll(paths []string) error {
+    for _, p := range paths {
+        f, err := os.Open(p)
+        if err != nil {
+            return err
+        }
+        defer f.Close() // 攒着,不会在这次循环结束时关闭
+    }
+    // ... 处理完全部文件之后才会集中 Close
+    return nil
+}</code></pre>
+  </div>
+  <p class="callout bad"><b>正确做法:</b>把每次循环体单独包成一个函数(或者立即执行的闭包),让 defer 跟着这个更小的函数帧一起提前返回、提前释放,而不是攒到最外层函数结束。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">10 · 参考与说明</p>
+  <h2>引用与这个模拟器做了哪些简化</h2>
+  <ul class="refs">
+    <li>本文所有源码引用均来自 <a href="https://github.com/golang/go" target="_blank" rel="noopener">golang/go</a>,commit <code class="mono">72aa6db7943024b48c4d41c1fbc32b57b9fa036e</code>,文件 <code class="mono">src/runtime/panic.go</code> 与 <code class="mono">src/runtime/runtime2.go</code>,遵循 Go 项目的 BSD-3-Clause 协议(© The Go Authors)。每段引用都标了具体文件、行号,并附了指向该 commit 的永久链接。</li>
+    <li>两个模拟场景用到的 Go 代码都是真实跑过的(<code class="mono">go run</code>,Go 1.26),模拟器里每一条打印输出都和真实终端输出逐行断言比对过,不是手写的猜测顺序。</li>
+    <li>模拟器略去了 <b>open-coded defer</b> 这条优化路径——Go 1.14 之后,如果一个函数里的 defer 数量不超过 8 个且不在循环里,编译器会把它们直接展开成内联代码(用一个 bitmask 记录哪些需要执行),完全绕开 <code class="mono">_defer</code> 堆分配,比链表快不少。这篇文章为了把"defer 到底在干什么"讲清楚,统一按未开放编码(heap-allocated <code class="mono">_defer</code>)的路径来演示——两条路径的<b>可观察行为</b>完全一致,只是内部实现和性能不同。</li>
+    <li><code class="mono">gorecover</code> 引用的那段省略了后半部分真正做栈回溯(unwinder)的代码,只保留了判定规则的文字说明和入口检查——回溯部分是纯粹的实现细节,不影响理解"什么情况下能 recover"这条规则本身。</li>
+  </ul>
+</section>
+
+<footer class="endnote prose">
+  Go 运行时系列 · 如果你的 Go 版本比这里引用的更早或更晚,defer/panic 的可观察行为(LIFO、跨帧传播、recover 的直接调用要求)从 Go 1.0 至今没有变过,变的只是 open-coded defer 这类内部性能优化。
+</footer>
+</article>
+
+<script>
+var SIMS = {"scenario1": [{"frame": "main", "type": "enter", "snapshot": {"stack": [{"name": "main", "defers": [], "status": "normal"}], "panicChain": []}}, {"frame": "main", "label": "main defer 1", "note": "main \u7684\u8fd9\u4e00\u6761 defer \u6392\u5728\u6700\u4e0b\u9762,\u6700\u540e\u4e00\u4e2a\u6267\u884c", "type": "defer-push", "snapshot": {"stack": [{"name": "main", "defers": ["main defer 1"], "status": "normal"}], "panicChain": []}}, {"frame": "a", "type": "enter", "snapshot": {"stack": [{"name": "main", "defers": ["main defer 1"], "status": "normal"}, {"name": "a", "defers": [], "status": "normal"}], "panicChain": []}}, {"frame": "a", "label": "a defer 1", "note": null, "type": "defer-push", "snapshot": {"stack": [{"name": "main", "defers": ["main defer 1"], "status": "normal"}, {"name": "a", "defers": ["a defer 1"], "status": "normal"}], "panicChain": []}}, {"frame": "a", "label": "a: recover()", "note": "\u8fd9\u4e2a\u533f\u540d\u51fd\u6570\u91cc\u8c03\u7528\u4e86 recover()", "type": "defer-push", "snapshot": {"stack": [{"name": "main", "defers": ["main defer 1"], "status": "normal"}, {"name": "a", "defers": ["a defer 1", "a: recover()"], "status": "normal"}], "panicChain": []}}, {"frame": "a", "label": "a defer 2", "note": null, "type": "defer-push", "snapshot": {"stack": [{"name": "main", "defers": ["main defer 1"], "status": "normal"}, {"name": "a", "defers": ["a defer 1", "a: recover()", "a defer 2"], "status": "normal"}], "panicChain": []}}, {"frame": "b", "type": "enter", "snapshot": {"stack": [{"name": "main", "defers": ["main defer 1"], "status": "normal"}, {"name": "a", "defers": ["a defer 1", "a: recover()", "a defer 2"], "status": "normal"}, {"name": "b", "defers": [], "status": "normal"}], "panicChain": []}}, {"frame": "b", "label": "b defer 1", "note": null, "type": "defer-push", "snapshot": {"stack": [{"name": "main", "defers": ["main defer 1"], "status": "normal"}, {"name": "a", "defers": ["a defer 1", "a: recover()", "a defer 2"], "status": "normal"}, {"name": "b", "defers": ["b defer 1"], "status": "normal"}], "panicChain": []}}, {"frame": "b", "label": "b defer arg captured: 10", "note": "defer \u7684\u53c2\u6570\u5728 defer \u8bed\u53e5\u6267\u884c\u7684\u8fd9\u4e00\u523b\u5c31\u88ab\u6c42\u503c\u5e76\u590d\u5236\u4e86,\u6b64\u65f6 x=10", "type": "defer-push", "snapshot": {"stack": [{"name": "main", "defers": ["main defer 1"], "status": "normal"}, {"name": "a", "defers": ["a defer 1", "a: recover()", "a defer 2"], "status": "normal"}, {"name": "b", "defers": ["b defer 1", "b defer arg captured: 10"], "status": "normal"}], "panicChain": []}}, {"frame": "b", "value": "boom", "chain": ["boom"], "type": "panic", "snapshot": {"stack": [{"name": "main", "defers": ["main defer 1"], "status": "normal"}, {"name": "a", "defers": ["a defer 1", "a: recover()", "a defer 2"], "status": "normal"}, {"name": "b", "defers": ["b defer 1", "b defer arg captured: 10"], "status": "panicking"}], "panicChain": ["boom"]}}, {"frame": "b", "label": "b defer arg captured: 10", "printLine": "b defer arg captured: 10", "type": "defer-run", "snapshot": {"stack": [{"name": "main", "defers": ["main defer 1"], "status": "normal"}, {"name": "a", "defers": ["a defer 1", "a: recover()", "a defer 2"], "status": "normal"}, {"name": "b", "defers": ["b defer 1"], "status": "panicking"}], "panicChain": ["boom"]}}, {"frame": "b", "label": "b defer 1", "printLine": "b defer 1", "type": "defer-run", "snapshot": {"stack": [{"name": "main", "defers": ["main defer 1"], "status": "normal"}, {"name": "a", "defers": ["a defer 1", "a: recover()", "a defer 2"], "status": "normal"}, {"name": "b", "defers": [], "status": "panicking"}], "panicChain": ["boom"]}}, {"fromFrame": "b", "toFrame": "a", "type": "unwind", "snapshot": {"stack": [{"name": "main", "defers": ["main defer 1"], "status": "normal"}, {"name": "a", "defers": ["a defer 1", "a: recover()", "a defer 2"], "status": "normal"}], "panicChain": ["boom"]}}, {"frame": "a", "label": "a defer 2", "printLine": "a defer 2", "type": "defer-run", "snapshot": {"stack": [{"name": "main", "defers": ["main defer 1"], "status": "normal"}, {"name": "a", "defers": ["a defer 1", "a: recover()"], "status": "normal"}], "panicChain": ["boom"]}}, {"frame": "a", "label": "a: recover()", "printLine": "a: recovering...", "type": "defer-run", "snapshot": {"stack": [{"name": "main", "defers": ["main defer 1"], "status": "normal"}, {"name": "a", "defers": ["a defer 1"], "status": "normal"}], "panicChain": ["boom"]}}, {"frame": "a", "ok": true, "value": "boom", "type": "recover-call", "snapshot": {"stack": [{"name": "main", "defers": ["main defer 1"], "status": "normal"}, {"name": "a", "defers": ["a defer 1"], "status": "recovered"}], "panicChain": []}}, {"frame": "a", "label": "a: recover()", "printLine": "a: recovered: boom", "type": "defer-run", "snapshot": {"stack": [{"name": "main", "defers": ["main defer 1"], "status": "normal"}, {"name": "a", "defers": ["a defer 1"], "status": "recovered"}], "panicChain": []}}, {"frame": "a", "label": "a defer 1", "printLine": "a defer 1", "type": "defer-run", "snapshot": {"stack": [{"name": "main", "defers": ["main defer 1"], "status": "normal"}, {"name": "a", "defers": [], "status": "recovered"}], "panicChain": []}}, {"frame": "a", "toFrame": "main", "recovered": true, "type": "return", "snapshot": {"stack": [{"name": "main", "defers": ["main defer 1"], "status": "normal"}], "panicChain": []}}, {"frame": "main", "printLine": "main: after a()", "type": "continue", "snapshot": {"stack": [{"name": "main", "defers": ["main defer 1"], "status": "normal"}], "panicChain": []}}, {"frame": "main", "label": "main defer 1", "printLine": "main defer 1", "type": "defer-run", "snapshot": {"stack": [{"name": "main", "defers": [], "status": "normal"}], "panicChain": []}}, {"frame": "main", "toFrame": null, "recovered": false, "type": "return", "snapshot": {"stack": [], "panicChain": []}}, {"type": "done", "snapshot": {"stack": [], "panicChain": []}}], "scenario2": [{"frame": "main", "type": "enter", "snapshot": {"stack": [{"name": "main", "defers": [], "status": "normal"}], "panicChain": []}}, {"frame": "main", "label": "main defer", "note": null, "type": "defer-push", "snapshot": {"stack": [{"name": "main", "defers": ["main defer"], "status": "normal"}], "panicChain": []}}, {"frame": "c", "type": "enter", "snapshot": {"stack": [{"name": "main", "defers": ["main defer"], "status": "normal"}, {"name": "c", "defers": [], "status": "normal"}], "panicChain": []}}, {"frame": "c", "label": "c: recover()", "note": "\u5148\u6ce8\u518c,\u6240\u4ee5\u6700\u540e\u6267\u884c(LIFO)", "type": "defer-push", "snapshot": {"stack": [{"name": "main", "defers": ["main defer"], "status": "normal"}, {"name": "c", "defers": ["c: recover()"], "status": "normal"}], "panicChain": []}}, {"frame": "c", "label": "c: repanic", "note": "\u540e\u6ce8\u518c,\u6240\u4ee5\u5148\u6267\u884c", "type": "defer-push", "snapshot": {"stack": [{"name": "main", "defers": ["main defer"], "status": "normal"}, {"name": "c", "defers": ["c: recover()", "c: repanic"], "status": "normal"}], "panicChain": []}}, {"frame": "c", "value": "first panic", "chain": ["first panic"], "type": "panic", "snapshot": {"stack": [{"name": "main", "defers": ["main defer"], "status": "normal"}, {"name": "c", "defers": ["c: recover()", "c: repanic"], "status": "panicking"}], "panicChain": ["first panic"]}}, {"frame": "c", "label": "c: repanic", "printLine": "c: about to repanic", "type": "defer-run", "snapshot": {"stack": [{"name": "main", "defers": ["main defer"], "status": "normal"}, {"name": "c", "defers": ["c: recover()"], "status": "panicking"}], "panicChain": ["first panic"]}}, {"frame": "c", "oldValue": "first panic", "newValue": "second panic", "chain": ["first panic", "second panic"], "type": "repanic", "snapshot": {"stack": [{"name": "main", "defers": ["main defer"], "status": "normal"}, {"name": "c", "defers": ["c: recover()"], "status": "panicking"}], "panicChain": ["first panic", "second panic"]}}, {"frame": "c", "ok": true, "value": "second panic", "type": "recover-call", "snapshot": {"stack": [{"name": "main", "defers": ["main defer"], "status": "normal"}, {"name": "c", "defers": [], "status": "recovered"}], "panicChain": []}}, {"frame": "c", "label": "c: recover()", "printLine": "c: recovered: second panic", "type": "defer-run", "snapshot": {"stack": [{"name": "main", "defers": ["main defer"], "status": "normal"}, {"name": "c", "defers": [], "status": "recovered"}], "panicChain": []}}, {"frame": "c", "toFrame": "main", "recovered": true, "type": "return", "snapshot": {"stack": [{"name": "main", "defers": ["main defer"], "status": "normal"}], "panicChain": []}}, {"frame": "main", "printLine": "main: after c()", "type": "continue", "snapshot": {"stack": [{"name": "main", "defers": ["main defer"], "status": "normal"}], "panicChain": []}}, {"frame": "main", "label": "main defer", "printLine": "main defer", "type": "defer-run", "snapshot": {"stack": [{"name": "main", "defers": [], "status": "normal"}], "panicChain": []}}, {"frame": "main", "toFrame": null, "recovered": false, "type": "return", "snapshot": {"stack": [], "panicChain": []}}, {"type": "done", "snapshot": {"stack": [], "panicChain": []}}]};
+var CURRENT_SCENARIO = 'scenario1';
+var SIM = SIMS[CURRENT_SCENARIO];
+var idx = -1;
+var playTimer = null;
+
+var stackCol = document.getElementById('stackCol');
+var terminal = document.getElementById('terminal');
+var panicBanner = document.getElementById('panicBanner');
+var simLog = document.getElementById('simLog');
+
+function collectOutput(upto){
+  var lines = [];
+  for(var i=0;i<=upto && i<SIM.length;i++){
+    var e = SIM[i];
+    if((e.type === 'defer-run' || e.type === 'continue') && e.printLine){
+      lines.push(e.printLine);
+    }
+  }
+  return lines;
+}
+
+function render(){
+  var snap = idx >= 0 ? SIM[idx].snapshot : {stack: [], panicChain: []};
+  var e = idx >= 0 ? SIM[idx] : null;
+
+  stackCol.innerHTML = '';
+  if(snap.stack.length === 0){
+    var note = document.createElement('div');
+    note.className = 'defer-empty';
+    note.textContent = idx < 0 ? '还没有任何函数被调用。' : '所有帧都已经返回,程序结束。';
+    stackCol.appendChild(note);
+  }
+  snap.stack.forEach(function(f){
+    var card = document.createElement('div');
+    card.className = 'frame-card';
+    card.dataset.status = f.status;
+    var head = document.createElement('div');
+    head.className = 'frame-card-head';
+    var name = document.createElement('span');
+    name.className = 'frame-name';
+    name.textContent = f.name + '()';
+    var status = document.createElement('span');
+    status.className = 'frame-status';
+    status.textContent = f.status;
+    head.appendChild(name); head.appendChild(status);
+    var chips = document.createElement('div');
+    chips.className = 'defer-chips';
+    if(f.defers.length === 0){
+      var em = document.createElement('span');
+      em.className = 'defer-empty';
+      em.textContent = '(无待执行 defer)';
+      chips.appendChild(em);
+    } else {
+      f.defers.forEach(function(label, i){
+        var chip = document.createElement('span');
+        chip.className = 'defer-chip';
+        chip.textContent = label;
+        chip.dataset.next = (i === f.defers.length - 1) ? 'true' : 'false';
+        chips.appendChild(chip);
+      });
+    }
+    card.appendChild(head); card.appendChild(chips);
+    stackCol.appendChild(card);
+  });
+
+  if(snap.panicChain.length > 0){
+    panicBanner.dataset.show = 'true';
+    panicBanner.innerHTML = '<b>🔥 panic 进行中:</b> ' + snap.panicChain.map(function(v,i){
+      var isLast = i === snap.panicChain.length - 1;
+      return '<span class="' + (isLast ? '' : 'panic-chain-item') + '">' + v + '</span>';
+    }).join(' → ');
+  } else {
+    panicBanner.dataset.show = 'false';
+  }
+
+  var out = collectOutput(idx);
+  terminal.innerHTML = '';
+  if(out.length === 0){
+    var te = document.createElement('div');
+    te.className = 'terminal-empty';
+    te.textContent = '(尚无输出)';
+    terminal.appendChild(te);
+  } else {
+    out.forEach(function(line){
+      var d = document.createElement('div');
+      d.className = 'terminal-line';
+      d.textContent = line;
+      terminal.appendChild(d);
+    });
+    terminal.scrollTop = terminal.scrollHeight;
+  }
+
+  var formulaEl = document.getElementById('simFormula');
+  var descEl = document.getElementById('simDesc');
+  if(idx < 0){
+    formulaEl.textContent = '—';
+    descEl.innerHTML = '点击"下一步"或"播放"开始。';
+  } else {
+    formulaEl.textContent = formulaFor(e);
+    descEl.innerHTML = descFor(e);
+  }
+
+  document.getElementById('simProgress').textContent = (idx+1) + ' / ' + SIM.length;
+  document.getElementById('btnPrev').disabled = idx < 0;
+  document.getElementById('btnNext').disabled = idx >= SIM.length - 1;
+
+  var items = simLog.children;
+  for(var i2=0;i2<items.length;i2++){
+    items[i2].setAttribute('data-active', i2 === idx ? 'true' : 'false');
+  }
+  if(idx >= 0 && items[idx]) items[idx].scrollIntoView({block:'nearest'});
+}
+
+function formulaFor(e){
+  if(e.type === 'enter') return 'call ' + e.frame + '()';
+  if(e.type === 'defer-push') return 'defer ' + JSON.stringify(e.label) + '  // 挂到 ' + e.frame + ' 的链头';
+  if(e.type === 'panic') return 'panic(' + JSON.stringify(e.value) + ')  // in ' + e.frame;
+  if(e.type === 'defer-run') return e.frame + ': running deferred "' + e.label + '"';
+  if(e.type === 'recover-call') return 'recover()  // in ' + e.frame + ' → ' + (e.ok ? JSON.stringify(e.value) : 'nil');
+  if(e.type === 'unwind') return e.fromFrame + ' 的 defer 链已空 → 翻到 ' + e.toFrame;
+  if(e.type === 'return') return e.frame + '() returns' + (e.toFrame ? (' → ' + e.toFrame) : '');
+  if(e.type === 'continue') return e.frame + ': ' + JSON.stringify(e.printLine);
+  if(e.type === 'repanic') return 'panic(' + JSON.stringify(e.newValue) + ')  // 在处理上一个 panic 时,in ' + e.frame;
+  if(e.type === 'done') return '// 程序正常结束';
+  return '—';
+}
+
+function descFor(e){
+  if(e.type === 'enter') return '调用 <b>' + e.frame + '()</b>,压入调用栈。';
+  if(e.type === 'defer-push') return '<b>' + e.frame + '</b> 执行到一条 defer 语句,把它挂到自己 defer 链的最前面(下次弹出时最先执行)。' + (e.note ? ('<br>' + e.note) : '');
+  if(e.type === 'panic') return '<b>' + e.frame + '()</b> 调用 panic(' + JSON.stringify(e.value) + ')。运行时开始沿调用栈往上找有没有能执行的 defer。';
+  if(e.type === 'defer-run') return '弹出并执行 <b>' + e.frame + '</b> 链头的 defer:<b>' + e.label + '</b>。' + (e.printLine ? ('输出:<code class="mono">' + e.printLine + '</code>') : '');
+  if(e.type === 'recover-call') return e.ok
+    ? '这个 deferred 函数直接调用了 recover(),而且中间只隔着这一层——满足"恰好一个非包装帧"的规则,成功接住 panic,拿到值 <b>' + JSON.stringify(e.value) + '</b>。'
+    : 'recover() 被调用,但条件不满足,返回 nil,panic 继续往上传播。';
+  if(e.type === 'unwind') return '<b>' + e.fromFrame + '</b> 的 defer 链已经空了,还是没人 recover——panic 翻到调用者 <b>' + e.toFrame + '</b>,继续问它有没有 defer。';
+  if(e.type === 'return') return '<b>' + e.frame + '()</b> ' + (e.recovered ? '(已经 recover,剩余 defer 也跑完了)' : '') + ' 正常返回' + (e.toFrame ? ('给 ' + e.toFrame) : '') + '。';
+  if(e.type === 'continue') return '<b>' + e.frame + '</b> 里 <code class="mono">' + JSON.stringify(e.printLine) + '</code> 前面调用的函数正常返回了,继续往下执行。';
+  if(e.type === 'repanic') return '这个正在处理上一个 panic 的 deferred 函数,自己又调用了 panic(' + JSON.stringify(e.newValue) + ')。新的 panic 被链到旧的前面——<b>之后 recover() 只会拿到这个新值</b>,旧的 "' + e.oldValue + '" 除非程序最终崩溃,否则不会再被看到。';
+  if(e.type === 'done') return '程序正常结束。';
+  return '';
+}
+
+function labelForEvent(e){
+  if(e.type === 'enter') return '调用 ' + e.frame + '()';
+  if(e.type === 'defer-push') return e.frame + ' defer: ' + e.label;
+  if(e.type === 'panic') return e.frame + ' panic(' + e.value + ')';
+  if(e.type === 'defer-run') return '执行 ' + e.label + (e.printLine ? (' → "' + e.printLine + '"') : '');
+  if(e.type === 'recover-call') return e.frame + ' recover() ' + (e.ok ? '成功' : '失败');
+  if(e.type === 'unwind') return e.fromFrame + ' → 翻到 ' + e.toFrame;
+  if(e.type === 'return') return e.frame + '() 返回';
+  if(e.type === 'continue') return e.frame + ': "' + e.printLine + '"';
+  if(e.type === 'repanic') return e.frame + ' 再次 panic(' + e.newValue + ')';
+  if(e.type === 'done') return '结束';
+  return '';
+}
+
+var logPanel = document.getElementById('simLog');
+function buildLog(){
+  logPanel.innerHTML = '';
+  SIM.forEach(function(e,i){
+    var item = document.createElement('div');
+    item.className = 'log-item';
+    item.setAttribute('data-active','false');
+    var idxSpan = document.createElement('span');
+    idxSpan.className = 'log-idx';
+    idxSpan.textContent = i+1;
+    var txt = document.createElement('span');
+    txt.textContent = labelForEvent(e);
+    item.appendChild(idxSpan); item.appendChild(txt);
+    item.addEventListener('click', function(ii){ return function(){ stopPlay(); idx = ii; render(); }; }(i));
+    logPanel.appendChild(item);
+  });
+}
+
+function goTo(i){
+  idx = Math.max(-1, Math.min(SIM.length-1, i));
+  render();
+}
+function stopPlay(){
+  if(playTimer){ clearInterval(playTimer); playTimer = null; }
+  document.getElementById('btnPlay').textContent = '播放';
+}
+document.getElementById('btnNext').addEventListener('click', function(){ stopPlay(); goTo(idx+1); });
+document.getElementById('btnPrev').addEventListener('click', function(){ stopPlay(); goTo(idx-1); });
+document.getElementById('btnReset').addEventListener('click', function(){ stopPlay(); goTo(-1); });
+document.getElementById('btnPlay').addEventListener('click', function(){
+  if(playTimer){ stopPlay(); return; }
+  if(idx >= SIM.length - 1) goTo(-1);
+  document.getElementById('btnPlay').textContent = '暂停';
+  var speed = parseInt(document.getElementById('simSpeed').value, 10);
+  playTimer = setInterval(function(){
+    if(idx >= SIM.length - 1){ stopPlay(); return; }
+    goTo(idx+1);
+  }, speed);
+});
+document.getElementById('simSpeed').addEventListener('change', function(){
+  if(playTimer){ stopPlay(); document.getElementById('btnPlay').click(); }
+});
+
+var tabs = document.getElementById('tabs');
+Array.prototype.forEach.call(tabs.children, function(b){
+  b.dataset.active = (b.dataset.scenario === CURRENT_SCENARIO) ? 'true' : 'false';
+  b.addEventListener('click', function(){
+    var sc = b.dataset.scenario;
+    if(sc === CURRENT_SCENARIO) return;
+    stopPlay();
+    CURRENT_SCENARIO = sc;
+    SIM = SIMS[CURRENT_SCENARIO];
+    Array.prototype.forEach.call(tabs.children, function(bb){
+      bb.dataset.active = (bb.dataset.scenario === CURRENT_SCENARIO) ? 'true' : 'false';
+    });
+    buildLog();
+    goTo(-1);
+  });
+});
+
+buildLog();
+goTo(-1);
+</script>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+</body>
+</html>

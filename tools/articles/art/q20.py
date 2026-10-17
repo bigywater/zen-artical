@@ -1,0 +1,20 @@
+from lib import *
+S = SS('q20')
+steps = [
+    step("内存水位线:rabbitmqctl status 里默认 vm_memory_high_watermark 是 0.6 of available memory(这台机器算出来 0.6442 gb),统计口径是 rss(进程常驻内存),不是 Erlang 自己报的内存。把水位线设成“当前 RSS 181.7 MiB + 40 MiB”= 221 MiB 后,往 quorum 队列一直发 1 KB 的消息:发布线程在 2 秒内冲到 48758 条,RSS 涨到 253 MiB 超过限制,之后一条也发不出去。rabbitmq-diagnostics alarms 显示 Memory alarm on node q20@localhost,list_connections 里发布连接的状态是 blocking → blocked。", t=tl(S(1)), mark=lidx(S(1), 'Memory alarm', "'blocking', 'blocked'"), done=lidx(S(1), 'rabbitmqctl status 里的内存部分', '当前 broker 进程内存', '发布线程停在'), b=bars([['限制', 221, '221 MiB'], ['发布前 RSS', 182, '182 MiB'], ['阻塞时 RSS', 253, '253 MiB']], 253, mark=[2], done=[0, 1]), kv=KV([['统计口径', 'RSS(rss 策略)'], ['超限后', 'alarm → 发布连接 blocked'], ['发布线程', '停在 48758 条']], ['统计口径'])),
+    step("阻塞时客户端收到的是 Connection.Blocked,pika 回调里的原因是 'low on memory'。消费者不受影响:开一个消费者把队列读走,消费开始后 1.3 秒、已消费 48051 条、RSS 回落到 207.7 MiB 时,告警解除,发布连接收到 Connection.Unblocked,事件序列正是 blocked → unblocked;发布线程接着继续发(累计 69348 条)。要消除内存告警靠的是让消息被消费掉或让内存降下来,不是重启发布者。", t=tl(S(2)), mark=lidx(S(2), "('blocked', 'low on memory')", '消费者运行中收到 Unblocked'), done=lidx(S(2), '事件序列'), kv=KV([['阻塞通知', 'Connection.Blocked(原因 low on memory)'], ['消费者', '不受影响,读走消息即可降内存'], ['解除', 'Connection.Unblocked,发布继续']], ['阻塞通知'])),
+    step("磁盘水位线在这台机器上没法验证:rabbitmqctl status 里 Low free disk space watermark 是 0.05 gb,可是 Free disk space 显示 (not available),broker 日志里有 \"Free disk space monitor encountered an error retrieving total memory. Retries left: 10\"——磁盘监控读不到剩余空间。操作系统 df 看数据目录所在卷剩余 27.3 GiB,把 disk_free_limit 设成比它多 5 GiB 后等 15 秒,alarms 仍是 no alarms。所以磁盘告警的触发不能在这里实测,机制与内存告警相同(Connection.Blocked,原因是磁盘),但这一节没有验证。", t=tl(S(3)), mark=lidx(S(3), 'Free disk space: (not available)', 'reported no alarms'), done=lidx(S(3), '日志里关于磁盘监控', '操作系统 df 看到'), kv=KV([['Free disk space', '(not available)'], ['disk_free_limit 设高 5 GiB', '15 秒后仍无告警'], ['结论', '磁盘告警在此环境无法验证']], ['结论'])),
+    step("另一种流控是每条连接的信用流控(credit flow),连接状态会出现 flow。4 个全速发布的连接往一个经典队列发持久化消息,在 broker 里用一次 eval 以 20 ms 间隔采样 200 次所有连接的 state:累计 800 个样本全部是 running(4 条连接 × 200 次),90720 条消息发布完,没有采样到 flow、blocking 或 blocked。这个负载下队列跟得上发布者,信用没有被耗尽;要看到 flow,需要队列(或消费者)慢到跟不上,这里没有构造出来。", t=tl(S(4)), mark=lidx(S(4), '#{running => 800}'), done=lidx(S(4), '200 次采样累计'), b=bars([['running', 800, '800 个样本'], ['flow', 0, '0'], ['blocked', 0, '0']], 800, mark=[1, 2], done=[0]), kv=KV([['4 连接 × 200 次采样', '全是 running'], ['flow 状态', '这次没有观察到'], ['含义', '队列跟得上时不触发信用流控']], ['flow 状态'])),
+]
+A = mkartq('q20', 20, 'RabbitMQ,流控,内存水位线,Connection.Blocked,credit flow,真实验证,动画演示',
+    '在 RabbitMQ 4.3.6 上实测流控:内存水位线按 RSS 计算,超限后发布连接 blocking→blocked、客户端收到 Connection.Blocked(low on memory),消费者读走消息后收到 Unblocked;磁盘告警在这台 macOS 上读不到剩余空间无法验证;4 个全速发布者采样 800 次全是 running,没有观察到 flow。',
+    '发布太快会把 broker 压垮吗?RabbitMQ 怎么让发布者慢下来?内存和磁盘水位线分别按什么口径,触发后客户端看到什么,消费者受不受影响?这篇把水位线调到刚好够用,真的压到告警并观察两侧的反应。',
+    [('221 MiB', '把水位线设成当前 RSS 181.7 MiB + 40 MiB;发布 48758 条后触发 Memory alarm'), ('low on memory', 'pika 收到的 Connection.Blocked 原因'), ('800 / 800', '4 个发布连接 200 次采样全部是 running,没有观察到 flow')],
+    [('内存水位线与阻塞', '<p><code>vm_memory_high_watermark</code> 默认是可用内存的 0.6,统计口径是进程 RSS。超过后 broker 触发内存告警,发布连接进入 blocking → blocked,不再读取它们的数据;客户端收到 <code>Connection.Blocked</code>,带原因 <code>low on memory</code>(pika 要在 <code>process_data_events</code> 里才会调用 blocked 回调)。</p>'),
+     ('消费者与解除', '<p>阻塞只针对发布连接。消费者继续工作,把消息读走、内存降下来,告警解除,发布连接收到 <code>Connection.Unblocked</code>。解除靠的是内存降下来,不是重启发布者。</p>'),
+     ('磁盘水位线', '<p>磁盘告警的机制与内存相同,但这台 macOS 上 broker 读不到磁盘剩余空间(Free disk space: not available),所以磁盘告警在这里没有验证。</p>'),
+     ('信用流控', '<p>除了告警,连接和队列之间还有信用(credit)流控,过载时连接状态会显示 <code>flow</code>。这次 4 个全速发布者没有触发,需要队列跟不上的场景才能看到。</p>')],
+    steps,
+    [ENV_Q + '。水位线用 rabbitmqctl set_vm_memory_high_watermark absolute 设置为“当前 RSS(ps)+ 40 MiB”;状态与告警来自 rabbitmqctl list_connections 与 rabbitmq-diagnostics alarms;pika 的 blocked / unblocked 回调在发布线程的 process_data_events 里触发;磁盘实验的 df 数字是 df -k 的剩余空间',
+     '没有验证:磁盘告警本身(读不到剩余空间);flow 状态何时出现;集群里告警是全局的(一个节点超限所有节点的发布者都被阻塞);消费者很慢时内存告警的持续时间;不同的内存计算策略(allocated);连接 blocked 时已有的 channel 缓冲行为'],
+    '流控与水位线')

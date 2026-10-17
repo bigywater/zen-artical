@@ -1,0 +1,20 @@
+from lib import *
+S = SS('w81')
+steps = [
+    step("真实站点的 Set-Cookie 头。www.baidu.com 的首页响应里有 4 个 Set-Cookie 头——同名头可以出现多次,不能像别的头那样用逗号合并(Expires 里本身就含逗号)。三个是长期标识:BAIDUID(37 字符)、BIDUPSID(32 字符)、PSTM(10 字符),属性都是 expires = 2037-12-31、max-age = 2147483647 秒(约 68 年)、path = /、domain = .baidu.com;第四个又是一个 BAIDUID,属性不同:max-age = 31536000(一年)、expires 2027-10-15、version=1、comment=bd(旧式的 Cookie 属性)。这些值是它自己生成的标识符(我只保留前 6 个字符):站点用它们在你的浏览器上认出同一个访问者。", t=tl(S(1)), mark=lidx(S(1), '名字 BAIDUID', '名字 BIDUPSID', '名字 PSTM'), done=lidx(S(1), '收到 4 个 Set-Cookie 头', '带 Max-Age 的'), kv=KV([['Set-Cookie 头', '4 个(同名头可重复)'], ['长期标识', 'max-age=2147483647 ≈ 68 年'], ['第 4 个', 'max-age=31536000(一年),version=1 / comment=bd']], ['长期标识'])),
+    step("本机服务器 + Python 的 http.cookiejar(按 RFC 规则存取)。服务器下发了 8 个 Cookie(a~h),cookiejar 实际保存了 5 个:a=1(会话 Cookie,Path=/)、c=3(Secure)、d=4(HttpOnly、Max-Age=3600,过期时间戳 1792063729)、b=2(Path=/admin)、h=8(Path=/api)。没有保存的是 e、f、g:e 带 Domain=example.org 与请求的主机 127.0.0.1 不匹配,被拒绝;f 是 Max-Age=0,表示立刻删除;g 的 Expires 是 2020 年,已经过期。随后的请求:/ → 带 a=1; d=4;/admin/x → 带 b=2; a=1; d=4(路径更长的排前面);/api/x → 带 h=8; a=1; d=4。c(Secure)在明文 HTTP 请求里没有被带上;SameSite=Strict 是浏览器对跨站请求的限制,cookiejar 不实现,所以 h 的 SameSite 属性在这里没有起作用。", t=tl(S(2)), mark=lidx(S(2), '没有保存的', '请求 /admin/x'), done=lidx(S(2), '服务器下发了 8 个 Cookie', 'a=1  domain', 'c=3', 'd=4', 'b=2', 'h=8', '请求 /  ', '请求 /api/x'), kv=KV([['保存 5 个', 'a、b、c、d、h'], ['拒绝 / 删除', 'e(域不匹配)、f(Max-Age=0)、g(已过期)'], ['/admin/x', 'b=2; a=1; d=4(长路径在前)'], ['Secure 的 c', '明文请求不带']], ['拒绝 / 删除'])),
+    step("Cookie 头的大小(服务器侧):往 example.com 的请求里放越来越大的 Cookie 头,100、4000、8000、16000、32000、64000 字节都返回 200 OK,没有测到上限。浏览器那一侧另有限制(每条 Cookie 约 4 KB、每个域名有数量限制),这里没有测;而且把大 Cookie 附在每一个请求上,会让每个请求都多这么多字节(Cookie 随同域名的所有请求发出)。", t=tl(S(3)), mark=lidx(S(3), 'Cookie 头值长 64000'), done=lidx(S(3), 'Cookie 头值长   100', 'Cookie 头值长  4000', 'Cookie 头值长 32000'), b=bars([['最大测试的 Cookie 头', 64000, '64000 字节,200 OK']], 64000, mark=[0], done=[]), kv=KV([['example.com', '到 64000 字节都接受'], ['浏览器', '每条约 4 KB 的限制(没测)']], ['example.com'])),
+    step("SameSite 的规则(模拟:浏览器行为我在这里没法直接测,下表是按规范写的判断函数的结果,不是实测浏览器)。同站点内的任何请求:Strict、Lax、None 都带 Cookie。b.com 页面里的 <img src=a.com/x>(跨站子资源):Strict 不带、Lax 不带、None 带。从 b.com 点链接跳到 a.com(顶层导航 GET):Strict 不带、Lax 带、None 带。b.com 的表单 POST 到 a.com(顶层导航 POST):Strict 不带、Lax 不带、None 带。b.com 的 fetch / XHR 请求 a.com:Strict 不带、Lax 不带、None 带(且 None 必须同时设 Secure)。“同站点”指可注册域名 eTLD+1 相同,example.com 与 api.example.com 算同一站点。", t=tl(S(4)), mark=lidx(S(4), '同站点内的任何请求', '顶层导航 GET'), done=lidx(S(4), '情形', '<img src', '顶层导航 POST', 'fetch/XHR'), kv=KV([['Strict', '只在同站点请求里带'], ['Lax', '同站点 + 顶层导航 GET'], ['None', '总是带(必须 Secure)'], ['性质', '规则模拟,非浏览器实测']], ['Lax'])),
+]
+A = mkartw('w81', 81, '网络协议,HTTP,Cookie,Set-Cookie,SameSite,Domain,Path,Secure,真实验证,动画演示',
+    '拆开 baidu.com 的 4 个 Set-Cookie(max-age 2147483647 秒 ≈ 68 年);用 cookiejar 验证 8 个 Cookie 保存 5 个,域不匹配 / Max-Age=0 / 已过期的被丢弃,长路径的排在前面,Secure 不会走明文;example.com 对 64000 字节的 Cookie 头照收;附 SameSite 规则的模拟表。',
+    'Cookie 是 HTTP 里最古老、也最容易误用的状态机制:一个 Set-Cookie 头里能写多少属性,它们怎么决定一个 Cookie 在什么时候被保存、什么时候被带上?这篇看真实站点的 Set-Cookie,用 cookiejar 验证保存与发送的规则,最后用规则模拟表整理 SameSite 的三种取值。',
+    [('4 个', 'baidu.com 首页响应里的 Set-Cookie 头数量(同名头可重复出现)'), ('5 / 8', '服务器下发的 8 个 Cookie 里 cookiejar 实际保存的个数'), ('68 年', 'baidu.com 长期标识 Cookie 的 Max-Age(2147483647 秒)')],
+    [('Set-Cookie 的样子', '<p>名字=值加一串属性;同名头可重复出现,不能逗号合并。</p>'),
+     ('保存与发送规则', '<p>域名不匹配被拒绝,Max-Age=0 删除,已过期丢弃;请求带上哪些由 Path、Secure、Domain 决定,长路径排前。</p>'),
+     ('大小', '<p>example.com 到 64000 字节的 Cookie 头都接受。</p>'),
+     ('SameSite', '<p>Strict 只在同站点带;Lax 额外允许顶层导航的 GET;None 总是带但必须 Secure。表是规则模拟。</p>')],
+    steps,
+    [ENV_W + '。第一节是对 www.baidu.com 的一次 HTTPS 请求(Cookie 值只留前 6 个字符);第二节用本机脚本服务器和 Python 的 http.cookiejar;第三节是对 example.com:80 的明文请求;第四节是按规范写的判断函数,没有用真实浏览器',
+     '没有验证:真实浏览器的 Cookie 存储上限、清理策略与第三方 Cookie 限制;__Host- / __Secure- 前缀;Partitioned(CHIPS)Cookie;Set-Cookie 的 Expires 与 Max-Age 同时出现时的优先级(规范是 Max-Age 优先);Cookie 属性在 IPv6 / IP 地址主机上的域匹配;HTTP/2 对 Cookie 头的压缩'],
+    'Cookie')

@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>API 优先级与公平:429 是怎么产生的</title>
+<meta name="description" content="在 kind 集群里实测 APF(API 优先级与公平):默认 8 个优先级、11 个 FlowSchema,并发席位 = 600 × 份额 ÷ 总份额(workload-low 245 席、catch-all 13 席);kubeadm 管理员证书与匿名访问都归 global-default,ServiceAccount 归 workload-low,无效令牌在进入 APF 之前就被 401;自建份额为 1(3 个席位)的 Reject 级别,80 线程压 5 秒 6041 个请求中有 312 个 429(Retry-After: 3);改成 Queue 后 6071 个请求全部成功、没有 429。">
+<link rel="canonical" href="https://bigywater.tech/k8s-api-priority-fairness.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="API 优先级与公平:429 是怎么产生的">
+<meta property="og:description" content="在 kind 集群里实测 APF(API 优先级与公平):默认 8 个优先级、11 个 FlowSchema,并发席位 = 600 × 份额 ÷ 总份额(workload-low 245 席、catch-all 13 席);kubeadm 管理员证书与匿名访问都归 global-default,ServiceAccount 归 workload-low,无效令牌在进入 APF 之前就被 401;自建份额为 1(3 个席位)的 Reject 级别,80 线程压 5 秒 6041 个请求中有 312 个 429(Retry-After: 3);改成 Queue 后 6071 个请求全部成功、没有 429。">
+<meta property="og:url" content="https://bigywater.tech/k8s-api-priority-fairness.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="API 优先级与公平:429 是怎么产生的">
+<meta name="twitter:description" content="在 kind 集群里实测 APF(API 优先级与公平):默认 8 个优先级、11 个 FlowSchema,并发席位 = 600 × 份额 ÷ 总份额(workload-low 245 席、catch-all 13 席);kubeadm 管理员证书与匿名访问都归 global-default,ServiceAccount 归 workload-low,无效令牌在进入 APF 之前就被 401;自建份额为 1(3 个席位)的 Reject 级别,80 线程压 5 秒 6041 个请求中有 312 个 429(Retry-After: 3);改成 Queue 后 6071 个请求全部成功、没有 429。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">2070</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">19</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">114</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">22</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#5D4A9C; --series-c-soft:#E7E2F3;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#A596DB; --series-c-soft:#231D3A;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#A596DB; --series-c-soft:#231D3A;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+.term pre.code{white-space:pre-wrap; word-break:break-word; overflow-x:visible;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Kubernetes · 23</div>
+  <h1>API 优先级与公平:429 是怎么产生的</h1>
+  <p>429 Too Many Requests 不是应用返回的,是 API Server 的 APF 在保护自己。这篇把 APF 的默认配置、请求怎么被归类、并发席位怎么算,以及超限时 Reject 和 Queue 两种处理方式的真实差别都跑了一遍。</p>
+  <div class="hero-fact">
+<div><div class="num">312 个 429</div><div class="lbl">自建的 1 份额级别(3 个席位)上,80 线程压 5 秒的 6041 个请求里被拒绝的数量</div></div><div><div class="num">600 × 份额 ÷ 245</div><div class="lbl">并发席位的算法:workload-low(份额 100)得到 245 席,份额 1 的自建级别得到 3 席</div></div><div><div class="num">0 个 429</div><div class="lbl">同样压力下把 limitResponse 改成 Queue 后返回 429 的数量</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="k8s-events-api.html">Event:事件的限流、聚合与保留时间</a></div>
+<section>
+  <h2>默认配置</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  优先级名称             类型        并发份额   超限时      队列数   并发席位(seats)
+  catch-all         Limited   5      Reject   -     13
+  exempt            Exempt    -      -        -     0
+  global-default    Limited   20     Queue    128   49
+  leader-election   Limited   10     Queue    16    25
+  node-high         Limited   40     Queue    64    98
+  system            Limited   30     Queue    64    74
+  workload-high     Limited   40     Queue    128   98
+  workload-low      Limited   100    Queue    128   245
+  FlowSchema 共 11 个;其中 matchingPrecedence 最小(最先匹配)的前 4 个:exempt(1)→exempt, probes(2)→exempt, system-leader-election(100)→leader-election, system-node-high(400)→node-high</pre></div>
+  <p>集群里有 8 个 <code>PriorityLevelConfiguration</code> 和 11 个 <code>FlowSchema</code>。每个优先级按“份额”分到并发席位:总并发(默认 400 + 200 = 600)乘以份额再除以所有 Limited 级别的总份额(245),向上取整,所以 <code>workload-low</code>(100 份)得到 245 席,<code>node-high</code>、<code>workload-high</code>(40 份)各 98 席,<code>catch-all</code>(5 份)13 席。超限时 <code>catch-all</code> 直接 Reject,其他级别排队;<code>exempt</code> 不受限。FlowSchema 按 <code>matchingPrecedence</code> 从小到大匹配,先匹配上的生效。</p>
+</section>
+<section>
+  <h2>请求被归到哪里</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  kubectl(客户端证书,身份 kubernetes-admin|["kubeadm:cluster-admins","system:authenticated"]):FlowSchema=global-default PriorityLevel=global-default
+  匿名访问 /version:HTTP 200;FlowSchema=global-default PriorityLevel=global-default
+  ServiceAccount k17/hammer(绑定了 view)请求 pods(HTTP 200):FlowSchema=service-accounts PriorityLevel=workload-low
+  无效令牌:HTTP 401;响应头里 没有 FlowSchema(认证失败的请求在进入 APF 之前就被拒了)</pre></div>
+  <p>响应头 <code>X-Kubernetes-PF-FlowSchema-UID</code> 和 <code>…PriorityLevel-UID</code> 能反查出归类结果。意外的是:kubeadm 的管理员证书(<code>kubernetes-admin</code>,组 <code>kubeadm:cluster-admins</code>)并不是 <code>exempt</code>,它和匿名访问一样归 <code>global-default</code>;ServiceAccount 归 <code>service-accounts</code> → <code>workload-low</code>,即使没有 RBAC 权限、请求最终是 403 也是一样——APF 在鉴权之前。认证失败(无效令牌)的 401 响应头里则没有归类,在进入 APF 之前就被拒了。</p>
+</section>
+<section>
+  <h2>Reject:429</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  创建 PriorityLevelConfiguration k17-tiny(份额 1,limitResponse=Reject)和 FlowSchema k17-fs(matchingPrecedence=100,匹配 SA hammer);k17-tiny 得到的并发席位 nominal_limit_seats=3
+  hammer 再请求一次:FlowSchema=k17-fs PriorityLevel=k17-tiny(原来是 service-accounts / workload-low,因为 100 比默认的更靠前)
+  80 个线程连续请求 5 秒(GET /api/v1/pods):共 6041 个请求(1208/秒),状态码 {200: 5729, 429: 312};成功请求的延迟 p50=65 ms p95=117 ms 最大=392 ms
+  第一个 429 的响应头 Retry-After=3;x-kubernetes-pf-flowschema-uid → k17-fs;响应体:Too many requests, please try again later.
+
+  apiserver_flowcontrol_rejected_requests_total{priority_level="k17-tiny"} 增加了 312(reason=concurrency-limit)</pre></div>
+  <p>自建 <code>k17-tiny</code>(份额 1,得到 3 个席位,<code>limitResponse: Reject</code>)和一个 <code>matchingPrecedence: 100</code> 的 FlowSchema 把 SA <code>hammer</code> 引过去。80 个线程连续请求 5 秒:6041 个请求里 312 个被 429,响应头带 <code>Retry-After: 3</code>,响应体是 <code>Too many requests, please try again later.</code>;<code>apiserver_flowcontrol_rejected_requests_total{reason="concurrency-limit"}</code> 增加了 312。client-go 会按 Retry-After 退避重试,自己写的客户端要记得处理 429。</p>
+</section>
+<section>
+  <h2>Queue:排队</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  limitResponse=Queue(queues=4,queueLengthLimit=100,handSize=2),同样 80 线程 5 秒:共 6071 个请求(1214/秒),状态码 {200: 6071};成功请求的延迟 p50=63 ms p95=112 ms 最大=164 ms
+  这一轮 rejected 增加了 0;排过队后执行的请求(request_wait_duration_seconds_count{execute="true"})增加了 6071</pre></div>
+  <p>同样的压力下把 <code>limitResponse</code> 改成 <code>Queue</code>(4 个队列、每队最长 100):6071 个请求全部是 200,没有 429,rejected 增加 0,所有请求都是先排队、再执行。成功请求的 p95 约 112 ms、最大 164 ms,Reject 那轮分别是 117 ms、392 ms。这轮压力下两者吞吐几乎一样(约 1210 个/秒),差别在于排队的请求最终都成功了,而 Reject 把超出的直接打回。队列满了才会 429。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">APF 的位置</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "f", "kind": "flow", "label": "APF 的位置"}, {"id": "t", "kind": "term", "label": "实测输出"}, {"id": "b", "kind": "bars", "label": "对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "默认有 8 个 PriorityLevelConfiguration、11 个 FlowSchema。并发席位 = 总并发 × 份额 ÷ 总份额(这里 600 × 份额 ÷ 245):workload-low 份额 100 → 245 席,node-high / workload-high 份额 40 → 98 席,catch-all 份额 5 → 13 席且超限时 Reject,其余 Limited 级别超限时排队;exempt 不受限。matchingPrecedence 最小的 FlowSchema 先匹配:exempt(1)、probes(2)、system-leader-election(100)、system-node-high(400)。", "s": {"f": {"nodes": [["请求", ""], ["认证", ""], ["FlowSchema", "11 个"], ["PriorityLevel", "8 个"], ["并发席位", "600 × 份额 ÷ 总份额"]], "cur": [4], "done": [0, 1, 2, 3], "mark": []}, "t": {"lines": ["  优先级名称             类型        并发份额   超限时      队列数   并发席位(seats)", "  catch-all         Limited   5      Reject   -     13", "  exempt            Exempt    -      -        -     0", "  global-default    Limited   20     Queue    128   49", "  leader-election   Limited   10     Queue    16    25", "  node-high         Limited   40     Queue    64    98", "  system            Limited   30     Queue    64    74", "  workload-high     Limited   40     Queue    128   98", "  workload-low      Limited   100    Queue    128   245", "  FlowSchema 共 11 个;其中 matchingPrecedence 最小(最先匹配)的前 4 个:exempt(1)→exempt, probes(2)→exempt, system-leader-election(100)→leader-election, system-node-high(400)→node-high"], "cur": [], "mark": [1, 8], "done": [9]}, "kv": {"items": [["份额", "相对权重,不是固定值"], ["席位", "600 × 份额 ÷ 245 向上取整"], ["catch-all", "超限直接 Reject"], ["其他 Limited", "超限排队"]], "hl": ["席位"]}}}, {"note": "不同身份被归到不同的优先级:kubectl 的管理员证书(kubernetes-admin,组 kubeadm:cluster-admins)和匿名访问都归 global-default;ServiceAccount hammer 归 service-accounts → workload-low(没有 RBAC 时同样如此,返回 403);无效令牌 401,响应头里没有 FlowSchema——认证失败在进入 APF 之前就被拒了。", "s": {"f": {"nodes": [["kubeadmin 证书", "global-default"], ["匿名", "global-default"], ["ServiceAccount", "service-accounts → workload-low"], ["无效令牌", "401,没有归类"]], "cur": [2], "done": [0, 1], "mark": [3]}, "t": {"lines": ["  kubectl(客户端证书,身份 kubernetes-admin|[\"kubeadm:cluster-admins\",\"system:authenticated\"]):FlowSchema=global-default PriorityLevel=global-default", "  匿名访问 /version:HTTP 200;FlowSchema=global-default PriorityLevel=global-default", "  ServiceAccount k17/hammer(绑定了 view)请求 pods(HTTP 200):FlowSchema=service-accounts PriorityLevel=workload-low", "  无效令牌:HTTP 401;响应头里 没有 FlowSchema(认证失败的请求在进入 APF 之前就被拒了)"], "cur": [], "mark": [0, 2], "done": [3]}, "kv": {"items": [["kubeadm 的管理员", "不是 exempt,和普通请求同一队列"], ["已认证但没权限的请求", "也先过 APF,再被鉴权拒绝"], ["认证失败", "不会被归类"]], "hl": ["kubeadm 的管理员"]}}}, {"note": "自建 PriorityLevelConfiguration k17-tiny(份额 1,limitResponse=Reject,得到 3 个席位)和 FlowSchema k17-fs(matchingPrecedence=100,匹配 SA hammer):hammer 的请求立刻被归到 k17-fs / k17-tiny。80 个线程连续请求 5 秒:6041 个请求里 5729 个 200、312 个 429;429 响应带 Retry-After: 3,响应体 Too many requests, please try again later.;apiserver_flowcontrol_rejected_requests_total 增加 312(reason=concurrency-limit)。", "s": {"f": {"nodes": [["k17-fs (precedence 100)", "匹配 SA hammer"], ["k17-tiny", "份额 1 → 3 席位"], ["超限", "Reject → 429"], ["Retry-After", "3"]], "cur": [2], "done": [0, 1], "mark": [3]}, "t": {"lines": ["  创建 PriorityLevelConfiguration k17-tiny(份额 1,limitResponse=Reject)和 FlowSchema k17-fs(matchingPrecedence=100,匹配 SA hammer);k17-tiny 得到的并发席位 nominal_limit_seats=3", "  hammer 再请求一次:FlowSchema=k17-fs PriorityLevel=k17-tiny(原来是 service-accounts / workload-low,因为 100 比默认的更靠前)", "  80 个线程连续请求 5 秒(GET /api/v1/pods):共 6041 个请求(1208/秒),状态码 {200: 5729, 429: 312};成功请求的延迟 p50=65 ms p95=117 ms 最大=392 ms", "  第一个 429 的响应头 Retry-After=3;x-kubernetes-pf-flowschema-uid → k17-fs;响应体:Too many requests, please try again later.", "  apiserver_flowcontrol_rejected_requests_total{priority_level=\"k17-tiny\"} 增加了 312(reason=concurrency-limit)"], "cur": [], "mark": [2, 3], "done": [4]}, "b": {"items": [["200", 5729, "5729"], ["429", 312, "312"]], "max": 5729, "cur": [], "mark": [1], "done": [0]}, "kv": {"items": [["Reject", "超出席位的请求立刻 429"], ["Retry-After", "告诉客户端多久后重试"], ["指标", "按 flow_schema / priority_level / reason 计数"]], "hl": ["Reject"]}}}, {"note": "把 k17-tiny 改成 limitResponse=Queue(queues=4、queueLengthLimit=100、handSize=2),同样的 80 线程 5 秒压力:6071 个请求全是 200,没有一个 429;rejected 指标增加 0,6071 个请求都是先排队、再执行(request_wait_duration_seconds_count{execute=\"true\"} 增加 6071)。成功请求的 p50 63 ms、p95 112 ms、最大 164 ms,Reject 那一轮是 65 / 117 / 392 ms。", "s": {"f": {"nodes": [["k17-tiny", "Queue"], ["80 个并发", "排队等席位"], ["不再返回 429", "6071 个全是 200"]], "cur": [1], "done": [2], "mark": []}, "t": {"lines": ["  limitResponse=Queue(queues=4,queueLengthLimit=100,handSize=2),同样 80 线程 5 秒:共 6071 个请求(1214/秒),状态码 {200: 6071};成功请求的延迟 p50=63 ms p95=112 ms 最大=164 ms", "  这一轮 rejected 增加了 0;排过队后执行的请求(request_wait_duration_seconds_count{execute=\"true\"})增加了 6071"], "cur": [], "mark": [0], "done": [1]}, "b": {"items": [["Reject:最大延迟(ms)", 392, "392"], ["Queue:最大延迟(ms)", 164, "164"]], "max": 392, "cur": [], "mark": [0], "done": [1]}, "kv": {"items": [["Queue", "宁可让请求等,也不拒绝"], ["队列长度上限", "满了才 429(这次没满)"], ["选哪个", "客户端会不会重试?能不能容忍等待?"]], "hl": ["Queue"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / kind(Docker 里的单节点或多节点真实集群,节点是 Docker Desktop 虚拟机里的容器)/ kubectl;用空的 kubeconfig 之外的独立 kubeconfig,不碰用户自己的集群;计时用 date +%s%N / kubectl 事件时间戳,数字每次运行会有小幅抖动。三节点 kind 集群 kx-main(Kubernetes v1.37.0,apiserver 并发参数为默认值);压力来自宿主机上 80 个 Python 线程(http.client,每个线程一个长连接)连续 GET /api/v1/pods 5 秒,身份是绑定了 view 的 ServiceAccount hammer 的令牌;身份归类用响应头里的 UID 对照 flowschemas / prioritylevelconfigurations 反查;席位数取自 /metrics 的 apiserver_flowcontrol_nominal_limit_seats;拒绝与排队计数用 /metrics 前后差值;延迟是客户端测得的(包含网络与 JSON 传输);实验后删除了自建的 FlowSchema 与 PriorityLevelConfiguration;每种情形各一次,数字每次运行不同(Retry-After 也观察到过 1)</li><li>没有验证:公平排队(同一优先级内不同用户之间如何分摊,shuffle sharding 的效果);借用(lendablePercent / borrowingLimitPercent);请求的 “seat” 数不止 1 的情形(大 list、watch 初始化);exempt 与 probes 的行为;apiserver_flowcontrol_current_inqueue_requests 等其他指标;--max-requests-inflight 与 APF 的关系</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="k8s-audit-logging.html">
+    <div>
+      <div class="t1">下一篇 · KUBERNETES 24</div>
+      <div class="t2">审计日志:一次 kubectl 命令留下了哪些记录</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Kubernetes · API 优先级与公平:429 是怎么产生的 · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

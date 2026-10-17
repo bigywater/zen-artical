@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>执行追踪 go tool trace:goroutine 在哪里等了多久</title>
+<meta name="description" content="在 Go 1.27.1 里实测执行追踪:go tool trace -pprof=sync 把 4 个 goroutine 争锁的等待(Mutex.Lock 314.33 ms)归到 main.holdLock;-pprof=sched 的调度延迟总量(804–1906 ms)明显低于程序直接量到的排队时间 4690 ms;用户标注的区域时长 12.03/12.03/12.01 ms;开 trace 让一个分配密集的程序慢约 22%、每秒约 18 MB。">
+<link rel="canonical" href="https://bigywater.tech/go-execution-trace.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="执行追踪 go tool trace:goroutine 在哪里等了多久">
+<meta property="og:description" content="在 Go 1.27.1 里实测执行追踪:go tool trace -pprof=sync 把 4 个 goroutine 争锁的等待(Mutex.Lock 314.33 ms)归到 main.holdLock;-pprof=sched 的调度延迟总量(804–1906 ms)明显低于程序直接量到的排队时间 4690 ms;用户标注的区域时长 12.03/12.03/12.01 ms;开 trace 让一个分配密集的程序慢约 22%、每秒约 18 MB。">
+<meta property="og:url" content="https://bigywater.tech/go-execution-trace.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="执行追踪 go tool trace:goroutine 在哪里等了多久">
+<meta name="twitter:description" content="在 Go 1.27.1 里实测执行追踪:go tool trace -pprof=sync 把 4 个 goroutine 争锁的等待(Mutex.Lock 314.33 ms)归到 main.holdLock;-pprof=sched 的调度延迟总量(804–1906 ms)明显低于程序直接量到的排队时间 4690 ms;用户标注的区域时长 12.03/12.03/12.01 ms;开 trace 让一个分配密集的程序慢约 22%、每秒约 18 MB。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">1994</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">68</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#00799A; --series-c-soft:#D9F1F8;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#4FC3E8; --series-c-soft:#0B2A33;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#4FC3E8; --series-c-soft:#0B2A33;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Go · 69</div>
+  <h1>执行追踪 go tool trace:goroutine 在哪里等了多久</h1>
+  <p>CPU profile 看不到 goroutine 在等什么。执行追踪记录每个 goroutine 的阻塞、唤醒、调度,可以回答“它在哪里等了多久”。这篇不用网页界面,用命令行把 trace 导成 pprof 和事件文本,并用程序自己的计时校验 trace 给出的数字。</p>
+  <div class="hero-fact">
+<div><div class="num">314.33 ms</div><div class="lbl">4 个 goroutine 争锁时,trace 的 sync 阻塞 profile 归到 Mutex.Lock 的等待</div></div><div><div class="num">4690 vs 1906 ms</div><div class="lbl">20 个 goroutine 排队:程序自己量到的排队时间对 sched profile 的总量(单次运行)</div></div><div><div class="num">+22%</div><div class="lbl">开着 trace 时,分配密集的小程序耗时增加</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="go-pprof-block-mutex.html">block 与 mutex profile:锁等待是怎么被记录的</a></div>
+<section>
+  <h2>sync 阻塞 profile</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  trace 文件 5592 字节
+  Type: delay
+  Showing nodes accounting for 537.23ms, 100% of 537.23ms total
+        flat  flat%   sum%        cum   cum%
+    314.33ms 58.51% 58.51%   314.33ms 58.51%  sync.(*Mutex).Lock
+    122.83ms 22.86% 81.37%   122.83ms 22.86%  sync.(*WaitGroup).Wait
+    100.08ms 18.63%   100%   100.08ms 18.63%  runtime.chanrecv1
+           0     0%   100%   314.33ms 58.51%  main.holdLock
+           0     0%   100%   122.83ms 22.86%  main.main
+           0     0%   100%   314.33ms 58.51%  main.main.func2
+           0     0%   100%   100.08ms 18.63%  runtime.(*wakeableSleep).sleep
+           0     0%   100%   100.08ms 18.63%  runtime.traceStartReadCPU.func1</pre></div>
+  <p><code>go tool trace -pprof=sync</code> 把 goroutine 阻塞在同步原语上的时间按调用栈汇总。4 个 goroutine 争锁的例子里,<code>Mutex.Lock</code> 记了 314.33 ms、归到 <code>main.holdLock</code>;另外混进了运行时自己的 goroutine 的 100 ms(<code>traceStartReadCPU</code>),读这类结果要认得哪些是运行时内部的项。</p>
+</section>
+<section>
+  <h2>sched profile 要小心</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  程序自己量的:20 个 goroutine 从创建到第一次运行的等待之和 3559 ms;从创建到结束的总时间之和 5090 ms,减去它们各自的 20 ms 空转 = 4690 ms 的排队时间
+  trace 文件 5157 字节
+  Type: delay
+  Showing nodes accounting for 1531.07ms, 80.32% of 1906.32ms total
+  Dropped 7 nodes (cum &lt;= 9.53ms)
+  Showing top 8 nodes out of 9
+        flat  flat%   sum%        cum   cum%
+   1155.78ms 60.63% 60.63%  1155.78ms 60.63%  time.Now
+    375.28ms 19.69% 80.32%   375.28ms 19.69%  runtime.wakeNetPoller
+           0     0% 80.32%  1155.79ms 60.63%  main.main.func3
+           0     0% 80.32%  1155.78ms 60.63%  main.spin
+           0     0% 80.32%   375.28ms 19.69%  runtime.(*timer).maybeAdd
+           0     0% 80.32%   375.28ms 19.69%  runtime.(*timer).modify
+           0     0% 80.32%   375.28ms 19.69%  runtime.(*timer).reset
+           0     0% 80.32%   375.28ms 19.69%  runtime.(*traceAdvancerState).start.func1</pre></div>
+  <p>20 个 goroutine 在一个 P 上排队,程序自己量出来的排队时间是 4690 ms,而 <code>-pprof=sched</code> 的总量只有 1906 ms(另外几次是 804、1353 ms)。为什么偏小又不稳定,我没有查清。把它当作“哪个栈等得多”的相对排序用,不要当作精确的总时间。</p>
+</section>
+<section>
+  <h2>用任务与区域标注业务</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  go tool trace -d=parsed 总共 485 行事件;与标注相关的 9 行,前 8 行:
+    M=8304148352 P=8 G=1 TaskBegin Time=395507253352320 ID=1 Parent=18446744073709551615 Type="请求"
+    M=8304148352 P=8 G=1 RegionBegin Time=395507253353280 Task=1 Type="解析"
+    M=6094778368 P=8 G=1 RegionEnd Time=395507265370048 Task=1 Type="解析"
+    M=6094778368 P=8 G=1 RegionBegin Time=395507265371072 Task=1 Type="查询"
+    M=6094778368 P=9 G=1 RegionEnd Time=395507277410496 Task=1 Type="查询"
+    M=6094778368 P=9 G=1 RegionBegin Time=395507277411584 Task=1 Type="渲染"
+    M=8304148352 P=9 G=1 RegionEnd Time=395507289457280 Task=1 Type="渲染"
+    M=8304148352 P=9 G=1 Log Time=395507289460800 Task=1 Category="category" Message="done"
+  区域 解析:12.02 ms(代码里是 time.Sleep(10ms))
+  区域 查询:12.04 ms(代码里是 time.Sleep(10ms))
+  区域 渲染:12.05 ms(代码里是 time.Sleep(10ms))</pre></div>
+  <p><code>trace.NewTask</code> / <code>trace.WithRegion</code> 把你关心的阶段写进 trace,<code>go tool trace -d=parsed</code> 里能直接读到 Begin/End 的纳秒时间戳。三个各睡 10 ms 的步骤读出来是 12.03、12.03、12.01 ms,和之前量到的 <code>Sleep</code> 多睡约 2 ms 一致。</p>
+</section>
+<section>
+  <h2>代价</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  plain  :耗时 最小 0.040 s / 中位 0.041 s / 最大 0.042 s
+  traced :耗时 最小 0.048 s / 中位 0.050 s / 最大 0.050 s;trace 文件 0.9–0.9 MB</pre></div>
+  <p>一个 200 个 goroutine、每个分配 400 次的小程序,开 trace 后中位耗时从 0.041 s 到 0.050 s,约慢 22%,生成 0.9 MB,折合每秒约 18 MB。真实服务的开销取决于事件密度,我只测了这一个例子。</p>
+</section>
+<section>
+  <h2>四种命令行 profile</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  execution tracer.
+  # Tracing runtime activities
+  The execution trace captures a wide range of execution events such as goroutine
+  creation/blocking/unblocking, syscall enter/exit/block, GC-related events,
+  changes of heap size, processor start/stop, etc. When CPU profiling is active,
+  the execution tracer makes an effort to include those samples as well. A precise
+  nanosecond-precision timestamp and a stack trace is captured for most events.
+  The generated trace can be interpreted using `go tool trace`.
+  - net: network blocking profile
+  - sync: synchronization blocking profile
+  - syscall: syscall blocking profile
+  - sched: scheduler latency profile</pre></div>
+  <p><code>-pprof=</code> 支持 net、sync、syscall、sched 四种。本文只实验了 sync 与 sched;net 与 syscall 没有试。网页界面(火焰图式的时间线)需要浏览器,这里没有使用。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">执行追踪</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "b", "kind": "bars", "label": "数字对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "4 个 goroutine 各 5 次抢同一把锁(每次持锁 5 ms),trace 只有 5592 字节。go tool trace -pprof=sync 的结果(总计 537.23ms):sync.(*Mutex).Lock 314.33ms(58.51%),调用者 main.holdLock;sync.(*WaitGroup).Wait 122.83ms(22.86%);runtime.chanrecv1 100.08ms(18.63%),它来自运行时自己的 traceStartReadCPU(运行时内部的 goroutine,不是用户代码)。", "s": {"t": {"lines": ["  trace 文件 5592 字节", "  Type: delay", "  Showing nodes accounting for 537.23ms, 100% of 537.23ms total", "        flat  flat%   sum%        cum   cum%", "    314.33ms 58.51% 58.51%   314.33ms 58.51%  sync.(*Mutex).Lock", "    122.83ms 22.86% 81.37%   122.83ms 22.86%  sync.(*WaitGroup).Wait", "    100.08ms 18.63%   100%   100.08ms 18.63%  runtime.chanrecv1", "           0     0%   100%   314.33ms 58.51%  main.holdLock", "           0     0%   100%   122.83ms 22.86%  main.main", "           0     0%   100%   314.33ms 58.51%  main.main.func2", "           0     0%   100%   100.08ms 18.63%  runtime.(*wakeableSleep).sleep", "           0     0%   100%   100.08ms 18.63%  runtime.traceStartReadCPU.func1"], "cur": [], "mark": [], "done": []}, "done": [4, 7], "mark": [5, 6, 11], "b": {"items": [["Mutex.Lock 上的等待 (ms)", 314.33, "314.33"], ["WaitGroup.Wait", 122.83, "122.83"], ["运行时内部 chanrecv1", 100.08, "100.08"]], "max": 314.33, "cur": [], "mark": [1, 2], "done": [0]}, "kv": {"items": [["Lock", "314.33 ms,归到 main.holdLock"], ["混入的内部项", "chanrecv1 100.08 ms 来自运行时自己"], ["trace 大小", "5592 字节"]], "hl": ["混入的内部项"]}}}, {"note": "GOMAXPROCS=1,20 个各自空转 20 ms 的 goroutine 同时就绪。程序自己量到的:从创建到第一次运行的等待之和 3559 ms;创建到结束的总时间之和 5090 ms,减去各自 20 ms 的空转 = 4690 ms 排队时间。go tool trace -pprof=sched 给出的总量(1906.32ms)只有它的一部分:time.Now 1155.78ms(60.63%)、runtime.wakeNetPoller 375.28ms(19.69%)。同一程序另几次运行的总量是 804.83ms、1353.41ms。为什么 trace 的总量比直接量的小、还不稳定,我没有查清。", "s": {"t": {"lines": ["  程序自己量的:20 个 goroutine 从创建到第一次运行的等待之和 3559 ms;从创建到结束的总时间之和 5090 ms,减去它们各自的 20 ms 空转 = 4690 ms 的排队时间", "  trace 文件 5157 字节", "  Type: delay", "  Showing nodes accounting for 1531.07ms, 80.32% of 1906.32ms total", "  Dropped 7 nodes (cum <= 9.53ms)", "  Showing top 8 nodes out of 9", "        flat  flat%   sum%        cum   cum%", "   1155.78ms 60.63% 60.63%  1155.78ms 60.63%  time.Now", "    375.28ms 19.69% 80.32%   375.28ms 19.69%  runtime.wakeNetPoller", "           0     0% 80.32%  1155.79ms 60.63%  main.main.func3", "           0     0% 80.32%  1155.78ms 60.63%  main.spin", "           0     0% 80.32%   375.28ms 19.69%  runtime.(*timer).maybeAdd", "           0     0% 80.32%   375.28ms 19.69%  runtime.(*timer).modify", "           0     0% 80.32%   375.28ms 19.69%  runtime.(*timer).reset", "           0     0% 80.32%   375.28ms 19.69%  runtime.(*traceAdvancerState).start.func1"], "cur": [], "mark": [], "done": []}, "done": [0], "mark": [3, 7, 8], "b": {"items": [["程序自己量的排队时间 (ms)", 4690, "4690"], ["sched profile 总量", 1906, "1906"], ["另一次运行", 1353, "1353"], ["再一次", 805, "805"]], "max": 4690, "cur": [], "mark": [1, 2, 3], "done": [0]}, "kv": {"items": [["直接测量", "排队约 4690 ms"], ["sched profile", "1906 / 1353 / 805 ms(三次运行)"], ["结论", "别把 -pprof=sched 的总量当精确值"], ["未查", "总量偏小的原因"]], "hl": ["结论"]}}}, {"note": "用户标注:trace.NewTask 与 trace.WithRegion(三个各 time.Sleep(10ms) 的步骤)。go tool trace -d=parsed 把它们列成事件:TaskBegin(Type=\"请求\")、每个区域的 RegionBegin/RegionEnd(Task=1)、Log(Category=\"category\", Message=\"done\")。按事件的 Time 相减:解析 12.03 ms、查询 12.03 ms、渲染 12.01 ms(代码里睡 10 ms,实际睡眠就超出约 2 ms,与之前 Sleep 的测量一致)。", "s": {"t": {"lines": ["  go tool trace -d=parsed 总共 485 行事件;与标注相关的 9 行,前 8 行:", "    M=8304148352 P=8 G=1 TaskBegin Time=395507253352320 ID=1 Parent=18446744073709551615 Type=\"请求\"", "    M=8304148352 P=8 G=1 RegionBegin Time=395507253353280 Task=1 Type=\"解析\"", "    M=6094778368 P=8 G=1 RegionEnd Time=395507265370048 Task=1 Type=\"解析\"", "    M=6094778368 P=8 G=1 RegionBegin Time=395507265371072 Task=1 Type=\"查询\"", "    M=6094778368 P=9 G=1 RegionEnd Time=395507277410496 Task=1 Type=\"查询\"", "    M=6094778368 P=9 G=1 RegionBegin Time=395507277411584 Task=1 Type=\"渲染\"", "    M=8304148352 P=9 G=1 RegionEnd Time=395507289457280 Task=1 Type=\"渲染\"", "    M=8304148352 P=9 G=1 Log Time=395507289460800 Task=1 Category=\"category\" Message=\"done\"", "  区域 解析:12.02 ms(代码里是 time.Sleep(10ms))", "  区域 查询:12.04 ms(代码里是 time.Sleep(10ms))", "  区域 渲染:12.05 ms(代码里是 time.Sleep(10ms))"], "cur": [], "mark": [], "done": []}, "done": [1, 8], "mark": [9, 10, 11], "b": {"items": [["解析 (ms)", 12.03, "12.03"], ["查询", 12.03, "12.03"], ["渲染", 12.01, "12.01"]], "max": 12.03, "cur": [], "mark": [0, 1, 2], "done": []}, "kv": {"items": [["事件类型", "TaskBegin / RegionBegin / RegionEnd / Log"], ["区域时长", "12.03 / 12.03 / 12.01 ms"], ["代码里的睡眠", "10 ms"]], "hl": ["区域时长"]}}}, {"note": "开着 trace 的代价:200 个 goroutine 各分配 400 次并 Gosched,每种各跑 5 次。不开 trace:最小 0.040 s / 中位 0.041 s / 最大 0.042 s;开 trace:0.048 / 0.050 / 0.050 s,约慢 22%;trace 文件 0.9 MB(0.050 s 约 0.9 MB,即每秒约 18 MB)。", "s": {"t": {"lines": ["  plain  :耗时 最小 0.040 s / 中位 0.041 s / 最大 0.042 s", "  traced :耗时 最小 0.048 s / 中位 0.050 s / 最大 0.050 s;trace 文件 0.9–0.9 MB"], "cur": [], "mark": [], "done": []}, "done": [0], "mark": [1], "b": {"items": [["plain 中位 (ms)", 41, "41"], ["traced 中位", 50, "50"]], "max": 50, "cur": [], "mark": [1], "done": [0]}, "kv": {"items": [["不开", "中位 0.041 s"], ["开", "中位 0.050 s,约 +22%"], ["trace 大小", "0.9 MB / 0.05 s"]], "hl": ["开"]}}}, {"note": "帮助与文档原文:execution trace 捕获 goroutine 创建/阻塞/唤醒、系统调用进入/退出/阻塞、GC 相关事件、堆大小变化、P 的启停等,大多数事件带纳秒时间戳和调用栈,用 go tool trace 解读。go tool trace -pprof=TYPE 支持四种:net(网络阻塞)、sync(同步阻塞)、syscall(系统调用阻塞)、sched(调度延迟)。", "s": {"t": {"lines": ["  execution tracer.", "  # Tracing runtime activities", "  The execution trace captures a wide range of execution events such as goroutine", "  creation/blocking/unblocking, syscall enter/exit/block, GC-related events,", "  changes of heap size, processor start/stop, etc. When CPU profiling is active,", "  the execution tracer makes an effort to include those samples as well. A precise", "  nanosecond-precision timestamp and a stack trace is captured for most events.", "  The generated trace can be interpreted using `go tool trace`.", "  - net: network blocking profile", "  - sync: synchronization blocking profile", "  - syscall: syscall blocking profile", "  - sched: scheduler latency profile"], "cur": [], "mark": [], "done": []}, "done": [2, 6], "mark": [8, 9, 10, 11], "kv": {"items": [["事件", "goroutine、系统调用、GC、堆、P 启停"], ["-pprof 类型", "net / sync / syscall / sched"], ["时间精度", "纳秒级时间戳 + 栈"]], "hl": ["-pprof 类型"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / Go 1.27.1(brew);用 go run / go build / go test 直接编译运行,需要第三方库时经代理从 proxy.golang.org 下载;计时用 time.Now / testing.B,数字每次运行会有小幅抖动。程序分别用 runtime/trace 写出 trace 文件,再用 go tool trace -pprof=… 与 -d=parsed 读取;程序自己的排队计时在每个 goroutine 里用 time.Since(created) 记录;区域时长由 -d=parsed 里的 RegionBegin/RegionEnd 时间戳相减;开销对比各 5 次;读过的文档:go doc runtime/trace,go tool trace -h</li><li>没有验证:网页界面(时间线/goroutine 分析)、-pprof=net 与 -pprof=syscall、sched profile 总量偏小的原因、trace 对真实服务的影响、飞行记录器(flight recorder)、Linux 上的结果</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="go-race-detector.html">
+    <div>
+      <div class="t1">下一篇 · GO 70</div>
+      <div class="t2">竞态检测器:ThreadSanitizer 在 Go 里的开销与漏报</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Go · 执行追踪 go tool trace:goroutine 在哪里等了多久 · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

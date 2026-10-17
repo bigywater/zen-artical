@@ -1,0 +1,24 @@
+from lib import *
+S = SS('l28')
+steps = [
+    step("A 和 B 是同一个远程的两个克隆,起点它们的 origin/main 都指向同一个提交(下面用“提交1”表示)。逐个测命令是否改变 A 的 origin/main:git commit(本地提交)没变;git ls-remote origin 没变;checkout 分支没变;git push origin main 才变(提交1 → 提交2)。git ls-remote 虽然访问了远程,却不更新任何本地 ref。", t=tl(S(1)), mark=lidx(S(1), 'git push origin main', '变了'), done=lidx(S(1), 'git commit', 'git ls-remote', 'git checkout -b x', '起点'), kv=KV([['不更新', 'commit、checkout、ls-remote'], ['更新', 'push、fetch、pull、clone'], ['origin/main', '只是本地对“远程上次的位置”的缓存']], ['origin/main'])),
+    step("B 不知道远程已有提交 2:B 的 origin/main 还是提交1,而 git ls-remote 查到远程的 main 是提交2。B 的 git status -sb 第一行是 ## main...origin/main,没有任何落后提示——status 只和自己缓存的 origin/main 比较,不联网。B 执行 git fetch 之后 origin/main 变成提交2,再 git status -sb 变成 ## main...origin/main [behind 1]。", t=tl(S(2)), mark=lidx(S(2), '[behind 1]', 'B: git fetch'), done=lidx(S(2), 'B 的缓存', 'B 的 origin/main = 提交1', 'up to date'), kv=KV([['git status', '不联网,只和缓存的 origin/main 比'], ['落后多少', '要先 fetch 才知道'], ['缓存', '过期是常态']], ['git status'])),
+    step("push 被拒绝时不更新:A 推了提交 3,B 再推送(B 基于旧的 origin/main 提交了一个):! [rejected] main -> main (fetch first),error: failed to push some refs,B 的 origin/main 前后不变。push 成功才更新:git push origin main:refs/heads/b-copy 之后本地多了 origin/b-copy。", t=tl(S(3)), mark=lidx(S(3), 'rejected', '没变:push 被拒绝'), done=lidx(S(3), 'failed to push', 'origin/b-copy'), kv=KV([['push 被拒绝', 'origin/* 不变'], ['push 成功', '更新对应的 origin/<名字>'], ['fetch first', '远程有你没有的提交']], ['push 被拒绝'])),
+    step("远程删了 b-copy 之后,B 普通 git fetch,git branch -r 仍然列出 origin/b-copy,git remote show origin 把它标成 stale (use 'git remote prune' to remove)。git fetch --prune 才会删除:输出 - [deleted] (none) -> origin/b-copy,之后只剩 origin/HEAD 和 origin/main。git config fetch.prune true 可以让每次 fetch 都自动 prune。", t=tl(S(4)), mark=lidx(S(4), 'stale', '[deleted]'), done=lidx(S(4), 'origin/b-copy   origin/main', 'fetch.prune'), kv=KV([['普通 fetch', '不会删除已不存在的 origin/*'], ['stale', 'git remote show origin 能看出来'], ['--prune', '删除;fetch.prune=true 变成默认']], ['--prune'])),
+    step("refs/remotes/origin/HEAD 是个符号引用,clone 时写成 ref: refs/remotes/origin/main。远程把默认分支改成 trunk 之后,普通 git fetch 并不会更新它(仍是 origin/main);要手工 git remote set-head origin -a,git 才提示 'origin/HEAD' has changed from 'main' and now points to 'trunk',并改成 refs/remotes/origin/trunk。", t=tl(S(5)), mark=lidx(S(5), '仍是 main', 'has changed from'), done=lidx(S(5), 'ref: refs/remotes/origin/main', 'refs/remotes/origin/trunk'), kv=KV([['origin/HEAD', 'clone 时设置,指向远程默认分支'], ['fetch', '不会更新它'], ['set-head -a', '重新探测并设置']], ['origin/HEAD'])),
+    step("remote-tracking ref 也有 reflog:git reflog show origin/main 列出 origin/main@{0}: fetch -q: fast-forward 和 origin/main@{1}: fetch -q: fast-forward,记录每次 fetch 的移动;origin/main@{1} 对应的是 “A 的提交 2”。可以用它回看“上一次 fetch 之前远程是什么样”。", t=tl(S(6)), mark=lidx(S(6), 'fetch -q: fast-forward'), done=lidx(S(6), 'A 的提交 2'), kv=KV([['reflog', '记录每次 fetch / push 带来的移动'], ['origin/main@{1}', '上一次 fetch 之前的位置'], ['用途', '回看远程分支的历史位置']], ['reflog'])),
+]
+A = mkarti('l28', 28, 'Git,远程跟踪分支,origin/main,fetch,prune,真实验证,动画演示',
+    '用同一个远程的两个克隆验证 refs/remotes 的更新时机:只有 fetch、pull、push、clone 会更新 origin/*,commit、checkout、ls-remote 不会;git status 的落后提示基于缓存;push 被拒绝时不更新;远程删除分支后本地的 origin/* 变 stale,要 fetch --prune 才删;origin/HEAD 不会自己跟随远程默认分支;remote-tracking ref 也有 reflog。',
+    'origin/main 是远程的实时镜像吗?不是,它只是一个本地缓存,什么时候才更新?这篇用同一个远程的两个克隆(A 和 B)验证 push、fetch、ls-remote 各自的效果,以及 stale 分支、origin/HEAD、reflog 的行为。',
+    [('4 个', 'git push、fetch、pull、clone 会更新 origin/*;commit、checkout、ls-remote 不会'), ('stale', '远程删了分支,本地的 origin/<分支> 仍在,直到 fetch --prune'), ('不联网', 'git status 的 ahead/behind 只和本地缓存的 origin/main 比较')],
+    [('缓存的性质', '<p><code>origin/main</code> 是本地保存的“上次和远程通信时,远程的 main 在哪里”,不是实时镜像。只有真正和远程通信并成功的命令(fetch、pull、push、clone)才会更新它。</p>'),
+     ('status 的盲点', '<p><code>git status</code> 的落后 / 领先提示只拿本地的 <code>origin/main</code> 比较,不联网,所以别人推了新提交之后你的 status 仍说“up to date”,直到下一次 fetch。</p>'),
+     ('push', '<p>push 成功会同时更新对应的 <code>origin/&lt;名字&gt;</code>;被拒绝(例如 <code>fetch first</code>)则一个字也不改。</p>'),
+     ('stale 与 prune', '<p>远程删除分支后,本地的 <code>origin/&lt;分支&gt;</code> 不会自己消失,<code>git remote show origin</code> 标成 stale;<code>git fetch --prune</code> 或配置 <code>fetch.prune=true</code> 才清理。</p>'),
+     ('origin/HEAD', '<p><code>refs/remotes/origin/HEAD</code> 在 clone 时设置,指向远程当时的默认分支;远程改了默认分支后,fetch 不会更新它,要 <code>git remote set-head origin -a</code>。</p>'),
+     ('reflog', '<p>remote-tracking ref 也有 reflog,<code>origin/main@{1}</code> 可以回看上一次 fetch 之前的位置。</p>')],
+    steps,
+    [ENV_I_GIT + '。A、B 是同一个本机裸仓库的两个克隆;为避免实时 hash 随运行变化,输出里的提交用“提交N”(第 N 个出现的 hash)代替;fetch.prune 在最后只做了设置,没有再验证其自动效果',
+     '没有验证:git pull 的 fetch + merge/rebase 对 origin/* 的更新(与 fetch 相同);remote.<name>.fetch 自定义 refspec 时 origin/* 的映射(见上一篇 refspec);fetch.pruneTags;多个 remote 同名分支;通过网络协议(ssh / http)时的差异'],
+    'origin/* 的更新时机')

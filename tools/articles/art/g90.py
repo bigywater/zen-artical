@@ -1,0 +1,22 @@
+from lib import *
+S = SS('g90')
+steps = [
+    step("一次成功的握手之后能读到什么(进程内生成的 CA 与服务端证书,本机回环):握手用了 1.44 ms,协议版本 TLS 1.3,密码套件 TLS_AES_128_GCM_SHA256,ALPN 协商结果 \"http/1.1\"(客户端只提供了这个),服务端名 \"example.test\",服务器发来的证书链长度 1,验证后的链数 1。", t=tl(S(1)), mark=lidx(S(1), '握手成功'), kv=KV([['版本', 'TLS 1.3'], ['密码套件', 'TLS_AES_128_GCM_SHA256'], ['ALPN', 'http/1.1'], ['证书', '链长度 1,验证后 1 条链']], ['版本'])),
+    step("各种握手/验证失败的错误原文。客户端没有信任这个 CA:tls: failed to verify certificate: x509: “example.test” certificate is not trusted;服务端证书已过期:x509: certificate has expired or is not yet valid: current time … is after …;证书里的名字是 other.test 而客户端要 example.test:x509: certificate is valid for other.test, not example.test;服务端最高只到 TLS 1.2、客户端要求最低 TLS 1.3:remote error: tls: protocol version not supported;客户端不设 ServerName(用 IP 地址拨号):tls: either ServerName or InsecureSkipVerify must be specified in the tls.Config;同上加 InsecureSkipVerify: true:握手成功。", t=tl(S(2)), done=lidx(S(2), 'InsecureSkipVerify: true'), mark=lidx(S(2), '没有信任这个 CA', '服务端证书已过期', 'other.test', 'TLS 1.3', '不设 ServerName'), kv=KV([['证书校验的三类错误', '不信任 / 过期 / 名字不符'], ['版本不匹配', 'protocol version not supported'], ['没有 ServerName', '配置错误,握手前就拒绝'], ['InsecureSkipVerify', '跳过校验,握手成功(只用于测试)']], ['InsecureSkipVerify'])),
+    step("会话复用:本机回环上完整握手(30 次)中位 0.89 ms;配 ClientSessionCache 的复用握手(30 次中 DidResume 为真 30 次)中位 0.63 ms。回环没有网络往返,省下的主要是证书验证和签名的计算。", t=tl(S(3)), mark=lidx(S(3), '完整握手', 'DidResume'), b=bars([['完整握手中位 (ms)', 0.89, '0.89'], ['复用握手中位', 0.63, '0.63']], 0.89, mark=[0], done=[1]), kv=KV([['完整握手', '0.89 ms'], ['复用握手', '0.63 ms,DidResume 30/30'], ['真实网络', '还能省往返,本机没有测']], ['真实网络'])),
+    step("证书密钥类型对握手耗时的影响(50 次完整握手中位数):服务端证书 ECDSA P-256 0.69 ms;RSA 2048 1.59 ms;协商出的密码套件都是 TLS_AES_128_GCM_SHA256。RSA 证书的握手约慢 2.3 倍。", t=tl(S(4)), mark=lidx(S(4), 'ECDSA P-256', 'RSA 2048'), b=bars([['ECDSA P-256 (ms)', 0.69, '0.69'], ['RSA 2048', 1.59, '1.59']], 1.59, done=[0], mark=[1]), kv=KV([['ECDSA P-256', '0.69 ms'], ['RSA 2048', '1.59 ms(约 2.3 倍)'], ['密码套件', '同一个']], ['RSA 2048'])),
+    step("文档(go doc crypto/tls.Config):InsecureSkipVerify 控制客户端是否验证服务端的证书链和主机名;为 true 时 crypto/tls 接受服务器给出的任何证书和证书里的任何主机名,这个模式下 TLS 容易受中间人攻击,除非使用自定义验证;只应该用于测试,或与 VerifyConnection、VerifyPeerCertificate 结合使用。MinVersion 是可接受的最低 TLS 版本;默认目前最低是 TLS 1.2,本包支持的最低版本是 TLS 1.0。", t=tl(S(5)), done=lidx(S(5), 'InsecureSkipVerify controls'), mark=lidx(S(5), 'MinVersion contains'), kv=KV([['InsecureSkipVerify', '只用于测试,或配合自定义验证'], ['MinVersion 默认', 'TLS 1.2'], ['本包最低支持', 'TLS 1.0']], ['InsecureSkipVerify'])),
+]
+A = mkartg('g90', 90, 'Go,crypto/tls,TLS,证书校验,会话复用,真实验证,动画演示',
+    '在 Go 1.27.1 里实测 crypto/tls:进程内生成 CA 和证书,握手后读到 TLS 1.3 与 TLS_AES_128_GCM_SHA256;逐个触发未信任、过期、主机名不符、版本不匹配、缺少 ServerName 等错误并给出原文;会话复用 0.63 ms 对完整握手 0.89 ms;RSA 2048 证书的握手比 ECDSA P-256 慢约 2.3 倍。',
+    'TLS 握手在 Go 代码里的一些细节常常只在出错时才被注意到:证书不被信任、过期、主机名不符、没设 ServerName。这篇在本机用真实生成的 CA 和证书,把这些错误一个个触发出来,看错误原文,并量会话复用和证书密钥类型对握手耗时的影响。',
+    [('TLS 1.3', '默认协商出的协议版本,密码套件 TLS_AES_128_GCM_SHA256'), ('0.89 → 0.63 ms', '本机回环上完整握手与会话复用握手的中位耗时'), ('0.69 vs 1.59 ms', '服务端证书用 ECDSA P-256 与 RSA 2048 的完整握手中位耗时')],
+    [('握手之后的状态', '<p><code>tls.Conn.ConnectionState()</code> 给出协商出的版本、密码套件、ALPN 结果、服务端名和验证后的证书链。默认就是 TLS 1.3;ALPN 取的是客户端提供的列表和服务端支持的列表的交集。</p>'),
+     ('校验失败的错误', '<p>四类典型错误的原文:不信任(<code>certificate is not trusted</code>,这个措辞来自 macOS 的系统验证器)、过期(<code>has expired or is not yet valid</code>,会带上当前时间)、主机名不符(<code>valid for other.test, not example.test</code>)、版本不匹配(服务端回 <code>protocol version not supported</code>)。另外不设 <code>ServerName</code> 又没设 <code>InsecureSkipVerify</code>,握手前就以配置错误拒绝;<code>InsecureSkipVerify: true</code> 会让握手成功,但文档明确说那样会遭遇中间人攻击,只用于测试。</p>'),
+     ('会话复用', '<p>配了 <code>ClientSessionCache</code> 并让服务端的会话票据到达后,30 次握手都是 <code>DidResume</code>,中位耗时 0.63 ms,对完整握手的 0.89 ms 省了约 30%。这是本机回环,没有网络往返,真实网络上节省的还有往返时延,我没有测。</p>'),
+     ('证书密钥类型', '<p>服务端证书用 RSA 2048,完整握手 1.59 ms,比 ECDSA P-256 的 0.69 ms 慢约 2.3 倍(服务端要做一次 RSA 签名)。对大量短连接的服务,这是可以量到的成本。</p>'),
+     ('文档', '<p>文档对 <code>InsecureSkipVerify</code> 的警告和 <code>MinVersion</code> 默认值(TLS 1.2)都与实验一致。</p>')],
+    steps,
+    [ENV_G + '。CA 与证书在进程内用 crypto/x509 生成(CA 与 ECDSA 叶子证书用 P-256,RSA 叶子 2048 位);握手在本机回环上进行;耗时用 time.Since 测,30 或 50 次取中位数;“证书不被信任”的措辞来自 macOS 的系统验证,Linux 上措辞可能不同;读过的文档:go doc crypto/tls.Config',
+     '没有验证:真实网络往返下的握手耗时、证书吊销(OCSP/CRL)、客户端证书(mTLS)、0-RTT、Linux 上的错误措辞、tls.Config 的其它选项(CipherSuites、CurvePreferences)'],
+    'crypto/tls')

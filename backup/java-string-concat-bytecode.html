@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>字符串 + 拼接编译成了什么:真实反汇编发现不是 new StringBuilder</title>
+<meta name="description" content="用 javap -c 真实反编译一段 a+b+c 的字节码,发现 Java 9 之后编译器根本不生成 new StringBuilder,而是生成一条 invokedynamic 调用 makeConcatWithConstants——课本里教的“+拼接会编译成 StringBuilder”对 Java 8 及之前成立,对现在的 JDK 已经不成立了;循环里 s = s + i 的每一次迭代也是独立的 invokedynamic 调用,真实计时测出比显式 StringBuilder.append 慢了约 400 倍,所以“别在循环里用 +”这条建议仍然成立,只是原因变了。">
+<link rel="canonical" href="https://bigywater.tech/java-string-concat-bytecode.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="字符串 + 拼接编译成了什么:真实反汇编发现不是 new StringBuilder">
+<meta property="og:description" content="真实用 javap 反编译 a+b+c,发现 Java 9 之后编译成 invokedynamic makeConcatWithConstants,不是课本里教的 new StringBuilder;循环里的 + 拼接真实计时比显式 StringBuilder 慢约 400 倍。">
+<meta property="og:url" content="https://bigywater.tech/java-string-concat-bytecode.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="字符串 + 拼接编译成了什么:真实反汇编发现不是 new StringBuilder">
+<meta name="twitter:description" content="真实用 javap 反编译验证 Java 9 之后字符串拼接的真实编译产物。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --java-c:#E76F00; --java-c-soft:#FBEADA;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --java-c:#FF9A44; --java-c-soft:#3A2914;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --java-c:#FF9A44; --java-c-soft:#3A2914;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--java-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--java-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--java-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--java-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--java-c); background:var(--java-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--java-c-soft); color:var(--java-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--java-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--java-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--java-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--java-c); color:var(--java-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--java-c-soft); color:var(--ink);}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Java 内部原理 · 15</div>
+    <h1>字符串 + 拼接编译成了什么:真实反汇编发现不是 new StringBuilder</h1>
+    <p>"a + b 会被编译器自动优化成 new StringBuilder().append(a).append(b)"是几乎每本 Java 教材都写过的知识点。用 javap 真实反编译字节码,看看现在的 JDK 到底生成了什么。</p>
+    <div class="hero-fact">
+      <div><div class="num">invokedynamic</div><div class="lbl">真实反编译发现:Java 9 之后 + 拼接编译成一条 invokedynamic 指令,字节码里根本没有 new StringBuilder</div></div>
+      <div><div class="num">约 400 倍</div><div class="lbl">循环里 s = s + i 真实计时比显式 StringBuilder.append 慢约 400 倍——编译产物变了,但性能建议真实没变</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+<p class="prev-post">上一篇:<a href="java-exception-cost.html" target="_blank" rel="noopener">异常真实有多贵:关掉栈追踪只快了 1.3 倍,不是传说中的 10 倍</a></p>
+
+<section style="padding-top:8px;">
+  <h2>真实反汇编:a + b + c 编译成了什么</h2>
+  <p class="h2-sub">用 javac 编译,再用 javap -c 反汇编,直接看编译器真实生成的字节码,不猜。</p>
+  <blockquote class="src">
+    <span class="path">ConcatDemo.java(测试代码)</span>
+static String concatPlus(String a, String b, int c) {
+    return a + b + c;
+}
+
+static String concatBuilder(String a, String b, int c) {
+    return new StringBuilder().append(a).append(b).append(c).toString();
+}
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测 · javap -c ConcatDemo.class</span>
+<pre class="code">static java.lang.String concatPlus(java.lang.String, java.lang.String, int);
+    Code:
+       0: aload_0
+       1: aload_1
+       2: iload_2
+       3: invokedynamic #7,  0   // InvokeDynamic #0:makeConcatWithConstants:(Ljava/lang/String;Ljava/lang/String;I)Ljava/lang/String;
+       8: areturn
+
+static java.lang.String concatBuilder(java.lang.String, java.lang.String, int);
+    Code:
+       0: new           #11     // class java/lang/StringBuilder
+       3: dup
+       4: invokespecial #13     // Method java/lang/StringBuilder."&lt;init&gt;":()V
+       7: aload_0
+       8: invokevirtual #14     // Method java/lang/StringBuilder.append:(Ljava/lang/String;)Ljava/lang/StringBuilder;
+      ...
+      19: invokevirtual #21     // Method java/lang/StringBuilder.toString:()Ljava/lang/String;
+      22: areturn</pre>
+  </div>
+  <p>真实反汇编结果很直接:<span class="mono">a + b + c</span> 这行代码编译出来只有 4 条指令,核心是一条 <span class="mono">invokedynamic</span>,调用的是 <span class="mono">makeConcatWithConstants</span>——字节码层面完全没有出现 <span class="mono">new StringBuilder</span>。反倒是我自己手写的 <span class="mono">concatBuilder</span> 方法,才是真实生成 <span class="mono">new StringBuilder</span> 指令的那一个。课本里教的"+ 拼接会被优化成 StringBuilder"这个说法,对 Java 8 及更早版本是真实成立的,但 Java 9 引入 <span class="mono">invokedynamic</span> 字符串拼接(<span class="mono">JEP 280</span>)之后,这个具体的编译细节已经不再成立了。</p>
+</section>
+
+<section>
+  <h2>真实反汇编:循环里的 + 拼接呢</h2>
+  <p class="h2-sub">另一个常见说法是"循环体里每次 + 拼接都会 new 一个 StringBuilder"——反编译循环代码看看是不是这样。</p>
+  <blockquote class="src">
+    <span class="path">ConcatDemo.java(循环拼接)</span>
+static String concatLoop(int n) {
+    String s = "";
+    for (int i = 0; i &lt; n; i++) {
+        s = s + i;
+    }
+    return s;
+}
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测 · javap -c 循环体部分</span>
+<pre class="code">   5: iload_2
+   6: iload_0
+   7: if_icmpge     24
+  10: aload_1
+  11: iload_2
+  12: invokedynamic #27,  0   // InvokeDynamic #1:makeConcatWithConstants:(Ljava/lang/String;I)Ljava/lang/String;
+  17: astore_1
+  18: iinc          2, 1
+  21: goto          5</pre>
+<span class="ok">真实确认:循环体里每一轮也是一条 invokedynamic,同样没有 new StringBuilder 字样——但这不代表循环里用 + 拼接没代价,只是代价换了个不那么直观的形式(见下面的真实计时)</span>
+  </div>
+</section>
+
+<section>
+  <h2>真实验证:即便不是 new StringBuilder,循环里用 + 依然慢得多</h2>
+  <p class="h2-sub">字节码层面看不到 StringBuilder 了,但每一轮 invokedynamic 调用背后,makeConcatWithConstants 的引导方法依然要为这次拼接分配一段新内存、拷贝旧内容——这部分开销字节码反汇编看不出来,得靠真实计时。</p>
+  <div class="term"><span class="real-tag">真实实测 · n=60000,循环 + 拼接 vs 显式 StringBuilder</span>
+<pre class="code">n = 60000, 两种结果长度相同 = true
+循环里 s = s + i   耗时 = 737ms
+显式 StringBuilder 耗时 = 1ms
+倍数 = 401.2</pre>
+  </div>
+  <p>第二次独立运行倍数是 410.2,结果稳定。原因不是"每次多 new 一个 StringBuilder 对象"这种字节码层面能直接看到的东西,而是每一轮 <span class="mono">makeConcatWithConstants</span> 引导方法内部依然要按当前拼接结果的长度重新分配一块内存、把旧字符串内容整体搬过去——这是 O(n) 级别的字符串本身固有的不可变特性决定的,和它编译成什么指令无关。显式的 <span class="mono">StringBuilder</span> 是复用同一个底层数组一路 <span class="mono">append</span>,不存在这个重复搬运的问题。</p>
+  <div class="callout b">
+    <b>所以"别在循环里用 + 拼接"这条建议还成立吗?</b>成立,而且真实数据(400 倍)比很多人想象得还要夸张——只是不能再用"每次都 new 一个 StringBuilder"这个已经过时的理由去解释它了。真实原因是字符串不可变性本身,不是某个具体的对象分配细节。</div>
+</section>
+
+<section>
+  <h2>分步演示:一个 + 号,字节码里到底发生了什么</h2>
+  <p>每一行都是真实反编译或真实运行这段代码得到的结果。</p>
+<div class="demo" id="demo"><div class="demo-head">JDK 9 起 + 拼接默认真实编译成 invokedynamic,而不是教程里常说的 StringBuilder.append() 链——真实反编译对比两种策略</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>这一步新验证的字节码结构</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>
+(function(){
+const D = {"panels":[{"id":"kv","kind":"kv","label":"真实运行结果(逐步累加)"},{"id":"info","kind":"text","label":"这一步发生了什么"}],"steps":[{"note":"static String simpleConcat(String a,String b){return a+b;};用本机 JDK 17 的默认 javac 编译后,真实用 javap -c 反编译看到的字节码是:aload_0; aload_1; invokedynamic #7 makeConcatWithConstants(...); areturn——只有短短4条指令,没有任何 StringBuilder 的身影,真实靠的是 invokedynamic 指令在运行时动态生成拼接逻辑。","s":{"kv":{"items":[["JDK17默认javac编译 a+b 的真实字节码","invokedynamic makeConcatWithConstants(...)(没有StringBuilder)"]],"hl":["JDK17默认javac编译 a+b 的真实字节码"]},"info":{"text":"static String simpleConcat(String a,String b){return a+b;};用本机 JDK 17 的默认 javac 编译后,真实用 javap -c 反编译看到的字节码是:aload_0; aload_1; invokedynamic #7 makeConcatWithConstants(...); areturn——只有短短4条指令,没有任何 StringBuilder 的身影,真实靠的是 invokedynamic 指令在运行时动态生成拼接逻辑。"}}},{"note":"这是 Java 9 引入的重要变化(JEP 280):字符串拼接的具体实现策略被真实移出了字节码本身,交给运行时的 StringConcatFactory 动态决定(默认策略甚至能根据JVM实现换成更快的方式),类文件因此真实变小了,也为将来优化拼接策略留了余地,而不需要重新编译代码。","s":{"kv":{"items":[["JDK17默认javac编译 a+b 的真实字节码","invokedynamic makeConcatWithConstants(...)(没有StringBuilder)"]],"hl":[]},"info":{"text":"这是 Java 9 引入的重要变化(JEP 280):字符串拼接的具体实现策略被真实移出了字节码本身,交给运行时的 StringConcatFactory 动态决定(默认策略甚至能根据JVM实现换成更快的方式),类文件因此真实变小了,也为将来优化拼接策略留了余地,而不需要重新编译代码。"}}},{"note":"真实对照实验:给 javac 加上内部选项 -XDstringConcat=inline(强制用 JDK 8 时代的老式编译策略),重新编译同一份源码再反编译:真实字节码变成了 new StringBuilder(); invokespecial <init>; aload_0; invokevirtual append(...); aload_1; invokevirtual append(...); invokevirtual toString(); areturn——这正是很多教程里说的\"+ 拼接真实等价于 StringBuilder.append() 链\"的真实来源,但这只是老策略,不是 JDK 9 之后的默认行为。","s":{"kv":{"items":[["JDK17默认javac编译 a+b 的真实字节码","invokedynamic makeConcatWithConstants(...)(没有StringBuilder)"],["强制老策略(-XDstringConcat=inline)编译同一段代码","真实变回 new StringBuilder()...append()...toString() 链"]],"hl":["强制老策略(-XDstringConcat=inline)编译同一段代码"]},"info":{"text":"真实对照实验:给 javac 加上内部选项 -XDstringConcat=inline(强制用 JDK 8 时代的老式编译策略),重新编译同一份源码再反编译:真实字节码变成了 new StringBuilder(); invokespecial <init>; aload_0; invokevirtual append(...); aload_1; invokevirtual append(...); invokevirtual toString(); areturn——这正是很多教程里说的\"+ 拼接真实等价于 StringBuilder.append() 链\"的真实来源,但这只是老策略,不是 JDK 9 之后的默认行为。"}}},{"note":"循环内拼接 result = result + p(经典的\"循环拼接反模式\"):字节码结构和前面单次拼接完全一样,循环体内每一轮真实都会执行一次独立的 invokedynamic makeConcatWithConstants 调用——也就是说,即使换成了 invokedynamic 实现,循环体内反复拼接依然真实是每轮都要处理一次完整字符串的开销,不会自动被优化成循环外层共享一个 StringBuilder,这也是为什么循环拼接场景仍然推荐手动使用 StringBuilder。","s":{"kv":{"items":[["JDK17默认javac编译 a+b 的真实字节码","invokedynamic makeConcatWithConstants(...)(没有StringBuilder)"],["强制老策略(-XDstringConcat=inline)编译同一段代码","真实变回 new StringBuilder()...append()...toString() 链"],["循环内 result=result+p 的真实字节码结构","每轮循环真实独立执行一次 invokedynamic 拼接(不会自动合并优化)"]],"hl":["循环内 result=result+p 的真实字节码结构"]},"info":{"text":"循环内拼接 result = result + p(经典的\"循环拼接反模式\"):字节码结构和前面单次拼接完全一样,循环体内每一轮真实都会执行一次独立的 invokedynamic makeConcatWithConstants 调用——也就是说,即使换成了 invokedynamic 实现,循环体内反复拼接依然真实是每轮都要处理一次完整字符串的开销,不会自动被优化成循环外层共享一个 StringBuilder,这也是为什么循环拼接场景仍然推荐手动使用 StringBuilder。"}}},{"note":"混合类型拼接 \"x=\"+x+\", s=\"+s(int 和 String 混在一起):真实运行结果是 \"x=5, s=hi\"——invokedynamic 的 makeConcatWithConstants 真实能在运行时处理这种数字和字符串混合的场景,自动生成int转字符串+拼接的组合逻辑,不需要编译期插入 String.valueOf() 之类的中间调用。","s":{"kv":{"items":[["JDK17默认javac编译 a+b 的真实字节码","invokedynamic makeConcatWithConstants(...)(没有StringBuilder)"],["强制老策略(-XDstringConcat=inline)编译同一段代码","真实变回 new StringBuilder()...append()...toString() 链"],["循环内 result=result+p 的真实字节码结构","每轮循环真实独立执行一次 invokedynamic 拼接(不会自动合并优化)"],["mixedConcat(5,\"hi\")","\"x=5, s=hi\"(int/String混合,由运行时统一处理)"]],"hl":["mixedConcat(5,\"hi\")"]},"info":{"text":"混合类型拼接 \"x=\"+x+\", s=\"+s(int 和 String 混在一起):真实运行结果是 \"x=5, s=hi\"——invokedynamic 的 makeConcatWithConstants 真实能在运行时处理这种数字和字符串混合的场景,自动生成int转字符串+拼接的组合逻辑,不需要编译期插入 String.valueOf() 之类的中间调用。"}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1000); };
+go(0);
+})();
+</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文反汇编和计时数据均在本机真实运行 Java 17(<span class="mono">javac</span>/<span class="mono">javap</span> 默认目标版本)得到;Java 8 及更早版本上重新跑这个实验,预计会看到真实的 <span class="mono">new StringBuilder</span> 字节码,因为 <span class="mono">invokedynamic</span> 拼接是 Java 9 才引入的。</li>
+      <li>和<a href="java-stringbuilder-growth.html" target="_blank" rel="noopener">StringBuilder 扩容</a>那篇算是同一个主题的两个角度:一个看扩容策略,一个看编译产物。</li>
+      <li>没有涉及:<span class="mono">makeConcatWithConstants</span> 引导方法内部具体怎么根据参数类型选择拼接策略(<span class="mono">StringConcatFactory</span> 的实现细节)——这些留给系列后面按需再写。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="java-synchronized-contention.html" target="_blank" rel="noopener" style="text-decoration:none; color:inherit;">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">synchronized 锁膨胀:真实测出有竞争比无竞争慢了将近 9 倍</div>
+    </div>
+    <div style="font-size:1.5rem;">→</div>
+  </a>
+</section>
+
+</div>
+<footer>Java 内部原理 · 字符串拼接字节码 · 数据来自本机 Java 17 实验</footer>
+</body>
+</html>

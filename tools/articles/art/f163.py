@@ -1,0 +1,17 @@
+from lib import *
+S = SS('f163')
+R = J('f163'); fs = R['first']; st = R['string']; sy = R['styles']; rl = R['reload']; sg = R['signals']
+k = list(sy)
+steps = [
+    step(f"第一次渲染要编译模板,之后命中缓存(1000 项的列表):第一次(含编译){fs[0]:.2f} ms,之后的渲染中位数 {fs[1]:.2f} ms,编译约占 {fs[0] - fs[1]:.2f} ms。模板编译成 Python 代码后缓存在 Jinja2 的环境里,每个进程的第一次请求要多付这一笔;预热(启动后渲染一次)可以把它挪到启动阶段。", t=tl(S(1)), done=lidx(S(1), '第一次'), kv=KV([['第一次', f'{fs[0]:.2f} ms,含编译'], ['之后', f'{fs[1]:.2f} ms,命中缓存']], ['第一次'])),
+    step(f"render_template_string 每次都要重新编译:渲染只有 1 项的小模板,文件模板 {st[0]:.0f} µs,render_template_string {st[1]:.0f} µs,约 {st[1] / st[0]:.0f} 倍。热点路径上不要用 render_template_string 渲染固定的模板源码,把它放进模板文件。", b=bars([['文件模板', st[0], f'{st[0]:.0f} µs'], ['render_template_string', st[1], f'{st[1]:.0f} µs']], st[1], mark=[1], done=[0]), t=tl(S(2)), done=lidx(S(2), '文件模板'), kv=KV([['render_template(文件)', '编译一次'], ['render_template_string', f'每次编译,约 {st[1] / st[0]:.0f} 倍']], ['render_template_string'])),
+    step(f"同样 1000 项,不同写法:直接循环(自动转义){sy[k[0]]:.2f} ms;name|safe 跳过转义 {sy[k[1]]:.2f} ms(反而更慢,多了一次过滤器调用,没有省下转义的开销);每项 {{% include %}} 一个小模板 {sy[k[2]]:.2f} ms;每项调用 macro {sy[k[3]]:.2f} ms。在循环里 include 每项约多 {(sy[k[2]] - sy[k[0]]) / 1000 * 1000:.1f} µs,macro 比 include 便宜一些;大列表里的行,尽量直接写在循环里。", b=bars([['直接循环', sy[k[0]], f'{sy[k[0]]:.2f} ms'], ['|safe', sy[k[1]], f'{sy[k[1]]:.2f} ms'], ['macro', sy[k[3]], f'{sy[k[3]]:.2f} ms'], ['include', sy[k[2]], f'{sy[k[2]]:.2f} ms']], sy[k[2]], mark=[3], done=[0]), t=tl(S(3)), done=lidx(S(3), '直接循环', '|safe'), mark=lidx(S(3), 'include', 'macro'), kv=KV([['直接循环', f'{sy[k[0]]:.2f} ms'], ['macro', f'{sy[k[3]]:.2f} ms'], ['include', f'{sy[k[2]]:.2f} ms']], ['include'])),
+    step(f"TEMPLATES_AUTO_RELOAD(debug 下默认开,每次渲染检查模板文件有没有改过):小模板渲染 auto_reload=False {rl['auto_reload=False']:.0f} µs、True {rl['auto_reload=True']:.0f} µs,多出的只有几 µs(一次文件状态检查,这里在测量噪声的量级)。所以它不是 debug 下变慢的主要原因。", t=tl(S(4)), done=lidx(S(4), 'auto_reload'), kv=KV([['auto_reload', f"{rl['auto_reload=False']:.0f} → {rl['auto_reload=True']:.0f} µs"]], ['auto_reload'])),
+    step(f"用 Flask 的模板信号统计每个模板的渲染耗时:before_render_template 里在 context 上记起点、template_rendered 里算差值,/p 请求两次,list_include.html 渲染 {sg['list_include.html'][0]} 次,单次 {sg['list_include.html'][1]:.2f} ms(200 项)。信号只对顶层的 render_template 触发;include 进来的 row.html 不单独触发,它的耗时包含在外层模板里。", t=tl(S(5)), done=lidx(S(5), 'list_include.html'), kv=KV([['before_render_template / template_rendered', '每次顶层渲染各触发一次'], ['include', '不单独触发']], ['before_render_template / template_rendered'])),
+]
+A = mkartf('f163', 163, 'Flask,Jinja2,模板渲染,性能,真实验证,动画演示',
+    f'实测 Jinja2 模板渲染耗时:第一次渲染含编译 {fs[0]:.2f} ms 而之后 {fs[1]:.2f} ms、render_template_string 比文件模板慢约 {st[1] / st[0]:.0f} 倍、循环里 include 比直接写慢约 {sy[k[2]] / sy[k[0]]:.1f} 倍、|safe 并不更快、TEMPLATES_AUTO_RELOAD 的开销很小、用模板信号统计渲染耗时。',
+    '模板渲染慢在哪?第一次请求为什么慢?render_template_string 能不能用在热点路径?include 和 macro 有多大代价?这篇逐项量出来。',
+    [(f'约 {st[1] / st[0]:.0f} 倍', 'render_template_string 相对文件模板的耗时(小模板)'), (f'{fs[0]:.1f} → {fs[1]:.1f} ms', '1000 项列表第一次渲染与之后的耗时'), (f'约 {sy[k[2]] / sy[k[0]]:.1f} 倍', '循环里每项 include 相对直接写的耗时')],
+    [('编译与缓存', '<p>上一篇:<a href="flask-flask-profiler.html">Flask Profiler</a>;下一篇:<a href="flask-json-serialization-performance.html">JSON 序列化性能</a>。</p>'), ('render_template_string', None), ('不同写法的耗时', None), ('自动重新加载', None), ('模板信号', None)],
+    steps, [ENV_F, '没有验证:Jinja2 的字节码缓存(bytecode_cache)、模板继承层数对耗时的影响、真实页面(很多变量与过滤器)的整体占比、异步渲染(enable_async)、缓存渲染结果的片段缓存做法'], '模板渲染耗时')

@@ -1,0 +1,18 @@
+from lib import *
+S = SS('g46')
+steps = [
+    step("一个 goroutine 一口气创建了 200 个各自忙 5 ms 的 goroutine(总共 1000 ms 的 CPU 工作),不同 GOMAXPROCS 下的墙钟时间(5 次):GOMAXPROCS=1:1000 ms;2:500 ms(加速 2.00);4:250 ms(4.00);8:125 ms(8.00);10:105 ms(9.52,理想 10)。任务都是从同一个 goroutine 创建的,因此一开始都挂在创建者所在 P 的本地队列里——其它 P 能拿到活并且几乎线性加速,靠的就是窃取。", t=tl(S(1)), done=lidx(S(1), 'GOMAXPROCS= 1', 'GOMAXPROCS= 2', 'GOMAXPROCS= 4'), mark=lidx(S(1), 'GOMAXPROCS= 8', 'GOMAXPROCS=10'), b=bars([['P=1(ms)', 1000, '1000'], ['P=2', 500, '500'], ['P=4', 250, '250'], ['P=8', 125, '125'], ['P=10', 105, '105']], 1000, done=[0, 1, 2, 3], mark=[4]), kv=KV([['加速比', 'P=2/4/8/10:2.00 / 4.00 / 8.00 / 9.52'], ['任务来源', '全部由同一个 goroutine 创建'], ['结论', '空闲的 P 能把活“偷”过来,加速接近线性']], ['结论'])),
+    step("GODEBUG=schedtrace=1,scheddetail=1(每 1 ms 一次,GOMAXPROCS=4),创建 1000 个任务:第 0 ms:各 P 本地队列 [0, 0, 0, 0];第 1 ms:全局队列 774,本地 [205, 0, 3, 14]——创建者所在 P 的本地队列只装得下一部分,多出来的进了全局队列;第 6 ms:全局 646,本地 [205, 127, 1, 12]——一个空闲 P 一次拿走 127 个;第 12 ms:全局 519,本地 [205, 125, 127, 10];第 47 ms:全局 391,本地 [194, 114, 116, 127]——另一个 P 在本地队列用完后又一次拿到 127 个(从全局队列批量拿)。单个 P 本地队列最长 205,全局队列最长 774。", t=tl(S(2)), done=lidx(S(2), '  0 ms', '  1 ms'), mark=lidx(S(2), '  6 ms', ' 12 ms', ' 47 ms', '全局队列的最大长度'), b=bars([['1ms:P0 本地队列', 205, '205'], ['1ms:全局队列', 774, '774'], ['6ms:P1 一次拿走', 127, '127'], ['47ms:P3 再拿', 127, '127']], 774, done=[0, 1], mark=[2, 3]), kv=KV([['本地队列', 'P0 最多约 205 个,放不下的一半进全局队列'], ['全局队列', '最长 774'], ['窃取', '一次约 127 个(约一半)']], ['窃取'])),
+    step("运行时源码(runtime/proc.go)里的几个关键点:runqgrab(Can be executed by any P)里 n := t - h 之后 n = n - n/2,也就是从目标 P 的本地队列取走大约一半;stealWork 里 const stealTries = 4,循环尝试 4 轮,只有最后一轮(stealTimersOrRunNextG := i == stealTries-1)才会去偷 runnext 与定时器;P 的本地队列用完时从全局队列批量取:globrunqgetbatch(int32(len(pp.runq)) / 2)。", t=tl(S(3)), done=lidx(S(3), 'func runqgrab', 'n = n - n/2'), mark=lidx(S(3), 'const stealTries = 4', 'stealTimersOrRunNextG', 'globrunqgetbatch'), kv=KV([['runqgrab', 'n = n - n/2:取走目标队列的一半'], ['stealWork', '最多尝试 4 轮;最后一轮才偷 runnext 与定时器'], ['全局队列', '本地用完后批量取(本地队列长度的一半)']], ['runqgrab'])),
+]
+A = mkartg('g46', 46, 'Go,调度器,工作窃取,GMP,schedtrace,真实验证,动画演示',
+    '在 Go 1.27.1 里验证调度器的工作窃取:同一个 goroutine 创建的 200 个任务,GOMAXPROCS 从 1 到 10 几乎线性加速(1000 → 105 ms,9.52 倍);用 GODEBUG=schedtrace=1,scheddetail=1 看到创建者所在 P 的本地队列放不下的部分进入全局队列(774 个),空闲 P 一次窃取约 127 个(约一半);并摘录 runqgrab 的 n = n - n/2 与 stealTries = 4 等源码。',
+    '调度器怎么让所有 CPU 都有活干?一个 goroutine 创建的任务一开始都在它所在 P 的队列里。这篇不描述抽象的算法,而是用加速比、schedtrace 里每个 P 队列长度的变化,以及源码里的关键几行,看工作窃取到底是怎么发生的。',
+    [('9.52 倍', 'GOMAXPROCS=10 时对 200 个任务的加速比(理想 10)'), ('127', '一个空闲 P 一次从别处拿到的 goroutine 数,约为队列的一半'), ('774', '1000 个任务一口气创建后,全局队列里的任务数')],
+    [('窃取让加速接近线性', '<p>200 个任务全部由同一个 goroutine 创建,所以起初都在它那个 P 的本地队列(放不下的进全局队列)。如果没有窃取,其它 P 就没有活可干,加速比会是 1。实测 P=2、4、8 的加速比正好是 2.00、4.00、8.00,P=10 是 9.52(开销与任务边界的影响),说明工作被均匀地分到了所有 P 上。</p>'),
+     ('队列长度的变化', '<p>schedtrace 每毫秒打印一次各 P 的 <code>runqsize</code> 与全局 <code>runqueue</code>:一开始只有 P0 有活,本地队列装满后溢出到全局队列(774),其它 P 一旦空闲就开始拿——可以看到一次拿走 127 个左右,正好是“拿一半”。注意这是调度器的实际快照,我没有逐个 goroutine 追踪它们的迁移路径。</p>'),
+     ('源码里的规则', '<p><code>runqgrab</code> 里 <code>n = n - n/2</code> 就是“偷一半”(奇数时多拿一个);窃取最多尝试 4 轮,并且只在最后一轮才去偷对方的 <code>runnext</code>(刚创建、预期马上运行的那个 goroutine)和定时器——这样尽量不打乱对方的局部性。本地队列用完时,P 也会从全局队列成批取。摘录的只是几行关键代码,没有展开整个 <code>findRunnable</code> 的流程。</p>')],
+    steps,
+    [ENV_G + '。任务是纯 CPU 的忙等循环(每个 5 ms 或 3 ms);加速比是 5 次中位数的墙钟时间;schedtrace 来自 GODEBUG=schedtrace=1,scheddetail=1 的原样输出并解析 runqsize 与 runqueue;读过的源码:runtime/proc.go 的 runqgrab 与 stealWork',
+     '没有验证:runnext 的窃取时机、本地队列溢出到全局队列的具体规则(只从 schedtrace 的数字推断“放不下的进全局”)、Linux 上的结果、有 I/O 或阻塞的负载下的窃取行为、GOMAXPROCS 大于核数时的表现、spinning 线程数对窃取延迟的影响'],
+    '工作窃取')

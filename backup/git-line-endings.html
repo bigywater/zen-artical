@@ -1,0 +1,492 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>换行符:autocrlf 与 .gitattributes 的 text 属性</title>
+<meta name="description" content="在真实仓库里对比换行符设置:默认原样存;core.autocrlf=true 添加时 CRLF→LF、检出时 LF→CRLF;input 只在添加时转换;.gitattributes 的 text / eol / binary 优先于 autocrlf;已提交的 CRLF 要 git add --renormalize 才会按新属性规范;safecrlf 在混合换行时拒绝添加。">
+<link rel="canonical" href="https://bigywater.tech/git-line-endings.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="换行符:autocrlf 与 .gitattributes 的 text 属性">
+<meta property="og:description" content="在真实仓库里对比换行符设置:默认原样存;core.autocrlf=true 添加时 CRLF→LF、检出时 LF→CRLF;input 只在添加时转换;.gitattributes 的 text / eol / binary 优先于 autocrlf;已提交的 CRLF 要 git add --renormalize 才会按新属性规范;safecrlf 在混合换行时拒绝添加。">
+<meta property="og:url" content="https://bigywater.tech/git-line-endings.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="换行符:autocrlf 与 .gitattributes 的 text 属性">
+<meta name="twitter:description" content="在真实仓库里对比换行符设置:默认原样存;core.autocrlf=true 添加时 CRLF→LF、检出时 LF→CRLF;input 只在添加时转换;.gitattributes 的 text / eol / binary 优先于 autocrlf;已提交的 CRLF 要 git add --renormalize 才会按新属性规范;safecrlf 在混合换行时拒绝添加。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">2299</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">97</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">56</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">14</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">114</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">111</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#8B3FA0; --series-c-soft:#F1E3F6;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#C48AD6; --series-c-soft:#2E1838;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#C48AD6; --series-c-soft:#2E1838;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Git · 15</div>
+  <h1>换行符:autocrlf 与 .gitattributes 的 text 属性</h1>
+  <p>换行符问题到底怎么回事?这篇用 git ls-files --eol 看暂存区(i/)和工作区(w/)的换行,对照 autocrlf 的 true、input、false 以及 .gitattributes 的 text、eol、binary,再看 --renormalize 和 safecrlf。</p>
+  <div class="hero-fact">
+<div><div class="num">i/ 与 w/</div><div class="lbl">git ls-files --eol 同时显示暂存区和工作区的换行,是排查换行问题的主要工具</div></div><div><div class="num">属性优先</div><div class="lbl">.gitattributes 的 text / eol / binary 比每个人的 autocrlf 设置优先,而且随仓库走</div></div><div><div class="num">--renormalize</div><div class="lbl">给已提交的 CRLF 文件补上 text 属性后,重新规范会产生一个改动每一行的提交</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="git-symlink-storage.html">符号链接在 git 里怎么存</a></div>
+<section>
+  <h2>默认不管</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  $ git config --get core.autocrlf || echo "(未设置)"; git config core.eol || echo "core.eol 未设置(默认 native,macOS 上是 LF)"
+  (未设置)
+  core.eol 未设置(默认 native,macOS 上是 LF)
+  $ git add -A &amp;&amp; git ls-files --eol
+  i/lf    w/lf    attr/                 	unix.txt
+  i/crlf  w/crlf  attr/                 	win.txt
+  blob 原始字节: b'line1\r\nline2\r\n' b'line1\nline2\n'</pre></div>
+  <p>没有任何设置时,git 不转换换行,字节怎么存怎么取。<code>git ls-files --eol</code> 的 <code>i/</code> 是暂存区里的换行风格,<code>w/</code> 是工作区里的,<code>attr/</code> 是生效的属性。</p>
+</section>
+<section>
+  <h2>autocrlf=true</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  $ git add -A 2&gt;&amp;1; git ls-files --eol
+  warning: in the working copy of 'unix.txt', LF will be replaced by CRLF the next time Git touches it
+  i/lf    w/lf    attr/                 	unix.txt
+  i/lf    w/crlf  attr/                 	win.txt
+  blob 原始字节(win.txt / unix.txt): b'line1\nline2\n' b'line1\nline2\n'
+  $ git commit -q -m x; rm win.txt unix.txt; git checkout -- win.txt unix.txt; git ls-files --eol
+  i/lf    w/crlf  attr/                 	unix.txt
+  i/lf    w/crlf  attr/                 	win.txt
+  检出后工作区文件的字节: b'line1\r\nline2\r\n' b'line1\r\nline2\r\n'
+  $ git status --short; echo "(status 为空:工作区的 CRLF 与 blob 的 LF 被视为相同)"
+  (status 为空:工作区的 CRLF 与 blob 的 LF 被视为相同)</pre></div>
+  <p>添加时把 CRLF 转成 LF,检出时再把 LF 转成 CRLF,工作区是 CRLF、仓库里是 LF。<code>git status</code> 认为两者相同,不会报改动。适合 Windows。</p>
+</section>
+<section>
+  <h2>autocrlf=input</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  $ git add -A 2&gt;&amp;1; git ls-files --eol
+  warning: in the working copy of 'win.txt', CRLF will be replaced by LF the next time Git touches it
+  i/lf    w/lf    attr/                 	unix.txt
+  i/lf    w/crlf  attr/                 	win.txt
+  blob 原始字节: b'line1\nline2\n' b'line1\nline2\n'</pre></div>
+  <p>只做添加时的转换,检出时保持 LF。适合 Linux / macOS,防止别人带来的 CRLF 进入仓库。</p>
+</section>
+<section>
+  <h2>.gitattributes</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  $ git add -A 2&gt;&amp;1; git ls-files --eol
+  warning: in the working copy of 'a.txt', CRLF will be replaced by LF the next time Git touches it
+  warning: in the working copy of 'b.bat', LF will be replaced by CRLF the next time Git touches it
+  warning: in the working copy of 'c.sh', CRLF will be replaced by LF the next time Git touches it
+  i/lf    w/lf    attr/                 	.gitattributes
+  i/lf    w/crlf  attr/text             	a.txt
+  i/lf    w/lf    attr/text eol=crlf    	b.bat
+  i/lf    w/crlf  attr/text eol=lf      	c.sh
+  i/crlf  w/crlf  attr/-text            	d.bin
+  i/crlf  w/crlf  attr/                 	e.dat
+  blob 原始字节:
+    a.txt: b'line1\nline2\n'
+    b.bat: b'line1\nline2\n'
+    c.sh: b'line1\nline2\n'
+    d.bin: b'line1\r\nline2\r\n'
+    e.dat: b'line1\r\nline2\r\n'
+  $ git commit -q -m x; rm b.bat c.sh a.txt; git checkout -- b.bat c.sh a.txt; git ls-files --eol
+  i/lf    w/lf    attr/                 	.gitattributes
+  i/lf    w/lf    attr/text             	a.txt
+  i/lf    w/crlf  attr/text eol=crlf    	b.bat
+  i/lf    w/lf    attr/text eol=lf      	c.sh
+  i/crlf  w/crlf  attr/-text            	d.bin
+  i/crlf  w/crlf  attr/                 	e.dat</pre></div>
+  <p><code>text</code> 启用规范化,<code>eol=crlf</code> / <code>eol=lf</code> 指定检出时的换行,<code>binary</code>(即 <code>-text</code>)禁止任何转换。因为随仓库提交,它比每个开发者自己的 <code>autocrlf</code> 更可靠。</p>
+</section>
+<section>
+  <h2>改属性之后</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  $ git ls-files --eol; printf '*.txt text\n' &gt; .gitattributes; git add .gitattributes; git status --short
+  i/crlf  w/crlf  attr/                 	old.txt
+  A  .gitattributes
+   M old.txt
+  $ git add --renormalize . ; git status --short; git diff --cached --stat; git ls-files --eol
+  A  .gitattributes
+  M  old.txt
+   .gitattributes | 1 +
+   old.txt        | 4 ++--
+   2 files changed, 3 insertions(+), 2 deletions(-)
+  i/lf    w/lf    attr/                 	.gitattributes
+  i/lf    w/crlf  attr/text             	old.txt</pre></div>
+  <p>给已经提交了 CRLF 的文件补 <code>text</code> 属性,不会自动改历史;<code>git add --renormalize .</code> 把暂存区按新属性重写,会产生一个几乎每一行都改的提交,最好单独提交并写清楚。</p>
+</section>
+<section>
+  <h2>safecrlf</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  $ git add mix.txt 2&gt;&amp;1; git ls-files -s mix.txt; echo "(退出情况见上)"
+  fatal: LF would be replaced by CRLF in mix.txt
+  (退出情况见上)
+  $ git config core.safecrlf warn; git add mix.txt 2&gt;&amp;1; git ls-files --eol mix.txt
+  warning: in the working copy of 'mix.txt', LF will be replaced by CRLF the next time Git touches it
+  i/lf    w/mixed attr/                 	mix.txt
+  $ git add bin.dat 2&gt;&amp;1; git ls-files --eol bin.dat
+  i/-text w/-text attr/                 	bin.dat</pre></div>
+  <p>混合换行的文件无法无损往返转换。<code>core.safecrlf=true</code> 直接拒绝添加,<code>warn</code> 只警告。含 NUL 字节的文件会被识别成二进制,不转换。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">换行符</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "默认(core.autocrlf 与 core.eol 都没设置,macOS 上 eol 的默认 native 就是 LF):CRLF 的 win.txt 和 LF 的 unix.txt 原样存。git ls-files --eol 的 i/ 是暂存区(index)里的换行、w/ 是工作区里的:win.txt 是 i/crlf w/crlf,blob 原始字节里就是 line1\\r\\nline2\\r\\n。git 本身不管换行,字节是什么就存什么。", "s": {"t": {"lines": ["  $ git config --get core.autocrlf || echo \"(未设置)\"; git config core.eol || echo \"core.eol 未设置(默认 native,macOS 上是 LF)\"", "  (未设置)", "  core.eol 未设置(默认 native,macOS 上是 LF)", "  $ git add -A && git ls-files --eol", "  i/lf    w/lf    attr/                 \tunix.txt", "  i/crlf  w/crlf  attr/                 \twin.txt", "  blob 原始字节: b'line1\\r\\nline2\\r\\n' b'line1\\nline2\\n'"], "cur": [], "mark": [], "done": []}, "mark": [5, 6], "done": [0, 1, 4], "kv": {"items": [["默认", "不转换,原样存"], ["i/ 与 w/", "暂存区里的换行 / 工作区里的换行"], ["blob", "含 \\r\\n 的字节"]], "hl": ["默认"]}}}, {"note": "core.autocrlf=true:add 时 win.txt 的 CRLF 被转成 LF(i/lf w/crlf),blob 原始字节是 line1\\nline2\\n;unix.txt 本来就是 LF,git 提示 LF will be replaced by CRLF the next time Git touches it。删掉文件再 git checkout 之后,两个文件在工作区里都是 CRLF(line1\\r\\nline2\\r\\n),而暂存区仍是 lf。git status 是空的:工作区的 CRLF 与 blob 的 LF 被视为相同。", "s": {"t": {"lines": ["  $ git add -A 2>&1; git ls-files --eol", "  warning: in the working copy of 'unix.txt', LF will be replaced by CRLF the next time Git touches it", "  i/lf    w/lf    attr/                 \tunix.txt", "  i/lf    w/crlf  attr/                 \twin.txt", "  blob 原始字节(win.txt / unix.txt): b'line1\\nline2\\n' b'line1\\nline2\\n'", "  $ git commit -q -m x; rm win.txt unix.txt; git checkout -- win.txt unix.txt; git ls-files --eol", "  i/lf    w/crlf  attr/                 \tunix.txt", "  i/lf    w/crlf  attr/                 \twin.txt", "  检出后工作区文件的字节: b'line1\\r\\nline2\\r\\n' b'line1\\r\\nline2\\r\\n'", "  $ git status --short; echo \"(status 为空:工作区的 CRLF 与 blob 的 LF 被视为相同)\"", "  (status 为空:工作区的 CRLF 与 blob 的 LF 被视为相同)"], "cur": [], "mark": [], "done": []}, "mark": [1, 8], "done": [3, 4, 7, 9, 10], "kv": {"items": [["add", "CRLF → LF"], ["checkout", "LF → CRLF"], ["status", "两边视为相同,不报改动"]], "hl": ["checkout"]}}}, {"note": "core.autocrlf=input:add 时 CRLF 转成 LF(blob 里是 line1\\nline2\\n,和 true 一样),git 提示 CRLF will be replaced by LF;但检出时不做反向转换。适合 Linux / macOS:从别处带来的 CRLF 文件提交时被规范成 LF,检出始终是 LF。", "s": {"t": {"lines": ["  $ git add -A 2>&1; git ls-files --eol", "  warning: in the working copy of 'win.txt', CRLF will be replaced by LF the next time Git touches it", "  i/lf    w/lf    attr/                 \tunix.txt", "  i/lf    w/crlf  attr/                 \twin.txt", "  blob 原始字节: b'line1\\nline2\\n' b'line1\\nline2\\n'"], "cur": [], "mark": [], "done": []}, "mark": [1], "done": [3, 4], "kv": {"items": [["input", "只在 add 时 CRLF → LF"], ["检出", "不转换"], ["适合", "Linux / macOS"]], "hl": ["input"]}}}, {"note": ".gitattributes 优先于 autocrlf(此时 core.autocrlf=false)。*.txt text:a.txt 的 CRLF 被规范成 LF;*.bat text eol=crlf:b.bat 存 LF,检出写成 CRLF(w/crlf);*.sh text eol=lf:c.sh 的 CRLF 存成 LF,检出是 LF;*.bin binary:d.bin 的 attr 是 -text,CRLF 原样保留;没有属性的 e.dat 在 autocrlf=false 下也原样保留。属性文件随仓库提交,团队里每个人行为一致。", "s": {"t": {"lines": ["  $ git add -A 2>&1; git ls-files --eol", "  warning: in the working copy of 'a.txt', CRLF will be replaced by LF the next time Git touches it", "  warning: in the working copy of 'b.bat', LF will be replaced by CRLF the next time Git touches it", "  warning: in the working copy of 'c.sh', CRLF will be replaced by LF the next time Git touches it", "  i/lf    w/lf    attr/                 \t.gitattributes", "  i/lf    w/crlf  attr/text             \ta.txt", "  i/lf    w/lf    attr/text eol=crlf    \tb.bat", "  i/lf    w/crlf  attr/text eol=lf      \tc.sh", "  i/crlf  w/crlf  attr/-text            \td.bin", "  i/crlf  w/crlf  attr/                 \te.dat", "  blob 原始字节:", "    a.txt: b'line1\\nline2\\n'", "    b.bat: b'line1\\nline2\\n'", "    c.sh: b'line1\\nline2\\n'", "    d.bin: b'line1\\r\\nline2\\r\\n'", "    e.dat: b'line1\\r\\nline2\\r\\n'", "  $ git commit -q -m x; rm b.bat c.sh a.txt; git checkout -- b.bat c.sh a.txt; git ls-files --eol", "  i/lf    w/lf    attr/                 \t.gitattributes", "  i/lf    w/lf    attr/text             \ta.txt", "  i/lf    w/crlf  attr/text eol=crlf    \tb.bat", "  i/lf    w/lf    attr/text eol=lf      \tc.sh", "  i/crlf  w/crlf  attr/-text            \td.bin", "  i/crlf  w/crlf  attr/                 \te.dat"], "cur": [], "mark": [], "done": []}, "mark": [6, 7, 8, 19, 20, 21], "done": [11, 12, 13, 14, 15], "kv": {"items": [["text", "启用规范化(暂存区存 LF)"], ["eol=crlf / eol=lf", "检出时写成什么"], ["binary", "-text,不做任何转换"], ["优势", "随仓库提交,不依赖每人的 autocrlf"]], "hl": ["优势"]}}}, {"note": "先提交了 CRLF 的 old.txt(i/crlf),后来才加上 *.txt text:git status 显示 M old.txt(内容字节没变,但按新属性它应该被规范化);git add --renormalize . 之后暂存区里变成 i/lf,git diff --cached --stat 显示 old.txt 4 行变动(2 行删除、2 行增加)——这个提交会把所有行都改一遍,历史里留下一个只改换行的大提交。", "s": {"t": {"lines": ["  $ git ls-files --eol; printf '*.txt text\\n' > .gitattributes; git add .gitattributes; git status --short", "  i/crlf  w/crlf  attr/                 \told.txt", "  A  .gitattributes", "   M old.txt", "  $ git add --renormalize . ; git status --short; git diff --cached --stat; git ls-files --eol", "  A  .gitattributes", "  M  old.txt", "   .gitattributes | 1 +", "   old.txt        | 4 ++--", "   2 files changed, 3 insertions(+), 2 deletions(-)", "  i/lf    w/lf    attr/                 \t.gitattributes", "  i/lf    w/crlf  attr/text             \told.txt"], "cur": [], "mark": [], "done": []}, "mark": [6, 8], "done": [1, 3, 10], "kv": {"items": [["加属性之后", "已提交的内容不会自动变"], ["--renormalize", "按当前属性重新规范暂存区"], ["代价", "一个改动所有行的提交"]], "hl": ["--renormalize"]}}}, {"note": "core.autocrlf=true 加 core.safecrlf=true:混合换行的 mix.txt(a CRLF、b LF、c CRLF)add 被拒绝,fatal: LF would be replaced by CRLF in mix.txt,暂存区里没有这个文件。把 safecrlf 降为 warn 之后 add 成功,只给出警告,i/lf w/mixed。含 NUL 字节的 bin.dat 被自动识别为二进制(i/-text w/-text),不做转换。", "s": {"t": {"lines": ["  $ git add mix.txt 2>&1; git ls-files -s mix.txt; echo \"(退出情况见上)\"", "  fatal: LF would be replaced by CRLF in mix.txt", "  (退出情况见上)", "  $ git config core.safecrlf warn; git add mix.txt 2>&1; git ls-files --eol mix.txt", "  warning: in the working copy of 'mix.txt', LF will be replaced by CRLF the next time Git touches it", "  i/lf    w/mixed attr/                 \tmix.txt", "  $ git add bin.dat 2>&1; git ls-files --eol bin.dat", "  i/-text w/-text attr/                 \tbin.dat"], "cur": [], "mark": [], "done": []}, "mark": [1, 5], "done": [3, 7], "kv": {"items": [["safecrlf=true", "转换不可逆就拒绝"], ["warn", "只警告"], ["二进制", "含 NUL 字节自动识别,不转换"]], "hl": ["safecrlf=true"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / git 2.54.0(Apple Git-157);每个实验在临时目录里新建仓库,HOME 和全局配置指向实验专用的空目录(不读用户自己的 git 配置),提交的作者与时间固定以便复现;需要网络协议的实验用本机的 file:// 或 git daemon 回环端口(9800 以上),不碰任何远程仓库;计时用 time.perf_counter,数字每次运行会有小幅抖动。macOS 上 core.eol 默认 native 即 LF;文件用 printf 写入 \r\n;i/ w/ 来自 git ls-files --eol</li><li>没有验证:Windows 上 core.eol 的 native 取值与实际表现;编辑器自己的换行设置(.editorconfig)与 git 的交互;大文件、非 UTF-8 编码(core.autocrlf 对 UTF-16 的影响);git diff 中 ^M 的显示(core.whitespace);ident、filter 等其它属性与 text 的组合</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="git-large-blob-cost.html">
+    <div>
+      <div class="t1">下一篇 · GIT 16</div>
+      <div class="t2">大文件的 blob:压缩率与每次修改的存储代价</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Git · 换行符:autocrlf 与 .gitattributes 的 text 属性 · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>Unclean Leader Election：为什么可能丢消息</title>
+<meta name="description" content="默认情况下，只有 ISR 里的副本才能成为新 Leader。unclean.leader.election.enable=true 允许一个不在 ISR 里、数据落后的副本上位。这次在集群里把这个场景完整走一遍：先让 Follower 掉出 ISR，Leader 独自写入 100 条并被 ack">
+<link rel="canonical" href="https://bigywater.tech/kafka-unclean-election.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Unclean Leader Election：为什么可能丢消息">
+<meta property="og:description" content="默认情况下，只有 ISR 里的副本才能成为新 Leader。unclean.leader.election.enable=true 允许一个不在 ISR 里、数据落后的副本上位。这次在集群里把这个场景完整走一遍：先让 Follower 掉出 ISR，Leader 独自写入 100 条并被 ack">
+<meta property="og:url" content="https://bigywater.tech/kafka-unclean-election.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Unclean Leader Election：为什么可能丢消息">
+<meta name="twitter:description" content="默认情况下，只有 ISR 里的副本才能成为新 Leader。unclean.leader.election.enable=true 允许一个不在 ISR 里、数据落后的副本上位。这次在集群里把这个场景完整走一遍：先让 Follower 掉出 ISR，Leader 独自写入 100 条并被 ack">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#2F6F8F; --series-c-soft:#E5F1F7;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#72B7D6; --series-c-soft:#173444;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#72B7D6; --series-c-soft:#173444;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Kafka 内部原理 · 20</div>
+  <h1>Unclean Leader Election：为什么可能丢消息</h1>
+  <p>默认情况下，只有 ISR 里的副本才能成为新 Leader。<span class="mono">unclean.leader.election.enable=true</span> 允许一个不在 ISR 里、数据落后的副本上位。这次在集群里把这个场景完整走一遍：先让 Follower 掉出 ISR，Leader 独自写入 100 条并被 <span class="mono">acks=all</span> 确认，然后 Leader 也宕机，只让落后的 Follower 活着，观察关闭和开启 unclean 选举两种情况下分区和数据的变化。</p>
+  <div class="hero-fact">
+    <div><div class="num">验证：只有落后副本存活时，默认配置下分区没有 Leader，写入超时</div><div class="lbl">kill -9 Leader 并让落后的 broker2 回来之后，这个分区的状态是 Leader: none、Isr </div></div>
+    <div><div class="num">验证：开启 unclean 选举后，落后副本上位，100 条已被确认的消息消失</div><div class="lbl">打开开关几秒后 broker2 成为 Leader，Isr 只有它自己。</div></div>
+  </div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="kafka-leader-failure.html">Broker 崩溃后，副本如何接管 Leader</a></div>
+<section style="padding-top:8px;">
+  <h2>验证：只有落后副本存活时，默认配置下分区没有 Leader，写入超时</h2>
+  <blockquote class="src">
+    <span class="path">命令 · shell</span>
+$ kafka-topics.sh --create --topic unclean-demo --replica-assignment 1:2 \
+    --config min.insync.replicas=1 --config unclean.leader.election.enable=false
+# 1) 两个副本都在线时写入 base-1 ~ base-100，acks=all，offset=100，两边日志都是 1489 字节
+# 2) kill -9 broker2（Follower），等 ISR 收缩到 &quot;Isr: 1&quot;
+# 3) 只有 broker1 在 ISR 时写入 onlyleader-1 ~ onlyleader-100，acks=all，成功，offset=200
+#    broker1 日志 3578 字节，broker2 日志仍是 1489 字节
+# 4) kill -9 broker1（Leader），重启 broker2
+$ kafka-topics.sh --describe --topic unclean-demo
+$ echo &quot;probe-while-offline&quot; | kafka-console-producer.sh --topic unclean-demo --command-property acks=all \
+    --command-property delivery.timeout.ms=6000
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测 · 本机执行输出</span>
+<pre class="code">Leader: none  Replicas: 1,2  Isr:   Elr: 1  LastKnownElr: 1
+
+TimeoutException: Expiring 1 record(s) for unclean-demo-0:6001 ms has passed since batch creation.</pre></div>
+  <p><span class="mono">kill -9</span> Leader 并让落后的 broker2 回来之后，这个分区的状态是 <span class="mono">Leader: none</span>、<span class="mono">Isr</span> 为空。broker2 明明活着，也是这个分区的副本，但它不在 ISR 里，默认配置不允许它成为 Leader，分区就这样离线了；写入尝试 6 秒后超时。这个版本的输出里多了 <span class="mono">Elr: 1</span>（Eligible Leader Replicas，可当选副本），显示 broker1 是唯一有资格当 Leader 的副本，而它已经死了。这也是&quot;选择可用性还是一致性&quot;的一面：默认配置选了一致性，宁可不可用。</p>
+</section>
+<section>
+  <h2>验证：开启 unclean 选举后，落后副本上位，100 条已被确认的消息消失</h2>
+  <blockquote class="src">
+    <span class="path">命令 · shell</span>
+$ kafka-configs.sh --entity-type topics --entity-name unclean-demo --alter --add-config unclean.leader.election.enable=true
+$ kafka-topics.sh --describe --topic unclean-demo
+$ kafka-get-offsets.sh --topic unclean-demo --time -1
+$ kafka-console-consumer.sh --topic unclean-demo --partition 0 --offset 0    # 按前缀统计
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测 · 本机执行输出</span>
+<pre class="code">Leader: 2  Replicas: 1,2  Isr: 2
+unclean-demo:0:100
+
+100 base            &lt;- 只剩这 100 条
+（onlyleader-* 一条也没有）</pre></div>
+  <p>打开开关几秒后 broker2 成为 Leader，<span class="mono">Isr</span> 只有它自己。log end offset 是 100，不是 200：在 broker1 上被 <span class="mono">acks=all</span> 确认过的 <span class="mono">onlyleader-1</span> 到 <span class="mono">onlyleader-100</span> 这 100 条消息，在新的 Leader 上根本不存在，消费者从 offset 0 读到的 100 条全是 <span class="mono">base-*</span>。当时那 100 条写入 Producer 是成功返回的，也就是说这是&quot;已确认写入后消息消失&quot;，而不是写入失败。原因很直接：这 100 条只存在于 broker1 的磁盘上（日志 3578 字节，而 broker2 只有 1489 字节），broker2 从来没有拉取过。</p>
+</section>
+<section>
+  <h2>验证：旧 Leader 回来后，多出来的数据被截断</h2>
+  <blockquote class="src">
+    <span class="path">命令 · shell</span>
+# 在新 Leader 上再写 20 条 after-*，offset=120；然后重启 broker1
+$ ls -l /private/tmp/kafka-lab/node1/unclean-demo-0/*.log
+$ grep &quot;Truncating&quot; /tmp/broker1-restart3.log
+$ cat /private/tmp/kafka-lab/node1/unclean-demo-0/leader-epoch-checkpoint
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测 · 本机执行输出</span>
+<pre class="code">Leader: 2  Replicas: 1,2  Isr: 1,2
+broker1 日志: 3578 字节 -&gt; 1841 字节
+WARN [UnifiedLog partition=unclean-demo-0] Truncating unclean-demo-0 to offset 100 below high watermark 200
+分别连 broker1、broker2 查询 log end offset，都返回 120
+leader-epoch-checkpoint: 0 / 2 / &quot;0 0&quot; / &quot;2 100&quot;</pre></div>
+  <p>重启后的 broker1 回到 ISR 之前，日志里有一条 WARN：<span class="mono">Truncating unclean-demo-0 to offset 100 below high watermark 200</span>。它把自己 offset 100 以后的内容截断，磁盘文件也从 3578 字节缩小到 1841 字节（100 条 base 加 20 条 after），随后分别连 broker1、broker2 查询 log end offset 都是 120（这个命令返回的是分区 Leader 的值，不是各自磁盘的独立读数），<span class="mono">Isr: 1,2</span> 恢复。<span class="mono">leader-epoch-checkpoint</span> 里新增的 <span class="mono">2 100</span> 记录了新 Leader 从 offset 100 开始写。注意这条 WARN 里&quot;below high watermark&quot;的措辞：被截断的部分本来是已经达到高水位 200 的数据，也就是集群曾经对外承诺过的数据。数据丢失是在这里被最终确定的。</p>
+</section>
+<section>
+  <h2>结论</h2>
+  <p><span class="mono">unclean.leader.election.enable</span> 是一个的取舍：关闭时（默认），只有落后副本存活，分区会一直没有 Leader，写入超时，但已确认的数据不会丢；打开后，分区能立刻恢复，代价是这次实验里 100 条已被 <span class="mono">acks=all</span> 确认的消息永久丢失，旧 Leader 回来还会被强制截断。</p>
+</section>
+<section>
+  <h2>分步演示：一次构造的双故障，数据是怎么丢掉的</h2>
+  <p>每一步都是本文上面几节kill -9、切换配置、核对offset和日志大小得到的原始结果。</p>
+<div class="demo" id="demo"><div class="demo-head">开启unclean选举，换来的是100条已确认消息永久消失</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>这一步新验证的状态</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>
+(function(){
+const D = {"panels":[{"id":"kv","kind":"kv","label":"实验结果（逐步累加）"},{"id":"info","kind":"text","label":"这一步发生了什么"}],"steps":[{"note":"两个副本(broker1=Leader, broker2=Follower)都在线时，写入base-1~base-100，acks=all确认，offset=100，两边日志都是1489字节（完全同步）。","s":{"kv":{"items":[["初始状态","两副本同步，offset=100"]],"hl":["初始状态"]},"info":{"text":"两个副本(broker1=Leader, broker2=Follower)都在线时，写入base-1~base-100，acks=all确认，offset=100，两边日志都是1489字节（完全同步）。"}}},{"note":"kill -9杀掉broker2（Follower），等ISR收缩到只剩broker1。","s":{"kv":{"items":[["初始状态","两副本同步，offset=100"],["ISR收缩后","只剩[1]（broker2掉线）"]],"hl":["ISR收缩后"]},"info":{"text":"kill -9杀掉broker2（Follower），等ISR收缩到只剩broker1。"}}},{"note":"只有broker1在ISR时，继续写入onlyleader-1~onlyleader-100，acks=all确认成功，offset变成200。broker1日志涨到3578字节，但broker2（还没重启）停留在1489字节。","s":{"kv":{"items":[["初始状态","两副本同步，offset=100"],["ISR收缩后","只剩[1]（broker2掉线）"],["新写入100条后","broker1=3578B, broker2=1489B（产生差异）"]],"hl":["新写入100条后"]},"info":{"text":"只有broker1在ISR时，继续写入onlyleader-1~onlyleader-100，acks=all确认成功，offset变成200。broker1日志涨到3578字节，但broker2（还没重启）停留在1489字节。"}}},{"note":"kill -9杀掉broker1（Leader）。现在只有落后的broker2活着——它从来没拉取过那100条onlyleader消息。","s":{"kv":{"items":[["初始状态","两副本同步，offset=100"],["ISR收缩后","只剩[1]（broker2掉线）"],["新写入100条后","broker1=3578B, broker2=1489B（产生差异）"],["事件","kill -9 杀掉Leader broker1"]],"hl":["事件"]},"info":{"text":"kill -9杀掉broker1（Leader）。现在只有落后的broker2活着——它从来没拉取过那100条onlyleader消息。"}}},{"note":"默认配置(unclean.leader.election.enable=false)下：查询这个分区，Leader:none，Isr为空——broker2虽然活着也是副本，但不在ISR里，默认不允许它当选，分区离线，写入6秒后超时。","s":{"kv":{"items":[["初始状态","两副本同步，offset=100"],["ISR收缩后","只剩[1]（broker2掉线）"],["新写入100条后","broker1=3578B, broker2=1489B（产生差异）"],["事件","kill -9 杀掉Leader broker1"],["默认配置结果","Leader:none（分区离线，写入超时）"]],"hl":["默认配置结果"]},"info":{"text":"默认配置(unclean.leader.election.enable=false)下：查询这个分区，Leader:none，Isr为空——broker2虽然活着也是副本，但不在ISR里，默认不允许它当选，分区离线，写入6秒后超时。"}}},{"note":"打开unclean.leader.election.enable=true：几秒后broker2成为新Leader，Isr只有它自己。查log end offset：是100，不是200——那100条已经被acks=all确认过的onlyleader消息，在新Leader上完全不存在了。","s":{"kv":{"items":[["初始状态","两副本同步，offset=100"],["ISR收缩后","只剩[1]（broker2掉线）"],["新写入100条后","broker1=3578B, broker2=1489B（产生差异）"],["事件","kill -9 杀掉Leader broker1"],["默认配置结果","Leader:none（分区离线，写入超时）"],["开启unclean选举后","broker2上位，log end offset=100（100条已确认消息消失）"]],"hl":["开启unclean选举后"]},"info":{"text":"打开unclean.leader.election.enable=true：几秒后broker2成为新Leader，Isr只有它自己。查log end offset：是100，不是200——那100条已经被acks=all确认过的onlyleader消息，在新Leader上完全不存在了。"}}},{"note":"在新Leader上再写20条after-*，offset变成120。重启broker1：它的日志被截断（WARN: Truncating to offset 100 below high watermark 200），磁盘从3578字节缩小到1841字节。","s":{"kv":{"items":[["初始状态","两副本同步，offset=100"],["ISR收缩后","只剩[1]（broker2掉线）"],["新写入100条后","broker1=3578B, broker2=1489B（产生差异）"],["事件","kill -9 杀掉Leader broker1"],["默认配置结果","Leader:none（分区离线，写入超时）"],["开启unclean选举后","broker2上位，log end offset=100（100条已确认消息消失）"],["broker1重启后","被截断到offset100（3578B→1841B），两边都是offset120"]],"hl":["broker1重启后"]},"info":{"text":"在新Leader上再写20条after-*，offset变成120。重启broker1：它的日志被截断（WARN: Truncating to offset 100 below high watermark 200），磁盘从3578字节缩小到1841字节。"}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1000); };
+go(0);
+})();
+</script>
+</section>
+<section>
+  <div class="refs"><h3>参考与说明</h3><ul>
+    <li>数据来自本机 3 节点 Kafka 4.3.1 集群：topic 副本指定在 broker1、broker2，broker3 全程保留以维持 KRaft Controller 多数派，所以所有管理命令都连接 broker2/3。<span class="mono">min.insync.replicas=1</span> 是让 ISR 收缩到只剩 Leader 时 <span class="mono">acks=all</span> 依然能写入的前提，这也是丢消息能发生的条件之一；如果 <span class="mono">min.insync.replicas=2</span>，第 3 步的写入会被拒绝。</li>
+    <li>和《acks=0/1/all：Producer 到底什么时候认为写成功》一起看：那篇看到 <span class="mono">acks=all</span> 依赖 ISR，这篇看到当 ISR 只剩一个副本时，&quot;全部确认&quot;的保证也会随之缩水。</li>
+    <li>没有验证：<span class="mono">min.insync.replicas=2</span> 的对照组；三副本下同样的场景；消费者在丢失前已经读到那 100 条时的表现（会看到 offset 回退）。</li>
+  </ul></div>
+</section>
+<section>
+  <a class="next-post" href="kafka-consumer-poll.html">
+    <div>
+      <div class="t1">下一篇 · KAFKA 内部原理 21</div>
+      <div class="t2">Consumer 为什么必须调用 poll()</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Kafka 内部原理 · Unclean Leader Election：为什么可能丢消息 · 数据来自本机 3 节点 Kafka 4.3.1 集群，构造 ISR 只剩 Leader 后双故障，对比 unclean 选举开关</footer>
+</body>
+</html>

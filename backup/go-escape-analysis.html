@@ -1,0 +1,557 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>逃逸分析:一个变量什么时候会从栈搬到堆</title>
+<meta name="description" content="用 Go 1.27.1 的 -gcflags=-m 与 -m -m 看编译器的逃逸判断,用 testing.AllocsPerRun 数真实分配次数:常量转接口虽然说 escapes to heap 却是 0 次分配,变长 make 在 32 字节以内留在栈上,二分法量出显式局部变量 128 KiB 与隐式分配 64 KiB 的栈上限,同一个函数内联与否结论相反,以及逃到堆上 500 万次比留在栈上慢约 3.3 倍。">
+<link rel="canonical" href="https://bigywater.tech/go-escape-analysis.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="逃逸分析:一个变量什么时候会从栈搬到堆">
+<meta property="og:description" content="用 Go 1.27.1 的 -gcflags=-m 与 -m -m 看编译器的逃逸判断,用 testing.AllocsPerRun 数真实分配次数:常量转接口虽然说 escapes to heap 却是 0 次分配,变长 make 在 32 字节以内留在栈上,二分法量出显式局部变量 128 KiB 与隐式分配 64 KiB 的栈上限,同一个函数内联与否结论相反,以及逃到堆上 500 万次比留在栈上慢约 3.3 倍。">
+<meta property="og:url" content="https://bigywater.tech/go-escape-analysis.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="逃逸分析:一个变量什么时候会从栈搬到堆">
+<meta name="twitter:description" content="用 Go 1.27.1 的 -gcflags=-m 与 -m -m 看编译器的逃逸判断,用 testing.AllocsPerRun 数真实分配次数:常量转接口虽然说 escapes to heap 却是 0 次分配,变长 make 在 32 字节以内留在栈上,二分法量出显式局部变量 128 KiB 与隐式分配 64 KiB 的栈上限,同一个函数内联与否结论相反,以及逃到堆上 500 万次比留在栈上慢约 3.3 倍。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">1937</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#00799A; --series-c-soft:#D9F1F8;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#4FC3E8; --series-c-soft:#0B2A33;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#4FC3E8; --series-c-soft:#0B2A33;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Go · 12</div>
+  <h1>逃逸分析:一个变量什么时候会从栈搬到堆</h1>
+  <p>一个变量放在栈上还是堆上,不由 new 或者 &T{} 这样的写法决定,而是由编译器的逃逸分析决定。这篇先读 -m 的诊断,再用 AllocsPerRun 数出真实的分配次数,发现两者并不总是一致;然后量出栈上限、对照内联的影响,最后量一量逃逸到底多花多少。</p>
+  <div class="hero-fact">
+<div><div class="num">128 KiB / 64 KiB</div><div class="lbl">显式局部变量 / 隐式分配(make、new、&T{})能留在栈上的上限(二分法实测)</div></div><div><div class="num">32 字节</div><div class="lbl">变长 make 的栈上缓冲:n=4 个 int 零分配,n=5 个就分配 1 次</div></div><div><div class="num">3.3 倍</div><div class="lbl">同样调用 500 万次,逃到堆上的 33.3 ms,留在栈上的 10.1 ms</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<section>
+  <h2>九种写法的逃逸结论</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  源码(省略 main):
+      1 | package main
+      2 | 
+      3 | import (
+      4 | 	"fmt"
+      5 | 	"io"
+      6 | )
+      7 | 
+      8 | type Point struct{ X, Y int }
+      9 | 
+     10 | //go:noinline
+     11 | func byValue() int { p := Point{1, 2}; return p.X + p.Y }
+     12 | 
+     13 | //go:noinline
+     14 | func returnPtr() *Point { p := Point{1, 2}; return &amp;p }
+     15 | 
+     16 | //go:noinline
+     17 | func toInterface() { p := Point{1, 2}; fmt.Fprintln(io.Discard, p) }
+     18 | 
+     19 | //go:noinline
+     20 | func smallMake() int { s := make([]int, 10); s[0] = 1; return s[0] }
+     21 | 
+     22 | //go:noinline
+     23 | func varMake(n int) int { s := make([]int, n); s[0] = 1; return s[0] }
+     24 | 
+     25 | //go:noinline
+     26 | func closure() func() int { x := 0; return func() int { x++; return x } }
+     27 | 
+     28 | //go:noinline
+     29 | func make64k() int { s := make([]int, 8000); s[0] = 1; return s[0] }
+     30 | 
+     31 | //go:noinline
+     32 | func make65k() int { s := make([]int, 8200); s[0] = 1; return s[0] }
+     33 | 
+     34 | //go:noinline
+     35 | func arr8M() int { var a [1 &lt;&lt; 20]int; a[0] = 1; return a[0] }
+     36 | 
+     37 | func main() {
+     38 | 	fmt.Println(byValue(), returnPtr().X, smallMake(), varMake(10), closure()(), make64k(), make65k(), arr8M())
+     39 | 	toInterface()
+  编译器诊断(只列 11–38 行的函数体,省略 main 里的):
+  main.go:14:27: moved to heap: p    ← func returnPtr() *Point { p := Point{1, 2}; return &amp;p }
+  main.go:17:52: ... argument does not escape    ← func toInterface() { p := Point{1, 2}; fmt.Fprintln(io.Discard, p) }
+  main.go:17:65: p escapes to heap    ← func toInterface() { p := Point{1, 2}; fmt.Fprintln(io.Discard, p) }
+  main.go:20:33: make([]int, 10) does not escape    ← func smallMake() int { s := make([]int, 10); s[0] = 1; return s[0] }
+  main.go:23:36: make([]int, n) does not escape    ← func varMake(n int) int { s := make([]int, n); s[0] = 1; return s[0] }
+  main.go:26:29: moved to heap: x    ← func closure() func() int { x := 0; return func() int { x++; return x } }
+  main.go:26:44: func literal escapes to heap    ← func closure() func() int { x := 0; return func() int { x++; return x } }
+  main.go:29:31: make([]int, 8000) does not escape    ← func make64k() int { s := make([]int, 8000); s[0] = 1; return s[0] }
+  main.go:32:31: make([]int, 8200) escapes to heap    ← func make65k() int { s := make([]int, 8200); s[0] = 1; return s[0] }
+  main.go:35:24: moved to heap: a    ← func arr8M() int { var a [1 &lt;&lt; 20]int; a[0] = 1; return a[0] }
+  运行 rc=0,输出:3 1 1 1 1 1 1 1</pre></div>
+  <p>编译器的措辞有三种:<code>moved to heap: p</code> 说的是变量 p 本身被搬到堆上;<code>… escapes to heap</code> 说的是某个表达式的值(<code>make</code> 的结果、转成接口的值、函数字面量)要放在堆上;<code>does not escape</code> 是留在栈上。第 17 行的 <code>p escapes to heap</code> 说的是“把 p 转成接口这一步”,它并不等于运行时一定有一次分配,下一节会看到。</p>
+</section>
+<section>
+  <h2>真实分配次数:-m 说逃逸,运行时不一定分配</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  byValue                               0 次/调用
+  returnPtr                             1 次/调用
+  toInterface(常量 Point{1,2})            0 次/调用
+  ifacePoint(n=1000) Point{n,2}         1 次/调用
+  ifaceInt(n=7)                         0 次/调用
+  ifaceInt(n=255)                       0 次/调用
+  ifaceInt(n=256)                       1 次/调用
+  ifaceInt(n=1000)                      1 次/调用
+  smallMake  make(10)                   0 次/调用
+  staticN  n:=10; make(n)               0 次/调用
+  staticBig  n:=1000; make(n)           0 次/调用
+  closure(返回闭包)                         2 次/调用
+  make64k  make(8000)                   0 次/调用
+  make65k  make(8200)                   1 次/调用
+  arr8M   [1&lt;&lt;20]int                    1 次/调用
+  varMake n=1(8 字节)                     0 次/调用
+  varMake n=2(16 字节)                    0 次/调用
+  varMake n=4(32 字节)                    0 次/调用
+  varMake n=5(40 字节)                    1 次/调用
+  varMake n=8(64 字节)                    1 次/调用
+  varMake n=16(128 字节)                  1 次/调用
+  varMake n=64(512 字节)                  1 次/调用
+  varMake n=1000(8000 字节)               1 次/调用
+  varMake n=8192(65536 字节)              1 次/调用
+  varMake n=8193(65544 字节)              1 次/调用
+  同一份代码加 -gcflags=-d=variablemakethreshold=1024(把变长 make 的栈缓冲从 32 字节调到 1024 字节),只看 varMake:
+  varMake n=1(8 字节)                     0 次/调用
+  varMake n=2(16 字节)                    0 次/调用
+  varMake n=4(32 字节)                    0 次/调用
+  varMake n=5(40 字节)                    0 次/调用
+  varMake n=8(64 字节)                    0 次/调用
+  varMake n=16(128 字节)                  0 次/调用
+  varMake n=64(512 字节)                  0 次/调用
+  varMake n=1000(8000 字节)               1 次/调用
+  varMake n=8192(65536 字节)              1 次/调用
+  varMake n=8193(65544 字节)              1 次/调用
+  同一份代码加 -gcflags=-N(关闭优化),只看 varMake 与 smallMake:
+  smallMake  make(10)                   0 次/调用
+  staticN  n:=10; make(n)               0 次/调用
+  varMake n=1(8 字节)                     1 次/调用
+  varMake n=4(32 字节)                    1 次/调用</pre></div>
+  <p>三个出乎意料的结果。<b>第一</b>,<code>toInterface</code> 传的是常量 <code>Point{1,2}</code>,编译器直接指向只读数据,0 次分配;换成运行时才知道的值就是 1 次。我在编译器源码 <code>walk/convert.go</code> 里读到同一个函数的几个分支:零大小用 <code>zerobase</code>、单字节或布尔用 <code>staticuint64s</code> 表、只读全局直接用,最后才调用运行时分配。int 的 255 / 256 分界来自 <code>runtime/iface.go</code> 的 <code>convT64</code>:值小于 <code>len(staticuint64s)</code>(256)时直接取表项,否则调 <code>mallocgc</code>,实测与之一致。<b>第二</b>,变长 <code>make([]int, n)</code> 的诊断是 <code>does not escape</code>,但并不保证零分配:源码(<code>walk/builtin.go</code> 的 <code>walkMakeSlice</code> 与 <code>base/flag.go</code> 里的 <code>VariableMakeThreshold = 32</code>)写的是“如果 cap ≤ K,就用栈上的 [K]E,否则调 makeslice”,K 由 32 字节除以元素大小得到——int 是 8 字节,所以 K = 4,实测正是 n=4 零分配、n=5 一次分配。<b>第三</b>,<code>-d=variablemakethreshold=1024</code> 把阈值调大后 n=64 也是零分配,<code>-N</code> 关闭优化后变长 make 就回到一次分配,而常量长度的 <code>make(10)</code> 在 <code>-N</code> 下仍是零。</p>
+</section>
+<section>
+  <h2>栈上能放多大</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  var a [N]byte(显式声明的局部数组):131072 字节仍在栈上,131073 字节被放到堆上(= 128 KiB + 0 字节为界)
+  make([]byte, N)(常量长度):65536 字节仍在栈上,65537 字节被放到堆上(= 64 KiB + 0 字节为界)
+  new([N]byte):65536 字节仍在栈上,65537 字节被放到堆上(= 64 KiB + 0 字节为界)
+  &amp;[N]byte{}(取地址的复合字面量):65536 字节仍在栈上,65537 字节被放到堆上(= 64 KiB + 0 字节为界)</pre></div>
+  <p>数字和源码里的两个常量对得上:<code>ir/cfg.go</code> 里 <code>MaxStackVarSize</code> 是 128 KiB(显式的 <code>var x T</code>),<code>MaxImplicitStackVarSize</code> 是 64 KiB(<code>new(T)</code>、<code>&T{}</code>、<code>make([]T, n)</code>)。二分法的结果是恰好以字节为界:131072 与 65536 在栈上,多一个字节就去了堆。注意这里是 arm64 上 Go 1.27.1 的数字,其它版本的上限可能不同。</p>
+</section>
+<section>
+  <h2>flow 链:编译器为什么这么判断</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  returnPtr(第 14 行 p):
+    main.go:14:27: p escapes to heap in returnPtr:
+    main.go:14:27:   flow: ~r0 ← &amp;p:
+    main.go:14:27:     from &amp;p (address-of) at main.go:14:52
+    main.go:14:27:     from return &amp;p (return) at main.go:14:45
+    main.go:14:27: moved to heap: p
+  toInterface(第 17 行 p):
+    main.go:17:65: p escapes to heap in toInterface:
+    main.go:17:65:   flow: {storage for ... argument} ← &amp;{storage for p}:
+    main.go:17:65:     from p (spill) at main.go:17:65
+    main.go:17:65:     from ... argument (slice-literal-element) at main.go:17:52
+    main.go:17:65:   flow: {heap} ← {storage for ... argument}:
+    main.go:17:65:     from ... argument (spill) at main.go:17:52
+    main.go:17:65:     from fmt.Fprintln(io.Discard, ... argument...) (call parameter) at main.go:17:52
+  closure(第 26 行 x):
+    main.go:26:29: x escapes to heap in closure:
+    main.go:26:29:   flow: {storage for func literal} ← &amp;x:
+    main.go:26:29:     from x (captured by a closure) at main.go:26:57
+    main.go:26:29:     from x (reference) at main.go:26:57
+    main.go:26:29: moved to heap: x
+  make65k(第 32 行):
+    main.go:32:31: make([]int, 8200) escapes to heap in make65k:
+    main.go:32:31:   flow: {heap} ← &amp;{storage for make([]int, 8200)}:
+    main.go:32:31:     from make([]int, 8200) (too large for stack) at main.go:32:31</pre></div>
+  <p><code>-m -m</code> 的 flow 链从右往左读:<code>flow: ~r0 ← &p</code> 是“返回值 ~r0 取得了 p 的地址”,所以 p 的生命周期要超过函数。接口参数那条链里出现了 <code>{heap}</code>,意思是它流进了编译器无法证明不逃逸的调用(<code>fmt.Fprintln</code> 的 <code>...any</code> 参数)。<code>too large for stack</code> 是大小原因,不涉及数据流。看到 <code>moved to heap</code> 时,往上找 flow 链里第一个“address-of”和最后一个流向,就能定位是哪一行造成的。</p>
+</section>
+<section>
+  <h2>同一段代码内联与否结论相反</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  默认(newPoint 被内联进 sum):
+    main.go:10:6: can inline newPoint    ← func newPoint() *Point { return &amp;Point{1, 2} }
+    main.go:13:31: inlining call to newPoint    ← func sum() int { p := newPoint(); return p.X + p.Y }
+    main.go:10:33: &amp;Point{...} escapes to heap    ← func newPoint() *Point { return &amp;Point{1, 2} }
+    main.go:13:31: &amp;Point{...} does not escape    ← func sum() int { p := newPoint(); return p.X + p.Y }
+    sum() 每次调用的分配次数:0
+  -gcflags=-l(关闭内联):
+    main.go:10:33: &amp;Point{...} escapes to heap    ← func newPoint() *Point { return &amp;Point{1, 2} }
+    sum() 每次调用的分配次数:1</pre></div>
+  <p>逃逸分析是在函数边界上做的。<code>newPoint</code> 返回指针,在它自己的诊断里永远逃逸;但被内联进 <code>sum</code> 之后,指针没有离开 <code>sum</code>,这个值就留在了栈上。所以排查分配问题时,<code>-gcflags=-l</code> 能帮你分辨“这次分配是不是只因为某个调用没被内联”。</p>
+</section>
+<section>
+  <h2>逃逸的代价</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  byValue(栈)     500 万次:耗时中位 10.1 ms(最小 9.7 / 最大 12.9);Mallocs +2,TotalAlloc +80 字节,GC 次数 +0
+  returnPtr(堆)   500 万次:耗时中位 33.3 ms(最小 33.0 / 最大 33.8);Mallocs +5000003,TotalAlloc +80000288 字节,GC 次数 +21</pre></div>
+  <p>代价有两层:每次调用多一次 <code>mallocgc</code>(这里 16 字节),以及这些堆对象带来的 GC 工作。上面的 33.3 ms 里包含了这 21 次 GC 的成本,不能全算成分配本身。byValue 每次调用约 2 纳秒(10.1 ms / 500 万),这是 <code>//go:noinline</code> 函数调用本身的量级;不要把“3.3 倍”套到别的程序上,它只说明在这个最小例子里,逃逸把一次几乎没有成本的调用变成了一次分配加回收。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">逃逸分析</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "b", "kind": "bars", "label": "数字对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "九个函数各写一种分配方式,全部标 //go:noinline,用 go build -gcflags=-m 读编译器的结论(Go 1.27.1)。returnPtr 返回 &p:moved to heap: p;toInterface 把 p 传给 fmt.Fprintln:p escapes to heap;closure 的变量 x 被返回的闭包捕获:moved to heap: x,闭包本身 func literal escapes to heap;byValue 不取地址,没有任何逃逸诊断;make([]int, 10)、make([]int, n)(n 是参数)、make([]int, 8000) 都是 does not escape;make([]int, 8200) 与 var a [1 << 20]int 分别是 escapes to heap 与 moved to heap: a。", "s": {"t": {"lines": ["  编译器诊断(只列 11–38 行的函数体,省略 main 里的):", "  main.go:14:27: moved to heap: p    ← func returnPtr() *Point { p := Point{1, 2}; return &p }", "  main.go:17:52: ... argument does not escape    ← func toInterface() { p := Point{1, 2}; fmt.Fprintln(io.Discard, p) }", "  main.go:17:65: p escapes to heap    ← func toInterface() { p := Point{1, 2}; fmt.Fprintln(io.Discard, p) }", "  main.go:20:33: make([]int, 10) does not escape    ← func smallMake() int { s := make([]int, 10); s[0] = 1; return s[0] }", "  main.go:23:36: make([]int, n) does not escape    ← func varMake(n int) int { s := make([]int, n); s[0] = 1; return s[0] }", "  main.go:26:29: moved to heap: x    ← func closure() func() int { x := 0; return func() int { x++; return x } }", "  main.go:26:44: func literal escapes to heap    ← func closure() func() int { x := 0; return func() int { x++; return x } }", "  main.go:29:31: make([]int, 8000) does not escape    ← func make64k() int { s := make([]int, 8000); s[0] = 1; return s[0] }", "  main.go:32:31: make([]int, 8200) escapes to heap    ← func make65k() int { s := make([]int, 8200); s[0] = 1; return s[0] }", "  main.go:35:24: moved to heap: a    ← func arr8M() int { var a [1 << 20]int; a[0] = 1; return a[0] }", "  运行 rc=0,输出:3 1 1 1 1 1 1 1"], "cur": [], "mark": [], "done": []}, "done": [1, 2, 3, 6, 7], "mark": [9, 10], "kv": {"items": [["moved to heap: p", "returnPtr:返回了 &p"], ["p escapes to heap", "toInterface:传给 ...any 参数"], ["moved to heap: x", "closure:被返回的闭包捕获"], ["make([]int, 8000)", "does not escape(64000 字节)"], ["make([]int, 8200)", "escapes to heap(65600 字节)"], ["var a [1 << 20]int", "moved to heap: a(8 MiB)"]], "hl": ["make([]int, 8200)"]}}}, {"note": "-m 的结论不等于运行时一定有分配,用 testing.AllocsPerRun(1000 次取平均)数真实次数:byValue 0、returnPtr 1、closure 2(x 一次、闭包本身一次);toInterface 虽然说 p escapes to heap,实测 0 次,因为 Point{1,2} 是常量,编译器直接指向只读数据;换成运行时才知道的值 ifacePoint(n=1000) 就是 1 次;int 转接口 n=255 是 0 次、n=256 是 1 次。变长 make:n=4(32 字节)0 次、n=5(40 字节)1 次;加 -gcflags=-d=variablemakethreshold=1024,n=64(512 字节)也是 0 次、n=1000 仍是 1 次;加 -N 关掉优化后 varMake(n=1) 变成 1 次。", "s": {"t": {"lines": ["  byValue                               0 次/调用", "  returnPtr                             1 次/调用", "  toInterface(常量 Point{1,2})            0 次/调用", "  ifacePoint(n=1000) Point{n,2}         1 次/调用", "  ifaceInt(n=7)                         0 次/调用", "  ifaceInt(n=255)                       0 次/调用", "  ifaceInt(n=256)                       1 次/调用", "  ifaceInt(n=1000)                      1 次/调用", "  smallMake  make(10)                   0 次/调用", "  staticN  n:=10; make(n)               0 次/调用", "  staticBig  n:=1000; make(n)           0 次/调用", "  closure(返回闭包)                         2 次/调用", "  make64k  make(8000)                   0 次/调用", "  make65k  make(8200)                   1 次/调用", "  arr8M   [1<<20]int                    1 次/调用", "  varMake n=1(8 字节)                     0 次/调用", "  varMake n=2(16 字节)                    0 次/调用", "  varMake n=4(32 字节)                    0 次/调用", "  varMake n=5(40 字节)                    1 次/调用", "  varMake n=8(64 字节)                    1 次/调用", "  varMake n=16(128 字节)                  1 次/调用", "  varMake n=64(512 字节)                  1 次/调用", "  varMake n=1000(8000 字节)               1 次/调用", "  varMake n=8192(65536 字节)              1 次/调用", "  varMake n=8193(65544 字节)              1 次/调用", "  同一份代码加 -gcflags=-d=variablemakethreshold=1024(把变长 make 的栈缓冲从 32 字节调到 1024 字节),只看 varMake:", "  varMake n=1(8 字节)                     0 次/调用", "  varMake n=2(16 字节)                    0 次/调用", "  varMake n=4(32 字节)                    0 次/调用", "  varMake n=5(40 字节)                    0 次/调用", "  varMake n=8(64 字节)                    0 次/调用", "  varMake n=16(128 字节)                  0 次/调用", "  varMake n=64(512 字节)                  0 次/调用", "  varMake n=1000(8000 字节)               1 次/调用", "  varMake n=8192(65536 字节)              1 次/调用", "  varMake n=8193(65544 字节)              1 次/调用", "  同一份代码加 -gcflags=-N(关闭优化),只看 varMake 与 smallMake:", "  smallMake  make(10)                   0 次/调用", "  staticN  n:=10; make(n)               0 次/调用", "  varMake n=1(8 字节)                     1 次/调用", "  varMake n=4(32 字节)                    1 次/调用"], "cur": [], "mark": [], "done": []}, "done": [0, 1, 2, 11], "mark": [5, 6, 17, 18, 25, 28, 29, 36, 40], "b": {"items": [["varMake n=4 (32B)", 0, "0 次"], ["varMake n=5 (40B)", 1, "1 次"], ["阈值调到 1024:n=64", 0, "0 次"], ["阈值调到 1024:n=1000", 1, "1 次"]], "max": 1, "cur": [], "mark": [1, 3], "done": [0, 2]}, "kv": {"items": [["toInterface 常量 Point{1,2}", "0 次(尽管 -m 说 escapes to heap)"], ["ifacePoint(n=1000)", "1 次"], ["ifaceInt n=255 / 256", "0 次 / 1 次"], ["varMake n=4 / n=5", "0 次 / 1 次"], ["-d=variablemakethreshold=1024", "n=64 也是 0 次"], ["-N", "varMake(n=1) 变成 1 次"]], "hl": ["varMake n=4 / n=5"]}}}, {"note": "栈上能放多大:用二分法反复编译、读 -m,找最大不被放到堆上的字节数。显式声明的局部数组 var a [N]byte:131072 字节(128 KiB)仍在栈上,131073 字节被放到堆上;make([]byte, N)(常量长度)、new([N]byte)、&[N]byte{} 三种隐式分配:65536 字节(64 KiB)仍在栈上,65537 字节被放到堆上。这与编译器源码 ir/cfg.go 里的 MaxStackVarSize = 128 * 1024 和 MaxImplicitStackVarSize = 64 * 1024 吻合。", "s": {"t": {"lines": ["  var a [N]byte(显式声明的局部数组):131072 字节仍在栈上,131073 字节被放到堆上(= 128 KiB + 0 字节为界)", "  make([]byte, N)(常量长度):65536 字节仍在栈上,65537 字节被放到堆上(= 64 KiB + 0 字节为界)", "  new([N]byte):65536 字节仍在栈上,65537 字节被放到堆上(= 64 KiB + 0 字节为界)", "  &[N]byte{}(取地址的复合字面量):65536 字节仍在栈上,65537 字节被放到堆上(= 64 KiB + 0 字节为界)"], "cur": [], "mark": [], "done": []}, "done": [0, 1, 2, 3], "b": {"items": [["var a [N]byte(KiB)", 128, "128"], ["make / new / &T{}(KiB)", 64, "64"]], "max": 128, "cur": [], "mark": [], "done": [0, 1]}, "kv": {"items": [["var a [N]byte", "131072 字节在栈上,131073 在堆上"], ["make([]byte, N)", "65536 在栈上,65537 在堆上"], ["new([N]byte)", "65536 / 65537"], ["&[N]byte{}", "65536 / 65537"]], "hl": ["var a [N]byte"]}}}, {"note": "-gcflags=\"-m -m\" 会多打印一条 flow 链,写明“谁的地址流向了哪里”。returnPtr:flow: ~r0 ← &p,来自 return &p,~r0 是返回值,所以 p 必须活得比函数长;toInterface:p 先装进 ...any 的临时存储,再作为调用参数流向 {heap};closure:x 被闭包引用(captured by a closure),闭包又被返回;make65k:{heap} ← &{storage for make([]int, 8200)},原因写的是 too large for stack。", "s": {"t": {"lines": ["  returnPtr(第 14 行 p):", "    main.go:14:27: p escapes to heap in returnPtr:", "    main.go:14:27:   flow: ~r0 ← &p:", "    main.go:14:27:     from &p (address-of) at main.go:14:52", "    main.go:14:27:     from return &p (return) at main.go:14:45", "    main.go:14:27: moved to heap: p", "  toInterface(第 17 行 p):", "    main.go:17:65: p escapes to heap in toInterface:", "    main.go:17:65:   flow: {storage for ... argument} ← &{storage for p}:", "    main.go:17:65:     from p (spill) at main.go:17:65", "    main.go:17:65:     from ... argument (slice-literal-element) at main.go:17:52", "    main.go:17:65:   flow: {heap} ← {storage for ... argument}:", "    main.go:17:65:     from ... argument (spill) at main.go:17:52", "    main.go:17:65:     from fmt.Fprintln(io.Discard, ... argument...) (call parameter) at main.go:17:52", "  closure(第 26 行 x):", "    main.go:26:29: x escapes to heap in closure:", "    main.go:26:29:   flow: {storage for func literal} ← &x:", "    main.go:26:29:     from x (captured by a closure) at main.go:26:57", "    main.go:26:29:     from x (reference) at main.go:26:57", "    main.go:26:29: moved to heap: x", "  make65k(第 32 行):", "    main.go:32:31: make([]int, 8200) escapes to heap in make65k:", "    main.go:32:31:   flow: {heap} ← &{storage for make([]int, 8200)}:", "    main.go:32:31:     from make([]int, 8200) (too large for stack) at main.go:32:31"], "cur": [], "mark": [], "done": []}, "done": [0, 6, 14, 20], "mark": [2, 11, 17, 22, 23], "kv": {"items": [["flow: ~r0 ← &p", "返回值拿着 p 的地址"], ["flow: {heap} ← ...", "参数流向堆(接口参数)"], ["captured by a closure", "闭包引用了 x"], ["too large for stack", "make([]int, 8200) 超过 64 KiB"]], "hl": ["flow: ~r0 ← &p"]}}}, {"note": "逃逸不是变量的固有属性,取决于上下文。newPoint 返回 &Point{1, 2}:在 newPoint 自己的诊断里永远是 &Point{...} escapes to heap;但默认编译时它被内联进 sum(inlining call to newPoint),在 sum 里同一个值变成 &Point{...} does not escape,sum() 每次调用 0 次分配;加 -gcflags=-l 关掉内联后,sum 里没有了这条诊断,sum() 每次调用 1 次分配。", "s": {"t": {"lines": ["  默认(newPoint 被内联进 sum):", "    main.go:10:6: can inline newPoint    ← func newPoint() *Point { return &Point{1, 2} }", "    main.go:13:31: inlining call to newPoint    ← func sum() int { p := newPoint(); return p.X + p.Y }", "    main.go:10:33: &Point{...} escapes to heap    ← func newPoint() *Point { return &Point{1, 2} }", "    main.go:13:31: &Point{...} does not escape    ← func sum() int { p := newPoint(); return p.X + p.Y }", "    sum() 每次调用的分配次数:0", "  -gcflags=-l(关闭内联):", "    main.go:10:33: &Point{...} escapes to heap    ← func newPoint() *Point { return &Point{1, 2} }", "    sum() 每次调用的分配次数:1"], "cur": [], "mark": [], "done": []}, "done": [0, 5], "mark": [2, 6, 8], "b": {"items": [["默认(内联):sum() 分配次数", 0, "0"], ["-l(不内联):sum() 分配次数", 1, "1"]], "max": 1, "cur": [], "mark": [1], "done": [0]}, "kv": {"items": [["newPoint 自己的诊断", "&Point{...} escapes to heap"], ["内联进 sum 之后", "&Point{...} does not escape"], ["默认 sum()", "0 次分配"], ["-gcflags=-l 的 sum()", "1 次分配"]], "hl": ["内联进 sum 之后"]}}}, {"note": "代价:同一个循环调用 500 万次(每个变体重复 5 轮,取中位数)。byValue 留在栈上:耗时中位 10.1 ms(最小 9.7、最大 12.9),Mallocs 只增加 2,TotalAlloc 增加 80 字节,GC 0 次;returnPtr 逃到堆上:中位 33.3 ms(最小 33.0、最大 33.8),Mallocs 增加 5000003,TotalAlloc 增加 80000288 字节(每次 16 字节),这一轮里 GC 触发了 21 次。同一段代码里,逃逸让耗时约为原来的 3.3 倍。", "s": {"t": {"lines": ["  byValue(栈)     500 万次:耗时中位 10.1 ms(最小 9.7 / 最大 12.9);Mallocs +2,TotalAlloc +80 字节,GC 次数 +0", "  returnPtr(堆)   500 万次:耗时中位 33.3 ms(最小 33.0 / 最大 33.8);Mallocs +5000003,TotalAlloc +80000288 字节,GC 次数 +21"], "cur": [], "mark": [], "done": []}, "done": [0], "mark": [1], "b": {"items": [["byValue(栈)ms", 10.1, "10.1"], ["returnPtr(堆)ms", 33.3, "33.3"]], "max": 33.3, "cur": [], "mark": [1], "done": [0]}, "kv": {"items": [["byValue(栈)", "10.1 ms / 0 次 GC / +80 字节"], ["returnPtr(堆)", "33.3 ms / 21 次 GC / +80000288 字节"], ["每次逃逸分配", "16 字节(Point 两个 int)"], ["耗时比", "约 3.3 倍"]], "hl": ["returnPtr(堆)"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / Go 1.27.1(brew);用 go run / go build / go test 直接编译运行,需要第三方库时经代理从 proxy.golang.org 下载;计时用 time.Now / testing.B,数字每次运行会有小幅抖动。逃逸诊断与阈值均在 arm64 上用 Go 1.27.1 实测;读过的编译器源码在 brew 安装目录 libexec/src/cmd/compile/internal 下:ir/cfg.go(两个栈上限常量)、walk/convert.go(接口转换的免分配分支)、walk/builtin.go 与 base/flag.go(变长 make 的 K 与 32 字节阈值)、escape/utils.go 与 escape/escape.go(变长 make 的“混合”做法、把静态已知的长度改写成字面量);耗时是 5 轮取中位数,每次运行会有抖动</li><li>没有验证:amd64 与 32 位平台上的栈上限和变长 make 阈值、Go 1.27 以前的版本是否有变长 make 的栈缓冲、-race / -msan 下的逃逸结论、cgo 指针传递规则、栈增长(大栈帧会触发复制整个栈)的代价、泛型函数的逃逸分析,以及 GC 触发节奏本身(见后面的 GC 相关文章)</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="go-interface-layout.html">
+    <div>
+      <div class="t1">下一篇 · GO 13</div>
+      <div class="t2">接口的内存布局:iface 与 eface 里到底存了什么</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Go · 逃逸分析:一个变量什么时候会从栈搬到堆 · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

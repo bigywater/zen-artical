@@ -1,0 +1,16 @@
+from lib import *
+S = SS('f122')
+steps = [
+    step("实验设置:受害者先登录 http://127.0.0.1:P2 上的转账站点(session cookie 属于它),随后被带到 http://localhost:P1 上的恶意页面——localhost 与 127.0.0.1 是不同的站点,所以是跨站。恶意页面用 JS 自动提交一个 POST 表单到 /transfer,或顶级导航到 GET 形式的 /transfer-get,金额 100、收款人 attacker。服务端记录每次转账请求的 cookie 里有没有登录用户、状态码,以及最终的余额。全部在真实的无头 Chrome 里跑。", t=tl(S(1)), done=lidx(S(1), '受害者'), kv=KV([['站点', 'cookie 属于 127.0.0.1,攻击页在 localhost'], ['攻击', '自动提交表单,或导航到 GET 链接']], ['攻击'])),
+    step("SameSite=Lax(显式写明)、没有 CSRF 防护、自动提交 POST 表单:服务端收到了请求(Sec-Fetch-Site: cross-site),但 cookie 里没有登录用户,返回 401,转账没有发生,余额仍是 1000。显式的 Lax 挡住了跨站的 POST。", t=tl(S(1)), done=lidx(S(1), 'SameSite=Lax(显式写明)', '401'), kv=KV([['显式 Lax', '跨站 POST 不带 cookie → 401'], ['余额', '1000']], ['显式 Lax'])),
+    step("SameSite 没有设置、没有 CSRF 防护、同样的 POST 表单:这次攻击成功——请求带着受害者的 cookie(登录用户 victim),200,转账给了 attacker,余额变成 900。没写 SameSite 与写了 Lax 的结果不同:Chrome 对没有显式 SameSite 的新 cookie 有一个短暂的宽限,允许这种跨站顶级 POST(我只观察到这个差别,没有单独验证宽限的具体规则)。所以不能靠「默认就是 Lax」来防 CSRF。", t=tl(S(1)), mark=lidx(S(1), 'SameSite 未设置(Chrome 当 Lax),无 CSRF 防护,恶意页面自动提交', '转账是否成功'), kv=KV([['SameSite 未设置', '攻击成功,余额 900'], ['显式 Lax', '攻击失败']], ['SameSite 未设置'])),
+    step("GET 形式的转账接口:恶意页面顶级导航到 /transfer-get,SameSite 未设置时攻击成功(余额 900);Lax 本来就放行顶级导航的 GET,所以「用 GET 做修改状态的操作」即使是 Lax 也防不住。修改状态的操作只能用 POST 等非安全方法。", t=tl(S(1)), mark=lidx(S(1), '顶级导航到 GET 转账接口'), kv=KV([['GET + 顶级导航', 'Lax 也放行'], ['结论', '不要用 GET 改状态']], ['GET + 顶级导航'])),
+    step("SameSite=None + Secure(为了跨站嵌入而放开)、没有 CSRF 防护:POST 表单攻击成功,余额 900;开了 Flask-WTF 的 CSRFProtect 后同样的攻击得到 400(服务端收到了带 cookie 的请求,但缺少 CSRF token),转账没有发生,余额仍是 1000。cookie 的 SameSite 一旦放开,就必须靠 token 防护。", t=tl(S(1)), mark=lidx(S(1), 'SameSite=None + Secure,无 CSRF 防护', 'SameSite=None + Secure,开了 CSRFProtect,自动提交'), kv=KV([['SameSite=None, 无 token', '攻击成功'], ['+ CSRFProtect', '400,攻击失败']], ['+ CSRFProtect'])),
+    step("但 CSRFProtect 只检查非安全方法:开了它之后,导航到 GET /transfer-get 的攻击仍然成功(余额 900)——GET 不检查 token。CSRF 防护三件事:状态变化只用 POST 等非安全方法、关键接口校验 token(或自定义请求头)、cookie 设好 SameSite 与 Secure。", t=tl(S(1)), mark=lidx(S(1), '开了 CSRFProtect,导航到 GET'), kv=KV([['CSRFProtect', '只管 POST/PUT/PATCH/DELETE'], ['GET 改状态', '仍然成功']], ['CSRFProtect'])),
+]
+A = mkartf('f122', 122, 'Flask,CSRF,CSRFProtect,SameSite,Chrome,真实验证,动画演示',
+    '在真实的 Chrome 里复现 CSRF:恶意页面(跨站)自动提交 POST 表单转走受害者的钱,显式 Lax 能挡住但没写 SameSite 的 cookie 挡不住、GET 形式的转账接口 Lax 也挡不住、SameSite=None 时必须靠 CSRFProtect(缺 token 得到 400)、CSRFProtect 不检查 GET。',
+    'CSRF 攻击在今天的浏览器里还成立吗?SameSite=Lax 能不能代替 CSRF token?GET 接口为什么不能改状态?这篇用 localhost 与 127.0.0.1 两个站点,在真实的 Chrome 里把攻击一次次打出来,再逐个看防护有没有用。',
+    [('余额 1000 → 900', '攻击成功时受害者账户的变化(没写 SameSite、或 SameSite=None 且无 token)'), ('400', '开了 CSRFProtect 后缺 token 的伪造 POST 得到的状态码'), ('GET', '修改状态的 GET 接口,Lax 与 CSRFProtect 都防不住')],
+    [('真实 Chrome 里的 CSRF', '<p>上一篇:<a href="flask-httponly-secure-samesite.html">HttpOnly、Secure、SameSite</a>;下一篇:<a href="flask-xss-protection.html">XSS 防护</a>。</p><p>第 73 篇看过 Flask-WTF 的 token 校验细节。本篇的六种配置在同一个实验里按顺序列出,右边的分步演示逐个对照。</p>')],
+    steps, [ENV_F + '。Flask-WTF 1.3.0(CSRFProtect)、本机 Google Chrome(无头模式)', '没有验证:Firefox 与 Safari 的 SameSite 默认值、没写 SameSite 时宽限期的具体时长与规则、Origin 与 Referer 头校验作为额外防线、JSON API 靠自定义头与 CORS 预检防 CSRF 的效果、登录 CSRF'], 'CSRF 防护', panels=[('t', 'term', '实验输出'), ('kv', 'kv', '要点')])

@@ -1,0 +1,25 @@
+from lib import *
+S = SS('k70')
+F1 = [['node.spec.podCIDR', '10.244.1.0/24(worker)'], ['/etc/cni/net.d/10-kindnet.conflist', 'ptp + portmap'], ['ptp 的 ipam', 'host-local,同一个 /24'], ['dataDir', '/run/cni-ipam-state']]
+F2 = [['新建 3 个 Pod', '189 / 190 / 191'], ['每个 IP 一个文件', '记录沙箱 ID'], ['last_reserved_ip.0', '191'], ['删除 b', '2.2 秒后文件才删'], ['新建 d', '192(不回头)']]
+F3 = [['Pod 里 eth0@if704', '10.244.1.189/24'], ['默认路由', 'via 10.244.1.1'], ['节点上 ifindex 704', 'veth25040d0e@if11'], ['/32 主机路由', '10.244.1.189 dev veth…']]
+F4 = [['删除 Pod d', ''], ['API 对象消失', ''], ['+2.3 秒', '路由消失'], ['veth', '4 → 3,IPAM 释放']]
+PANELS = [('f', 'flow', 'CNI 做了什么'), ('t', 'term', '实测输出'), ('kv', 'kv', '要点')]
+steps = [
+    step("kindnet 的 CNI 配置 /etc/cni/net.d/10-kindnet.conflist:name=kindnet,插件链是 ptp 和 portmap。ptp 的 ipam 是 host-local,dataDir=/run/cni-ipam-state,ranges 里的 subnet 就是这个节点的 spec.podCIDR(control-plane 10.244.0.0/24、worker 10.244.1.0/24、worker2 10.244.2.0/24),routes 是 0.0.0.0/0 默认路由,mtu 65535。每个节点的 CNI 配置里写的是自己那一段。", f=fl(F1, cur=[1, 2], done=[0, 3]), t=tl(S(1), mark=lidx(S(1), 'ptp', 'podCIDR=10.244.1.0/24'), done=lidx(S(1), 'worker2')), kv=KV([['podCIDR', 'controller-manager 给每个节点划一段 /24'], ['CNI 配置', 'kubelet 不管细节,由插件链完成'], ['host-local', 'IPAM 只在本节点范围内分配,不需要集中协调']], ['host-local'])),
+    step("在 worker 上新建 3 个 Pod,IP 是 10.244.1.189、.190、.191——都在这个节点的 /24 里,从上一次分配的地址继续往后。/run/cni-ipam-state/kindnet/ 下每个已分配的 IP 一个文件(内容是占用它的沙箱 ID),外加 last_reserved_ip.0=10.244.1.191。删除 Pod b(.190)后,API 对象消失又过了 2.2 秒这个 IP 的文件才被删掉;新建 Pod d 拿到 10.244.1.192,没有回头用刚释放的 .190。", f=fl(F2, cur=[3], done=[0, 1, 2, 4]), t=tl(S(2), mark=lidx(S(2), 'last_reserved_ip.0', '2.2 秒'), done=lidx(S(2), '新建 Pod d')), kv=KV([['记账', '一个 IP 一个文件 + last_reserved_ip'], ['不立刻复用', '总是往后分配,用完一圈才回头'], ['释放有延迟', 'CNI DEL 在容器停止之后才执行']], ['记账'])),
+    step("Pod a 的网络命名空间里:eth0@if704,地址 10.244.1.189/24,默认路由 via 10.244.1.1 dev eth0。节点上 ifindex=704 的网卡是 veth25040d0e@if11,名字里的 @if11 又指回 Pod 里 eth0 的 ifindex 11,两头互指——这是一对 veth。节点上通往这个 Pod 的路由是 10.244.1.189 dev veth25040d0e scope host,一条 /32 主机路由直接指向它的 veth,没有网桥。", f=fl(F3, cur=[2, 3], done=[0, 1]), t=tl(S(3), mark=lidx(S(3), 'eth0@if704', '对端是 ifindex=704'), done=lidx(S(3), '没有网桥')), kv=KV([['veth 对', '一头在 Pod,一头在节点'], ['@ifN', '互相记着对端的 ifindex'], ['/32 路由', 'ptp 模式不用网桥,每个 Pod 一条主机路由']], ['veth 对'])),
+    step("删除 Pod d 后,API 对象消失又过了 2.3 秒,节点上到 10.244.1.192 的路由才没有;节点上 veth 数 4 → 3,IPAM 里这个 IP 的文件已释放。网络配置随沙箱销毁(CNI DEL)而撤销,不是随 API 对象删除而立即撤销。", f=fl(F4, cur=[2], done=[3]), t=tl(S(4), mark=lidx(S(4), '2.3 秒'), done=lidx(S(4), '已释放')), kv=KV([['DEL', 'CNI 删除 veth、路由、IPAM 记录'], ['顺序', '先删 Pod 对象,再停容器,最后 DEL'], ['延迟约 2 秒', '本实验单次测量']], ['DEL'])),
+]
+A = mkartk('k70', 70, 'Kubernetes,CNI,Pod IP,host-local,veth,ptp,kindnet,真实验证,动画演示',
+    '在 kind 节点上读 CNI 配置与现场:kindnet 用 ptp + host-local,每个节点一段 podCIDR(10.244.1.0/24 等);host-local 在 /run/cni-ipam-state 里一个 IP 一个文件并记下 last_reserved_ip,新 IP 总是往后分配;Pod 里的 eth0 和节点上的 vethXXXX 互为对端,节点上是一条 /32 主机路由;删除 Pod 后路由、veth 和 IP 记录约 2 秒后才被 CNI DEL 清掉。',
+    'Pod IP 是谁分配的?CNI 到底做了什么?veth 在哪里?为什么删除 Pod 后 IP 没有马上被复用?这篇在 kind 节点里读 CNI 配置、IPAM 记账文件、nsenter 进 Pod 的网络命名空间看 veth 和路由,把 CNI 的每一步现场对出来。',
+    [('/24 每节点', 'node.spec.podCIDR 给每个节点一段 /24,host-local 只在本节点范围内分配'), ('10.244.1.190 不回头', '释放后新建的 Pod 拿到的是 .192,往后分配,不立即复用'), ('2.3 秒', 'Pod 对象消失后到路由和 veth 被清掉的延迟')],
+    [('CNI 配置与 IPAM', '<p>节点 worker 上 <code>/etc/cni/net.d/10-kindnet.conflist</code> 的插件链是 <code>ptp</code> 和 <code>portmap</code>。<code>ptp</code> 的 <code>ipam</code> 是 <code>host-local</code>,<code>dataDir</code> 是 <code>/run/cni-ipam-state</code>,<code>ranges</code> 里的 <code>subnet</code> 就是这个节点的 <code>spec.podCIDR</code>(control-plane 10.244.0.0/24、worker 10.244.1.0/24、worker2 10.244.2.0/24),<code>routes</code> 是默认路由,<code>mtu</code> 65535。每个节点自己管自己那一段,不需要和别的节点协调。</p>'),
+     ('host-local 怎么记账', '<p>worker 上新建 3 个 Pod,IP 是 10.244.1.189、.190、.191,从上一次分配的地址继续往后。<code>/run/cni-ipam-state/kindnet/</code> 下每个已分配的 IP 一个文件(内容是占用它的沙箱 ID),再加 <code>last_reserved_ip.0</code> 记着上次分到哪(.191)。删除 Pod b(.190)后,API 对象消失又过了 2.2 秒这个文件才被删——CNI 的 DEL 要等容器停止之后才执行;随后新建 Pod d 得到 10.244.1.192,没有回头用刚释放的 .190,地址要用完一圈才会复用。</p>'),
+     ('一对 veth', '<p>用 <code>nsenter</code> 进 Pod a 的网络命名空间:<code>eth0@if704</code>,地址 10.244.1.189/24,默认路由 <code>via 10.244.1.1</code>。节点上 ifindex 704 的网卡是 <code>veth25040d0e@if11</code>,名字里的 <code>@if11</code> 又指回 Pod 里 eth0 的 ifindex 11:一对 veth 两头互指。节点上通往这个 Pod 的路由是 <code>10.244.1.189 dev veth25040d0e scope host</code>——一条 /32 主机路由直接指向 veth,没有网桥。</p>'),
+     ('撤销', '<p>删除 Pod d 后,API 对象消失又过了 2.3 秒,节点上到 10.244.1.192 的路由才没有;veth 数 4 → 3,IPAM 里的记录释放。网络配置随沙箱销毁(CNI DEL)而撤销,不是随 API 对象删除而立即撤销。</p>')],
+    steps,
+    [ENV_K + '。三节点 kind 集群 kx-main(Kubernetes v1.37.0),CNI 是 kind 默认的 kindnet(ptp + host-local + portmap);在 worker 节点用 docker exec 读 /etc/cni/net.d、/run/cni-ipam-state,用 crictl inspectp + nsenter 进入 Pod 的网络命名空间;Pod 用 nodeName 固定在 worker 上;删除延迟是 0.3 秒间隔轮询,单次测量;每种情形各一次',
+     '没有验证:Calico / Cilium / Flannel 等其他 CNI 的 IPAM 与数据路径;CNI 插件链里 portmap 对 hostPort 的实现;IPv6 / 双栈;podCIDR 用尽后的行为;kubelet 调用 CNI 的错误处理与重试;containerd 的 CNI 配置目录与二进制目录的选择'],
+    'CNI', PANELS)

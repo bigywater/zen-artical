@@ -1,0 +1,18 @@
+from lib import *
+S = SS('p25')
+steps = [
+    step("26 个边界用例,Python 3.14.8 标准库 urllib.robotparser 与 protego 0.7.0 比较:只有 1 个不一致。两者一致的行为包括:Allow 更长压过 Disallow(Disallow: /private/ 加 Allow: /private/public.html,后者允许),不论两条规则谁在前;长度相同的 Allow 与 Disallow 取 Allow;前缀匹配(/private 挡住 /privateer/x);路径区分大小写;* 通配符和结尾 $(/*.pdf$ 挡住 /docs/a.pdf,但挡不住 /docs/a.pdf?download=1);空的 Disallow 允许全部;Disallow: / 之外的 Allow: /ok 生效;/robots.txt 自己总是允许。不一致的那个:组名 bot 与我的 UA MyBot——标准库认为组名是 UA 名字的子串就适用(挡住了),protego 不适用(允许)。", t=tl(S(1)), done=lidx(S(1), '最长匹配:Allow 更长压过 Disallow', '结尾 $ 精确匹配', '通配符 * 在中间'), mark=lidx(S(1), '不一致', '共 26 个用例'), b=bars([['用例总数', 26, '26'], ['两个解析器判断不同', 1, '1']], 26, mark=[1], done=[0]), kv=KV([['26 个用例', '1 个不一致'], ['最长匹配与通配符', '两者都支持'], ['唯一分歧', '组名 bot 是否适用于 MyBot']], ['唯一分歧'])),
+    step("读 Crawl-delay、Request-rate、Sitemap:都有 Crawl-delay 3 的 * 组和 Crawl-delay 7 的 MyBot 组。标准库 crawl_delay(\"MyBot\") = 7(整数)、crawl_delay(\"Other\") = 3,request_rate = RequestRate(requests=2, seconds=10),site_maps() 返回两个 sitemap;protego 的 crawl_delay 返回 7.0 和 3.0(浮点数),sitemap 同样两个。但 Crawl-delay: 1.5 这样的小数,两者都返回 None——没读到。", t=tl(S(2)), done=lidx(S(2), '标准库:crawl_delay', 'protego:crawl_delay'), mark=lidx(S(2), 'Crawl-delay: 1.5'), kv=KV([['MyBot 组', 'Crawl-delay 7'], ['* 组(其它 UA)', 'Crawl-delay 3'], ['Crawl-delay: 1.5', '两者都读成 None']], ['Crawl-delay: 1.5'])),
+    step("robots.txt 本身的 HTTP 状态决定标准库 read() 之后的行为(robots.txt 内容是 Disallow: /x):200 → 按规则;404、410、429(4xx)→ allow_all 全部允许;401、403 → disallow_all 全部禁止;500、503(5xx)→ 也是 disallow_all 全部禁止;301 重定向到真正的文件 → 跟随后按规则。没有调用 read 或 parse 的新对象,can_fetch 返回 False。5xx 一律禁止、4xx 一律允许,是标准库的现行处理方式。", t=tl(S(3)), done=lidx(S(3), '返回 404', '返回 410', '返回 429'), mark=lidx(S(3), '返回 401', '返回 403', '返回 500', '返回 503', '从没读过'), b=bars([['4xx(404、410、429):/y 允许', 1, '允许'], ['401、403:/y 允许', 0, '禁止'], ['500、503:/y 允许', 0, '禁止']], 1, done=[0], mark=[1, 2]), kv=KV([['404、410、429', 'allow_all'], ['401、403、500、503', 'disallow_all'], ['没读过 robots.txt', 'can_fetch 返回 False']], ['401、403、500、503'])),
+]
+A = mkartp('p25', 25, '爬虫,robots.txt,robotparser,protego,Crawl-delay,礼貌,Python,真实验证,动画演示',
+    '实测 robots.txt 的解析:Python 3.14.8 标准库 urllib.robotparser 与 protego 0.7.0 在 26 个边界用例中只有 1 个不一致(组名是 UA 名字的子串时是否适用);两者都是最长匹配并支持 * 与 $;Crawl-delay 的小数两者都读不出;robots.txt 本身返回 404/410/429 时全部允许,401/403/500/503 时全部禁止。',
+    '遵守 robots.txt 是爬虫最基本的礼貌。但“遵守”的细节很多:Allow 与 Disallow 谁优先、通配符怎么算、UA 名字怎么匹配、robots.txt 本身打不开怎么办。这篇把标准库和 Scrapy 用的 protego 放在一起,用 26 个边界用例逐条对照,再看 HTTP 状态对 read() 的影响。',
+    [('1 / 26', '标准库与 protego 判断不同的用例数'), ('Crawl-delay: 1.5', '两个解析器都读成 None 的写法(整数可以)'), ('5xx 全禁', 'robots.txt 返回 500 或 503 时,标准库 read() 之后整站不可抓')],
+    [('规则怎么匹配', '<p>两个解析器都按最长匹配决定 Allow 与 Disallow 谁优先(长度相同取 Allow),都支持 <code>*</code> 和结尾 <code>$</code>。路径区分大小写、前缀匹配、<code>/robots.txt</code> 自身总是允许。这是 Python 3.14.8 的标准库;更早版本的实现我没有测,不要把这里的结论套到旧版本上。</p>'),
+     ('UA 名字与 Crawl-delay', '<p>组名 <code>bot</code> 对我的 UA <code>MyBot</code>:标准库认为适用(子串匹配),protego 不适用——这是 26 个用例里唯一的分歧。<code>Crawl-delay</code> 两者都能读取整数,<code>Crawl-delay: 1.5</code> 这样的小数两者都得到 <code>None</code>,所以不能靠它们表达小于 1 秒的间隔。</p>'),
+     ('robots.txt 打不开', '<p>标准库 <code>read()</code>:404、410、429 等 4xx 视为没有限制;401、403、500、503 视为整站禁止;重定向会被跟随。如果你的爬虫遇到 429(被限速)时把整站当“全部允许”,要意识到这是标准库的选择,不一定是你想要的。</p>')],
+    steps,
+    [ENV_P + '。解析器:Python 3.14.8 标准库 urllib.robotparser,protego 0.7.0(pip 装进实验专用目录,实验后删除);用例都是纯文本解析(URL 是 example.test,不发请求);HTTP 状态实验用本机服务器按查询参数返回 200、301、404、410、401、403、429、500、503',
+     '没有验证:RFC 9309 原文的要求(上文只描述两个实现的行为,没有逐条对照标准);Python 旧版本的 robotparser(印象里是按顺序第一条匹配且不支持通配符,没有测);Googlebot 等搜索引擎实际怎么解析;robots.txt 的大小上限、缓存时长;非 UTF-8 编码的 robots.txt;X-Robots-Tag 和 meta robots;不同解析器对畸形输入的处理'],
+    'robots.txt')

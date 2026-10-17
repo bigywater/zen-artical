@@ -1,0 +1,16 @@
+from lib import *
+S = SS('f82')
+R = J('f82'); ev = R['events']; evr = R['events_rb']
+steps = [
+    step("一个对象的状态变化(用 sa.inspect 读):Author(name=...) 是 transient;session.add 之后 pending;flush 之后 persistent;commit 之后仍是 persistent,但属性被标成 expired(下一篇 expire_on_commit 展开);session.delete(a) 之后在 flush 之前 inspect 仍报 persistent,flush 之后是 deleted;再 commit,对象变成 detached。", t=tl(S(1)), done=lidx(S(1), 'session.add', 'flush()', 'session.commit()'), mark=lidx(S(1), '→ deleted', '→ detached'), kv=KV([['add', 'transient → pending'], ['flush', 'pending → persistent'], ['delete + flush', 'persistent → deleted'], ['commit 之后', 'deleted → detached']], ['flush'])),
+    step("事务是自动开始的:一开始 in_transaction=False,服务端有一个空闲的池连接(idle);执行 select 1 之后 in_transaction=True,PostgreSQL 里这个连接是 idle in transaction;commit() 之后回到 idle(连接还给池);再执行一次又进入 idle in transaction,rollback() 之后 idle。离开应用上下文(session.remove)之后服务端是 idle。所以只读查询之后不 commit 或不关 session,连接会一直停在 idle in transaction。", t=tl(S(2)), done=lidx(S(2), '执行了', '再执行'), mark=lidx(S(2), 'commit()', 'rollback()'), kv=KV([['执行 SQL', '自动开始事务 → idle in transaction'], ['commit / rollback', '结束事务 → idle'], ['不结束', '一直 idle in transaction']], ['执行 SQL'])),
+    step(f"一次 commit() 里依次触发的 Session 事件:{' → '.join(ev)}。注意 before_commit 在最前面,它触发 flush(before_flush、after_begin、after_flush、after_flush_postexec),然后才是 after_commit。add 加 flush 之后 rollback():{' → '.join(evr)}(中间的 -- 是 rollback 的分界)。", t=tl(S(3)), done=lidx(S(3), 'add 之后 commit'), mark=lidx(S(3), 'rollback'), kv=KV([['commit', 'before_commit → flush → after_commit'], ['rollback', 'after_rollback + after_soft_rollback']], ['commit'])),
+    step("请求结束时 db.session 被 remove:视图里只改了属性没有 commit(/change),请求结束后库里 bob 的名字还是 bob——改动被丢弃。请求结束后拿着视图里的对象,状态是 detached:已经加载的属性(name=CHANGED)还能读,没加载过的关系 books 读取抛 DetachedInstanceError;commit 过的对象是 detached (expired),读任何属性都抛 DetachedInstanceError。", t=tl(S(4)), done=lidx(S(4), 'bob', '读已加载'), mark=lidx(S(4), 'DetachedInstanceError'), kv=KV([['没 commit', '请求结束后丢弃'], ['请求外用对象', 'detached,懒加载与过期属性会报错']], ['请求外用对象'])),
+    step("session.close():原来 persistent 的对象变成 detached;重新 session.add(a) 之后又是 persistent,identity_map 里有 1 个对象。", t=tl(S(5)), done=lidx(S(5), 'close()', '重新'), kv=KV([['close()', '所有对象 detached'], ['add 回来', '重新 persistent']], ['close()'])),
+]
+A = mkartf('f82', 82, 'Flask,SQLAlchemy,Session,事务,连接,真实验证,动画演示',
+    '实测 SQLAlchemy Session 的生命周期:对象的 transient、pending、persistent、deleted、detached 状态转换;用 pg_stat_activity 看自动开始的事务(idle in transaction)与 commit 后的 idle;一次 commit 触发的事件顺序;请求结束后没 commit 的改动被丢弃、对象变成 detached 后的 DetachedInstanceError。',
+    'Session 里的对象有哪些状态?事务是什么时候开始、什么时候结束的?请求结束之后手里的对象还能不能用?这篇用真实的 PostgreSQL,把状态、连接状态和事件顺序逐个打印出来。',
+    [('5 种', '对象状态:transient、pending、persistent、deleted、detached'), ('idle in transaction', '执行 SQL 之后、commit/rollback 之前,PostgreSQL 里连接的状态'), ('DetachedInstanceError', '请求结束后读取没加载的关系或过期的属性时的异常')],
+    [('对象的状态', '<p>上一篇:<a href="flask-flask-sqlalchemy-init.html">Flask-SQLAlchemy 初始化过程</a>;下一篇:<a href="flask-request-db-transaction-boundary.html">Flask 请求与数据库事务边界</a>。</p>'), ('事务与连接', None), ('commit 的事件顺序', None), ('请求结束之后', None), ('close 与重新 add', None)],
+    steps, [ENV_F + '。Flask-SQLAlchemy 3.1.1、psycopg 3.3.6、自己起的 PostgreSQL(非默认端口)', '没有验证:autoflush 的细节(见第 89 篇)、嵌套事务与 savepoint、异步 Session、多线程共享同一个 Session 的后果、expire_on_commit 关掉之后的行为(见第 93 篇)'], 'Session 生命周期')

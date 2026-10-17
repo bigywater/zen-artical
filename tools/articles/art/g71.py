@@ -1,0 +1,16 @@
+from lib import *
+S = SS('g71')
+steps = [
+    step("2000 个各睡 5 ms 的任务,并发上限 50(每种 3 次取中位数):固定 50 个 worker 读任务 channel:200 ms,峰值 goroutine 52,同时在做事的最大个数 50,累计分配 73 KiB,向系统申请 9 MiB;信号量先占位再起 goroutine:201 ms,峰值 52,最大 50,378 KiB,13 MiB;信号量先起 goroutine 再在里面占位:201 ms,峰值 2002,最大 50,1475 KiB,17 MiB;errgroup.SetLimit(50):201 ms,峰值 52,最大 50,398 KiB,13 MiB;不限制:6 ms,峰值 2002,同时在做事的最大个数 2000,1315 KiB,17 MiB。", t=tl(S(1)), done=lidx(S(1), '固定 N 个 worker', '信号量:先占位', 'errgroup.SetLimit'), mark=lidx(S(1), '先起 goroutine 再在里面占位', '不限制'), b=bars([['worker 池:峰值 goroutine', 52, '52'], ['errgroup:峰值', 52, '52'], ['信号量(里面占位):峰值', 2002, '2002'], ['不限制:峰值', 2002, '2002']], 2002, done=[0, 1], mark=[2, 3]), kv=KV([['固定 worker', '峰值 52,最大并发 50'], ['先占位再起', '峰值 52,最大并发 50'], ['先起再占位', '峰值 2002,最大并发 50(并发受限但 goroutine 没省)'], ['不限制', '6 ms,2000 个同时在做事']], ['先起再占位'])),
+    step("100 万个几乎不做事的任务(50 次加法),并发上限 8:固定 8 个 worker:414 ms,峰值 goroutine 10,累计分配 27 KiB,13 MiB;信号量先占位再起:649 ms,峰值 126,31475 KiB,17 MiB;信号量先起再在里面占位:521 ms,峰值 841,31864 KiB,17 MiB;errgroup.SetLimit(8):646 ms,峰值 145,39279 KiB,17 MiB;不限制:417 ms,峰值 170,23727 KiB,21 MiB。任务极短时,为每个任务起 goroutine 的写法比固定 worker 慢约 25%–55%(不限制的写法例外),并多分配约 31 MB 以上。", t=tl(S(2)), done=lidx(S(2), '固定 N 个 worker'), mark=lidx(S(2), '信号量:先占位', 'errgroup.SetLimit', '先起 goroutine 再在里面占位'), b=bars([['固定 worker (ms)', 414, '414'], ['信号量先占位', 649, '649'], ['errgroup', 646, '646'], ['不限制', 417, '417']], 649, done=[0, 3], mark=[1, 2]), kv=KV([['固定 8 个 worker', '414 ms,累计分配 27 KiB'], ['每任务一个 goroutine(带限制)', '521–649 ms,分配约 31–39 MB'], ['不限制', '417 ms,但内存申请 21 MiB']], ['每任务一个 goroutine(带限制)'])),
+]
+A = mkartg('g71', 71, 'Go,worker pool,并发控制,errgroup,信号量,真实验证,动画演示',
+    '在 Go 1.27.1 里比较固定并发数的五种写法:2000 个 5 ms 任务、上限 50 时,固定 worker、先占位的信号量、errgroup 峰值只有 52 个 goroutine,先起 goroutine 再占位的写法峰值 2002;100 万个极短任务、上限 8 时,固定 8 个 worker 414 ms、累计分配 27 KiB,每任务一个 goroutine 的限并发写法 521–649 ms、分配 31–39 MB。',
+    '限制并发数有好几种写法:固定 worker 读 channel、信号量、errgroup.SetLimit。它们都能把同时在做事的任务数限住,但 goroutine 数、内存和速度不一样。这篇用真实运行把它们并排比较,看任务慢和任务极短两种情形。',
+    [('52 vs 2002', '上限 50 的 2000 个慢任务:固定 worker 的峰值 goroutine 数 vs 先起 goroutine 再在里面占位的写法'), ('414 vs 521–649 ms', '100 万个极短任务、上限 8:固定 worker vs 每任务一个 goroutine 的限并发写法'), ('27 KiB vs 31 MB', '同样这 100 万个极短任务的累计分配')],
+    [('慢任务:并发被限住,goroutine 数不一定', '<p>五种写法同时在做事的最大个数都符合预期(50;不限制是 2000)。但“先起 goroutine 再在里面抢信号量”会同时存在 2002 个 goroutine,虽然并发受限,内存多申请了几 MiB。先占位再起,或者固定 worker,峰值只有 52。</p>'),
+     ('任务极短时,每任务一个 goroutine 就贵了;怎么选', '<p>100 万个 50 次加法的任务,固定 8 个 worker 用 414 ms、几乎不分配(27 KiB);每任务起一个 goroutine 的写法用 521–649 ms、累计分配 31–39 MB。不限制的写法 417 ms 看起来不慢,但同时有 170 个 goroutine,内存申请 21 MiB,而且没有限制,不能用在任务重的场景。注意这里“同时在做事的最大个数”只有 4–6,因为任务太短几乎不重叠。选择上:任务多且短,用固定 worker 读 channel;任务慢、数量少,errgroup.SetLimit 写起来最省事,性能与手写信号量一样;无论哪种,都别在 goroutine 里面再抢信号量。每种只测了 3 次、任务内容只有睡眠和极短加法两种,结果对真实业务不一定适用。</p>')],
+    steps,
+    [ENV_G + '。五种写法:固定 N 个 worker 读 channel、信号量先占位再起 goroutine、先起 goroutine 再在里面占位、errgroup.SetLimit(来自 golang.org/x/sync v0.24.0)、不限制;峰值 goroutine 数由另一个 goroutine 每 200 µs 采样 runtime.NumGoroutine;“同时在做事的最大个数”用原子计数器记录;累计分配 = MemStats.TotalAlloc 差;内存 = MemStats.Sys;每种 3 次取用时中位数那一次',
+     '没有验证:任务有返回值或错误时的收集写法、动态调整并发数、优先级队列、真实 CPU 重任务下的差别、第三方 worker pool 库(如 ants)的表现、不同 GOMAXPROCS 下的结果'],
+    'worker pool')

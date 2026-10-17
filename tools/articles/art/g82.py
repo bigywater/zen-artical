@@ -1,0 +1,20 @@
+from lib import *
+S = SS('g82')
+steps = [
+    step("写:50 万次 16 字节的小写(共 8 MB)到文件,每种取 5 次中位数。不缓冲:对底层 Write 调用 500000 次,976.5 ms;bufio 16 B(缓冲区只有 16 字节,每次都直通):500000 次,964.0 ms;bufio 512 B:15625 次,31.1 ms;bufio 4096 B(默认):1954 次,6.0 ms;bufio 64 KiB:123 次,2.7 ms;bufio 1 MiB:8 次,2.5 ms。", t=tl(S(1)), done=lidx(S(1), 'bufio 4096 B', 'bufio 64 KiB', 'bufio 1 MiB'), mark=lidx(S(1), '不缓冲', 'bufio 16 B', 'bufio 512 B'), b=bars([['不缓冲 (ms)', 976.5, '976.5'], ['bufio 512 B', 31.1, '31.1'], ['bufio 4096 B(默认)', 6.0, '6.0'], ['bufio 64 KiB', 2.7, '2.7']], 976.5, mark=[0, 1], done=[2, 3]), kv=KV([['不缓冲', '50 万次系统调用,约 2 µs 一次'], ['默认 4096', '1954 次,快约 160 倍'], ['64 KiB 起', '收益趋平(2.7 ms → 2.5 ms)'], ['缓冲区 = 写入大小', 'bufio 16 B 等于没缓冲']], ['缓冲区 = 写入大小'])),
+    step("忘了 Flush:写了 16000 字节,没有 Flush 就 Close 文件:磁盘上的文件大小 = 12288 字节(3 个 4096),缓冲区里还剩 3712 字节没写出去——静悄悄地丢了数据,没有任何错误。", t=tl(S(2)), mark=lidx(S(2), '12288'), b=bars([['已写入磁盘', 12288, '12288'], ['丢失', 3712, '3712']], 12288, done=[0], mark=[1]), kv=KV([['应写', '16000 字节'], ['实际落盘', '12288 字节'], ['丢失', '3712 字节,无任何报错']], ['丢失'])),
+    step("读:逐字节读 128 MiB 文件,每种取 5 次中位数。直接用 1 MiB 缓冲区整块 Read:129 次 Read,8.8 ms;bufio 16 B:8388609 次 Read,3865.6 ms;bufio 512 B:262145 次,391.6 ms;bufio 4096 B(默认):32769 次,288.0 ms;bufio 64 KiB:2049 次,274.3 ms;bufio 1 MiB:129 次,274.6 ms。缓冲区够大之后,耗时不再下降——剩下的是每个字节一次 ReadByte 调用的成本。", t=tl(S(3)), done=lidx(S(3), '直接用 1 MiB', 'bufio 4096 B', 'bufio 65536 B', 'bufio 1048576 B'), mark=lidx(S(3), 'bufio 16 B', 'bufio 512 B'), b=bars([['bufio 16 B (ms)', 3865.6, '3865.6'], ['bufio 512 B', 391.6, '391.6'], ['bufio 4096 B(默认)', 288.0, '288.0'], ['bufio 1 MiB', 274.6, '274.6'], ['整块 Read(不逐字节)', 8.8, '8.8']], 3865.6, mark=[0, 1], done=[2, 3, 4]), kv=KV([['16 B', '838 万次系统调用,3.9 秒'], ['4 KiB 起', '约 280 ms,平台'], ['整块读', '8.8 ms,不逐字节处理才是大头'], ['含义', '缓冲区够大后瓶颈换成了逐字节调用']], ['含义'])),
+    step("Scanner 的行长限制:默认 Scanner 读到一行 100000 字节的内容:只读到第一行(长度 5),sc.Err() = bufio.Scanner: token too long(MaxScanTokenSize = 65536)。sc.Buffer(…, 1 MiB) 之后读到 [5 100000 5],没有错误。bufio.Reader.ReadString('\\n') 没有行长限制:读到 [6 100001 6]。", t=tl(S(4)), done=lidx(S(4), 'sc.Buffer', 'ReadString'), mark=lidx(S(4), '默认 Scanner', 'MaxScanTokenSize'), kv=KV([['默认 Scanner', '行超过 64 KiB 就停下并报 token too long'], ['sc.Buffer', '调大上限后正常'], ['bufio.Reader', 'ReadString 没有限制']], ['默认 Scanner'])),
+]
+A = mkartg('g82', 82, 'Go,bufio,缓冲区,Flush,Scanner,真实验证,动画演示',
+    '在 Go 1.27.1(arm64 macOS)里量 bufio 的缓冲区大小:50 万次 16 字节小写不缓冲要 976.5 ms(50 万次系统调用),默认 4096 字节的 bufio.Writer 只要 6.0 ms(1954 次),64 KiB 以上收益趋平;忘了 Flush 丢了 3712 字节而不报错;逐字节读 128 MiB,16 字节缓冲区 3865.6 ms,4 KiB 起约 280 ms;默认 Scanner 遇到超过 64 KiB 的行会停下。',
+    'bufio 的缓冲区到底有多大作用?设多大合适?忘了 Flush 会怎样?这篇用 50 万次小写和 128 MiB 的逐字节读,把缓冲区大小对系统调用次数和耗时的影响量出来,并复现 Scanner 的行长限制。',
+    [('976.5 → 6.0 ms', '50 万次 16 字节小写:不缓冲 对 默认 4096 字节的 bufio.Writer'), ('3712 字节', '没有 Flush 就 Close 时,16000 字节里丢掉的部分'), ('65536', 'bufio.MaxScanTokenSize:默认 Scanner 一行最长 64 KiB')],
+    [('写:缓冲区越大,系统调用越少', '<p>50 万次 16 字节的小写,不缓冲就是 50 万次系统调用,约 2 µs 一次,共 976.5 ms;默认的 4096 字节缓冲区只发出 1954 次调用,6.0 ms;64 KiB 起只剩 123 次、2.7 ms,再大也只有微小的改善。缓冲区和单次写入同样大(16 字节)时等于没有缓冲。</p>'),
+     ('Flush', '<p><code>bufio.Writer</code> 不会在 <code>Close</code> 文件时自动 Flush:16000 字节只落盘了 12288 字节,3712 字节留在缓冲区里被丢掉,而且没有任何错误。写完要 <code>Flush</code>,或者用 <code>defer</code> 并检查它的错误。</p>'),
+     ('读:瓶颈会转移', '<p>逐字节读 128 MiB,16 字节缓冲区要 838 万次系统调用、3.9 秒;4 KiB 起降到约 280 ms 就不再下降,因为剩下的是每个字节一次 <code>ReadByte</code> 调用的成本。对比直接用 1 MiB 缓冲区整块 <code>Read</code> 只要 8.8 ms:能整块处理就别逐字节。(文件已在页缓存里,所以这里没有磁盘等待的成分。)</p>'),
+     ('Scanner 与 Reader', '<p>默认 <code>Scanner</code> 的行长上限是 65536 字节,超过就停下并返回 <code>bufio.Scanner: token too long</code>,读不到后面的行;用 <code>sc.Buffer</code> 调大。<code>bufio.Reader</code> 的 <code>ReadString</code> 则没有这个限制,但也要自己防止恶意的超长行耗尽内存。</p>')],
+    steps,
+    [ENV_G + '。写实验:50 万次 16 字节写到临时文件,每种 5 次取中位数;读实验:128 MiB 的临时文件(已在页缓存中),逐字节 ReadByte 对比整块读;底层调用次数由计数包装器统计;所有临时文件实验后已删除',
+     '没有验证:文件不在页缓存时的结果、Linux 上的系统调用成本差异、Scanner 其它分割函数、bufio.Writer 对网络连接的影响(Nagle 等)、更大的写入块(远超缓冲区)时的直通行为'],
+    'bufio 缓冲')

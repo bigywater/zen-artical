@@ -1,0 +1,17 @@
+from lib import *
+S = SS('f96')
+R = J('f96'); ov = R['overhead']; rec = R['recorded']
+steps = [
+    step("SQLALCHEMY_ECHO=True 的输出:每次 commit 前后是 BEGIN (implicit) 与 COMMIT;语句本身分行打印,下面一行是 [generated in 0.00004s] 加参数字典;同一条语句第二次执行时变成 [cached since 0.0008152s ago]——SQLAlchemy 的语句编译缓存命中了。上面第一段两次 INSERT 与两次 SELECT,各自第一次是 generated、第二次是 cached(各 2 行)。echo 给整个进程的 sqlalchemy.engine 日志装了处理器,所以我在单独的进程里跑这一段。", t=tl(S(1)), done=lidx(S(1), 'generated in', 'cached since'), kv=KV([['generated in', '第一次编译'], ['cached since', '命中编译缓存'], ['BEGIN (implicit)', '自动开始的事务']], ['cached since'])),
+    step("DEBUG 级别还会把返回的行打印出来:Col ('id', 'name')、Row (1, 'n0')、Row (2, 'n1')。数据量大时日志会非常大,只适合本地调试。", t=tl(S(2)), done=lidx(S(2), 'Row', 'Col'), kv=KV([['INFO', '语句 + 参数'], ['DEBUG', '再加返回的每一行']], ['DEBUG'])),
+    step("日志默认带参数,所以密码哈希之类的敏感值会写进日志(默认下能在日志里看到 hunter2-hash);engine 选项 hide_parameters=True 之后参数行变成 [SQL parameters hidden due to hide_parameters=True],日志里再也看不到那个值。生产环境开语句日志前要先想好这一点。", t=tl(S(3)), mark=lidx(S(3), '默认'), done=lidx(S(3), 'hide_parameters'), kv=KV([['默认', '参数明文进日志'], ['hide_parameters=True', '参数被隐藏']], ['hide_parameters=True'])),
+    step(f"SQLALCHEMY_RECORD_QUERIES = True:get_recorded_queries() 返回本应用上下文里每条语句的耗时:select 1 {rec[0][1]:.1f} ms,select pg_sleep(0.2) {rec[1][1]:.1f} ms。可以在请求结束时把超过阈值的记下来。", b=bars([['select 1', rec[0][1], f'{rec[0][1]:.1f} ms'], ['pg_sleep(0.2)', rec[1][1], f'{rec[1][1]:.0f} ms']], rec[1][1], done=[0], mark=[1]), t=tl(S(4)), done=lidx(S(4), 'select 1'), mark=lidx(S(4), 'pg_sleep'), kv=KV([['record_queries', '每条语句的 duration']], ['record_queries'])),
+    step("自己用 before_cursor_execute 与 after_cursor_execute 事件写慢查询日志:阈值 100 ms,执行 select 1、select pg_sleep(0.15)、select 2,只记下了 pg_sleep 那一条(约 153 ms)。这样日志里只有慢查询,没有噪音。", t=tl(S(5)), done=lidx(S(5), '只记下了'), kv=KV([['事件', 'before / after_cursor_execute'], ['阈值', '只记录慢查询']], ['事件'])),
+    step(f"echo 的开销:1000 次简单查询,不开日志 {ov['不开日志']:.1f} ms,INFO 日志写到内存 {ov['INFO(echo)']:.1f} ms,多约 {(ov['INFO(echo)'] / ov['不开日志'] - 1) * 100:.0f}%(日志写到内存,写文件或终端会更慢)。", b=bars([['不开日志', ov['不开日志'], f"{ov['不开日志']:.0f} ms"], ['INFO 日志', ov['INFO(echo)'], f"{ov['INFO(echo)']:.0f} ms"]], ov['INFO(echo)'], done=[0], mark=[1]), t=tl(S(6)), done=lidx(S(6), '不开日志'), mark=lidx(S(6), 'INFO'), kv=KV([['不开日志', f"{ov['不开日志']:.0f} ms"], ['INFO', f"{ov['INFO(echo)']:.0f} ms"]], ['INFO'])),
+]
+A = mkartf('f96', 96, 'Flask,SQLAlchemy,查询日志,echo,慢查询,真实验证,动画演示',
+    f'实测 SQLAlchemy 的查询日志:SQLALCHEMY_ECHO 的输出格式与 generated in 对 cached since、DEBUG 打印返回行、参数里的敏感值与 hide_parameters、RECORD_QUERIES 的每条耗时、用事件实现 100 ms 阈值的慢查询日志、1000 次查询时 INFO 日志多出约 {(ov["INFO(echo)"] / ov["不开日志"] - 1) * 100:.0f}% 耗时。',
+    '想看 ORM 到底发了什么 SQL,怎么开日志?日志里会不会泄漏敏感参数?怎么只记录慢查询?这篇在真实的 PostgreSQL 上把几种做法的输出和开销逐个打印出来。',
+    [('cached since', '同一条语句第二次执行时日志里的标记——SQLAlchemy 编译缓存命中'), ('hide_parameters', '打开后日志里不再出现参数值'), (f'{(ov["INFO(echo)"] / ov["不开日志"] - 1) * 100:.0f}%', '1000 次简单查询时 INFO 日志写到内存多出的耗时')],
+    [('ECHO 的输出', '<p>上一篇:<a href="flask-pessimistic-lock.html">悲观锁</a>;下一篇:<a href="flask-migration-files.html">Flask-Migrate Migration 文件</a>。</p>'), ('DEBUG 日志', None), ('参数与敏感信息', None), ('RECORD_QUERIES', None), ('自己写慢查询日志', None), ('日志的开销', None)],
+    steps, [ENV_F + '。Flask-SQLAlchemy 3.1.1、psycopg 3.3.6、自己起的 PostgreSQL(非默认端口)', '没有验证:日志写到文件或终端时的开销、结构化日志(JSON)与采样、慢查询在 PostgreSQL 服务端的 log_min_duration_statement、EXPLAIN ANALYZE 的集成'], 'SQLAlchemy 查询日志', panels=[('t', 'term', '实验输出'), ('b', 'bars', '耗时'), ('kv', 'kv', '要点')])

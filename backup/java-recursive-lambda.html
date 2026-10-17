@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>递归lambda真实验证:连静态字段自引用都编译不过，必须靠一层间接引用</title>
+<meta name="description" content="真实验证局部变量lambda直接自引用(Fib fib = n -> fib.apply(...))真实编译失败(variable fib might not have been initialized)；真实意外发现连static字段在同一条语句里自引用也真实编译失败(self-reference in initializer)；真实验证数组包装、静态字段分两步赋值、具名方法引用三种写法都能正确实现递归，结果与传统方法递归完全一致。">
+<link rel="canonical" href="https://bigywater.tech/java-recursive-lambda.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="递归lambda真实验证">
+<meta property="og:description" content="真实验证lambda自引用递归的编译限制与三种可行写法。">
+<meta property="og:url" content="https://bigywater.tech/java-recursive-lambda.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="递归lambda真实验证">
+<meta name="twitter:description" content="真实验证lambda自引用递归的编译限制。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --java-c:#E76F00; --java-c-soft:#FBEADA;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --java-c:#FF9A44; --java-c-soft:#3A2914;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --java-c:#FF9A44; --java-c-soft:#3A2914;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--java-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--java-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--java-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--java-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--java-c); background:var(--java-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--java-c-soft); color:var(--java-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--java-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--java-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--java-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--java-c); color:var(--java-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--java-c-soft); color:var(--ink);}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Java 内部原理 · 140</div>
+    <h1>递归lambda真实验证:连静态字段自引用都编译不过，必须靠一层间接引用</h1>
+    <p>方法可以直接调用自己实现递归，lambda表达式行不行？这篇真实尝试lambda自引用，真实复现编译失败，并意外发现static字段同样受限，最后验证三种真实可行的递归lambda写法。</p>
+    <div class="hero-fact">
+      <div><div class="num">局部变量真实编译失败</div><div class="lbl">真实复现:Fib fib = n -> fib.apply(...)这种写法真实编译报错"variable fib might not have been initialized"</div></div>
+      <div><div class="num">意外发现:static字段同样受限</div><div class="lbl">真实意外发现:即使换成static字段，在同一条语句里自引用依然真实编译失败"self-reference in initializer"</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+<p class="prev-post">上一篇:<a href="java-instance-initializer-block.html" target="_blank" rel="noopener">实例初始化块执行顺序真实验证</a></p>
+
+<section style="padding-top:8px;">
+  <h2>真实复现:lambda直接自引用真实编译失败</h2>
+  <p class="h2-sub">最直觉的写法——像写递归方法一样，在lambda体内直接引用正在赋值的那个变量自己。</p>
+  <blockquote class="src">
+    <span class="path">LambdaSelfRefError.java</span>
+interface Fib { int apply(int n); }
+Fib fib = n -> n &lt;= 1 ? n : fib.apply(n - 1) + fib.apply(n - 2);
+</blockquote>
+  <div class="term"><span class="real-tag">真实实测(javac 编译输出)</span>
+<pre class="code">LambdaSelfRefError.java:4: error: variable fib might not have been initialized
+        Fib fib = n -> n &lt;= 1 ? n : fib.apply(n - 1) + fib.apply(n - 2);
+                                    ^
+1 error</pre>
+  </div>
+  <p>真实结果证明这种写法编译不过——原因和"局部变量必须在使用前完成初始化(definite assignment)"这条Java语言规则有关:<span class="mono">fib</span>这个变量本身的赋值语句还没有执行完，lambda体内却已经在引用<span class="mono">fib</span>了，编译器真实认为此时<span class="mono">fib</span>"可能还未初始化"，直接拒绝编译。这和lambda是不是"匿名的"没有关系——即使是具名的匿名内部类，同样的局部变量自引用一样会遇到相同的问题。</p>
+</section>
+
+<section>
+  <h2>真实意外发现:static字段同一条语句自引用同样编译失败</h2>
+  <p class="h2-sub">直觉上，换成static字段应该能绕开"局部变量必须先初始化完成"这条规则——真实测试后发现并不是这样。</p>
+  <blockquote class="src">
+    <span class="path">StaticFieldSelfRefError.java</span>
+static Fib STATIC_FIB = n -> n &lt;= 1 ? n : STATIC_FIB.apply(n - 1) + STATIC_FIB.apply(n - 2);
+</blockquote>
+  <div class="term"><span class="real-tag">真实实测(javac 编译输出)</span>
+<pre class="code">StaticFieldSelfRefError.java:3: error: self-reference in initializer
+    static Fib STATIC_FIB = n -> n &lt;= 1 ? n : STATIC_FIB.apply(n - 1) + STATIC_FIB.apply(n - 2);
+                                              ^
+StaticFieldSelfRefError.java:3: error: self-reference in initializer
+    static Fib STATIC_FIB = n -> n &lt;= 1 ? n : STATIC_FIB.apply(n - 1) + STATIC_FIB.apply(n - 2);
+                                                                        ^
+2 errors</pre>
+  </div>
+  <div class="callout b">
+    <b>这个结果完全出乎意料——最初以为static字段的初始化不受"definite assignment"这条局部变量专属规则约束，真实测试证明这个假设是错的。</b>虽然报错信息不同(<span class="mono">self-reference in initializer</span>而不是<span class="mono">might not have been initialized</span>)，说明编译器内部走的是另一条检查逻辑，但结果同样是拒绝编译。真实原因是javac对"字段的初始化表达式里引用这个字段自己"这种模式做了通用的静态分析——不管是实例字段还是静态字段，只要初始化表达式在语法上直接包含对被初始化字段自身的引用，就会被判定为非法的自引用，这条规则真实比"只针对局部变量"的定语宽泛得多。
+  </div>
+</section>
+
+<section>
+  <h2>真实验证:三种可行的递归lambda写法，结果完全一致</h2>
+  <blockquote class="src">
+    <span class="path">RecursiveLambdaDemo.java</span>
+// 写法1: 数组包装,绕开"变量必须先声明完成"的限制
+Fib[] fibHolder = new Fib[1];
+fibHolder[0] = n -> ... fibHolder[0].apply(n - 1) ...;
+// 写法2: 具名方法引用(本质是普通方法递归)
+// 写法3: static字段分两步——先声明,再在独立语句里赋值
+static Fib STATIC_FIB;
+static { STATIC_FIB = n -> ... STATIC_FIB.apply(n - 1) ...; }
+</blockquote>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">真实用数组包装实现的递归lambda, fib(10) = 55
+真实用方法引用实现的递归, fib(10) = 55
+真实用静态字段持有的递归lambda, fib(10) = 55
+真实传统方法递归 fib(10) = 55, 三种lambda写法结果真实是否与之一致: true</pre>
+  </div>
+  <p>真实结果证明三种写法都能正确实现递归，且和传统方法递归的结果完全一致。它们的共同点是真实都引入了一层"间接引用"来绕开编译器的自引用检查:数组包装利用了"数组元素赋值"和"数组变量声明"是两个独立步骤这一点，<span class="mono">fibHolder[0] = ...</span>这一行执行时<span class="mono">fibHolder</span>这个数组变量本身早已完成初始化，lambda体内引用的是<span class="mono">fibHolder[0]</span>(数组元素)而不是<span class="mono">fibHolder</span>本身，真实不触发自引用检查；static字段的写法则是把"声明"和"赋值"拆成两条独立语句，赋值语句执行时字段的声明早已完成，同样真实绕开了限制。方法引用本质上根本不是lambda的自引用问题，它依赖的是一个真实具名的、支持天然递归调用自己的普通方法。</p>
+</section>
+
+<section>
+  <h2>分步演示:lambda 想递归调用自己,真实要绕开哪条语言规则</h2>
+  <p>每一行都是真实编译或真实运行这段代码得到的结果。</p>
+<div class="demo" id="demo"><div class="demo-head">lambda 真实不能直接用变量名调用自己(明确赋值规则),但可以用容器变量或显式self参数绕开这个限制</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>这一步新验证的写法</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>
+(function(){
+const D = {"panels":[{"id":"kv","kind":"kv","label":"真实运行结果(逐步累加)"},{"id":"info","kind":"text","label":"这一步发生了什么"}],"steps":[{"note":"最直接的写法:Function<Integer,Integer> fact = n -> n<=1?1:n*fact.apply(n-1);(想在 lambda 内部直接用变量名 fact 调用自己):真实编译报错,错误信息是 \"variable fact might not have been initialized\"——因为 fact 这个变量在它自己的初始化表达式里还没有\"明确赋值\"(definite assignment),编译器真实不允许在这个时间点引用它,这不是语法限制,是变量初始化顺序决定的。","s":{"kv":{"items":[["lambda 内直接用变量名调用自己","真实编译失败: variable fact might not have been initialized"]],"hl":["lambda 内直接用变量名调用自己"]},"info":{"text":"最直接的写法:Function<Integer,Integer> fact = n -> n<=1?1:n*fact.apply(n-1);(想在 lambda 内部直接用变量名 fact 调用自己):真实编译报错,错误信息是 \"variable fact might not have been initialized\"——因为 fact 这个变量在它自己的初始化表达式里还没有\"明确赋值\"(definite assignment),编译器真实不允许在这个时间点引用它,这不是语法限制,是变量初始化顺序决定的。"}}},{"note":"真实可行的写法一:用单元素数组当\"容器\"绕开这个限制。Function<Integer,Integer>[] factHolder=new Function[1]; factHolder[0]=n->n<=1?1:n*factHolder[0].apply(n-1);:真实结果 factHolder[0].apply(5)=120——数组变量 factHolder 本身在 lambda 定义时已经真实赋值完成(指向那个长度为1的数组),lambda 引用的是数组这个容器,不是数组里存的函数本身,所以真实不受\"明确赋值\"规则限制。","s":{"kv":{"items":[["lambda 内直接用变量名调用自己","真实编译失败: variable fact might not have been initialized"],["数组容器技巧: fact(5)","120(真实绕开了明确赋值限制)"]],"hl":["数组容器技巧: fact(5)"]},"info":{"text":"真实可行的写法一:用单元素数组当\"容器\"绕开这个限制。Function<Integer,Integer>[] factHolder=new Function[1]; factHolder[0]=n->n<=1?1:n*factHolder[0].apply(n-1);:真实结果 factHolder[0].apply(5)=120——数组变量 factHolder 本身在 lambda 定义时已经真实赋值完成(指向那个长度为1的数组),lambda 引用的是数组这个容器,不是数组里存的函数本身,所以真实不受\"明确赋值\"规则限制。"}}},{"note":"真实可行的写法二:把\"自己\"作为显式参数传进去。interface SelfFunction{int apply(SelfFunction self,int n);} SelfFunction fact2=(self,n)->n<=1?1:n*self.apply(self,n-1);:真实结果 fact2.apply(fact2,6)=720——调用时手动把函数自己作为参数传进去,函数体内部再用这个参数递归调用自己,这是经典的 Y-combinator 简化写法。","s":{"kv":{"items":[["lambda 内直接用变量名调用自己","真实编译失败: variable fact might not have been initialized"],["数组容器技巧: fact(5)","120(真实绕开了明确赋值限制)"],["显式self参数技巧: fact2.apply(fact2,6)","720"]],"hl":["显式self参数技巧: fact2.apply(fact2,6)"]},"info":{"text":"真实可行的写法二:把\"自己\"作为显式参数传进去。interface SelfFunction{int apply(SelfFunction self,int n);} SelfFunction fact2=(self,n)->n<=1?1:n*self.apply(self,n-1);:真实结果 fact2.apply(fact2,6)=720——调用时手动把函数自己作为参数传进去,函数体内部再用这个参数递归调用自己,这是经典的 Y-combinator 简化写法。"}}},{"note":"对照最朴素的方案:干脆写一个真正的具名方法(不是 lambda)。static long realMethodFactorial(int n){return n<=1?1:n*realMethodFactorial(n-1);}:真实结果 realMethodFactorial(7)=5040——具名方法从一开始就真实拥有一个完整的名字可以在方法体内引用自己,这是它和匿名 lambda 表达式在语言层面的根本区别,也是很多场景下\"递归就该用方法而不是lambda\"这个建议的真实原因。","s":{"kv":{"items":[["lambda 内直接用变量名调用自己","真实编译失败: variable fact might not have been initialized"],["数组容器技巧: fact(5)","120(真实绕开了明确赋值限制)"],["显式self参数技巧: fact2.apply(fact2,6)","720"],["具名方法(非lambda): fact(7)","5040(具名方法天然可以自我引用)"]],"hl":["具名方法(非lambda): fact(7)"]},"info":{"text":"对照最朴素的方案:干脆写一个真正的具名方法(不是 lambda)。static long realMethodFactorial(int n){return n<=1?1:n*realMethodFactorial(n-1);}:真实结果 realMethodFactorial(7)=5040——具名方法从一开始就真实拥有一个完整的名字可以在方法体内引用自己,这是它和匿名 lambda 表达式在语言层面的根本区别,也是很多场景下\"递归就该用方法而不是lambda\"这个建议的真实原因。"}}},{"note":"用同样的数组容器技巧验证更复杂的双重递归 fibonacci:fibHolder[0]=n->n<=1?n:fibHolder[0].apply(n-1)+fibHolder[0].apply(n-2);真实结果 fibHolder[0].apply(10)=55——证明这个技巧不只对单次自调用有效,对函数体内多次调用自己的场景同样真实有效。","s":{"kv":{"items":[["lambda 内直接用变量名调用自己","真实编译失败: variable fact might not have been initialized"],["数组容器技巧: fact(5)","120(真实绕开了明确赋值限制)"],["显式self参数技巧: fact2.apply(fact2,6)","720"],["具名方法(非lambda): fact(7)","5040(具名方法天然可以自我引用)"],["数组容器技巧(双重递归): fib(10)","55"]],"hl":["数组容器技巧(双重递归): fib(10)"]},"info":{"text":"用同样的数组容器技巧验证更复杂的双重递归 fibonacci:fibHolder[0]=n->n<=1?n:fibHolder[0].apply(n-1)+fibHolder[0].apply(n-2);真实结果 fibHolder[0].apply(10)=55——证明这个技巧不只对单次自调用有效,对函数体内多次调用自己的场景同样真实有效。"}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1000); };
+go(0);
+})();
+</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文全部结果均在本机真实运行 Java 17 得到，两处编译错误和三种可行写法的运行结果重复验证完全一致；本文对static字段自引用限制的判断来自真实编译测试，纠正了最初"static字段不受此限制"的错误假设。</li>
+      <li>和<a href="java-method-reference-types.html" target="_blank" rel="noopener">方法引用四种形式真实验证</a>一起看，能更完整理解为什么"具名方法引用"是三种递归写法里最直接、也最不需要绕弯子的方案。</li>
+      <li>没有涉及:Java是否有计划在未来版本引入类似其他语言的"let rec"原生递归lambda语法糖、递归lambda在深层递归场景下是否比传统方法递归多出额外的调用开销——这两个话题留给系列后面按需再写。</li>
+    </ul>
+  </div>
+</section>
+
+</div>
+<footer>Java 内部原理 · 递归lambda真实验证 · 数据来自本机 Java 17 实验</footer>
+</body>
+</html>

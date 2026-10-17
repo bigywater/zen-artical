@@ -1,0 +1,16 @@
+from lib import *
+S = SS('f121')
+R = J('f121'); m = R['modes']
+steps = [
+    step("实验设置:页面 A 在 http://127.0.0.1:P2(session cookie 所属的站点),登录接口给它设置 cookie;A 再嵌入一个来自 http://localhost:P1 的 iframe(localhost 与 127.0.0.1 是不同的站点,所以是跨站),iframe 里的 JS 用 fetch(credentials: 'include') 请求 127.0.0.1:P2/read(服务端开了允许凭证的 CORS),看 cookie 有没有被带上。每种配置都在真实的无头 Chrome 里跑。", t=tl(S(1)), done=lidx(S(1), '页面 A'), kv=KV([['站点 A', '127.0.0.1:P2(cookie 所属)'], ['站点 B', 'localhost:P1(跨站)']], ['站点 B'])),
+    step("HttpOnly:HttpOnly=True 时 A 页面的 JS 读 document.cookie 是空(js_cookie_visible = False),但同源的 fetch('/read') 仍然带上了 cookie(first_party_read = True);HttpOnly=False 时 document.cookie 里能看到 session=<值>(True)。HttpOnly 挡的是脚本读取(XSS 偷 cookie),不影响浏览器自己发送 cookie。", t=tl(S(1)), done=lidx(S(1), 'HttpOnly=True, SameSite 未设置', 'js_cookie_visible'), mark=lidx(S(1), 'HttpOnly=False'), kv=KV([['HttpOnly=True', 'JS 读不到,请求照样带'], ['HttpOnly=False', 'JS 能读到']], ['HttpOnly=True'])),
+    step("SameSite(Secure 都没开,SameSite 之外的变量相同):没设置 SameSite 时,跨站 iframe 里的请求没有带上 cookie(cookie sent: false)——Chrome 把没写 SameSite 的 cookie 当作 Lax;显式 Lax 与 Strict 同样没有带上(false);同站的请求(first_party_read)都是 True。", t=tl(S(1)), done=lidx(S(1), 'SameSite=Lax', 'SameSite=Strict', '未设置'), kv=KV([['未设置', 'Chrome 默认按 Lax,跨站不带'], ['Lax / Strict', '跨站子请求不带']], ['未设置'])),
+    step("SameSite=None 而没开 Secure:登录请求 200,但 cookie 根本没被浏览器接受——同站的 first_party_read 也是 False,跨站同样 false。Chrome 要求 SameSite=None 必须同时有 Secure(这里的 127.0.0.1 是回环地址,Chrome 视为安全上下文,所以下一种配置不需要真的 HTTPS)。", t=tl(S(1)), mark=lidx(S(1), 'None(无 Secure)', 'first_party_read     False'), kv=KV([['SameSite=None 无 Secure', 'cookie 被浏览器拒绝']], ['SameSite=None 无 Secure'])),
+    step("SameSite=None 加 Secure:cookie 被接受(first_party_read = True),跨站 iframe 里的 fetch 也带上了 cookie(cookie sent: true)——要让跨站嵌入或跨站调用带上 session,必须是 SameSite=None 加 Secure,并且服务端 CORS 要允许凭证。对比 SameSite=Lax 加 Secure:跨站仍然 false。结论:SameSite 决定「跨站时发不发」,Lax 与 Strict 都拦住了这里的跨站子请求;None 才放行,它也意味着没有这层对 CSRF 的防护(见第 122 篇)。", t=tl(S(1)), done=lidx(S(1), 'None + Secure'), mark=lidx(S(1), 'Lax + Secure'), kv=KV([['None + Secure', '跨站带 cookie'], ['Lax / Strict', '跨站子请求不带'], ['代价', 'None 没有 SameSite 的保护']], ['None + Secure'])),
+]
+A = mkartf('f121', 121, 'Flask,Cookie,HttpOnly,Secure,SameSite,Chrome,真实验证,动画演示',
+    '用真实的无头 Chrome 验证 HttpOnly、Secure、SameSite:HttpOnly 让 JS 读不到 document.cookie 但不影响请求、没写 SameSite 时 Chrome 按 Lax 处理、Lax 与 Strict 都挡住跨站子请求、SameSite=None 没有 Secure 时 cookie 被浏览器拒绝、None 加 Secure 才能跨站带 cookie。',
+    '这三个 cookie 属性到底拦了什么?没写 SameSite 会怎样?跨站场景下什么配置才能带上 cookie?这篇不靠文档,用 localhost 与 127.0.0.1 这两个不同的站点在真实的 Chrome 里逐种配置跑一遍。',
+    [('document.cookie', 'HttpOnly=True 时 JS 读到的是空'), ('Lax', '没有写 SameSite 的 cookie,Chrome 的默认处理'), ('None + Secure', '本次实验里唯一让跨站请求带上 cookie 的配置')],
+    [('在真实的 Chrome 里逐种配置', '<p>上一篇:<a href="flask-session-cookie-security.html">Session Cookie 安全属性</a>;下一篇:<a href="flask-csrf-protection.html">CSRF 防护</a>。</p><p>浏览器是本机的 Google Chrome 无头模式,两个站点分别是 127.0.0.1 与 localhost 上不同端口的 gunicorn 服务。第一次运行时跨站 iframe 偶尔没有返回结果,我给每种配置加了最多 4 次重试,并把无结果的运行丢弃。</p>')],
+    steps, [ENV_F + '。本机 Google Chrome(无头模式)', '没有验证:真实 HTTPS 站点上的 Secure 行为(这里的 127.0.0.1 被 Chrome 当作安全上下文)、Firefox 与 Safari 的差异、SameSite=Lax 在顶级导航(点链接)里的放行、同站不同子域的 cookie 共享、第三方 cookie 弃用策略的影响'], 'HttpOnly Secure SameSite')

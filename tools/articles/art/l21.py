@@ -1,0 +1,22 @@
+from lib import *
+S = SS('l21')
+steps = [
+    step("造不可达对象:提交一个 commit(“会被丢掉的提交”)再 git reset --hard HEAD~1,并用 git reflog expire --expire=now --all 清空 reflog。git fsck --unreachable --no-reflogs 列出 3 个不可达对象(一个 commit、一个 tree、一个 blob);git prune -n(不带过期时间,dry run)也列出同样三个。这个提交此刻还在对象库里(exists: True)——不可达不等于已删除。", t=tl(S(1)), mark=lidx(S(1), 'unreachable commit', 'unreachable tree', 'unreachable blob'), done=lidx(S(1), 'git reset', '<sha> commit', '此刻是否存在'), kv=KV([['不可达', '没有引用(分支、标签、reflog、暂存区)能走到它'], ['还在磁盘上', '直到有人 prune'], ['dry run', 'git prune -n 只列出,不删']], ['不可达'])),
+    step("宽限期:再造两个不可达的 blob,A 的文件时间改成 13 天前、B 改成 15 天前。git prune --expire=2.weeks.ago -n -v 只列出一个 blob(B);不带过期时间的 git prune -n 列出 5 个(c2 的 commit、tree、blob 加 A、B)。执行默认的 git gc 之后:A 还在(13 天 < 2 周),B 没了(15 天 > 2 周),c2 也还在(它刚刚才变得不可达,文件很新)。", t=tl(S(2)), mark=lidx(S(2), 'B(15 天前)', 'B 存在 False'), done=lidx(S(2), 'A(13 天前)', '--expire=2.weeks.ago', '         5'), b=bars([['A:13 天前', 13, '保留'], ['B:15 天前', 15, '被 gc 删除']], 15, mark=[1], done=[0]), kv=KV([['gc.pruneExpire', '默认 2.weeks.ago'], ['判据', '松散对象文件的修改时间'], ['结果', '13 天的留着,15 天的删掉']], ['gc.pruneExpire'])),
+    step("宽限期为什么存在:别的 git 进程可能刚写入一个对象、还没来得及在引用或暂存区里挂上它。git prune --expire=now 会立刻删掉刚写入、没有任何引用的 blob(存在: False),但暂存区里的 blob 是可达的,不会被删(存在: True)。有了 2 周的宽限期,并发进行的操作写入的新对象不会被误删。", t=tl(S(3)), mark=lidx(S(3), '刚写入的 blob 存在 False', '暂存区的 blob 存在 True'), done=lidx(S(3), 'git prune --expire=now'), kv=KV([['没有引用的新对象', '--expire=now 会立刻删掉'], ['暂存区里的对象', '算作可达,不会删'], ['宽限期的作用', '给并发操作留出挂引用的时间']], ['宽限期的作用'])),
+    step("reflog 也算引用:reset --hard 之后 reflog 里 HEAD@{1} 仍指着“丢掉”的提交,git gc --prune=now 之后这个提交仍存在(True)。要先 git reflog expire --expire=now --expire-unreachable=now --all 清掉 reflog,再 gc --prune=now,它才真正消失(False)。(这一节的提交用真实时间:固定的旧时间会让 reflog 条目一开始就已过期,看不出保护效果。)", t=tl(S(4)), mark=lidx(S(4), 'reflog 还引用着它', '清空 reflog 再 gc'), done=lidx(S(4), 'HEAD@{1}: commit', 'git gc -q --prune=now'), kv=KV([['reflog', '默认保留可达条目 90 天、不可达 30 天'], ['reset --hard 之后', '旧提交仍被 reflog 引用'], ['真正删除', '先清 reflog,再 prune']], ['reflog'])),
+    step("不可达对象已经在 pack 里:先 git repack -ad 打成 pack,再 reset 并清 reflog,git gc 之后 pack 目录里多出一组带 .mtimes 的文件(cruft pack),不可达的提交仍然存在(True);.mtimes 记录了每个对象何时变成不可达,用来判断是否过期。gc --prune=now 之后 cruft pack 消失,只剩一个正常的 pack,提交不存在了(False)。", t=tl(S(5)), mark=lidx(S(5), 'mtimes', 'cruft pack 的 .mtimes 文件: 有'), done=lidx(S(5), '不可达的提交存在 True', '不可达的提交存在 False'), kv=KV([['pack 里的不可达对象', 'gc 把它们放进 cruft pack'], ['.mtimes', '记录它们变得不可达的时间'], ['--prune=now', '连 cruft pack 一起清掉']], ['.mtimes'])),
+]
+A = mkarti('l21', 21, 'Git,prune,gc,不可达对象,宽限期,reflog,cruft,真实验证,动画演示',
+    '用修改文件时间的办法验证 git gc 的 2 周宽限期:13 天前的不可达 blob 保留、15 天前的被删;git prune --expire=now 立刻删掉没有引用的新对象但不碰暂存区里的对象;reflog 仍引用着 reset 丢掉的提交,清掉 reflog 再 prune 才真正消失;pack 里的不可达对象由 cruft pack 的 .mtimes 计时。',
+    '丢掉的 commit 什么时候真的从磁盘上消失?这篇造出不可达对象,用改文件时间的办法验证 2 周宽限期,再看暂存区、reflog 和 cruft pack 对它们各自的保护,以及 --prune=now 能删到什么程度。',
+    [('13 / 15 天', '13 天前的不可达 blob 被 gc 保留,15 天前的被删除(宽限期 2 周)'), ('reflog', 'reset --hard 之后 gc --prune=now 也删不掉旧提交,因为 reflog 还引用着它'), ('.mtimes', 'pack 里的不可达对象靠 cruft pack 的 .mtimes 计算过期时间')],
+    [('不可达不等于已删', '<p>commit 被 reset 掉、reflog 也清空之后,对象仍留在 <code>.git/objects</code> 里,<code>git fsck --unreachable</code> 能列出它们,<code>git prune -n</code> 能预览会删什么。只有 prune 才真正删除。</p>'),
+     ('2 周宽限期', '<p><code>git gc</code> 调用 prune 时带 <code>gc.pruneExpire</code>(默认 2 周),只删修改时间早于它的不可达松散对象。把文件时间改成 13 天前和 15 天前,gc 之后只有后者消失。</p>'),
+     ('为什么要宽限', '<p>别的进程可能刚写入一个对象、还没挂上引用。<code>prune --expire=now</code> 会立刻删掉这种对象,但暂存区里的对象算可达,不会被删。宽限期给并发操作留出时间。</p>'),
+     ('reflog 的保护', '<p>reflog 也是引用:<code>reset --hard</code> 之后旧提交仍被 reflog 引用,<code>gc --prune=now</code> 也不会删它。想彻底丢掉要先 <code>reflog expire --expire=now --expire-unreachable=now --all</code>。实验里的提交要用真实时间,否则 reflog 条目一开始就已经过期。</p>'),
+     ('pack 里的不可达对象', '<p>已经进了 pack 的不可达对象,<code>git gc</code> 会把它们放进 cruft pack,<code>.mtimes</code> 文件记录每个对象变成不可达的时间,过期后才删除;<code>--prune=now</code> 则立即清掉。</p>')],
+    steps,
+    [ENV_I_GIT + '。“13 天前 / 15 天前”是用 os.utime 把松散对象文件的修改时间改旧得到的,没有真的等待;第四节的提交使用真实时间(其余实验的提交时间固定为 2026-01-01,在当前日期下 reflog 条目早已过期,会让 reflog 看起来不起保护作用——这是我在调试时发现的);gc 的子命令序列来自 GIT_TRACE',
+     '没有验证:gc.pruneExpire 设为其它值、gc.cruftExpire 与 --cruft-expiration;松散对象之外(比如 worktree、rerere)的过期;prune 对多个 worktree 里的暂存区与 HEAD 的保护;并发场景下宽限期真的救了一个对象(只验证了 --expire=now 会删除没有引用的新对象);reflog 默认的 90 天 / 30 天过期(只验证了清除之后的结果)'],
+    'prune 与宽限期')

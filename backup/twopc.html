@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>redo log 和 binlog 是怎么保持一致的</title>
+<meta name="description" content="两阶段提交协议如何防止主从数据不一致。">
+<link rel="canonical" href="https://bigywater.tech/twopc.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="redo log 和 binlog 是怎么保持一致的">
+<meta property="og:description" content="两阶段提交协议如何防止主从数据不一致。">
+<meta property="og:url" content="https://bigywater.tech/twopc.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="redo log 和 binlog 是怎么保持一致的">
+<meta name="twitter:description" content="两阶段提交协议如何防止主从数据不一致。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#EFF1F3; --paper:#FFFFFF; --ink:#1B1F24; --ink-dim:#5B6470; --line:#D8DCE1;
+  --node-c:#1F6FA8; --node-c-soft:#E4EFF6;
+  --key-c:#8B5A2B; --key-c-soft:#F3E9DD;
+  --io-c:#A13D3D; --io-c-soft:#F7E7E5;
+  --code-bg:#1B1F24; --code-ink:#E7EAED;
+  --shadow: 0 1px 2px rgba(20,25,30,.06), 0 8px 24px -12px rgba(20,25,30,.15);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#12151A; --paper:#1A1E24; --ink:#E7EAED; --ink-dim:#9AA4B0; --line:#2B3138;
+    --node-c:#5FA8DE; --node-c-soft:#1D2C38;
+    --key-c:#D6A15C; --key-c-soft:#332619;
+    --io-c:#E27A7A; --io-c-soft:#3A2323;
+    --code-bg:#0E1013; --code-ink:#DCE1E6;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#12151A; --paper:#1A1E24; --ink:#E7EAED; --ink-dim:#9AA4B0; --line:#2B3138;
+  --node-c:#5FA8DE; --node-c-soft:#1D2C38;
+  --key-c:#D6A15C; --key-c-soft:#332619;
+  --io-c:#E27A7A; --io-c-soft:#3A2323;
+  --code-bg:#0E1013; --code-ink:#DCE1E6;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--node-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--io-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--io-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--io-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.node .tag{background:var(--node-c-soft); color:var(--node-c);}
+.card.key .tag{background:var(--key-c-soft); color:var(--key-c);}
+.card.io .tag{background:var(--io-c-soft); color:var(--io-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#8B95A1; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#8FC7EA;}
+
+.callout{border-left:3px solid var(--node-c); background:var(--node-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.io{border-color:var(--io-c); background:var(--io-c-soft);}
+.callout.key{border-color:var(--key-c); background:var(--key-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--node-c-soft); color:var(--node-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#8FC7EA;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88A8A;}
+.term .cm{color:#8B95A1;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.88rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.78rem; padding:8px 10px; border-bottom:1px solid var(--line);}
+td{padding:9px 10px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+.commit{color:var(--node-c); font-weight:600;}
+.rollback{color:var(--io-c); font-weight:600;}
+
+.timeline{display:flex; flex-direction:column; gap:2px; margin:16px 0;}
+.tl-row{display:flex; align-items:center; gap:12px; padding:10px 14px; border-radius:8px; border:1px solid var(--line); background:var(--paper); font-size:.88rem;}
+.tl-row .who{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; padding:2px 8px; border-radius:5px; flex:0 0 auto; background:var(--node-c-soft); color:var(--node-c);}
+.tl-row.crash{background:var(--io-c-soft); border-color:var(--io-c); font-weight:600;}
+.tl-row.crash .who{background:var(--io-c); color:#fff;}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;}
+.demo-title{font-weight:600; font-size:.95rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--key-c-soft); color:var(--key-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:22px 20px;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--node-c); color:var(--node-c);}
+.btn.primary{background:var(--io-c); border-color:var(--io-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.matrix{display:grid; grid-template-columns:repeat(2,1fr); gap:10px; margin-top:16px;}
+.mcell{border:1.5px solid var(--line); border-radius:10px; padding:14px 16px; background:var(--bg); font-size:.86rem;}
+.mcell.active{border-color:var(--io-c); background:var(--io-c-soft);}
+.mcell .h{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.75rem; color:var(--ink-dim); margin-bottom:6px;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{display:flex; align-items:center; gap:10px; margin-bottom:24px; font-size:.88rem; color:var(--ink-dim); flex-wrap:wrap;}
+.prev-post a{font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>MySQL / InnoDB 存储引擎系列 · 第九篇</div>
+    <h1>一次提交,其实要写两份完全独立的日志——它们怎么保证不会打架?</h1>
+    <p>第四篇讲过 redo log:只要日志落盘,进程崩了也不丢数据。但 MySQL 还有另一份日志——<b>binlog</b>,用来做主从复制和数据恢复,由 SQL 层维护,和 InnoDB 的 redo log 是完全独立的两套系统、两份文件。一次提交要把两份日志都写对,如果中途崩溃,两份日志<b>不一致</b>会怎样?这篇讲 InnoDB 和 binlog 之间的两阶段提交(2PC)——就是解决这个问题的机制。</p>
+    <p>第四篇的错误日志里其实已经出现过这套机制的名字——"XA crash recovery"——当时没展开,这篇把它讲清楚。</p>
+    <div class="hero-fact">
+      <div><div class="num">Xid = 61</div><div class="lbl">本机 binlog 里,一次提交对应的 XID 事件</div></div>
+      <div><div class="num">commit ⟺ 在 binlog 里</div><div class="lbl">2PC 恢复要保证的核心不变式</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <div class="prev-post">← 接上篇 <a href="changebuf.html" target="_blank" rel="noopener">Change Buffer 是怎么把随机写攒成批量写的</a></div>
+  <h2>问题出在哪</h2>
+  <p class="h2-sub">redo log 由 InnoDB 存储引擎层维护,binlog 由 MySQL Server 层维护——两个不同的子系统,各自决定"什么时候把自己的日志写盘"。</p>
+  <div class="cards">
+    <div class="card node">
+      <span class="tag">先写 binlog,后 InnoDB 提交?</span>
+      <h3>崩在中间——binlog 有,InnoDB 没提交</h3>
+      <p>从库靠 binlog 复制,已经拿到了这笔修改并执行了;但主库自己重启后如果把这个事务回滚掉,主库和从库的数据就不一样了。</p>
+    </div>
+    <div class="card key">
+      <span class="tag">先 InnoDB 提交,后写 binlog?</span>
+      <h3>崩在中间——InnoDB 有,binlog 没有</h3>
+      <p>主库这边数据已经改了,但这笔修改永远不会同步到从库——同样是主从不一致,而且这次连"重放一遍"都补救不了,因为原始请求早就返回成功了。</p>
+    </div>
+    <div class="card io">
+      <span class="tag">两阶段提交</span>
+      <h3>拆成 prepare + commit 两步</h3>
+      <p>InnoDB 先进入"prepare"状态(相当于说"我准备好了,但还没最终生效"),再写 binlog,最后才真正提交 InnoDB。崩溃恢复时,靠"binlog 里有没有这笔"来决定 prepare 状态的事务该提交还是回滚。</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>的 binlog 里长什么样</h2>
+  <p class="h2-sub">提交一个事务,用 <span class="mono">mysqlbinlog</span> 把对应的 binlog 内容原样倒出来看。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cmd">START TRANSACTION;
+INSERT INTO t VALUES (1, 100);
+COMMIT;</span>
+
+<span class="cm">$ mysqlbinlog -v /path/to/binlog.000010</span>
+BEGIN
+<span class="cm"># Table_map: `xademo`.`t` mapped to number 90</span>
+<span class="cm"># Write_rows: table id 90</span>
+### INSERT INTO `xademo`.`t`
+###   SET @1=1  @2=100
+<span class="ok">
+#260828  7:03:06 ... Xid = 61</span>
+COMMIT
+  </div>
+  <p>这条 <span class="mono">Xid = 61</span> 就是 binlog 一侧的提交标记——它和 InnoDB 那边这次事务的 XA 事务 ID 是配对的。<b>崩溃恢复时到底该不该提交某个"看起来还没完成"的事务,就是靠这个 XID 在 binlog 里存不存在来判断的。</b></p>
+</section>
+
+<section>
+  <h2>源码里的两阶段提交</h2>
+  <blockquote class="src">
+    <span class="path">sql/binlog.cc · <a href="https://github.com/mysql/mysql-server/blob/mysql-9.7.1/sql/binlog.cc#L6936" target="_blank" rel="noopener">mysql-server @ mysql-9.7.1, L6936</a></span>
+/* If the binary log was not properly closed it means that the server
+   may have crashed. In that case, we need to call
+   binlog::Binlog_recovery::recover()
+   to:
+     a) collect logged XIDs;
+     b) complete the 2PC of the pending XIDs;
+     c) collect the last valid position. */
+  </blockquote>
+  <p>收集到的 XID 集合,直接被交给存储引擎去核对:</p>
+  <blockquote class="src">
+    <span class="path">sql/binlog/recovery.cc · <a href="https://github.com/mysql/mysql-server/blob/mysql-9.7.1/sql/binlog/recovery.cc#L53" target="_blank" rel="noopener">mysql-server @ mysql-9.7.1, L53</a></span>
+binlog::Binlog_recovery &binlog::Binlog_recovery::recover() {
+  ...
+  this->m_no_engine_recovery = ha_recover(&this->m_internal_xids, &xa_list);
+  ...
+}
+  </blockquote>
+  <p>InnoDB 这一侧,对应注册的正是我们在第四篇错误日志里见过的那套"XA crash recovery"逻辑——两个存在的钩子函数:</p>
+  <blockquote class="src">
+    <span class="path">storage/innobase/handler/ha_innodb.cc</span>
+/** This function is used to prepare an X/Open XA distributed transaction. */
+static int innobase_xa_prepare(handlerton *hton, THD *thd, bool all);
+
+/** This function is used to recover X/Open XA distributed transactions.
+@return number of prepared transactions stored in xid_list */
+static int innobase_xa_recover(handlerton *hton, XA_recover_txn *txn_list,
+                               uint len, MEM_ROOT *mem_root);
+
+innobase_hton->recover = innobase_xa_recover;
+  </blockquote>
+</section>
+
+<section>
+  <h2>崩溃恢复的判定规则</h2>
+  <p class="h2-sub">拿到 InnoDB 里"处于 prepare 状态但还没提交"的事务列表,和 binlog 里收集到的 XID 集合一比对,规则只有两条。</p>
+  <div class="matrix">
+    <div class="mcell"><div class="h">InnoDB: prepared · binlog: 有这个 XID</div>提交(roll forward)——binlog 已经写完,可能已经有从库拿到了这份数据,主库必须跟上。</div>
+    <div class="mcell"><div class="h">InnoDB: prepared · binlog: 没有这个 XID</div>回滚——崩溃发生在 binlog 落盘之前,没有任何从库见过这笔修改,主库也不能留着它。</div>
+  </div>
+  <p style="margin-top:16px;">这套判定要保证的不变式很直白:<b>崩溃恢复之后,一个事务在主库上是"已提交"状态,当且仅当它在 binlog 里——不多不少</b>。这样任何从 binlog 复制数据的从库,看到的世界最终都会和主库完全一致。</p>
+</section>
+
+<section>
+  <h2>演示:四种崩溃时机,四种恢复结果</h2>
+  <div class="demo" id="tpcDemo">
+    <div class="demo-head"><div class="demo-title">崩溃恢复扫描:逐个事务判定</div></div>
+    <div class="demo-narration" id="tpcNarration"></div>
+    <div class="demo-body">
+      <div class="timeline" id="tpcTimeline"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="tpcReset">⏮ 重来</button>
+      <button class="btn" id="tpcPrev">‹ 上一步</button>
+      <button class="btn primary" id="tpcNext">下一步 ›</button>
+      <span class="step-counter" id="tpcCounter"></span>
+    </div>
+  </div>
+  <div class="callout key">
+    这四个场景覆盖了源码逻辑里全部有意义的组合(另外两种——"committed 但 binlog 没有"、"none 但 binlog 有"——在系统里根本不可能出现,已经用独立的暴力穷举核对过所有组合,结论一致)。
+  </div>
+</section>
+
+<section>
+  <h2>一个诚实的限制</h2>
+  <p class="h2-sub">这篇没有像第四篇、第六篇那样做一次的 <span class="mono">kill -9</span> 崩溃实验。</p>
+  <p>不是不想做——是这次崩溃窗口太窄。redo log 那次实验能靠命令行控制时序(先 COMMIT 返回、再杀进程,或者让事务停在 SLEEP 里不提交),窗口是以秒计的,黑盒操作完全够用。但 InnoDB "prepare 完成"到"binlog 写完"这中间,通常只有微秒级的间隙,普通发行版的 <span class="mono">mysqld</span> 二进制没有暴露任何办法能精确让进程停在这两步之间——MySQL 自己的测试套件靠的是内部编译的 DBUG 同步点(<span class="mono">DBUG_EXECUTE_IF</span>),普通用户拿不到。所以这篇的验证方式换成了:源码 +  binlog 结构 + 逻辑仿真验证,外加第四篇里已经观察到的 "XA crash recovery" 日志作为佐证——但没有一次精确命中这个窗口的崩溃实验。这个限制如实写在这里,不假装做到了。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>binlog Xid 事件的转储来自本机 MySQL 9.7.1,通过 <span class="mono">mysqlbinlog -v</span> 对提交的事务生成,未做删改。</li>
+      <li>源码引用(<span class="mono">sql/binlog.cc</span>、<span class="mono">sql/binlog/recovery.cc</span>、<span class="mono">storage/innobase/handler/ha_innodb.cc</span>)取自 <span class="mono">mysql/mysql-server</span> 仓库 <span class="mono">mysql-9.7.1</span> 标签(commit <span class="mono">a26ea1a2</span>),与本机安装的 MySQL 9.7.1 完全一致。</li>
+      <li>演示动画的四个场景和判定规则,是对源码逻辑(prepare 状态 + XID 是否在 binlog 中)的直接建模,附带对"commit 当且仅当在 binlog 中"这条不变式的完整真值表核对,但不是逐行照抄 <span class="mono">innobase_xa_recover</span> 的具体实现细节(那里还涉及 XA 事务的更多中间状态,比如显式 XA START/PREPARE SQL 语法发起的分布式事务,本文只覆盖普通自动提交/显式事务场景)。</li>
+      <li>没有涉及:显式 XA 事务(<span class="mono">XA START/PREPARE/COMMIT</span> SQL 语法)与这里的内部 2PC 是同一套机制的两种触发方式、组提交(group commit)如何在保证 2PC 正确性的前提下把多个事务的 fsync 合并成一次、半同步复制对这套流程的影响。</li>
+    </ul>
+  </div>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>InnoDB B+树系列 · 第九篇 · 两阶段提交 · 数据来自本机 MySQL 9.7.1 真实实测</footer>
+
+<script>
+const DATA = {"events": [{"txn": "T1", "innodbState": "prepared", "inBinlog": true, "type": "scan"}, {"txn": "T1", "decision": "commit", "reason": "redo log 里是 prepared,但 binlog 里已经有这个 XID -- 说明 binlog 已经写完了,为了和可能已经拿到这份 binlog 的从库保持一致,必须提交(roll forward)", "type": "decide"}, {"txn": "T2", "innodbState": "prepared", "inBinlog": false, "type": "scan"}, {"txn": "T2", "decision": "rollback", "reason": "redo log 里是 prepared,但 binlog 里找不到这个 XID -- 说明崩溃发生在写 binlog 之前,从库不可能见过这个事务,必须回滚,不能让主库比从库多出一笔", "type": "decide"}, {"txn": "T3", "innodbState": "committed", "inBinlog": true, "type": "scan"}, {"txn": "T3", "decision": "commit", "reason": "已经完整走完两阶段,直接确认", "type": "decide"}, {"txn": "T4", "innodbState": "none", "inBinlog": false, "type": "scan"}, {"txn": "T4", "decision": "none", "reason": "从未进入 prepare 阶段,InnoDB 里没有它的痕迹,不用做任何事", "type": "decide"}], "results": {"T1": "commit", "T2": "rollback", "T3": "commit", "T4": "none"}};
+
+(function(){
+  const events = DATA.events;
+  const timeline = document.getElementById('tpcTimeline');
+  const narration = document.getElementById('tpcNarration');
+  const counter = document.getElementById('tpcCounter');
+  let idx = 0;
+
+  const stateLabel = {none:'从未 prepare', prepared:'prepared(未提交)', committed:'已完整提交'};
+
+  function describe(e){
+    if (e.type==='scan'){
+      return `检查事务 <span class="k">${e.txn}</span>:redo log 里的状态是「${stateLabel[e.innodbState]}」,binlog 里${e.inBinlog?'能找到':'找不到'}它的 XID。`;
+    }
+    if (e.type==='decide'){
+      const cls = e.decision==='commit' ? 'commit' : (e.decision==='rollback' ? 'rollback' : '');
+      return `判定:<span class="${cls}">${e.decision==='commit'?'提交':e.decision==='rollback'?'回滚':'无需处理'}</span> —— ${e.reason}`;
+    }
+    return e.type;
+  }
+
+  function render(){
+    idx = Math.max(0, Math.min(events.length-1, idx));
+    const e = events[idx];
+    narration.innerHTML = describe(e);
+
+    const decided = {};
+    for (let i=0;i<=idx;i++){
+      if (events[i].type==='decide') decided[events[i].txn] = events[i];
+    }
+    let html = '';
+    const seen = new Set();
+    for (let i=0;i<=idx;i++){
+      const ev = events[i];
+      if (ev.type!=='scan' || seen.has(ev.txn)) continue;
+      seen.add(ev.txn);
+      const d = decided[ev.txn];
+      const cls = (ev.txn===e.txn) ? 'crash' : '';
+      const label = d ? (d.decision==='commit'?'<span class="commit">✓ 提交</span>':d.decision==='rollback'?'<span class="rollback">✕ 回滚</span>':'（无需处理）') : '...判定中';
+      html += `<div class="tl-row ${cls}"><span class="who">${ev.txn}</span><span>redo=${stateLabel[ev.innodbState]}, binlog${ev.inBinlog?'有':'无'}XID → ${label}</span></div>`;
+    }
+    timeline.innerHTML = html;
+
+    counter.textContent = `${idx+1} / ${events.length}`;
+    document.getElementById('tpcPrev').disabled = idx===0;
+    document.getElementById('tpcNext').disabled = idx===events.length-1;
+  }
+  document.getElementById('tpcPrev').onclick=()=>{idx--;render();};
+  document.getElementById('tpcNext').onclick=()=>{idx++;render();};
+  document.getElementById('tpcReset').onclick=()=>{idx=0;render();};
+  render();
+})();
+</script>
+
+</body>
+</html>

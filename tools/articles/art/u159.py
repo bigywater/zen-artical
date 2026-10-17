@@ -1,0 +1,22 @@
+from lib import *
+import re
+S = SS('u159')
+R = J('u159'); V = R['vals']; asm = R['asm']
+runs = R['runs']
+mixes = [float(re.search(r'([\d,.]+) ns/iter', r['mix_with_blackbox']).group(1).replace(',', '')) for r in runs]; sorts = [float(re.search(r'([\d,.]+) ns/iter', r['sort_1000']).group(1).replace(',', '')) for r in runs]
+st = {l.split()[0] + ' ' + l.split()[1] if False else l[:22].strip(): l for l in R['stable']}
+sx = [float(re.search(r'([\d.]+) ns/iter', l).group(1)) for l in R['stable']]
+steps = [
+    step("#[bench](标准库自带的基准框架,需要 nightly 的 #![feature(test)],这里用 RUSTC_BOOTSTRAP=1 打开)配合 cargo bench:输出 test 名 ... bench: N ns/iter (+/- 波动)。cargo bench 用 bench profile(release 一样的优化)。4 类基准:mix 与 sum_squares 各有「结果没人用」和「用 black_box」两种写法,再加 sort_1000 与 clone_only_1000。", t=tl(S(1)), done=lidx(S(1), 'ns/iter'), kv=KV([['输出', 'ns/iter (+/- 波动)'], ['profile', 'bench = release 级优化']], ['输出'])),
+    step(f"最大的陷阱是死代码消除:mix(1000)(循环里做 1000 次 xorshift)在 b.iter(|| {{ bm::mix(1000); }}) 里结果没人用,测得 {V['mix_no_blackbox']} ns/iter —— 优化器把整个计算删掉了;把输入输出都包上 black_box,测得 {V['mix_with_blackbox']:,.0f} ns/iter,是前者的约 {V['mix_with_blackbox'] / V['mix_no_blackbox']:,.0f} 倍。没有 black_box 的基准量的是「空」。", t=tl(S(2)), done=lidx(S(2), 'mix(1000)'), b=bars([['mix 无 black_box', V['mix_no_blackbox'], f"{V['mix_no_blackbox']} ns"], ['mix 有 black_box', V['mix_with_blackbox'], f"{V['mix_with_blackbox']:,.0f} ns"]], V['mix_with_blackbox'], cur=[0], done=[1]), kv=KV([['没有 black_box', f"{V['mix_no_blackbox']} ns/iter(假的)"], ['black_box', f"{V['mix_with_blackbox']:,.0f} ns/iter"]], ['没有 black_box'])),
+    step(f"black_box 也不是万能的:sum_to(1000)(平方和 Σ b²)即使加了 black_box 也只有 {V['sum_squares_with_blackbox']} ns/iter,远低于做 1000 次乘加所需的时间。看汇编:sum_to 只有 {asm['sum_to'][0]} 条指令,没有循环,是 umulh / mul 加上乘以 0x5555…5556(除以 3 的乘法逆元)算出来的闭式公式,只有一条 cbz 向前跳过 n = 0。优化器识别出了这个求和的公式 —— 你测的是一个 O(1) 的表达式,不是你以为的循环。", t=tl(S(2)), mark=lidx(S(2), 'sum_to(1000)'), kv=KV([['sum_to', f"{asm['sum_to'][0]} 条指令,无循环(闭式公式)"], ['mix', f"{asm['mix'][0]} 条指令,有循环"]], ['sum_to'])),
+    step(f"同一个基准重复运行 5 次,mix_with_blackbox 是 {'、'.join(f'{m:,.0f}' for m in mixes)} ns/iter,sort_1000 是 {'、'.join(f'{x:,.0f}' for x in sorts)} ns/iter:在这台机器上波动约 {(max(sorts) - min(sorts)) / min(sorts) * 100:.1f}%,框架给的 (+/- N) 是单次运行内的离散程度。结论要看多次运行和范围,而不是单个数字。", t=tl(S(3)), done=lidx(S(3), 'mix_with_blackbox', 'sort_1000'), kv=KV([['mix_with_blackbox', f'{min(mixes):,.0f}–{max(mixes):,.0f} ns'], ['sort_1000', f'{min(sorts):,.0f}–{max(sorts):,.0f} ns']], ['sort_1000'])),
+    step(f"基准里的准备工作也计入时间:sort_1000 每次迭代都 clone 一个 1000 元素的 Vec 再排序,测得 {R['sort'][0]:,.0f} ns/iter;单独量 clone_only_1000 是 {R['sort'][1]:.0f} ns/iter,所以排序本身约 {R['sort'][0] - R['sort'][1]:,.0f} ns,clone 只占约 {R['sort'][1] / R['sort'][0] * 100:.0f}%。clone 的成本可以忽略,但要知道它在里面。", t=tl(S(4)), done=lidx(S(4), 'sort_1000'), kv=KV([['sort_1000(含 clone)', f"{R['sort'][0]:,.0f} ns"], ['clone_only_1000', f"{R['sort'][1]:.0f} ns"]], ['clone_only_1000'])),
+    step(f"不用 nightly 也能自己写:稳定版里用 std::hint::black_box 与 Instant,先自适应地翻倍迭代次数到 50 ms 以上,再取 5 轮最小值。同样的 mix(1000) 测得 {sx[1]:.1f} ns/iter(与 #[bench] 的 {V['mix_with_blackbox']:,.0f} 基本一致),空闭包(测量开销)是 {sx[2]} ns/iter,sum_to 同样是 {sx[0]} ns(又被折叠了)。自己写要小心上面说的所有陷阱。", t=tl(S(5)), done=lidx(S(5), 'mix(1000) 稳定版', '空闭包'), kv=KV([['稳定版 mix(1000)', f'{sx[1]:.1f} ns'], ['#[bench] mix(1000)', f"{V['mix_with_blackbox']:,.0f} ns"], ['空闭包开销', f'{sx[2]} ns']], ['稳定版 mix(1000)'])),
+]
+A = mkart('u159', 159, 'Rust,Benchmark,基准测试,black_box,真实验证,动画演示',
+    f'用 cargo bench 与自写基准验证基准测试的陷阱:没有 black_box 时 mix(1000) 测得 {V["mix_no_blackbox"]} ns(计算被删掉),有 black_box {V["mix_with_blackbox"]:,.0f} ns;sum_to 即使有 black_box 也被优化成闭式公式({asm["sum_to"][0]} 条指令、无循环);5 次运行波动;准备工作计入耗时;稳定版自写基准与 #[bench] 一致。',
+    '写基准测试比想象中难:优化器会删掉没人用的计算,甚至把整个循环换成公式。这篇用真实的 cargo bench 把这些陷阱一个个量出来,并看汇编验证优化器到底做了什么。',
+    [(f'{V["mix_no_blackbox"]} 对 {V["mix_with_blackbox"]:,.0f} ns', '同一个 mix(1000):没有 black_box 与有 black_box 的基准结果'), (f'{asm["sum_to"][0]} 条指令', 'sum_to 的汇编:平方和被优化成闭式公式,没有循环'), ('5 次', '同一基准重复运行次数,用来看波动')],
+    [('#[bench] 的输出', '<p>#[bench] 需要 nightly 特性(这里用 RUSTC_BOOTSTRAP=1);更完善的统计方案见<a href="rust-criterion.html">Criterion 性能测试</a>。</p>'), ('死代码消除与闭式公式', '<p>迭代器链的汇编比较见<a href="rust-iterator-chain-performance.html">Iterator 链的性能</a>。</p>'), ('波动', None), ('准备工作也计入耗时', None), ('稳定版自己写', '<p>本系列里的微基准都按这个方式写,每一轮的结果都经过 black_box(如果漏掉,取多轮最小值时会选中被优化器删掉计算的那一轮,得到接近 0 的耗时)。</p>')],
+    steps, [ENV_U + '。#[bench] 通过 RUSTC_BOOTSTRAP=1 使用', '没有验证:统计显著性(多次运行的置信区间)、CPU 频率与散热对结果的影响、多线程基准、iai 之类按指令数计数的基准、不同优化级别下闭式公式是否仍成立'], 'Benchmark')

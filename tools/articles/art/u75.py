@@ -1,0 +1,19 @@
+from lib import *
+S = SS('u75')
+R = J('u75')
+steps = [
+    step("unwrap 的 panic 消息:Option::unwrap() 遇 None 是「called `Option::unwrap()` on a `None` value」;Result::unwrap() 遇 Err 会带上错误的 Debug 文本:called `Result::unwrap()` on an `Err` value: \"磁盘满\"。进程退出码都是 101。", t=tl(S(1)), done=lidx(S(1), 'Option::unwrap on None', 'Result::unwrap on Err', '退出码 101'), kv=KV([['退出码', '101'], ['unwrap(Err(e))', '消息里带 e 的 Debug']], ['unwrap(Err(e))'])),
+    step("expect 让消息自己说话:None.expect(\"配置里必须有端口\") 的消息就是这句话;Result::expect(\"解析端口\") 变成「解析端口: ParseIntError { kind: InvalidDigit }」(你的话 + 冒号 + 错误)。", t=tl(S(1)), done=lidx(S(1), 'expect 带自定义消息', 'Result::expect'), kv=KV([['Option::expect(m)', 'm'], ['Result::expect(m)', 'm: 错误的 Debug']], ['Result::expect(m)'])),
+    step("其它 panic 来源也都是 101:数组越界 \"index out of bounds: the len is 3 but the index is 5\"、除以零 \"attempt to divide by zero\"、RefCell 重复可变借用 \"RefCell already borrowed\"、panic!(\"状态非法: n = {}\") 带格式、unreachable! 的 \"internal error: entered unreachable code: n = 1\"。", t=tl(S(1)), done=lidx(S(1), '数组越界', '除以零', 'RefCell', '显式 panic!', 'unreachable!'), kv=KV([['数组越界', 'index out of bounds'], ['除以零', 'attempt to divide by zero'], ['RefCell', 'already borrowed']], ['数组越界'])),
+    step("整数溢出在 debug 与 release 里行为不同:u8 的 250 + 6 在 debug 构建里 panic(退出码 101,\"attempt to add with overflow\"),在 release 构建里默默回绕,打印 x = 0 且退出码 0。", t=tl(S(2)), mark=lidx(S(2), 'debug  :'), done=lidx(S(2), 'release:'), kv=KV([['debug', 'panic:attempt to add with overflow'], ['release', '回绕成 0,不 panic']], ['release'])),
+    step("不 panic 的替代:unwrap_or(expensive(...)) 的参数是急切求值的,即使 Some(1) 也会调用 expensive;unwrap_or_else(|| expensive(...)) 只在 None 时才调用;unwrap_or_default() 用类型的默认值 0;Result 的 unwrap_or_else 闭包还能拿到错误值。", t=tl(S(3)), mark=lidx(S(3), 'expensive(unwrap_or)'), done=lidx(S(3), 'expensive(none)', 'unwrap_or_default', '拿到错误'), kv=KV([['unwrap_or(x)', 'x 总是被求值'], ['unwrap_or_else(f)', '只在需要时调用 f']], ['unwrap_or_else(f)'])),
+    step("线程里的 panic 只终止那个线程:join 返回 Err,载荷用 downcast_ref::<&str>() 取出 \"子线程出错了\";主线程继续运行并打印「主线程仍在运行」,进程退出码 0。panic 消息仍会打印到 stderr。", t=tl(S(4)), done=lidx(S(4), 'join 得到 Err', '主线程仍在运行'), kv=KV([['子线程 panic', '只终止该线程'], ['join', '返回 Err(payload)']], ['join'])),
+    step("panic hook:set_hook 替换默认的 stderr 输出,自定义 hook 打印「自定义 hook:出事了」,之后栈展开仍然 drop 了守卫(「Drop 运行了」),退出码仍是 101。", t=tl(S(5)), done=lidx(S(5), '自定义 hook', 'Drop 运行了'), kv=KV([['set_hook', '只改变如何报告'], ['展开', '仍然 drop']], ['set_hook'])),
+    step("panic = \"abort\"(cargo profile):同一个程序的 stdout 只有「即将 panic」,没有「Drop 运行了」,进程被 SIGABRT(信号 6)终止;默认 unwind 则 stdout 里有「Drop 运行了」,退出码 101。", t=tl(S(5)), mark=lidx(S(5), 'panic = "abort"'), done=lidx(S(5), '默认 unwind'), kv=KV([['unwind(默认)', 'drop 运行,退出码 101'], ['abort', '不 drop,SIGABRT']], ['abort'])),
+]
+A = mkart('u75', 75, 'Rust,panic,unwrap,expect,真实验证,动画演示',
+    '用真实运行验证 panic:unwrap/expect/数组越界/除零/RefCell 的消息与退出码 101;整数溢出 debug 里 panic 而 release 回绕;unwrap_or 的急切求值;线程 panic 只杀线程、join 返回 Err;panic hook;panic = "abort" 不运行 Drop,被 SIGABRT 终止。',
+    'panic 到底打印什么、退出码是多少、什么时候不会发生?unwrap 和 expect 的消息有什么区别?线程里 panic 会不会拖垮进程?这篇把九种常见 panic 的真实输出、overflow 的 debug/release 差异、线程与 hook 行为一起验证。',
+    [('101', '默认 panic 的进程退出码'), ('debug / release', '整数溢出的行为差异:panic 对回绕'), ('SIGABRT', 'panic = "abort" 下进程被终止的信号')],
+    [('常见 panic 的消息与退出码', None), ('整数溢出', '<p>release 回绕是默认配置;可以通过 profile 的 overflow-checks 修改,这里没有验证。</p>'), ('不 panic 的替代', None), ('线程中的 panic', '<p>展开与 catch_unwind 见<a href="rust-catch-unwind.html">catch_unwind</a>。</p>'), ('hook 与 abort', '<p>Drop 的运行规则见<a href="rust-drop-trait.html">Drop Trait 与资源释放</a>。</p>')],
+    steps, [ENV_U + '。panic = "abort" 通过 cargo profile.dev 设置', '没有验证:RUST_BACKTRACE 的回溯内容、panic 发生在 Drop 里(双重 panic 会 abort)、overflow-checks 的 profile 设置、no_std 下的 panic_handler、被 abort 终止时是否生成 core dump'], 'panic')

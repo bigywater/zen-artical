@@ -1,0 +1,45 @@
+#!/bin/bash
+# netlab:只作用于 lo0、只匹配 TCP/UDP 端口 9400-9499 的 dummynet 辅助脚本(给网络协议实验造延迟 / 丢包 / 限速)。
+#   netlab on <丢包率%> <单向延迟ms> <带宽Kbit/s,0=不限>    例:netlab on 5 20 0
+#   netlab off      恢复原样(清掉锚点规则、恢复 /etc/pf.conf、释放 pf 引用)
+#   netlab status
+set -eu
+export PATH=/sbin:/usr/sbin:/bin:/usr/bin
+TOKEN=/var/run/netlab.token
+CONF=/var/run/netlab.pf.conf
+num() { [[ "$1" =~ ^[0-9]+(\.[0-9]+)?$ ]] || { echo "netlab: 参数必须是数字: $1" >&2; exit 2; }; }
+cmd=${1:-}
+case "$cmd" in
+  on)
+    [ $# -eq 4 ] || { echo "usage: netlab on <loss%> <delay_ms> <bw_kbit>" >&2; exit 2; }
+    num "$2"; num "$3"; num "$4"
+    awk -v l="$2" -v d="$3" -v b="$4" 'BEGIN{ if (l>50 || d>1000 || b>10000000) exit 1 }' || { echo "netlab: 参数超出范围(丢包≤50%,延迟≤1000ms,带宽≤10Gbit/s)" >&2; exit 2; }
+    plr=$(awk -v l="$2" 'BEGIN{printf "%.4f", l/100}')
+    bw=""; [ "$4" != "0" ] && bw="bw ${4}Kbit/s"
+    dnctl -q flush
+    dnctl pipe 1 config $bw delay "$3" plr "$plr" queue 100
+    dnctl pipe 2 config $bw delay "$3" plr "$plr" queue 100
+    { cat /etc/pf.conf; echo 'dummynet-anchor "netlab"'; echo 'anchor "netlab"'; } > "$CONF"
+    pfctl -q -f "$CONF" 2>/dev/null
+    if [ ! -s "$TOKEN" ]; then pfctl -E 2>&1 | awk '/Token/{print $NF}' > "$TOKEN" || true; fi
+    pfctl -q -a netlab -f - <<R
+dummynet in on lo0 proto { tcp udp } from any to any port 9400:9499 pipe 1
+dummynet in on lo0 proto { tcp udp } from any port 9400:9499 to any pipe 2
+R
+    echo "netlab: on  loss=${2}% delay=${3}ms(每个方向) bw=${4}Kbit/s  仅 lo0 端口 9400-9499"
+    ;;
+  off)
+    pfctl -q -a netlab -F all 2>/dev/null || true
+    pfctl -q -f /etc/pf.conf 2>/dev/null || true
+    if [ -s "$TOKEN" ]; then pfctl -X "$(cat $TOKEN)" 2>/dev/null || true; rm -f "$TOKEN"; fi
+    dnctl -q flush
+    rm -f "$CONF"
+    echo "netlab: off"
+    ;;
+  status)
+    echo "--- dnctl pipes"; dnctl list || true
+    echo "--- anchor netlab"; pfctl -a netlab -s rules 2>/dev/null || true
+    echo "--- pf"; pfctl -s info 2>/dev/null | head -2 || true
+    ;;
+  *) echo "usage: netlab on <loss%> <delay_ms> <bw_kbit> | off | status" >&2; exit 2 ;;
+esac

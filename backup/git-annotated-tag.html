@@ -1,0 +1,496 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>注解标签与轻量标签:tag 对象里有什么</title>
+<meta name="description" content="在真实仓库里区分轻量标签与注解标签:轻量标签只是一个 ref 文件(对象数不变),注解标签多一个 tag 对象(对象数 3 → 4,ref 指向它而不是 commit);读 tag 对象原文,用 ^{} 剥开;describe 默认只看注解标签;标签可以指向 tag、tree、blob;push --follow-tags 只推注解标签;删标签后 tag 对象成为悬空对象。">
+<link rel="canonical" href="https://bigywater.tech/git-annotated-tag.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="注解标签与轻量标签:tag 对象里有什么">
+<meta property="og:description" content="在真实仓库里区分轻量标签与注解标签:轻量标签只是一个 ref 文件(对象数不变),注解标签多一个 tag 对象(对象数 3 → 4,ref 指向它而不是 commit);读 tag 对象原文,用 ^{} 剥开;describe 默认只看注解标签;标签可以指向 tag、tree、blob;push --follow-tags 只推注解标签;删标签后 tag 对象成为悬空对象。">
+<meta property="og:url" content="https://bigywater.tech/git-annotated-tag.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="注解标签与轻量标签:tag 对象里有什么">
+<meta name="twitter:description" content="在真实仓库里区分轻量标签与注解标签:轻量标签只是一个 ref 文件(对象数不变),注解标签多一个 tag 对象(对象数 3 → 4,ref 指向它而不是 commit);读 tag 对象原文,用 ^{} 剥开;describe 默认只看注解标签;标签可以指向 tag、tree、blob;push --follow-tags 只推注解标签;删标签后 tag 对象成为悬空对象。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">2294</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">97</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">56</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">9</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">114</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">111</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#8B3FA0; --series-c-soft:#F1E3F6;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#C48AD6; --series-c-soft:#2E1838;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#C48AD6; --series-c-soft:#2E1838;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Git · 9</div>
+  <h1>注解标签与轻量标签:tag 对象里有什么</h1>
+  <p>git tag v1 和 git tag -a v1 -m ... 有什么区别?这篇数对象个数、读 tag 对象原文、用 ^{} 剥开标签,再让标签指向另一个标签、tree、blob,最后看 push --follow-tags 和删除标签的后果。</p>
+  <div class="hero-fact">
+<div><div class="num">3 → 3 → 4</div><div class="lbl">打标签前、轻量标签后、注解标签后的对象总数</div></div><div><div class="num">tag 对象</div><div class="lbl">注解标签的 ref 指向一个独立的 tag 对象,而不是 commit</div></div><div><div class="num">--follow-tags</div><div class="lbl">本地推送实验里只带走了 2 个标签(annot、nested),轻量标签没有被推送</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="git-commit-parents-author.html">commit 对象:parent 个数、author 与 committer 的区别</a></div>
+<section>
+  <h2>轻量标签</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  打标签之前对象数: 3
+  $ git tag light
+  git tag light 之后对象数: 3
+  $ cat .git/refs/tags/light; git rev-parse HEAD
+  30385d36cf7f73566529aa24a6ee8c9d4c8472fe
+  30385d36cf7f73566529aa24a6ee8c9d4c8472fe
+  $ git tag -a annot -m '第一个注解标签'
+  git tag -a annot 之后对象数: 4
+  $ cat .git/refs/tags/annot; git rev-parse HEAD
+  8542d98add695e90a7b4cad8a1387dfb1c999c37
+  30385d36cf7f73566529aa24a6ee8c9d4c8472fe</pre></div>
+  <p><code>git tag name</code> 只在 <code>refs/tags/</code> 下写一个文件,内容是目标 commit 的 hash,没有任何新对象。对它做 <code>git cat-file -t</code> 得到的就是 <code>commit</code>。</p>
+</section>
+<section>
+  <h2>注解标签</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  $ git cat-file -t annot; git cat-file -p annot
+  tag
+  object 30385d36cf7f73566529aa24a6ee8c9d4c8472fe
+  type commit
+  tag annot
+  tagger Alice &lt;alice@example.com&gt; 1767261720 +0000
+  
+  第一个注解标签
+  $ git cat-file -t light
+  commit</pre></div>
+  <p><code>git tag -a</code> 先创建一个 tag 对象,内容是被标记对象的 hash 和类型、标签名、打标签人和时间、说明,再让 <code>refs/tags/name</code> 指向这个 tag 对象。所以 ref 里的 hash 不等于 commit 的 hash。</p>
+</section>
+<section>
+  <h2>剥开标签</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  $ for n in light annot annot^{} annot^{commit} annot^{tag}; do printf "%-14s" $n; git rev-parse $n 2&gt;&amp;1 | cut -c1-12; done
+  light         30385d36cf7f
+  annot         8542d98add69
+  annot^{}      30385d36cf7f
+  annot^{commit}30385d36cf7f
+  annot^{tag}   8542d98add69
+  $ git tag light2
+  新提交上打了轻量标签 light2,git describe 默认只看注解标签,--tags 才看轻量标签:
+  $ git describe
+  annot-1-g77640ce
+  $ git describe --tags
+  light2
+  $ git describe --tags --exact-match HEAD~1
+  annot</pre></div>
+  <p><code>name^{}</code> 把标签一层层剥开到最终对象,<code>name^{tag}</code> 停在 tag 对象。<code>git describe</code> 默认只用注解标签,<code>--tags</code> 才把轻量标签算进去;同一个提交上有两种标签时,优先选注解标签。</p>
+</section>
+<section>
+  <h2>标签指向什么</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  $ git tag -a nested -m '标签的标签' annot
+  hint: You have created a nested tag. The object referred to by your new tag is
+  hint: already a tag. If you meant to tag the object that it points to, use:
+  hint:
+  hint: 	git tag -f nested annot^{}
+  hint: Disable this message with "git config set advice.nestedTag false"
+  $ git cat-file -p nested | head -3
+  object 8542d98add695e90a7b4cad8a1387dfb1c999c37
+  type tag
+  tag nested
+  $ git tag -a ontree -m 'tree 标签' HEAD^{tree}
+  $ git cat-file -p ontree | head -3
+  object 02439fb50f442f187d6db9a7b47287b9e3f5d49c
+  type tree
+  tag ontree
+  $ git tag -a onblob -m 'blob 标签' HEAD:a
+  $ git cat-file -p onblob | head -3
+  object 0cfbf08886fca9a91cb753ec8734c84fcbe52c9f
+  type blob
+  tag onblob
+  $ git for-each-ref refs/tags --format='%(refname:short) → %(objecttype)'
+  annot → tag
+  light → commit
+  light2 → commit
+  nested → tag
+  onblob → tag
+  ontree → tag</pre></div>
+  <p>标签可以指向任何对象:另一个标签(git 会提示这是嵌套标签)、tree、blob。实际中几乎都是 commit,但对象模型上没有限制。</p>
+</section>
+<section>
+  <h2>推送与删除</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  $ git init -q --bare ../l5bare.git
+  $ git push -q ../l5bare.git main --follow-tags 2&gt;&amp;1; git --git-dir=../l5bare.git for-each-ref refs/tags --format="%(refname:short)"
+  annot
+  nested
+  $ git tag -d annot nested ontree onblob light
+  Deleted tag 'annot' (was 8542d98)
+  Deleted tag 'nested' (was d1a592a)
+  Deleted tag 'ontree' (was 9ce851e)
+  Deleted tag 'onblob' (was 3033fe2)
+  Deleted tag 'light' (was 30385d3)
+  $ git fsck --lost-found 2&gt;&amp;1 | head -6
+  dangling tag 3033fe207118b853401a832b4245d0d088de1c08
+  dangling tag d1a592abe9b63ec1eca41d84118c51c1affca28e
+  dangling tag 9ce851e940d0bacae2ea7c8de9dc8852a461b412</pre></div>
+  <p><code>--follow-tags</code> 只推送带注解、并且指向正在推送的历史的标签。删除标签只删 ref,tag 对象留在对象库里,<code>fsck</code> 把没人引用的那些列为 dangling,直到 <code>gc</code> 清理。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">两种标签</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "b", "kind": "bars", "label": "数字对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "对象数的变化:打标签之前 .git/objects 里 3 个对象(1 个 commit、1 个 tree、1 个 blob);git tag light 之后还是 3 个——轻量标签只在 .git/refs/tags/light 写了一个文件,内容就是 commit 的 hash 30385d3…;git tag -a annot 之后变成 4 个,refs/tags/annot 里的 hash 是 8542d98…,不等于 commit 的 30385d3…,因为它指向的是新生成的 tag 对象。", "s": {"t": {"lines": ["  打标签之前对象数: 3", "  $ git tag light", "  git tag light 之后对象数: 3", "  $ cat .git/refs/tags/light; git rev-parse HEAD", "  30385d36cf7f73566529aa24a6ee8c9d4c8472fe", "  30385d36cf7f73566529aa24a6ee8c9d4c8472fe", "  $ git tag -a annot -m '第一个注解标签'", "  git tag -a annot 之后对象数: 4", "  $ cat .git/refs/tags/annot; git rev-parse HEAD", "  8542d98add695e90a7b4cad8a1387dfb1c999c37", "  30385d36cf7f73566529aa24a6ee8c9d4c8472fe"], "cur": [], "mark": [], "done": []}, "mark": [7, 9], "done": [0, 2], "b": {"items": [["打标签之前", 3, "3 个对象"], ["轻量标签 light 之后", 3, "3 个"], ["注解标签 annot 之后", 4, "4 个"]], "max": 4, "cur": [], "mark": [2], "done": [0, 1]}, "kv": {"items": [["轻量标签", "一个 ref 文件,内容是 commit hash"], ["注解标签", "ref 指向新的 tag 对象"], ["对象数", "轻量不变,注解 +1"]], "hl": ["注解标签"]}}}, {"note": "tag 对象的原文:object(指向的对象)、type commit、tag annot(标签名)、tagger(打标签的人、时间戳、时区),一个空行,最后是说明“第一个注解标签”。git cat-file -t annot 得到 tag,而对轻量标签 light 得到 commit:轻量标签名字解出来的就是目标本身。", "s": {"t": {"lines": ["  $ git cat-file -t annot; git cat-file -p annot", "  tag", "  object 30385d36cf7f73566529aa24a6ee8c9d4c8472fe", "  type commit", "  tag annot", "  tagger Alice <alice@example.com> 1767261720 +0000", "  第一个注解标签", "  $ git cat-file -t light", "  commit"], "cur": [], "mark": [], "done": []}, "mark": [2, 3, 4, 5], "done": [0, 6, 7], "kv": {"items": [["object / type", "指向谁、是什么类型"], ["tag", "标签名"], ["tagger", "谁在什么时候打的"], ["light 的类型", "commit(没有 tag 对象)"]], "hl": ["tagger"]}}}, {"note": "同一个名字的不同写法:light 解出 30385d3(commit);annot 解出 8542d98(tag 对象);annot^{} 与 annot^{commit} 层层剥开,解出 30385d3;annot^{tag} 解出 8542d98。新提交上打了轻量标签 light2 后:git describe(默认只用注解标签)得到 annot-1-g77640ce;git describe --tags 得到 light2;HEAD~1 上有两个标签,--exact-match 选了注解标签 annot。", "s": {"t": {"lines": ["  $ for n in light annot annot^{} annot^{commit} annot^{tag}; do printf \"%-14s\" $n; git rev-parse $n 2>&1 | cut -c1-12; done", "  light         30385d36cf7f", "  annot         8542d98add69", "  annot^{}      30385d36cf7f", "  annot^{commit}30385d36cf7f", "  annot^{tag}   8542d98add69", "  $ git tag light2", "  新提交上打了轻量标签 light2,git describe 默认只看注解标签,--tags 才看轻量标签:", "  $ git describe", "  annot-1-g77640ce", "  $ git describe --tags", "  light2", "  $ git describe --tags --exact-match HEAD~1", "  annot"], "cur": [], "mark": [], "done": []}, "mark": [0, 3, 6, 7, 10, 11, 12], "done": [0, 5, 9, 12], "kv": {"items": [["annot", "解出 tag 对象"], ["annot^{}", "剥开,得到最终的 commit"], ["describe", "默认只用注解标签,--tags 才包含轻量标签"]], "hl": ["annot^{}"]}}}, {"note": "标签可以指向任何对象:给 annot 再打 nested(type tag,git 还提示这是嵌套标签);给 tree 打 ontree(type tree),给 blob 打 onblob(type blob)。git for-each-ref 的 objecttype 列显示:除了 light 和 light2(commit),其它几个都是 tag。", "s": {"t": {"lines": ["  $ git tag -a nested -m '标签的标签' annot", "  hint: You have created a nested tag. The object referred to by your new tag is", "  hint: already a tag. If you meant to tag the object that it points to, use:", "  hint:", "  hint: \tgit tag -f nested annot^{}", "  hint: Disable this message with \"git config set advice.nestedTag false\"", "  $ git cat-file -p nested | head -3", "  object 8542d98add695e90a7b4cad8a1387dfb1c999c37", "  type tag", "  tag nested", "  $ git tag -a ontree -m 'tree 标签' HEAD^{tree}", "  $ git cat-file -p ontree | head -3", "  object 02439fb50f442f187d6db9a7b47287b9e3f5d49c", "  type tree", "  tag ontree", "  $ git tag -a onblob -m 'blob 标签' HEAD:a", "  $ git cat-file -p onblob | head -3", "  object 0cfbf08886fca9a91cb753ec8734c84fcbe52c9f", "  type blob", "  tag onblob", "  $ git for-each-ref refs/tags --format='%(refname:short) → %(objecttype)'", "  annot → tag", "  light → commit", "  light2 → commit", "  nested → tag", "  onblob → tag", "  ontree → tag"], "cur": [], "mark": [], "done": []}, "mark": [1, 8, 13, 18], "done": [21, 22, 23, 24, 25, 26], "kv": {"items": [["嵌套标签", "标签指向标签,git 会提示"], ["tree / blob 标签", "可以,type 字段不同"], ["refs 的类型", "for-each-ref 的 %(objecttype) 看得出"]], "hl": ["嵌套标签"]}}}, {"note": "push --follow-tags 到本地裸仓库,只带上了 annot 和 nested(带注解、能从推送的提交到达的标签);轻量标签 light、light2 与指向 tree / blob 的标签没有被推送。把五个标签全删掉后,tag 对象还在对象库里:git fsck 报告 3 个 dangling tag(3033fe2、d1a592a、9ce851e);annot 因为被 nested 引用着,不算悬空。", "s": {"t": {"lines": ["  $ git init -q --bare ../l5bare.git", "  $ git push -q ../l5bare.git main --follow-tags 2>&1; git --git-dir=../l5bare.git for-each-ref refs/tags --format=\"%(refname:short)\"", "  annot", "  nested", "  $ git tag -d annot nested ontree onblob light", "  Deleted tag 'annot' (was 8542d98)", "  Deleted tag 'nested' (was d1a592a)", "  Deleted tag 'ontree' (was 9ce851e)", "  Deleted tag 'onblob' (was 3033fe2)", "  Deleted tag 'light' (was 30385d3)", "  $ git fsck --lost-found 2>&1 | head -6", "  dangling tag 3033fe207118b853401a832b4245d0d088de1c08", "  dangling tag d1a592abe9b63ec1eca41d84118c51c1affca28e", "  dangling tag 9ce851e940d0bacae2ea7c8de9dc8852a461b412"], "cur": [], "mark": [], "done": []}, "mark": [1, 11, 12, 13], "done": [1, 5, 6, 7, 8, 9], "kv": {"items": [["--follow-tags", "只推带注解、能到达的标签"], ["删标签", "只删 ref,tag 对象还在,直到 gc"], ["fsck", "把没人引用的 tag 对象列为 dangling"]], "hl": ["--follow-tags"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / git 2.54.0(Apple Git-157);每个实验在临时目录里新建仓库,HOME 和全局配置指向实验专用的空目录(不读用户自己的 git 配置),提交的作者与时间固定以便复现;需要网络协议的实验用本机的 file:// 或 git daemon 回环端口(9800 以上),不碰任何远程仓库;计时用 time.perf_counter,数字每次运行会有小幅抖动。推送实验的远程是本机的一个裸仓库(git init --bare),没有走网络;标签说明与时间由环境变量固定</li><li>没有验证:签名标签(git tag -s,需要 GPG 或 SSH 密钥,后面有 SSH 签名一篇);服务器端对标签更新的限制(本实验只验证了本地裸仓库);git describe 在多个候选标签之间选择的完整规则(只观察了本例);轻量标签重名覆盖时的 -f 行为</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="git-hash-cascade.html">
+    <div>
+      <div class="t1">下一篇 · GIT 10</div>
+      <div class="t2">改一个字,后面所有 commit 的 hash 为什么全变</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Git · 注解标签与轻量标签:tag 对象里有什么 · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

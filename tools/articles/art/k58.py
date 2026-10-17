@@ -1,0 +1,25 @@
+from lib import *
+S = SS('k58')
+F1 = [['--from-literal', 's3cr3t-Pa55'], ['data.password', 'czNjcjN0LVBhNTU='], ['base64 -d', '还原明文'], ['describe', '只显示 11 bytes']]
+F2 = [['Secret db', ''], ['etcd /registry/secrets/…', '"k8s\\0" + protobuf'], ['值里找明文', '直接找到'], ['ConfigMap', '同样直接找到']]
+F3 = [['只有 list 权限', ''], ['GET 单个', '403'], ['LIST 全部', '200,带完整 data'], ['auth can-i', 'get=no,list=yes']]
+F4 = [['Secret 卷', 'tmpfs,只读'], ['环境变量', '进程环境里可见'], ['Pod 对象', '只有引用,没有值']]
+PANELS = [('f', 'flow', 'Secret 的值在哪'), ('t', 'term', '实测输出'), ('kv', 'kv', '要点')]
+steps = [
+    step("kubectl create secret --from-literal=password=s3cr3t-Pa55 之后,JSON 里 data.password 是 czNjcjN0LVBhNTU=,base64 -d 立即还原成 s3cr3t-Pa55;kubectl describe 只显示 password: 11 bytes。用 stringData 写明文,服务端存成 data.token(base64),返回的对象里没有 stringData;data 里写不是 base64 的内容,创建失败:illegal base64 data at input byte 3。", f=fl(F1, cur=[1], mark=[2], done=[3]), t=tl(S(1), mark=lidx(S(1), 'czNjcjN0LVBhNTU=', 'base64 -d'), done=lidx(S(1), '11 bytes', 'illegal base64')), kv=KV([['base64', '编码,不是加密'], ['describe', '只隐藏显示,不隐藏权限'], ['stringData', '只写字段,服务端转成 data']], ['base64'])),
+    step("etcd 里 /registry/secrets/k58/db 的值共 230 字节,开头是 k8s\\x00(protobuf 存储格式的魔数);把不可见字节换成点,能读到 Secret、db、k58、kubectl-create 等字符串;s3cr3t-Pa55 直接就能找到(True),而 base64 形式 czNjcjN0LVBhNTU= 找不到(False)——etcd 里存的是原始字节,比 API 里看到的更“明文”。同样内容放进 ConfigMap,etcd 里同样能直接找到明文。", f=fl(F2, cur=[1, 2], done=[3]), t=tl(S(2), mark=lidx(S(2), '明文 s3cr3t-Pa55:True'), done=lidx(S(2), '同样内容放进 ConfigMap')), kv=KV([['默认不加密', 'Secret 在 etcd 里和 ConfigMap 一样'], ['含 etcd 备份', '谁拿到备份就拿到所有 Secret'], ['保护靠', 'RBAC + 静态加密(后面一篇)']], ['默认不加密'])),
+    step("给一个 ServiceAccount 只绑 list secrets:GET 单个 Secret 是 403;但 LIST 全部返回 200,响应里带着完整的 data,解码就是 db 的 s3cr3t-Pa55 和 sd 的 plain-text-in-yaml。kubectl auth can-i:get secrets → no,list secrets → yes。", f=fl(F3, cur=[2], mark=[1], done=[3]), t=tl(S(3), mark=lidx(S(3), 'HTTP 403', 'HTTP 200'), done=lidx(S(3), 'list secrets')), kv=KV([['list = 读全部值', 'list 权限不是“只能看名字”'], ['watch 同理', '(本文未验证)'], ['最小权限', '只给具体的 resourceNames 的 get']], ['list = 读全部值'])),
+    step("把 Secret 挂进 Pod:卷是 tmpfs(tmpfs /etc/s tmpfs ro,…,不落节点磁盘),容器里 /etc/s/password 是明文;环境变量 PW=s3cr3t-Pa55 也能在 /proc/1/environ 里看到;Pod 对象里只写了 secretKeyRef 的引用,值不在 Pod 里。", f=fl(F4, cur=[0, 1], done=[2]), t=tl(S(4), mark=lidx(S(4), 'tmpfs /etc/s', '/proc/1/environ'), done=lidx(S(4), '值不在 Pod 对象里')), kv=KV([['卷', 'tmpfs,读取靠文件权限'], ['环境变量', '会被子进程继承'], ['Pod 对象', '不含值,但 exec 进去就能读']], ['环境变量'])),
+]
+A = mkartk('k58', 58, 'Kubernetes,Secret,base64,etcd,RBAC,安全,真实验证,动画演示',
+    '在 kind 集群里实测 Secret 的“保密”到底有多少:data 里是 base64 编码,base64 -d 就能还原;stringData 只是写入时的便利字段;etcd 里默认存原始字节,明文能直接 grep 到,和 ConfigMap 没区别;只有 list 权限的 ServiceAccount 单个 GET 是 403,LIST 却返回全部明文;挂进 Pod 后卷是 tmpfs,环境变量则进入进程环境。',
+    'Secret 里的值到底有多“保密”?base64 是加密吗?etcd 里存的是什么?只有 list 权限能不能看到值?这篇在真集群里把 Secret 从 kubectl、etcd、RBAC 和 Pod 里各看一遍。',
+    [('230 字节', 'etcd 里 /registry/secrets/…/db 的值,明文直接可见'), ('403 vs 200', '只有 list 权限时 GET 单个被拒,LIST 却返回所有 Secret 的完整 data'), ('tmpfs', 'Secret 卷在容器里的文件系统类型')],
+    [('base64 只是编码', '<p><code>kubectl create secret --from-literal=password=s3cr3t-Pa55</code> 之后,API 里的 <code>data.password</code> 是 <code>czNjcjN0LVBhNTU=</code>,<code>base64 -d</code> 一步还原。<code>kubectl describe</code> 只显示 <code>password: 11 bytes</code>,那只是不显示,不是不能读。<code>stringData</code> 是写入时的便利字段:服务端把它转成 <code>data</code>(base64),读回来时没有 <code>stringData</code>;在 <code>data</code> 里写不是 base64 的内容会直接失败:<code>illegal base64 data at input byte 3</code>。</p>'),
+     ('etcd 里的样子', '<p>etcd 里 <code>/registry/secrets/k58/db</code> 的值共 230 字节,开头是 <code>k8s\\x00</code>(Kubernetes 的 protobuf 存储格式标记),把不可见字节换成点能读到 <code>Secret</code>、<code>db</code>、<code>k58</code>、<code>kubectl-create</code> 这些字符串;<code>s3cr3t-Pa55</code> 明文直接能找到,base64 形式反而找不到——etcd 存的是原始字节。同样的数据放进 ConfigMap,etcd 里的样子几乎一样,Secret 默认没有任何额外保护。所以 etcd 的备份文件、能直接访问 etcd 的人都等于拿到了所有 Secret。</p>'),
+     ('list 就等于读', '<p>给 ServiceAccount 只绑 <code>list secrets</code>:GET 单个 Secret 是 403,<code>kubectl auth can-i get secrets</code> 是 no;但 LIST 命名空间下全部 Secret 返回 200,响应里就带着每个 Secret 的完整 <code>data</code>,解码就是 <code>s3cr3t-Pa55</code> 和 <code>plain-text-in-yaml</code>。给 <code>list</code> 就等于给了读取所有值的权限,不是“只能看名字”。</p>'),
+     ('挂进 Pod', '<p>Secret 作为卷挂进容器时,挂载点是 <code>tmpfs … ro</code>,不落节点磁盘;容器里 <code>/etc/s/password</code> 是明文。作为环境变量时,<code>PW=s3cr3t-Pa55</code> 进入进程环境,在 <code>/proc/1/environ</code> 里能看到,子进程会继承。Pod 对象里只有 <code>secretKeyRef</code> 引用,值不在 Pod 里,但谁能 <code>exec</code> 进这个容器,谁就能读。</p>')],
+    steps,
+    [ENV_K + '。三节点 kind 集群 kx-main(Kubernetes v1.37.0),没有开启静态加密;etcd 的内容用控制面上 etcd 静态 Pod 里的 etcdctl 以 -w json 读出,在宿主机上解 base64 后检查字节;“只有 list 权限”的 ServiceAccount 令牌由 kubectl create token 取得,用 curl 风格的直接 API 请求;每种情形各一次',
+     '没有验证:静态加密之后 etcd 里的样子(见下一篇);watch 权限是否同样返回完整内容;kubectl get secret -o yaml 的 managedFields 是否泄露;Secret 在 kubelet 缓存和日志里的保留;imagePullSecrets 与 kubernetes.io/dockerconfigjson 类型的格式;外部 Secret 存储(CSI Secrets Store)'],
+    'Secret 与 base64', PANELS)

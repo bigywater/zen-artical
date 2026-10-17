@@ -1,0 +1,45 @@
+import sys, os, time, json, re; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from dj import *
+tee('d50'); R = {}
+files = {
+    'people/__init__.py': '', 'people/models.py': "from django.db import models\nclass Person(models.Model):\n    name = models.CharField(max_length=20)\n",
+    'orders/__init__.py': '', 'orders/models.py': "from django.db import models\nclass Order(models.Model):\n    person = models.ForeignKey('people.Person', on_delete=models.CASCADE)\n    total = models.IntegerField(default=0)\n",
+    'billing/__init__.py': '', 'billing/models.py': "from django.db import models\nclass Invoice(models.Model):\n    order = models.OneToOneField('orders.Order', on_delete=models.CASCADE)\n",
+}
+d = proj('d50', files=files, apps=['django.contrib.contenttypes', 'people', 'orders', 'billing'], with_lab=False)
+print('== 一:makemigrations 生成的文件与依赖(orders 依赖 people;billing 依赖 orders)')
+rc, out = manage(d, 'makemigrations', 'people', 'orders', 'billing'); print('  ' + out.strip().replace('\n', '\n  ')); R['make'] = out.strip()
+for app in ('people', 'orders', 'billing'):
+    txt = (d / app / 'migrations' / '0001_initial.py').read_text(); dep = re.search(r'dependencies = \[(.*?)\]', txt, re.S).group(1).strip()
+    print(f'  {app}/migrations/0001_initial.py 的 dependencies = [{" ".join(dep.split())}]'); R.setdefault('deps', {})[app] = ' '.join(dep.split())
+print()
+print('== 二:再改模型,得到 0002:依赖同一个 app 的上一个迁移')
+(d / 'people' / 'models.py').write_text("from django.db import models\nclass Person(models.Model):\n    name = models.CharField(max_length=20)\n    email = models.CharField(max_length=40, default='')\n")
+rc, out = manage(d, 'makemigrations', 'people'); print('  ' + out.strip().replace('\n', '\n  '))
+txt = (d / 'people' / 'migrations' / '0002_person_email.py').read_text(); print('  0002 的 dependencies =', ' '.join(re.search(r'dependencies = \[(.*?)\]', txt, re.S).group(1).split())); R['dep2'] = ' '.join(re.search(r'dependencies = \[(.*?)\]', txt, re.S).group(1).split())
+print()
+print('== 三:showmigrations --plan:migrate 将要执行的顺序(整个图拓扑排序的结果)')
+rc, out = manage(d, 'showmigrations', '--plan'); print('  ' + out.strip().replace('\n', '\n  ')); R['plan'] = out.strip()
+print()
+print('== 四:django_migrations 表:记录的是「已应用的迁移名」,而不是图')
+rc, out = manage(d, 'migrate', 'people', '0001'); rc, out = manage(d, 'migrate', 'orders')
+rc, out = pyscript(d, "from django.db import connection\nc = connection.cursor(); c.execute('select id, app, name from django_migrations order by id'); [print(r) for r in c.fetchall()]")
+print('  只迁移 people 到 0001,再迁移 orders 之后:'); print('  ' + out.strip().replace('\n', '\n  ')); R['table'] = out.strip()
+rc, out = manage(d, 'showmigrations'); print('  showmigrations:'); print('  ' + out.strip().replace('\n', '\n  ')); R['show'] = out.strip()
+print()
+print('== 五:图对象:节点、叶子节点、某个迁移的依赖与前向计划')
+rc, out = pyscript(d, """
+from django.db import connection
+from django.db.migrations.loader import MigrationLoader
+l = MigrationLoader(connection); g = l.graph
+print('节点数:', len(g.nodes)); print('叶子节点(每个 app 一个):', sorted(g.leaf_nodes()))
+print('billing.0001 的直接依赖:', sorted(g.node_map[('billing', '0001_initial')].parents))
+print('billing.0001 的前向计划(需要先执行的所有迁移,含自己):', g.forwards_plan(('billing', '0001_initial')))
+print('已应用的迁移:', sorted(l.applied_migrations))
+""")
+print('  ' + out.strip().replace('\n', '\n  ')); R['graph'] = out.strip()
+print()
+print('== 六:循环依赖会怎样')
+p2 = (d / 'people' / 'migrations' / '0001_initial.py'); txt = p2.read_text(); p2.write_text(txt.replace("dependencies = [\n    ]", "dependencies = [\n        ('billing', '0001_initial'),\n    ]"))
+rc, out = manage(d, 'showmigrations', '--plan'); print('  people.0001 依赖 billing.0001 之后 →', [l for l in out.strip().splitlines() if l.strip()][-1][:160]); R['circular'] = [l for l in out.strip().splitlines() if l.strip()][-1][:160]
+save('d50', R)

@@ -1,0 +1,24 @@
+from lib import *
+S = SS('h9')
+steps = [
+    step("客户端流:客户端发 3 条消息(每条 DATA 帧 9 字节),在 CloseAndRecv 之前服务端的 Recv 一直在等,没有记录 EOF;CloseAndRecv 之后服务端 Recv 收到 io.EOF(共 3 条),再 SendAndClose,客户端拿到 resp.N=3。线上是 HEADERS、三个 DATA(各 9 字节,没有标志)、最后一个长度为 0 的 DATA 帧带 END_STREAM——客户端的 CloseSend 是靠一个空的 DATA 帧加 END_STREAM 通知对方“我发完了”。服务端 Recv 的 io.EOF 对应的就是这个 END_STREAM。", t=tl(S(1)), done=lidx(S(1), 'C→S DATA     长 0'), mark=lidx(S(1), 'CloseAndRecv 后'), b=bars([['消息 DATA 帧', 3, '3'], ['空 DATA 帧(END_STREAM)', 1, '1'], ['服务端收到的消息数', 3, '3']], 4, done=[1, 2]), kv=KV([['CloseSend 在线上', '长度 0 的 DATA 帧,带 END_STREAM'], ['服务端 Recv', '收到 io.EOF = 客户端发完了'], ['结果', 'SendAndClose 回 resp.N=3']], ['CloseSend 在线上'])),
+    step("双向流的半关闭:客户端 Send 一条之后 CloseSend,服务端 Recv 得到 io.EOF,但服务端可以继续发——服务端在收到 EOF 之后又发了 3 条(late-0、late-1、late-2),客户端按顺序都收到了,等服务端 handler 返回之后,客户端的 Recv 才返回 io.EOF。两个方向各自独立关闭:CloseSend 只关闭客户端到服务端的方向。", t=tl(S(2)), done=lidx(S(2), '客户端依次收到'), b=bars([['CloseSend 之后服务端又发的消息', 3, '3'], ['客户端收到的消息', 3, '3']], 4, done=[0, 1]), kv=KV([['客户端 CloseSend', '只关闭客户端→服务端方向'], ['服务端', 'Recv 得到 EOF 后仍可 Send'], ['客户端 Recv 的 EOF', '要等服务端 handler 返回']], ['客户端 CloseSend'])),
+    step("服务端提前结束时客户端继续 Send:服务端读了 1 条就 return nil,客户端之后 3 次 Send 都返回 io.EOF,再 Recv 也是 io.EOF(状态 OK);服务端读了 1 条就 return PermissionDenied,客户端之后 3 次 Send 同样都返回 io.EOF(并不是 PermissionDenied),要靠 Recv 才得到 code=PermissionDenied message=“不让你继续”。所以 Send 返回 io.EOF 只表示“流已经结束”,不是错误本身——收到 EOF 后必须再调 Recv 取真正的状态。", t=tl(S(3)), done=lidx(S(3), 'early-err'), mark=lidx(S(3), 'early-ok'), b=bars([['early-ok:Send 返回 EOF 的次数', 3, '3'], ['early-err:Send 返回 EOF 的次数', 3, '3'], ['early-err:Recv 才得到 PermissionDenied', 1, '1']], 4, mark=[0], done=[1, 2]), kv=KV([['Send 返回', 'io.EOF(不管服务端是 nil 还是错误)'], ['真正的状态', '要 Recv 才得到'], ['early-err', 'Recv 得到 PermissionDenied']], ['Send 返回'])),
+    step("经典死锁:服务端收一条回一条(同一个 goroutine),客户端只 Send 不 Recv,每条 256 KiB:1 秒后客户端只 Send 成功了 5 条(共 1280 KiB),之后卡住;服务端的 handler 阻塞在 Send 上(因为客户端不读,它的发送窗口满了)。两边都在等对方先读:deadline 到了才一起退出,服务端得到 Send 错误 Canceled。对照:客户端用另一个 goroutine 同时 Recv,同样 100 条(25 MiB)用 261.9 ms 全部发完。双向流里收发要放在不同的 goroutine。", t=tl(S(4)), done=lidx(S(4), '对照:客户端用另一个 goroutine'), mark=lidx(S(4), '1 秒后客户端只 Send 成功了'), b=bars([['不读:Send 成功的消息', 5, '5'], ['并发读:Send 成功的消息', 100, '100']], 105, mark=[0], done=[1]), kv=KV([['只 Send 不 Recv', '5 条(1280 KiB)后死锁'], ['并发 Recv', '100 条(25 MiB)用 261.9 ms'], ['原因', '两端的发送窗口都满了,都在等对方读']], ['原因'])),
+    step("忘记 CloseSend:客户端 Send 一条、Recv 一条之后不 CloseSend,500 ms 后服务端的 handler 仍然没返回(Recv 在等下一条或 EOF);deadline 800 ms 到了之后客户端 Recv 返回 DeadlineExceeded,服务端 Recv 返回 Canceled。服务端靠 Recv 返回 io.EOF 知道客户端发完;客户端不 CloseSend,服务端就一直等到流被取消。", t=tl(S(5)), done=lidx(S(5), 'deadline 到了之后'), mark=lidx(S(5), '500 ms 后服务端'), b=bars([['500 ms 时服务端 handler 已返回?', 0, '否'], ['deadline 后客户端 code', 4, 'DeadlineExceeded']], 5, mark=[0], done=[1]), kv=KV([['不 CloseSend', '服务端 Recv 一直等'], ['结束方式', '只有 deadline 或取消'], ['服务端看到', 'Canceled']], ['不 CloseSend'])),
+    step("各种结束方式下客户端 Recv 最终得到什么:服务端 return nil → io.EOF(状态 OK);服务端 return 错误 → 那个错误(PermissionDenied);客户端 CloseSend(服务端 echo 到 EOF 返回 nil)→ io.EOF;客户端 cancel → Canceled,服务端的 Recv 得到 Canceled。io.EOF 只在状态为 OK 时出现;任何非 OK 的状态,Recv 返回的是带 code 的错误。所以判断成败别靠 “err == io.EOF”,要看它是 io.EOF 还是 status 错误。", t=tl(S(6)), done=lidx(S(6), '客户端 cancel'), mark=lidx(S(6), '服务端 return nil'), b=bars([['服务端 return nil → EOF', 1, 'io.EOF'], ['服务端 return 错误', 7, 'PermissionDenied(7)'], ['客户端 cancel', 1, 'Canceled(1)']], 8, mark=[0], done=[1, 2]), kv=KV([['服务端 return nil', 'Recv → io.EOF'], ['服务端 return 错误', 'Recv → 该错误'], ['客户端 cancel', 'Recv → Canceled']], ['服务端 return nil'])),
+]
+A = mkarth('h9', 9, 'gRPC,客户端流,双向流,CloseSend,io.EOF,死锁,Go,真实验证,动画演示',
+    '客户端流和双向流的结束语义:CloseSend 在线上是长度 0 的 DATA 帧加 END_STREAM;半关闭后服务端还能继续发;服务端提前结束时客户端 Send 一律返回 io.EOF,状态要靠 Recv 取;只 Send 不 Recv 会在 5 条(1280 KiB)后死锁;忘了 CloseSend 服务端一直等。',
+    '客户端流和双向流里,什么时候 Recv 返回 io.EOF?CloseSend 在线上是什么?服务端先结束了客户端还能 Send 吗?两边都在发时会不会死锁?这篇逐个验证。',
+    [('长度 0 的 DATA', 'CloseSend 在线上:带 END_STREAM 的空 DATA 帧'), ('5 条', '双向流里客户端只 Send 不 Recv,每条 256 KiB 时 Send 成功的条数(之后死锁)'), ('io.EOF', '服务端提前结束时,客户端后续每次 Send 的返回值(无论服务端返回 nil 还是错误)')],
+    [('CloseSend', '<p>CloseSend 就是一个长度为 0 的 DATA 帧加 END_STREAM,表示客户端到服务端这个方向结束。服务端 Recv 得到 io.EOF 就是它。</p>'),
+     ('半关闭', '<p>客户端 CloseSend 之后服务端还可以继续 Send,客户端 Recv 到服务端 handler 返回才得到 io.EOF。两个方向独立关闭。</p>'),
+     ('Send 返回 io.EOF', '<p>服务端提前结束后,客户端 Send 返回 io.EOF,无论服务端返回的是 nil 还是错误。真正的状态要调 Recv 才能拿到。</p>'),
+     ('死锁', '<p>双向流里服务端同一个 goroutine 里收一条回一条,客户端只管 Send 不 Recv,两边的窗口都会满,双方互相等待。收发要放在不同的 goroutine 里。</p>'),
+     ('不 CloseSend', '<p>客户端不 CloseSend,服务端的 Recv 永远等不到 EOF,只能等到 deadline 或取消。</p>'),
+     ('结束方式一览', '<p>io.EOF 只出现在状态为 OK 的时候;非 OK 的状态,Recv 返回带 code 的错误;取消得到 Canceled。</p>')],
+    steps,
+    [ENV_H + '。线上帧来自抓包代理;死锁实验用 2 秒 deadline 终止;所有结果是确定的,耗时为单次测量',
+     '没有验证:服务端流与客户端流同时存在时的更多状态组合;grpc-go 其它版本对 Send 返回 io.EOF 的行为;非 grpc-go 实现的半关闭语义;死锁时窗口的具体占用(只数了 Send 成功的条数)'],
+    '客户端流与双向流')

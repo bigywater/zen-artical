@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>默认 exchange 与队列名路由</title>
+<meta name="description" content="在 RabbitMQ 4.3.6 上看默认 exchange:空串名字、每个队列自动绑上 key=队列名的绑定;写错队列名消息被丢弃,mandatory + confirm 才有 UnroutableError;它不能被删、绑、重新声明(403);队列名上限 255 字节;20000 条消息走默认 exchange(中位数 545 ms)与显式 direct(536 ms)没有可测的差别。">
+<link rel="canonical" href="https://bigywater.tech/rabbitmq-default-exchange.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="默认 exchange 与队列名路由">
+<meta property="og:description" content="在 RabbitMQ 4.3.6 上看默认 exchange:空串名字、每个队列自动绑上 key=队列名的绑定;写错队列名消息被丢弃,mandatory + confirm 才有 UnroutableError;它不能被删、绑、重新声明(403);队列名上限 255 字节;20000 条消息走默认 exchange(中位数 545 ms)与显式 direct(536 ms)没有可测的差别。">
+<meta property="og:url" content="https://bigywater.tech/rabbitmq-default-exchange.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="默认 exchange 与队列名路由">
+<meta name="twitter:description" content="在 RabbitMQ 4.3.6 上看默认 exchange:空串名字、每个队列自动绑上 key=队列名的绑定;写错队列名消息被丢弃,mandatory + confirm 才有 UnroutableError;它不能被删、绑、重新声明(403);队列名上限 255 字节;20000 条消息走默认 exchange(中位数 545 ms)与显式 direct(536 ms)没有可测的差别。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">2629</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">70</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">97</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">56</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">78</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">114</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">111</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">88</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#D9531E; --series-c-soft:#FBE3D8;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#F58A5B; --series-c-soft:#3A1A0F;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#F58A5B; --series-c-soft:#3A1A0F;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>RabbitMQ · 3</div>
+  <h1>默认 exchange 与队列名路由</h1>
+  <p>教程里“直接往队列发消息”其实是发给一个名字为空的 exchange。它是什么、有哪些限制、写错队列名会怎样、会比显式 exchange 更快吗?这篇一项项在 RabbitMQ 4.3.6 上验证。</p>
+  <div class="hero-fact">
+<div><div class="num">403</div><div class="lbl">对默认 exchange 做删除、绑定、解绑、重新声明,全部是 ACCESS_REFUSED</div></div><div><div class="num">255 字节</div><div class="lbl">队列名与 routing key 的长度上限(AMQP 短字符串)</div></div><div><div class="num">545 vs 536 ms</div><div class="lbl">20000 条消息走默认 exchange 与显式 direct exchange 的耗时中位数,差别小于波动</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="rabbitmq-exchange-types.html">四种 exchange:direct、fanout、topic、headers 的路由实测</a></div>
+<section>
+  <h2>它是什么</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  $ rabbitmqctl list_queues name messages
+    Timeout: 60.0 seconds ...
+    Listing queues for vhost / ...
+    name	messages
+    hello	1
+  basic_get → ['hi']
+  $ rabbitmqctl list_bindings source_name destination_name routing_key
+    Listing bindings for vhost /...
+    source_name	destination_name	routing_key
+    	hello	hello
+  list_bindings 里的第一列为空串,就是默认 exchange;这个绑定不是我建的,队列一声明就有</pre></div>
+  <p>默认 exchange 的名字是空串,direct 类型。每个队列声明时 broker 自动给它加一个以队列名为 key 的绑定,所以 <code>basic_publish(exchange='', routing_key=队列名)</code> 就等于“直接发到这个队列”。这个绑定在 <code>list_bindings</code> 里能看到,删除队列时跟着消失。</p>
+</section>
+<section>
+  <h2>发给不存在的队列</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  不加 mandatory:发布没有任何错误,消息也没有去哪(没有这个队列)
+  mandatory=True + confirm: UnroutableError: 1 unroutable message(s) returned
+  对存在的队列 mandatory=True: 成功</pre></div>
+  <p>routing key 对不上任何队列时,消息被悄悄丢弃,发布方没有错误。要得到反馈需要 <code>mandatory</code> 加 publisher confirm(得到 UnroutableError)。</p>
+</section>
+<section>
+  <h2>被保护</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  exchange_delete(""):         ChannelClosedByBroker: (403, 'ACCESS_REFUSED - operation not permitted on the default exchange')
+  queue_bind("hello", "", k):  ChannelClosedByBroker: (403, 'ACCESS_REFUSED - operation not permitted on the default exchange')
+  queue_unbind(…, ""):         ChannelClosedByBroker: (403, 'ACCESS_REFUSED - operation not permitted on the default exchange')
+  exchange_declare("", fanout): ChannelClosedByBroker: (403, 'ACCESS_REFUSED - operation not permitted on the default exchange')
+  exchange_declare("amq.foo"):  ChannelClosedByBroker: (403, "ACCESS_REFUSED - exchange name 'amq.foo' contains reserved prefix 'amq.*'")
+  管理 API 里它叫 amq.default: {'durable': True, 'internal': False, 'name': '', 'type': 'direct'}</pre></div>
+  <p>不能删除、绑定、解绑或重新声明默认 exchange(403 ACCESS_REFUSED);自己声明的 exchange 名字也不能以 <code>amq.</code> 开头。管理 API 里默认 exchange 的名字是 <code>amq.default</code>。</p>
+</section>
+<section>
+  <h2>队列名</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  queue_declare("") → 服务器生成名字 amq.gen-…(共 30 个字符,前缀 amq.gen-)
+  用生成的名字作 routing key 发布 → ['to-generated']
+  队列 'a.b.c': 通过默认 exchange 收到 ['x']
+  队列 'with space': 通过默认 exchange 收到 ['x']
+  队列 '中文队列': 通过默认 exchange 收到 ['x']
+  队列 'UPPER': 通过默认 exchange 收到 ['x']
+  255 字节的名字: 成功
+  256 字节的名字: ShortStringTooLong(pika 在客户端就拒绝了,字符串超过 255 字节,没有发给 broker)
+  routing key 256 字节: ShortStringTooLong(pika 在客户端就拒绝了,字符串超过 255 字节,没有发给 broker)
+  list_bindings 里有没有 a.b.c 那一行:删除队列前 True,删除后 False
+  $ rabbitmqctl list_bindings source_name destination_name routing_key
+    Listing bindings for vhost /...
+    source_name	destination_name	routing_key
+    	UPPER	UPPER
+    	hello	hello
+    	with space	with space
+    	中文队列	中文队列</pre></div>
+  <p>空队列名由 broker 生成 <code>amq.gen-…</code>;中文、空格、大写都可以;名字和 routing key 都是 AMQP 短字符串,上限 255 字节,超出时 pika 在客户端就拒绝。</p>
+</section>
+<section>
+  <h2>性能</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  默认 exchange:中位数 545 ms(最小 532、最大 672);显式 direct exchange:中位数 536 ms(最小 530、最大 685)</pre></div>
+  <p>20000 条消息走默认 exchange 与走显式 direct exchange 耗时一样(中位数 545 ms 与 536 ms,轮间波动更大)。默认 exchange 的好处是少两步声明,不是更快。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">默认 exchange</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "b", "kind": "bars", "label": "数字对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "不声明任何 exchange、不建任何 binding,直接往名字为空串的 exchange 发一条 routing key = hello 的消息,list_queues 显示队列 hello 里有 1 条,basic_get 取到 'hi'。list_bindings 里有一行:source_name 为空串(就是默认 exchange)、destination 是 hello、routing key 也是 hello——这一行不是我建的,队列一声明 broker 就自动加上。", "s": {"t": {"lines": ["  $ rabbitmqctl list_queues name messages", "    Timeout: 60.0 seconds ...", "    Listing queues for vhost / ...", "    name\tmessages", "    hello\t1", "  basic_get → ['hi']", "  $ rabbitmqctl list_bindings source_name destination_name routing_key", "    Listing bindings for vhost /...", "    source_name\tdestination_name\trouting_key", "    \thello\thello", "  list_bindings 里的第一列为空串,就是默认 exchange;这个绑定不是我建的,队列一声明就有"], "cur": [], "mark": [], "done": []}, "mark": [4, 10], "done": [5, 9], "kv": {"items": [["默认 exchange", "名字是空串,direct 类型"], ["绑定", "每个队列自动绑上,key = 队列名"], ["不用声明", "没有 exchange 声明、没有 bind"]], "hl": ["默认 exchange"]}}}, {"note": "routing key 写了一个不存在的队列名:不加 mandatory 时发布没有任何错误,消息就是没有地方可去,悄悄丢弃;加上 mandatory=True 并开启 publisher confirm 后,pika 抛 UnroutableError: 1 unroutable message(s) returned,才知道没送到;对存在的队列 mandatory=True 正常成功。(mandatory 与 return 的细节见本系列专门一篇。)", "s": {"t": {"lines": ["  不加 mandatory:发布没有任何错误,消息也没有去哪(没有这个队列)", "  mandatory=True + confirm: UnroutableError: 1 unroutable message(s) returned", "  对存在的队列 mandatory=True: 成功"], "cur": [], "mark": [], "done": []}, "mark": [0, 1], "done": [2], "kv": {"items": [["队列名写错", "默认丢弃,发布方不知道"], ["mandatory + confirm", "得到 UnroutableError"], ["存在的队列", "正常成功"]], "hl": ["队列名写错"]}}}, {"note": "默认 exchange 被保护:删它、往它上面 bind 或 unbind、用 fanout 重新声明它,都是 403 ACCESS_REFUSED,消息 operation not permitted on the default exchange;自己声明名字以 amq. 开头的 exchange 也是 403(reserved prefix)。管理 API 里它叫 amq.default,type direct、durable 为 true、internal 为 false。", "s": {"t": {"lines": ["  exchange_delete(\"\"):         ChannelClosedByBroker: (403, 'ACCESS_REFUSED - operation not permitted on the default exchange')", "  queue_bind(\"hello\", \"\", k):  ChannelClosedByBroker: (403, 'ACCESS_REFUSED - operation not permitted on the default exchange')", "  queue_unbind(…, \"\"):         ChannelClosedByBroker: (403, 'ACCESS_REFUSED - operation not permitted on the default exchange')", "  exchange_declare(\"\", fanout): ChannelClosedByBroker: (403, 'ACCESS_REFUSED - operation not permitted on the default exchange')", "  exchange_declare(\"amq.foo\"):  ChannelClosedByBroker: (403, \"ACCESS_REFUSED - exchange name 'amq.foo' contains reserved prefix 'amq.*'\")", "  管理 API 里它叫 amq.default: {'durable': True, 'internal': False, 'name': '', 'type': 'direct'}"], "cur": [], "mark": [], "done": []}, "mark": [0, 1, 2, 3, 4], "done": [5], "kv": {"items": [["删除 / 绑定 / 解绑 / 重新声明", "全部 403 ACCESS_REFUSED"], ["amq. 前缀", "保留给系统,不能自己声明"], ["管理 API 中的名字", "amq.default"]], "hl": ["删除 / 绑定 / 解绑 / 重新声明"]}}}, {"note": "队列名的细节:不给名字(空串)时 broker 生成 amq.gen-… 的名字(共 30 个字符),用这个名字当 routing key 照样能经默认 exchange 投到;a.b.c、带空格、中文、大写字母的队列名都能用;255 字节的名字声明成功,256 字节的名字在客户端就被 pika 拒绝(ShortStringTooLong,AMQP 的短字符串上限 255 字节,routing key 同理)。队列删掉后 list_bindings 里它的默认绑定也一并消失(a.b.c 删除前 True,删除后 False)。", "s": {"t": {"lines": ["  queue_declare(\"\") → 服务器生成名字 amq.gen-…(共 30 个字符,前缀 amq.gen-)", "  用生成的名字作 routing key 发布 → ['to-generated']", "  队列 'a.b.c': 通过默认 exchange 收到 ['x']", "  队列 'with space': 通过默认 exchange 收到 ['x']", "  队列 '中文队列': 通过默认 exchange 收到 ['x']", "  队列 'UPPER': 通过默认 exchange 收到 ['x']", "  255 字节的名字: 成功", "  256 字节的名字: ShortStringTooLong(pika 在客户端就拒绝了,字符串超过 255 字节,没有发给 broker)", "  routing key 256 字节: ShortStringTooLong(pika 在客户端就拒绝了,字符串超过 255 字节,没有发给 broker)", "  list_bindings 里有没有 a.b.c 那一行:删除队列前 True,删除后 False", "  $ rabbitmqctl list_bindings source_name destination_name routing_key", "    Listing bindings for vhost /...", "    source_name\tdestination_name\trouting_key", "    \tUPPER\tUPPER", "    \thello\thello", "    \twith space\twith space", "    \t中文队列\t中文队列"], "cur": [], "mark": [], "done": []}, "mark": [6, 7, 8], "done": [0, 2, 3, 4, 5, 9, 13, 15, 16], "kv": {"items": [["空队列名", "broker 生成 amq.gen-…"], ["名字上限", "255 字节(短字符串)"], ["删除队列", "默认绑定随之消失"]], "hl": ["名字上限"]}}}, {"note": "速度:各发 20000 条 100 字节的消息(不开 confirm),默认 exchange 和一个显式 direct exchange(绑了同一个队列)交替跑 7 轮取中位数:默认 exchange 中位数 545 ms(最小 532、最大 672),显式 direct exchange 中位数 536 ms(最小 530、最大 685),差别小于轮与轮之间的波动——默认 exchange 只是省了你声明和绑定的步骤,并不是更快的路径。", "s": {"t": {"lines": ["  默认 exchange:中位数 545 ms(最小 532、最大 672);显式 direct exchange:中位数 536 ms(最小 530、最大 685)"], "cur": [], "mark": [], "done": []}, "mark": [0], "done": [0], "b": {"items": [["默认 exchange", 545, "545 ms"], ["显式 direct", 536, "536 ms"]], "max": 545, "cur": [], "mark": [0], "done": [1]}, "kv": {"items": [["默认 exchange", "中位数 545 ms"], ["显式 direct", "中位数 536 ms"], ["结论", "差别小于轮间波动"]], "hl": ["结论"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / RabbitMQ 4.3.6 / Erlang/OTP 28.5 / pika 1.4.4(Homebrew 与临时虚拟环境);所有节点都是本机自己起的 RabbitMQ 进程(127.0.0.1,端口 9500 以上,每个实验独立的数据目录与节点名,不连任何外部服务);命令输出来自真实的 rabbitmqctl 与管理 API,发布与消费用 pika 的真实连接;计时用 time.perf_counter,数字每次运行会有小幅抖动。mandatory 的实验开了 confirm_delivery;速度对比不开 confirm,两种方式交替跑 7 轮,每轮 purge 后重发,最后一次 queue_declare(passive) 往返确保 broker 处理完</li><li>没有验证:集群里队列在别的节点时默认 exchange 的转发;quorum 队列和 stream 队列通过默认 exchange 的行为(第 15、17 篇会涉及队列类型);非 ASCII 队列名的编码边界(UTF-8 字节数);vhost 隔离下的默认 exchange;消息体更大时的速度差异</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="rabbitmq-ack-nack-reject.html">
+    <div>
+      <div class="t1">下一篇 · RABBITMQ 4</div>
+      <div class="t2">消息确认:ack、nack、reject 与 requeue</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>RabbitMQ · 默认 exchange 与队列名路由 · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

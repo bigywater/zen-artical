@@ -1,0 +1,36 @@
+import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from ll import *
+tee('l44')
+import ll as _ll
+def run(d, cmd, t='now', **k): return _ll.run(d, cmd, t, **k)
+def sh(d, cmd, t='now', **k): return _ll.sh(d, cmd, t, **k)
+def ci(d, msg, files=None, t='now', **k): return _ll.ci(d, msg, files, t, **k)
+def objs(d): return int(out1(d, "git count-objects -v | awk '/^count:|^in-pack:/{s+=$2} END{print s}'"))
+G = " | sed -E 's/^[*|\\\\/ ]+ ?[0-9a-f]{7} /& /; s/[0-9a-f]{7} //'"
+def mk(name):
+    d = lab(name); ci(d, 'M1', {'a': '1\n'}); run(d, 'git checkout -q -b feature'); ci(d, 'F1', {'f': '1\n'}); ci(d, 'F2', {'f': '2\n'}); run(d, 'git checkout -q main'); return d
+print('== 一:快进(fast-forward):main 没有新提交,合并只是把分支指针挪到 feature 的位置,不产生任何新对象')
+d = mk('l44a'); n0 = objs(d); h0 = out1(d, 'git rev-parse --short main')
+sh(d, 'git merge feature 2>&1 | head -4 | sed -E "s/[0-9a-f]{7}\\.\\.[0-9a-f]{7}/<旧>..<新>/"')
+print(f'  对象数 {n0} → {objs(d)}(新增 {objs(d) - n0} 个);main 现在等于 feature: {out1(d, "git rev-parse main") == out1(d, "git rev-parse feature")}')
+sh(d, "git reflog show main --format='%gd: %gs' | head -2; git log --graph --oneline | sed -E 's/[0-9a-f]{7} //'")
+print('== 二:--no-ff:即使能快进也创建一个合并提交,它的 tree 与 feature 末端的 tree 是同一个对象')
+d = mk('l44b'); n0 = objs(d)
+sh(d, 'git merge --no-ff -m "合并 feature" feature 2>&1 | head -3')
+print(f'  对象数 {n0} → {objs(d)}(只新增 {objs(d) - n0} 个:合并提交本身,tree 复用)')
+print(f'  合并提交的 tree == feature 末端的 tree: {out1(d, "git rev-parse HEAD^{tree}") == out1(d, "git rev-parse feature^{tree}")};parent 数: {out1(d, "git cat-file -p HEAD | grep -c ^parent")}')
+sh(d, "git log --graph --oneline | sed -E 's/[0-9a-f]{7} //'")
+print('== 三:main 也有新提交(分叉)时不能快进:默认生成合并提交,--ff-only 直接拒绝')
+d = mk('l44c'); ci(d, 'M2', {'a': '2\n'})
+sh(d, 'git merge --ff-only feature 2>&1 | grep -E "fatal|hint: *git|Merge"; git log --oneline | wc -l')
+sh(d, 'git config merge.ff only; git merge feature 2>&1 | grep -E "fatal|Merge"; git config --unset merge.ff')
+sh(d, 'git merge -m "合并 feature" feature 2>&1 | head -2')
+print('== 四:历史形状:快进是一条直线,--no-ff 留下“这几个提交曾经是一个功能”的痕迹;--first-parent 只看主线')
+for nm, opt in [('快进', ''), ('--no-ff', '--no-ff -m 合并feature')]:
+    d = mk('l44d'); run(d, f'git merge {opt} feature')
+    print(f'  [{nm}]'); sh(d, "git log --graph --oneline | sed -E 's/[0-9a-f]{7} //'; echo '  -- --first-parent:'; git log --first-parent --oneline | sed -E 's/[0-9a-f]{7} //'; echo '  -- --merges 的个数:'; git log --merges --oneline | wc -l", ind='    ')
+print('== 五:--squash:把 feature 的全部改动压成工作区里的改动,自己再提交一个单 parent 的提交;feature 不算“已合并”')
+d = mk('l44e'); sh(d, 'git merge --squash feature 2>&1 | head -3; git status --short')
+run(d, 'git commit -q -m "合并 feature(squash)"')
+print(f'  新提交的 parent 数: {out1(d, "git cat-file -p HEAD | grep -c ^parent")};tree == feature 末端 tree: {out1(d, "git rev-parse HEAD^{tree}") == out1(d, "git rev-parse feature^{tree}")}')
+sh(d, 'git branch --merged | tr -d " *" | tr "\\n" " "; echo "(--merged 里没有 feature)"; git branch -d feature 2>&1 | head -2 | cut -c1-70')

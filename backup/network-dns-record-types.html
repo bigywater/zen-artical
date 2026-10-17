@@ -1,0 +1,486 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>A、AAAA、CNAME、MX、TXT、NS、SRV:记录类型实测</title>
+<meta name="description" content="逐类型取 DNS 记录的原始 RDATA 字节并手工解读:A 4 字节、AAAA 16 字节、CNAME 与 MX 后半截用压缩指针、TXT 带长度前缀、SRV 端口 993、CAA 只允许 pki.goog、PTR 反向名字、HTTPS 记录里的 alpn=h3,h2;ANY 在 1.1.1.1 上直接 NOTIMP。每个答案都和 8.8.8.8 交叉核对。">
+<link rel="canonical" href="https://bigywater.tech/network-dns-record-types.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="A、AAAA、CNAME、MX、TXT、NS、SRV:记录类型实测">
+<meta property="og:description" content="逐类型取 DNS 记录的原始 RDATA 字节并手工解读:A 4 字节、AAAA 16 字节、CNAME 与 MX 后半截用压缩指针、TXT 带长度前缀、SRV 端口 993、CAA 只允许 pki.goog、PTR 反向名字、HTTPS 记录里的 alpn=h3,h2;ANY 在 1.1.1.1 上直接 NOTIMP。每个答案都和 8.8.8.8 交叉核对。">
+<meta property="og:url" content="https://bigywater.tech/network-dns-record-types.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="A、AAAA、CNAME、MX、TXT、NS、SRV:记录类型实测">
+<meta name="twitter:description" content="逐类型取 DNS 记录的原始 RDATA 字节并手工解读:A 4 字节、AAAA 16 字节、CNAME 与 MX 后半截用压缩指针、TXT 带长度前缀、SRV 端口 993、CAA 只允许 pki.goog、PTR 反向名字、HTTPS 记录里的 alpn=h3,h2;ANY 在 1.1.1.1 上直接 NOTIMP。每个答案都和 8.8.8.8 交叉核对。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">2731</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">70</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">97</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">56</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">78</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">114</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">111</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">88</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#40678F; --series-c-soft:#DDE7F2;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#86B1DC; --series-c-soft:#16263A;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#86B1DC; --series-c-soft:#16263A;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>网络协议 · 69</div>
+  <h1>A、AAAA、CNAME、MX、TXT、NS、SRV:记录类型实测</h1>
+  <p>一个域名下可以挂很多种记录:地址、别名、邮件、委派、文本、服务发现、证书授权……它们在线上各是什么样?这篇对每种常见类型取回原始 RDATA 字节,一字节一字节地对着解读,还看了 ANY 为什么不再可用。每个回答都同时问了 8.8.8.8 来交叉核对。</p>
+  <div class="hero-fact">
+<div><div class="num">4 / 16 字节</div><div class="lbl">A 与 AAAA 记录的 RDATA 长度</div></div><div><div class="num">c0 10</div><div class="lbl">www.github.com 的 CNAME 记录的 RDATA:只有 2 字节的压缩指针</div></div><div><div class="num">NOTIMP</div><div class="lbl">1.1.1.1 对 ANY 查询的 RCODE(4),响应只有 29 字节</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="network-dns-caching.html">DNS 缓存与 TTL:负缓存与过期时的行为</a></div>
+<section>
+  <h2>地址与别名</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  A —— 问 example.com 的 A(类型号 1):RCODE 0,回答 2 条,报文 61 字节
+    example.com  A  TTL 293  RDLENGTH 4  RDATA 字节:ac 42 93 f3
+      解读:IPv4 172.66.147.243
+    example.com  A  TTL 293  RDLENGTH 4  RDATA 字节:68 14 17 9a
+      解读:IPv4 104.20.23.154
+    与 8.8.8.8 比较:回答完全一致
+  AAAA —— 问 example.com 的 AAAA(类型号 28):RCODE 0,回答 2 条,报文 85 字节
+    example.com  AAAA  TTL 239  RDLENGTH 16  RDATA 字节:26 06 47 00 00 10 00 00 00 00 00 00 68 14 17 9a
+      解读:IPv6 2606:4700:10::6814:179a
+    example.com  AAAA  TTL 239  RDLENGTH 16  RDATA 字节:26 06 47 00 00 10 00 00 00 00 00 00 ac 42 93 f3
+      解读:IPv6 2606:4700:10::ac42:93f3
+    与 8.8.8.8 比较:回答完全一致
+  CNAME —— 问 www.github.com 的 CNAME(类型号 5):RCODE 0,回答 1 条,报文 46 字节
+    www.github.com  CNAME  TTL 3600  RDLENGTH 2  RDATA 字节:c0 10
+      解读:名字 github.com
+    与 8.8.8.8 比较:回答完全一致</pre></div>
+  <p>A 是 4 字节,AAAA 是 16 字节,CNAME 是一个域名(可被压缩指针代替)。</p>
+</section>
+<section>
+  <h2>邮件与委派</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  MX —— 问 gmail.com 的 MX(类型号 15):RCODE 0,回答 5 条,报文 150 字节
+    gmail.com  MX  TTL 461  RDLENGTH 27  RDATA 字节:00 05 0d 67 6d 61 69 6c 2d 73 6d 74 70 2d 69 6e 01 6c 06 67 6f 6f 67 6c 65 c0 12
+      解读:优先级 5,邮件服务器 gmail-smtp-in.l.google.com
+    gmail.com  MX  TTL 461  RDLENGTH 9  RDATA 字节:00 14 04 61 6c 74 32 c0 29
+      解读:优先级 20,邮件服务器 alt2.gmail-smtp-in.l.google.com
+    gmail.com  MX  TTL 461  RDLENGTH 9  RDATA 字节:00 28 04 61 6c 74 34 c0 29
+      解读:优先级 40,邮件服务器 alt4.gmail-smtp-in.l.google.com
+    gmail.com  MX  TTL 461  RDLENGTH 9  RDATA 字节:00 1e 04 61 6c 74 33 c0 29
+      解读:优先级 30,邮件服务器 alt3.gmail-smtp-in.l.google.com
+    …共 5 条,只显示前 4 条
+    与 8.8.8.8 比较:回答不完全一致(条数 5 对 5;不同解析器的负载均衡 / 缓存可能给出不同子集)
+  NS —— 问 example.com 的 NS(类型号 2):RCODE 0,回答 2 条,报文 84 字节
+    example.com  NS  TTL 82536  RDLENGTH 21  RDATA 字节:04 68 65 72 61 02 6e 73 0a 63 6c 6f 75 64 66 6c 61 72 65 c0 14
+      解读:名字 hera.ns.cloudflare.com
+    example.com  NS  TTL 82536  RDLENGTH 10  RDATA 字节:07 65 6c 6c 69 6f 74 74 c0 2e
+      解读:名字 elliott.ns.cloudflare.com
+    与 8.8.8.8 比较:回答完全一致
+  SOA —— 问 example.com 的 SOA(类型号 6):RCODE 0,回答 1 条,报文 91 字节
+    example.com  SOA  TTL 1029  RDLENGTH 50  RDATA 字节:07 65 6c 6c 69 6f 74 74 02 6e 73 0a 63 6c 6f 75 64 66 6c 61 72 65 c0 14 03 64 6e 73 c0 34 90 06 f3 98 00 00 27 10 00 00 …
+      解读:主名字服务器 elliott.ns.cloudflare.com,管理员邮箱 dns.cloudflare.com(第一个点代表 @),序列号 2416374680,刷新 10000,重试 2400,过期 604800,最小 TTL 1800
+    与 8.8.8.8 比较:回答完全一致</pre></div>
+  <p>MX = 优先级 + 名字;NS = 名字;SOA 含主服务器、管理员邮箱、序列号和一组计时字段,最后一个字段是负缓存时间。</p>
+</section>
+<section>
+  <h2>文本与服务</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  TXT —— 问 gmail.com 的 TXT(类型号 16):RCODE 0,回答 4 条,报文 308 字节
+    gmail.com  TXT  TTL 156  RDLENGTH 65  RDATA 字节:40 67 6c 6f 62 61 6c 73 69 67 6e 2d 73 6d 69 6d 65 2d 64 76 3d 43 44 59 58 2b 58 46 48 55 77 32 77 6d 6c 36 2f 47 62 38 …
+      解读:1 个字符串(各 ≤255 字节,前缀 1 字节长度):globalsign-smime-dv=CDYX+XFHUw2wml6/Gb8+59BsH31KzUr6c1l2BPvqKX8=
+    gmail.com  TXT  TTL 156  RDLENGTH 68  RDATA 字节:43 79 61 68 6f 6f 2d 76 65 72 69 66 69 63 61 74 69 6f 6e 2d 6b 65 79 3d 2b 65 5a 77 49 50 53 67 52 78 6b 41 55 7a 44 74 …
+      解读:1 个字符串(各 ≤255 字节,前缀 1 字节长度):yahoo-verification-key=+eZwIPSgRxkAUzDtqT8Qhk+j4A1JF6V/wtGoyGTkELY=
+    gmail.com  TXT  TTL 156  RDLENGTH 32  RDATA 字节:1f 76 3d 73 70 66 31 20 72 65 64 69 72 65 63 74 3d 5f 73 70 66 2e 67 6f 6f 67 6c 65 2e 63 6f 6d
+      解读:1 个字符串(各 ≤255 字节,前缀 1 字节长度):v=spf1 redirect=_spf.google.com
+    …共 4 条,只显示前 3 条
+    与 8.8.8.8 比较:回答完全一致
+  SRV —— 问 _imaps._tcp.gmail.com 的 SRV(类型号 33):RCODE 0,回答 1 条,报文 73 字节
+    _imaps._tcp.gmail.com  SRV  TTL 86400  RDLENGTH 22  RDATA 字节:00 05 00 00 03 e1 04 69 6d 61 70 05 67 6d 61 69 6c 03 63 6f 6d 00
+      解读:优先级 5,权重 0,端口 993,目标 imap.gmail.com
+    与 8.8.8.8 比较:回答完全一致
+  CAA —— 问 google.com 的 CAA(类型号 257):RCODE 0,回答 1 条,报文 55 字节
+    google.com  CAA  TTL 86400  RDLENGTH 15  RDATA 字节:00 05 69 73 73 75 65 70 6b 69 2e 67 6f 6f 67
+      解读:flags 0,tag "issue",value "pki.goog"
+    与 8.8.8.8 比较:回答完全一致</pre></div>
+  <p>TXT 是带长度前缀的字符串(SPF 就是一条 TXT);SRV 给出优先级、权重、端口和目标;CAA 限定哪些 CA 可以签发证书。</p>
+</section>
+<section>
+  <h2>反向与新类型</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  反向名字的构造:IPv4 地址 1.1.1.1 的四段倒过来,加后缀 .in-addr.arpa → 1.1.1.1.in-addr.arpa;一个任意地址 a.b.c.d 就是 d.c.b.a.in-addr.arpa;IPv6 要把 32 个十六进制位逐位倒过来加 .ip6.arpa
+  PTR —— 问 1.1.1.1.in-addr.arpa 的 PTR(类型号 12):RCODE 0,回答 1 条,报文 67 字节
+    1.1.1.1.in-addr.arpa  PTR  TTL 32  RDLENGTH 17  RDATA 字节:03 6f 6e 65 03 6f 6e 65 03 6f 6e 65 03 6f 6e 65 00
+      解读:名字 one.one.one.one
+    与 8.8.8.8 比较:回答完全一致
+  HTTPS —— 问 cloudflare.com 的 HTTPS(类型号 65):RCODE 0,回答 1 条,报文 105 字节
+    cloudflare.com  HTTPS  TTL 213  RDLENGTH 61  RDATA 字节:00 01 00 00 01 00 06 02 68 33 02 68 32 00 04 00 08 68 10 84 e5 68 10 85 e5 00 06 00 20 26 06 47 00 00 00 00 00 00 00 00 …
+      解读:SvcPriority 1,TargetName .,SvcParams 58 字节
+    与 8.8.8.8 比较:回答完全一致</pre></div>
+  <p>PTR 用倒过来的地址加 in-addr.arpa;HTTPS(SVCB)在连接前就给出 alpn 和地址提示。</p>
+</section>
+<section>
+  <h2>ANY</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  问 example.com 的 ANY:RCODE 4,回答 0 条:[];报文 29 字节
+  问 cloudflare.com 的 ANY:RCODE 4,回答 0 条:[];报文 32 字节
+  类型号表(本篇用到的):A=1,NS=2,CNAME=5,SOA=6,PTR=12,MX=15,TXT=16,AAAA=28,SRV=33,HTTPS=65,CAA=257</pre></div>
+  <p>被拿来做放大攻击,现在 1.1.1.1 直接回 NOTIMP。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">记录类型</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "b", "kind": "bars", "label": "数字对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "地址与别名记录的 RDATA 原始字节。A 记录的 RDATA 就是 4 个字节:ac 42 93 f3 = 172.66.147.243,68 14 17 9a = 104.20.23.154(example.com 有 2 条,TTL 293)。AAAA 的 RDATA 是 16 个字节:26 06 47 00 00 10 00 … 68 14 17 9a = 2606:4700:10::6814:179a,以及另一条 …ac42:93f3(报文 85 字节)。CNAME 的 RDATA 是一个名字:www.github.com 的 CNAME 只有 2 个字节 c0 10——不是名字本身,而是指向报文偏移 16 的压缩指针,解出来是 github.com(TTL 3600)。以上与 8.8.8.8 的回答完全一致,没有发现被篡改的迹象。", "s": {"t": {"lines": ["  A —— 问 example.com 的 A(类型号 1):RCODE 0,回答 2 条,报文 61 字节", "    example.com  A  TTL 293  RDLENGTH 4  RDATA 字节:ac 42 93 f3", "      解读:IPv4 172.66.147.243", "    example.com  A  TTL 293  RDLENGTH 4  RDATA 字节:68 14 17 9a", "      解读:IPv4 104.20.23.154", "    与 8.8.8.8 比较:回答完全一致", "  AAAA —— 问 example.com 的 AAAA(类型号 28):RCODE 0,回答 2 条,报文 85 字节", "    example.com  AAAA  TTL 239  RDLENGTH 16  RDATA 字节:26 06 47 00 00 10 00 00 00 00 00 00 68 14 17 9a", "      解读:IPv6 2606:4700:10::6814:179a", "    example.com  AAAA  TTL 239  RDLENGTH 16  RDATA 字节:26 06 47 00 00 10 00 00 00 00 00 00 ac 42 93 f3", "      解读:IPv6 2606:4700:10::ac42:93f3", "    与 8.8.8.8 比较:回答完全一致", "  CNAME —— 问 www.github.com 的 CNAME(类型号 5):RCODE 0,回答 1 条,报文 46 字节", "    www.github.com  CNAME  TTL 3600  RDLENGTH 2  RDATA 字节:c0 10", "      解读:名字 github.com", "    与 8.8.8.8 比较:回答完全一致"], "cur": [], "mark": [], "done": []}, "mark": [1, 7, 9, 13], "done": [2, 4, 5, 8, 10, 11, 14, 15], "kv": {"items": [["A", "4 字节 IPv4"], ["AAAA", "16 字节 IPv6"], ["CNAME", "一个域名(这里是压缩指针 c0 10)"]], "hl": ["CNAME"]}}}, {"note": "MX:RDATA = 2 字节优先级 + 一个域名(数值小的优先)。gmail.com 有 5 条 MX:优先级 5 的 gmail-smtp-in.l.google.com,和 20 / 30 / 40 的 alt2 / alt3 / alt4.gmail-smtp-in.l.google.com;后几条只有 9 个字节,因为名字后半截 gmail-smtp-in.l.google.com 用 c0 29 指针指回前面。注意:与 8.8.8.8 比较,这一条回答“不完全一致”(条数都是 5,但内容有差别),我没有查具体差在哪。NS:example.com 的两条 NS(hera.ns.cloudflare.com、elliott.ns.cloudflare.com),TTL 82536 秒(约 23 小时)。SOA:主名字服务器 elliott.ns.cloudflare.com,管理员邮箱 dns.cloudflare.com(第一个点代表 @),序列号 2416374680,刷新 10000 秒,重试 2400 秒,过期 604800 秒,最小 TTL 1800 秒;最后这个字段就是上一篇里负缓存的时间。", "s": {"t": {"lines": ["  MX —— 问 gmail.com 的 MX(类型号 15):RCODE 0,回答 5 条,报文 150 字节", "    gmail.com  MX  TTL 461  RDLENGTH 27  RDATA 字节:00 05 0d 67 6d 61 69 6c 2d 73 6d 74 70 2d 69 6e 01 6c 06 67 6f 6f 67 6c 65 c0 12", "      解读:优先级 5,邮件服务器 gmail-smtp-in.l.google.com", "    gmail.com  MX  TTL 461  RDLENGTH 9  RDATA 字节:00 14 04 61 6c 74 32 c0 29", "      解读:优先级 20,邮件服务器 alt2.gmail-smtp-in.l.google.com", "    gmail.com  MX  TTL 461  RDLENGTH 9  RDATA 字节:00 28 04 61 6c 74 34 c0 29", "      解读:优先级 40,邮件服务器 alt4.gmail-smtp-in.l.google.com", "    gmail.com  MX  TTL 461  RDLENGTH 9  RDATA 字节:00 1e 04 61 6c 74 33 c0 29", "      解读:优先级 30,邮件服务器 alt3.gmail-smtp-in.l.google.com", "    …共 5 条,只显示前 4 条", "    与 8.8.8.8 比较:回答不完全一致(条数 5 对 5;不同解析器的负载均衡 / 缓存可能给出不同子集)", "  NS —— 问 example.com 的 NS(类型号 2):RCODE 0,回答 2 条,报文 84 字节", "    example.com  NS  TTL 82536  RDLENGTH 21  RDATA 字节:04 68 65 72 61 02 6e 73 0a 63 6c 6f 75 64 66 6c 61 72 65 c0 14", "      解读:名字 hera.ns.cloudflare.com", "    example.com  NS  TTL 82536  RDLENGTH 10  RDATA 字节:07 65 6c 6c 69 6f 74 74 c0 2e", "      解读:名字 elliott.ns.cloudflare.com", "    与 8.8.8.8 比较:回答完全一致", "  SOA —— 问 example.com 的 SOA(类型号 6):RCODE 0,回答 1 条,报文 91 字节", "    example.com  SOA  TTL 1029  RDLENGTH 50  RDATA 字节:07 65 6c 6c 69 6f 74 74 02 6e 73 0a 63 6c 6f 75 64 66 6c 61 72 65 c0 14 03 64 6e 73 c0 34 90 06 f3 98 00 00 27 10 00 00 …", "      解读:主名字服务器 elliott.ns.cloudflare.com,管理员邮箱 dns.cloudflare.com(第一个点代表 @),序列号 2416374680,刷新 10000,重试 2400,过期 604800,最小 TTL 1800", "    与 8.8.8.8 比较:回答完全一致"], "cur": [], "mark": [], "done": []}, "mark": [10, 19], "done": [2, 13, 15], "kv": {"items": [["MX", "2 字节优先级 + 名字"], ["NS", "一个名字"], ["SOA", "主服务器、邮箱、序列号、刷新 / 重试 / 过期 / 最小 TTL"]], "hl": ["SOA"]}}}, {"note": "TXT:RDATA 是一串“1 字节长度 + 内容”的字符串(每个最多 255 字节)。gmail.com 有 4 条 TXT,其中一条是 SPF:1f 之后是 31 字节的 \"v=spf1 redirect=_spf.google.com\"(1f 就是长度 31),RDLENGTH 32;另外还有第三方的验证串,它们都放在 TXT 里,这是 TXT 常被拿来做域名所有权验证的原因。SRV:_imaps._tcp.gmail.com 的 RDATA = 优先级 5、权重 0、端口 0x03e1 = 993、目标 imap.gmail.com(服务发现:名字里的 _imaps._tcp 是服务和协议)。CAA:google.com 的 RDATA = flags 0、tag \"issue\"(长度 5)、value \"pki.goog\",意思是只允许 pki.goog 这家 CA 签发证书。三者与 8.8.8.8 的回答均一致。", "s": {"t": {"lines": ["  TXT —— 问 gmail.com 的 TXT(类型号 16):RCODE 0,回答 4 条,报文 308 字节", "    gmail.com  TXT  TTL 156  RDLENGTH 65  RDATA 字节:40 67 6c 6f 62 61 6c 73 69 67 6e 2d 73 6d 69 6d 65 2d 64 76 3d 43 44 59 58 2b 58 46 48 55 77 32 77 6d 6c 36 2f 47 62 38 …", "      解读:1 个字符串(各 ≤255 字节,前缀 1 字节长度):globalsign-smime-dv=CDYX+XFHUw2wml6/Gb8+59BsH31KzUr6c1l2BPvqKX8=", "    gmail.com  TXT  TTL 156  RDLENGTH 68  RDATA 字节:43 79 61 68 6f 6f 2d 76 65 72 69 66 69 63 61 74 69 6f 6e 2d 6b 65 79 3d 2b 65 5a 77 49 50 53 67 52 78 6b 41 55 7a 44 74 …", "      解读:1 个字符串(各 ≤255 字节,前缀 1 字节长度):yahoo-verification-key=+eZwIPSgRxkAUzDtqT8Qhk+j4A1JF6V/wtGoyGTkELY=", "    gmail.com  TXT  TTL 156  RDLENGTH 32  RDATA 字节:1f 76 3d 73 70 66 31 20 72 65 64 69 72 65 63 74 3d 5f 73 70 66 2e 67 6f 6f 67 6c 65 2e 63 6f 6d", "      解读:1 个字符串(各 ≤255 字节,前缀 1 字节长度):v=spf1 redirect=_spf.google.com", "    …共 4 条,只显示前 3 条", "    与 8.8.8.8 比较:回答完全一致", "  SRV —— 问 _imaps._tcp.gmail.com 的 SRV(类型号 33):RCODE 0,回答 1 条,报文 73 字节", "    _imaps._tcp.gmail.com  SRV  TTL 86400  RDLENGTH 22  RDATA 字节:00 05 00 00 03 e1 04 69 6d 61 70 05 67 6d 61 69 6c 03 63 6f 6d 00", "      解读:优先级 5,权重 0,端口 993,目标 imap.gmail.com", "    与 8.8.8.8 比较:回答完全一致", "  CAA —— 问 google.com 的 CAA(类型号 257):RCODE 0,回答 1 条,报文 55 字节", "    google.com  CAA  TTL 86400  RDLENGTH 15  RDATA 字节:00 05 69 73 73 75 65 70 6b 69 2e 67 6f 6f 67", "      解读:flags 0,tag \"issue\",value \"pki.goog\"", "    与 8.8.8.8 比较:回答完全一致"], "cur": [], "mark": [], "done": []}, "mark": [5, 10, 14], "done": [11, 15], "kv": {"items": [["TXT", "1 字节长度 + 字符串,可多段"], ["SRV", "优先级 / 权重 / 端口 993 / 目标"], ["CAA", "flags + tag + value"]], "hl": ["TXT"]}}}, {"note": "反向解析:IPv4 地址 a.b.c.d 的反向名字是 d.c.b.a.in-addr.arpa,所以 1.1.1.1 的是 1.1.1.1.in-addr.arpa;IPv6 要把 32 个十六进制位逐位倒过来再加 .ip6.arpa。PTR 的 RDATA 是一个名字:03 \"one\" 03 \"one\" 03 \"one\" 03 \"one\" 00 = one.one.one.one(17 字节),TTL 32。新类型 HTTPS(类型号 65,SVCB 的一种)取 cloudflare.com:SvcPriority 1、TargetName 是 \".\"(表示就是本名字)、后面 58 字节的 SvcParams(其中能看到 alpn 里的 \"h3\" \"h2\" 字符串 02 68 33 02 68 32,还有 IPv4 / IPv6 提示地址)。这类记录让客户端在连接之前就知道服务器支持 HTTP/3 和哪些地址。", "s": {"t": {"lines": ["  反向名字的构造:IPv4 地址 1.1.1.1 的四段倒过来,加后缀 .in-addr.arpa → 1.1.1.1.in-addr.arpa;一个任意地址 a.b.c.d 就是 d.c.b.a.in-addr.arpa;IPv6 要把 32 个十六进制位逐位倒过来加 .ip6.arpa", "  PTR —— 问 1.1.1.1.in-addr.arpa 的 PTR(类型号 12):RCODE 0,回答 1 条,报文 67 字节", "    1.1.1.1.in-addr.arpa  PTR  TTL 32  RDLENGTH 17  RDATA 字节:03 6f 6e 65 03 6f 6e 65 03 6f 6e 65 03 6f 6e 65 00", "      解读:名字 one.one.one.one", "    与 8.8.8.8 比较:回答完全一致", "  HTTPS —— 问 cloudflare.com 的 HTTPS(类型号 65):RCODE 0,回答 1 条,报文 105 字节", "    cloudflare.com  HTTPS  TTL 213  RDLENGTH 61  RDATA 字节:00 01 00 00 01 00 06 02 68 33 02 68 32 00 04 00 08 68 10 84 e5 68 10 85 e5 00 06 00 20 26 06 47 00 00 00 00 00 00 00 00 …", "      解读:SvcPriority 1,TargetName .,SvcParams 58 字节", "    与 8.8.8.8 比较:回答完全一致"], "cur": [], "mark": [], "done": []}, "mark": [2, 6], "done": [0, 3, 7], "kv": {"items": [["1.1.1.1 的反向名", "1.1.1.1.in-addr.arpa"], ["PTR", "one.one.one.one"], ["HTTPS(65)", "SvcPriority + TargetName + SvcParams(alpn=h3,h2 …)"]], "hl": ["HTTPS(65)"]}}}, {"note": "ANY 类型的现状:历史上 ANY(255)能“列出所有记录”,但被拿去做放大攻击,RFC 8482 允许服务器敷衍。实测 1.1.1.1 对 example.com 和 cloudflare.com 的 ANY 都直接回 RCODE 4(NOTIMP,没有实现),回答 0 条,报文只有 29 / 32 字节——查询 29 字节,响应也一样小,放大倍数几乎是 1。现在想知道一个名字有哪些记录,只能一种类型一种类型地问。本篇用到的类型号:A=1、NS=2、CNAME=5、SOA=6、PTR=12、MX=15、TXT=16、AAAA=28、SRV=33、HTTPS=65、CAA=257。", "s": {"t": {"lines": ["  问 example.com 的 ANY:RCODE 4,回答 0 条:[];报文 29 字节", "  问 cloudflare.com 的 ANY:RCODE 4,回答 0 条:[];报文 32 字节", "  类型号表(本篇用到的):A=1,NS=2,CNAME=5,SOA=6,PTR=12,MX=15,TXT=16,AAAA=28,SRV=33,HTTPS=65,CAA=257"], "cur": [], "mark": [], "done": []}, "mark": [0, 1], "done": [2], "b": {"items": [["查询 example.com ANY", 29, "29 字节"], ["响应(NOTIMP)", 29, "29 字节"]], "max": 32, "cur": [], "mark": [], "done": [0, 1]}, "kv": {"items": [["ANY 查询", "1.1.1.1 回 NOTIMP(RCODE 4)"], ["响应大小", "29 / 32 字节,几乎无放大"], ["替代", "一种类型一种类型地问"]], "hl": ["ANY 查询"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64(Apple 芯片)/ Python 3.14.8 / tcpdump(libpcap)/ scapy 2.8 / dpkt / dnspython / h2 / aioquic / OpenSSL / curl 8.7.1;抓包在 lo0(环回)上做,少数实验用真实网卡 en0(这台机器上 en0 是 Wi-Fi,tcpdump 看到的是系统转成以太网格式的帧,所以文中的“以太网头”都指这个 14 字节的头)或访问公网(会在文章里注明);需要丢包 / 延迟 / 限速时,用一个只作用于 lo0 端口 9400-9499 的 dummynet 辅助脚本(netlab);所有服务端都是本机自己起的进程;时间戳取自 tcpdump 的 -tt,数字每次运行会有小幅抖动。向 1.1.1.1 取记录、向 8.8.8.8 交叉核对;RDATA 解读是我按各类型的格式手写的解析器;TXT 里的第三方验证串不在文章里展示;TTL 每次运行不同</li><li>没有验证:gmail.com 的 MX 在两个解析器之间“不完全一致”的原因(没有逐条比较);DNSSEC 相关记录(DNSKEY、RRSIG、DS,下一篇有 DNSSEC 专题);DNAME、NAPTR、TLSA、SSHFP 等较少见的类型;SVCB / HTTPS 的 SvcParams 逐个字段的解析(只看到了前几个字节);权威服务器上直接取记录(这里都是经过递归解析器的)</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="network-dns-tcp-edns.html">
+    <div>
+      <div class="t1">下一篇 · 网络协议 70</div>
+      <div class="t2">DNS over TCP 与 EDNS0:什么时候不再用 UDP 512 字节</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>网络协议 · A、AAAA、CNAME、MX、TXT、NS、SRV:记录类型实测 · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

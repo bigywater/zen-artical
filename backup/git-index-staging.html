@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>暂存区 .git/index 到底是什么:手动解析这个二进制文件,看 git add 真实写了什么</title>
+<meta name="description" content="真实 git add 两个文件后,手动按字节解析 .git/index 这个二进制文件,解出的 mode/文件大小/SHA-1/文件名跟 git ls-files --stage 的结果逐字段对上;真实验证文件末尾 20 字节是对前面所有内容重新算一遍 SHA-1 的自校验值;真实发现 commit 之前 git add 就已经把 blob 对象写进了 .git/objects,commit 并没有新建文件内容,只是把索引里已经就位的引用打包成 tree/commit;真实制造工作目录、暂存区、HEAD 三份不同内容的同一个文件,逐一验证 git diff / git diff --cached / git diff HEAD 分别比较的是哪两份。">
+<link rel="canonical" href="https://bigywater.tech/git-index-staging.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="暂存区 .git/index 到底是什么:手动解析这个二进制文件,看 git add 真实写了什么">
+<meta property="og:description" content="真实 git add 两个文件后,手动按字节解析 .git/index 这个二进制文件,解出的 mode/文件大小/SHA-1/文件名跟 git ls-files --stage 的结果逐字段对上;真实验证文件末尾 20 字节是对前面所有内容重新算一遍 SHA-1 的自校验值;真实发现 commit 之前 git add 就已经把 blob 对象写进了 .git/objects,commit 并没有新建文件内容,只是把索引里已经就位的引用打包成 tree/commit;真实制造工作目录、暂存区、HEAD 三份不同内容的同一个文件,逐一验证 git diff / git diff --cached / git diff HEAD 分别比较的是哪两份。">
+<meta property="og:url" content="https://bigywater.tech/git-index-staging.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="暂存区 .git/index 到底是什么:手动解析这个二进制文件,看 git add 真实写了什么">
+<meta name="twitter:description" content="真实 git add 两个文件后,手动按字节解析 .git/index 这个二进制文件,解出的 mode/文件大小/SHA-1/文件名跟 git ls-files --stage 的结果逐字段对上;真实验证文件末尾 20 字节是对前面所有内容重新算一遍 SHA-1 的自校验值;真实发现 commit 之前 git add 就已经把 blob 对象写进了 .git/objects,commit 并没有新建文件内容,只是把索引里已经就位的引用打包成 tree/commit;真实制造工作目录、暂存区、HEAD 三份不同内容的同一个文件,逐一验证 git diff / git diff --cached / git diff HEAD 分别比较的是哪两份。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F7F4F8; --paper:#FFFFFF; --ink:#221C25; --ink-dim:#6E6376; --line:#E6DFEA;
+  --git-c:#8B3FA0; --git-c-soft:#F1E4F5;
+  --mem-c:#C99A2E; --mem-c-soft:#FBF2DC;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#211A28; --code-ink:#EDE6F0;
+  --shadow: 0 1px 2px rgba(30,20,35,.06), 0 8px 24px -12px rgba(30,20,35,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#170F1B; --paper:#241A2B; --ink:#EDE6F0; --ink-dim:#AEA0B6; --line:#3A2C43;
+    --git-c:#C97FDC; --git-c-soft:#332039;
+    --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#170F1B; --code-ink:#E4D9E8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#170F1B; --paper:#241A2B; --ink:#EDE6F0; --ink-dim:#AEA0B6; --line:#3A2C43;
+  --git-c:#C97FDC; --git-c-soft:#332039;
+  --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#170F1B; --code-ink:#E4D9E8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--git-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--git-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--git-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--git-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#C9A8D9; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--git-c); background:var(--git-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--git-c-soft); color:var(--git-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#D6B3E6;}
+.term pre.code{margin:0 0 10px; color:#D6B3E6; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+.term .add{color:#7DD0A0;}
+.term .del{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Git 内部原理 · 04</div>
+    <h1>暂存区 .git/index 到底是什么:手动解析这个二进制文件,看 git add 真实写了什么</h1>
+    <p>前三篇讲的 blob/tree/commit/pack 都在 <span class="mono">.git/objects</span> 里,唯独漏了"工作目录 / 暂存区 / HEAD"这三个区域里的暂存区——它压根不在 <span class="mono">objects</span> 目录下,是单独一个二进制文件 <span class="mono">.git/index</span>。真实 <span class="mono">git add</span> 两个文件,手动按字节把这个文件解出来,看它到底记了什么。</p>
+    <div class="hero-fact">
+      <div><div class="num">add 时就写了 blob</div><div class="lbl">真实验证:还没 commit,git add 已经把文件内容真实存成了 .git/objects 里的 blob 对象</div></div>
+      <div><div class="num">3 份内容,3 条 diff</div><div class="lbl">真实让同一个文件在工作目录/暂存区/HEAD 三处内容都不一样,精确对应三种 git diff</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<p class="prev-post">前面几篇:<a href="git-object-storage.html" target="_blank" rel="noopener">对象存储</a> · <a href="git-branch-refs.html" target="_blank" rel="noopener">分支的本质</a> · <a href="git-gc-pack.html" target="_blank" rel="noopener">gc 与 pack</a></p>
+
+<section style="padding-top:8px;">
+  <h2>思路:三个区域,暂存区是唯一没在 .git/objects 里的那个</h2>
+  <p class="h2-sub">工作目录是磁盘上的真实文件,HEAD 指向的是已经提交过的 commit/tree/blob,暂存区单独存在一个文件里。</p>
+  <p>日常说的"工作目录 / 暂存区 / HEAD"三个区域,其实是三份不同的文件快照:工作目录就是磁盘上肉眼能看到的文件;HEAD 是上一次提交时的快照,内容全部封在 <a href="git-object-storage.html" target="_blank" rel="noopener">tree/blob 对象</a>里;暂存区(即 <span class="mono">index</span>,也叫 staging area)是"下一次 commit 打算提交的内容",它既不是工作目录、也不是任何一次历史提交,是介于两者之间的一份独立快照。这份快照具体存在哪?就是仓库根目录下的 <span class="mono">.git/index</span>——一个二进制文件,不属于 <span class="mono">.git/objects</span> 那套内容寻址体系,直接用 <span class="mono">cat</span> 打开是一堆乱码。</p>
+</section>
+
+<section>
+  <h2>真实验证:手动解析 .git/index,字段对不对得上 git ls-files</h2>
+  <p class="h2-sub">git add 两个文件,不 commit,直接按字节把 .git/index 解出来。</p>
+  <blockquote class="src">
+    <span class="path">造数据</span>
+echo "hello index" &gt; a.txt
+echo "another file here" &gt; b.txt
+git add a.txt b.txt
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ git ls-files --stage
+100644 eb2fc3ca2f129a710df1a6c0fd5ebfd088a10bfd 0	a.txt
+100644 0f3e019c47668711f39499b2607e014c62b8047d 0	b.txt</pre>
+  </div>
+  <p>这是 git 自己格式化好的结果,真实按 <span class="mono">.git/index</span> 的二进制格式手动解一遍,看解出来的是不是同一份数据。格式并不复杂:开头 12 字节是文件头(4 字节签名 <span class="mono">"DIRC"</span> + 4 字节版本号 + 4 字节条目数),后面跟着 N 条定长为主的记录,每条记录固定部分 62 字节(时间戳、设备号、inode、文件权限 mode、uid/gid、文件大小、20 字节 SHA-1、2 字节 flags),再接一个变长的文件名(以 <span class="mono">\0</span> 结尾),整条记录再补齐到 8 字节的整数倍:</p>
+  <div class="term"><span class="real-tag">真实实测(Python)</span>
+<pre class="code">sig, version, n = struct.unpack(">4sII", data[0:12])
+# sig=b'DIRC' version=2 n=2
+
+pos = 12
+for i in range(n):
+    (ctime_s, ctime_ns, mtime_s, mtime_ns, dev, ino,
+     mode, uid, gid, size, sha1, flags) = struct.unpack(">10I20sH", data[pos:pos+62])
+    pos += 62
+    name_end = data.index(b'\x00', pos)
+    name = data[pos:name_end].decode()
+    # ...条目再按 8 字节对齐跳到下一条</pre>
+<span class="ok">条目 0: name='a.txt'  mode=0o100644  size=12  sha1=eb2fc3ca2f129a710df1a6c0fd5ebfd088a10bfd</span>
+<span class="ok">条目 1: name='b.txt'  mode=0o100644  size=18  sha1=0f3e019c47668711f39499b2607e014c62b8047d</span>
+  </div>
+  <p>手动解出来的 <span class="mono">mode</span>/<span class="mono">size</span>/<span class="mono">sha1</span>/文件名,跟 <span class="mono">git ls-files --stage</span> 的结果逐字段完全一致。<span class="mono">flags</span> 字段的低 12 位记录着文件名长度,解出来也是 5,跟 <span class="mono">"a.txt"</span> 真实长度对得上。</p>
+</section>
+
+<section>
+  <h2>真实验证:文件末尾 20 字节是自校验用的 checksum</h2>
+  <p class="h2-sub">.git/index 是个自校验文件——末尾 20 字节就是对前面所有字节重新算一遍的 SHA-1。</p>
+  <div class="term"><span class="real-tag">真实实测(Python)</span>
+<pre class="code">body, checksum = data[:-20], data[-20:]
+recomputed = hashlib.sha1(body).digest()
+
+print(checksum.hex())
+print(recomputed.hex())
+print(checksum == recomputed)</pre>
+<span class="ok">6c7bf978f3d2d33fe34f55b9a54d8fffe2ee8fae</span>
+<span class="ok">6c7bf978f3d2d33fe34f55b9a54d8fffe2ee8fae</span>
+<span class="ok">True —— 完全一致</span>
+  </div>
+  <p>这跟 <a href="git-object-storage.html" target="_blank" rel="noopener">blob/tree/commit 按内容算哈希</a>是同一套思路的延伸,只是这里哈希的对象是"整个索引文件自己",git 每次读 <span class="mono">.git/index</span> 时都会顺手校验一遍这个值,文件如果被意外截断或改坏,校验不通过就会直接报错,不会假装没事地把错误数据当成合法暂存区读进来。</p>
+</section>
+
+<section>
+  <h2>真实验证:commit 之前,blob 对象已经真实写进了 .git/objects</h2>
+  <p class="h2-sub">容易以为"暂存区只是个内存态的标记,提交时才真正生成内容对象"——真实检查发现不是这样。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ git add a.txt b.txt   # 还没 commit
+
+$ find .git/objects -type f -not -path '*/pack/*' -not -path '*/info/*'
+.git/objects/eb/2fc3ca2f129a710df1a6c0fd5ebfd088a10bfd
+.git/objects/0f/3e019c47668711f39499b2607e014c62b8047d</pre>
+<span class="ok">哈希跟 index 里记录的 sha1 一模一样——commit 命令都还没敲,这两个 blob 对象就已经真实存在于 .git/objects 了</span>
+  </div>
+  <p><span class="mono">git add</span> 这一步,不只是在 <span class="mono">.git/index</span> 里记一笔"这个文件被暂存了",而是立刻把文件当前内容按<a href="git-object-storage.html" target="_blank" rel="noopener">内容寻址规则</a>真实压缩存成一个 blob 对象。<span class="mono">git commit</span> 要做的事,只是拿 <span class="mono">.git/index</span> 里已经就位的这些 <span class="mono">(文件名, mode, sha1)</span> 记录,组装成一个新的 tree 对象,再包一层 commit 对象——文件内容本身在 <span class="mono">add</span> 那一刻就已经落盘了,<span class="mono">commit</span> 没有重新生成任何文件内容。</p>
+</section>
+
+<section>
+  <h2>真实验证:三份不同内容,对应三种 git diff</h2>
+  <p class="h2-sub">让同一个文件在工作目录/暂存区/HEAD 三处内容都不一样,验证三条 diff 命令到底各自在比哪两份。</p>
+  <blockquote class="src">
+    <span class="path">先提交一次,再制造三份不同内容</span>
+git commit -m "commit 1: add a.txt b.txt"
+
+echo "v1-staged" &gt; a.txt
+git add a.txt              # 此刻 index 里是 v1-staged
+echo "v2-working" &gt; a.txt  # 工作目录又改了一次,但没有再 add
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">工作目录: v2-working
+暂存区(git ls-files --stage a.txt): bbc5e5a...
+HEAD(git rev-parse HEAD:a.txt):     eb2fc3c...   # 内容是最早的 "hello index"</pre>
+  </div>
+  <p>现在三处内容真的两两不同,分别跑三条 diff 命令:</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ git diff -- a.txt              # 工作目录 vs 暂存区
+<span class="del">-v1-staged</span>
+<span class="add">+v2-working</span>
+
+$ git diff --cached -- a.txt     # 暂存区 vs HEAD
+<span class="del">-hello index</span>
+<span class="add">+v1-staged</span>
+
+$ git diff HEAD -- a.txt         # 工作目录 vs HEAD(前两者叠加)
+<span class="del">-hello index</span>
+<span class="add">+v2-working</span></pre>
+  </div>
+  <p>三条命令,三个完全不同的结果,精确对应三对区域:<span class="mono">git diff</span> 不带参数比的是"工作目录相对暂存区改了什么"(还没 <span class="mono">add</span> 的部分);<span class="mono">git diff --cached</span> 比的是"暂存区相对上次提交改了什么"(已经 <span class="mono">add</span>、还没 <span class="mono">commit</span> 的部分);<span class="mono">git diff HEAD</span> 相当于把前两段改动加在一起,直接对比工作目录和上次提交。平时"明明 add 了,git diff 却还显示有改动"的疑惑,根源都是工作目录在 <span class="mono">add</span> 之后又被改了一次——三个区域各自独立,任何一个区域的内容都可能跟另外两个不一样。</p>
+  <div class="callout b">
+    <b>flags 字段里还有几个"stage"位没提到</b>——发生合并冲突时,同一个文件在索引里会同时出现 stage 1/2/3(分别代表共同祖先、当前分支、待合并分支的版本),<span class="mono">git ls-files --stage</span> 最前面那列数字平时是 0,冲突时才会看到 1/2/3。这部分涉及三路合并的具体机制,留给系列后面写合并相关的文章。
+  </div>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文 <span class="mono">.git/index</span> 的字节解析、checksum 校验、三份 diff 结果均在本机真实 <span class="mono">git add</span>/<span class="mono">git commit</span> 后用 Python 标准库(<span class="mono">struct</span>/<span class="mono">hashlib</span>)和真实 git 命令现场跑出。</li>
+      <li>对象内容寻址存储参见<a href="git-object-storage.html" target="_blank" rel="noopener">第一篇</a>;本文用到的 index 格式是当前最常见的版本 2,更高版本(v3/v4)在此基础上加了扩展字段和路径压缩,没有展开。</li>
+      <li>没有涉及:合并冲突时 index 里 stage 1/2/3 的具体结构、<span class="mono">git update-index</span> 手动操作暂存区的用法——留给系列后面按需再写。</li>
+    </ul>
+  </div>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Git 内部原理 · 暂存区与 index · 数据来自本机真实运行的 git</footer>
+
+</body>
+</html>

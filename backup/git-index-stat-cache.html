@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>index 的 stat 缓存:git status 为什么快</title>
+<meta name="description" content="解析 .git/index 里每个条目的 stat 缓存(ctime、mtime、dev、ino、mode、uid、gid、size)并与 os.stat 对账;git status 只在 stat 不同时才读文件;core.trustctime=false 加 core.checkStat=minimal 会让原地改写且恢复 mtime 的改动不可见;10,000 个文件时 stat 缓存失效使 git status 从 29 ms 变成 204 ms,cp -a 搬仓库后首次 status 734 ms。">
+<link rel="canonical" href="https://bigywater.tech/git-index-stat-cache.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="index 的 stat 缓存:git status 为什么快">
+<meta property="og:description" content="解析 .git/index 里每个条目的 stat 缓存(ctime、mtime、dev、ino、mode、uid、gid、size)并与 os.stat 对账;git status 只在 stat 不同时才读文件;core.trustctime=false 加 core.checkStat=minimal 会让原地改写且恢复 mtime 的改动不可见;10,000 个文件时 stat 缓存失效使 git status 从 29 ms 变成 204 ms,cp -a 搬仓库后首次 status 734 ms。">
+<meta property="og:url" content="https://bigywater.tech/git-index-stat-cache.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="index 的 stat 缓存:git status 为什么快">
+<meta name="twitter:description" content="解析 .git/index 里每个条目的 stat 缓存(ctime、mtime、dev、ino、mode、uid、gid、size)并与 os.stat 对账;git status 只在 stat 不同时才读文件;core.trustctime=false 加 core.checkStat=minimal 会让原地改写且恢复 mtime 的改动不可见;10,000 个文件时 stat 缓存失效使 git status 从 29 ms 变成 204 ms,cp -a 搬仓库后首次 status 734 ms。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">2319</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">97</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">56</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">34</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">114</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">111</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#8B3FA0; --series-c-soft:#F1E3F6;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#C48AD6; --series-c-soft:#2E1838;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#C48AD6; --series-c-soft:#2E1838;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Git · 35</div>
+  <h1>index 的 stat 缓存:git status 为什么快</h1>
+  <p>git status 在大仓库里为什么能这么快?答案是 index 里的 stat 缓存:只在文件的 stat 变了的时候才去读内容。这篇解析 index 条目、验证 touch 与原地改写时 status 的判断,再测 10,000 个文件时缓存有效与失效的差别,以及 cp -a 之后为什么第一次 status 特别慢。</p>
+  <div class="hero-fact">
+<div><div class="num">29 vs 204 ms</div><div class="lbl">10,000 个文件的仓库,stat 缓存有效与全部失效时 git status 的耗时</div></div><div><div class="num">8 个字段</div><div class="lbl">index 条目里缓存的 stat 信息:ctime、mtime、dev、ino、mode、uid、gid、size</div></div><div><div class="num">734 ms</div><div class="lbl">cp -a 把仓库搬走后第一次 git status 的耗时(inode 与 ctime 全变),第二次只要 28 ms</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="git-branch-rename-delete.html">分支改名与删除对对象的影响</a></div>
+<section>
+  <h2>index 里的 stat</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  index 版本 2,3 个条目,扩展块: [('TREE', 82)]
+  路径               size            mtime(秒.纳秒)  ino      mode    与 stat 一致?
+  a.txt               6 1791728834.904695532  44030464 100644  True
+  src/b.txt           7 1791728834.904872532  44030466 100644  True
+  src/deep/c.txt      2 1791728834.904997991  44030468 100644  True</pre></div>
+  <p>每个 index 条目除了路径、blob hash、flags,还存着该文件当时的 stat:ctime、mtime(秒与纳秒)、dev、ino、权限、uid、gid、大小。解析 .git/index 后逐字段与 <code>os.stat</code> 对比完全一致。</p>
+</section>
+<section>
+  <h2>怎么判断没改</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  只 touch(内容不变,mtime 变了):status 无输出,但要重新读文件算 hash,再把新的 stat 写回 index
+  $ git status --short; echo "(status 为空:内容没变)"
+  (status 为空:内容没变)
+  a.txt 在 index 里的 mtime: 1791728834.904695532 → 1791728836.059909000(git status 顺手刷新了 index)</pre></div>
+  <p><code>git status</code> 对每个文件先比较 stat:全部一致就认定没改,不读内容;只要有字段不同,才去读内容算 hash。如果内容其实没变(比如只是 touch),git 会把新的 stat 写回 index,下次又能走快速路径。</p>
+</section>
+<section>
+  <h2>盲点</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  $ cat a.txt; git status --short; echo "(默认配置:原地改写会更新 ctime,git 发现 stat 不同,重新比较内容,报告 M)"
+  HELLO
+   M a.txt
+  (默认配置:原地改写会更新 ctime,git 发现 stat 不同,重新比较内容,报告 M)
+  $ git config core.trustctime false; git config core.checkStat minimal; cat a.txt; git status --short; echo "(trustctime=false + checkStat=minimal:只比较 mtime 和 size,没有任何输出,看不出改动)"; git diff --stat | wc -l
+  HELLO
+  (trustctime=false + checkStat=minimal:只比较 mtime 和 size,没有任何输出,看不出改动)
+         0
+  $ echo "工作区文件的 blob hash : $(git hash-object a.txt | cut -c1-12)"; echo "index 里记的 blob hash : $(git rev-parse :a.txt | cut -c1-12)"; echo "(两者不同:内容确实变了,只是 git status 的 stat 比较没发现)"
+  工作区文件的 blob hash : e427984d4a2c
+  index 里记的 blob hash : ce013625030b
+  (两者不同:内容确实变了,只是 git status 的 stat 比较没发现)
+  $ git config --unset core.trustctime; git config --unset core.checkStat; git status --short; echo "(恢复默认比较后,ctime 暴露了改动)"
+   M a.txt
+  (恢复默认比较后,ctime 暴露了改动)</pre></div>
+  <p>stat 比较是启发式的:内容改了但大小不变、mtime 又被恢复,只要 ctime 也不比较(<code>core.trustctime=false</code> 加 <code>core.checkStat=minimal</code>),git 就看不出来。默认配置下原地写文件会更新 ctime,把这个改动暴露出来。</p>
+</section>
+<section>
+  <h2>值多少钱</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  stat 缓存有效:git status 29 ms
+  把 10,000 个文件的 mtime 全部改掉(内容不变)后的第一次 git status(要重读全部文件算 hash)204 ms
+  等过 1 秒、再跑一次让 index 刷新之后的 git status(原因见下一篇 racy git:刚被改过的文件会被认为“可能 racy”)29 ms</pre></div>
+  <p>10,000 个小文件,缓存有效 29 ms;缓存全失效要重读所有文件,204 ms,大约 7 倍。文件越多、越大,差距越大。</p>
+</section>
+<section>
+  <h2>搬仓库</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  cp -a 之后第一次 git status 734 ms,第二次 28 ms
+  同样 cp -a,设置 core.checkStat=minimal(只看 mtime 和 size)和 core.trustctime=false 之后第一次 git status 29 ms</pre></div>
+  <p><code>cp -a</code> 保留 mtime 但 inode 与 ctime 变了,index 里的缓存整体失效,第一次 <code>git status</code> 慢(734 ms),第二次恢复。把 stat 检查放宽到 mtime 和 size 可以避开,但放弃了 ctime 带来的保护。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">index 的 stat 缓存</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "b", "kind": "bars", "label": "数字对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "用 Python 解析 .git/index:版本 2,3 个条目,扩展块 TREE(82 字节,缓存的目录树)。每个条目除了路径和 blob hash,还有一份文件的 stat 信息:ctime、mtime(秒加纳秒)、dev、ino、权限模式、uid、gid、文件大小。逐字段与 os.stat 对比,三个文件全部一致(True)。git 创建这条记录时,把当时磁盘上文件的 stat 抄了一份存进去。", "s": {"t": {"lines": ["  index 版本 2,3 个条目,扩展块: [('TREE', 82)]", "  路径               size            mtime(秒.纳秒)  ino      mode    与 stat 一致?", "  a.txt               6 1791728834.904695532  44030464 100644  True", "  src/b.txt           7 1791728834.904872532  44030466 100644  True", "  src/deep/c.txt      2 1791728834.904997991  44030468 100644  True"], "cur": [], "mark": [], "done": []}, "mark": [2, 3, 4], "done": [0], "kv": {"items": [["条目里有", "ctime、mtime、dev、ino、mode、uid、gid、size"], ["再加", "blob hash、flags、路径"], ["来源", "创建条目时从磁盘 stat 抄来"]], "hl": ["条目里有"]}}}, {"note": "git status 判断“没改”的方式:把磁盘上现在的 stat 和 index 里存的比较,全部一致就认为没改,不读文件内容。如果只是 touch(内容没变、mtime 变了),git 发现 stat 不同,就得读文件算 hash 确认内容没变;结果无输出,并且顺手把新的 stat 写回 index——a.txt 在 index 里的 mtime 从上一个值更新成了新的(秒数增加)。下一次 status 就又只比 stat 了。", "s": {"t": {"lines": ["  只 touch(内容不变,mtime 变了):status 无输出,但要重新读文件算 hash,再把新的 stat 写回 index", "  $ git status --short; echo \"(status 为空:内容没变)\"", "  (status 为空:内容没变)", "  a.txt 在 index 里的 mtime: 1791728834.904695532 → 1791728836.059909000(git status 顺手刷新了 index)"], "cur": [], "mark": [], "done": []}, "mark": [1, 2, 3], "done": [0], "kv": {"items": [["stat 一致", "认为没改,不读内容"], ["stat 不同", "读内容算 hash 再确认"], ["确认没改", "把新的 stat 写回 index"]], "hl": ["stat 不同"]}}}, {"note": "stat 缓存的盲点:把 a.txt 原地改成同样 6 个字节的 HELLO,再把 mtime 恢复成原值。默认配置下 ctime 暴露了改动(原地写入会更新 ctime),git status 报告 M a.txt。把 core.trustctime=false 和 core.checkStat=minimal(只比较 mtime 和 size)打开,同样的改动再来一次,git status 和 git diff --stat 都没有任何输出;但 git hash-object a.txt(e427984d…)与 index 里的 hash(ce013625…)不同——内容确实变了。恢复默认配置后,git status 又报告 M a.txt。", "s": {"t": {"lines": ["  $ cat a.txt; git status --short; echo \"(默认配置:原地改写会更新 ctime,git 发现 stat 不同,重新比较内容,报告 M)\"", "  HELLO", "   M a.txt", "  (默认配置:原地改写会更新 ctime,git 发现 stat 不同,重新比较内容,报告 M)", "  $ git config core.trustctime false; git config core.checkStat minimal; cat a.txt; git status --short; echo \"(trustctime=false + checkStat=minimal:只比较 mtime 和 size,没有任何输出,看不出改动)\"; git diff --stat | wc -l", "  HELLO", "  (trustctime=false + checkStat=minimal:只比较 mtime 和 size,没有任何输出,看不出改动)", "         0", "  $ echo \"工作区文件的 blob hash : $(git hash-object a.txt | cut -c1-12)\"; echo \"index 里记的 blob hash : $(git rev-parse :a.txt | cut -c1-12)\"; echo \"(两者不同:内容确实变了,只是 git status 的 stat 比较没发现)\"", "  工作区文件的 blob hash : e427984d4a2c", "  index 里记的 blob hash : ce013625030b", "  (两者不同:内容确实变了,只是 git status 的 stat 比较没发现)", "  $ git config --unset core.trustctime; git config --unset core.checkStat; git status --short; echo \"(恢复默认比较后,ctime 暴露了改动)\"", "   M a.txt", "  (恢复默认比较后,ctime 暴露了改动)"], "cur": [], "mark": [], "done": []}, "mark": [4, 6, 8, 9, 11], "done": [0, 2, 3, 12, 13, 14], "kv": {"items": [["默认", "ctime 也比较,原地改写会暴露"], ["trustctime=false + checkStat=minimal", "只比 mtime 和 size,可被伪造"], ["代价", "换来更少的重新哈希"]], "hl": ["trustctime=false + checkStat=minimal"]}}}, {"note": "stat 缓存有多重要:10,000 个小文件的仓库,stat 缓存有效时 git status 29 ms;把 10,000 个文件的 mtime 全部改掉(内容不变)后第一次 git status 要重读所有文件算 hash,204 ms;等过 1 秒、再跑一次让 index 刷新之后,git status 又回到 29 ms。省的就是读 10,000 个文件的时间(差约 7 倍)。刚被改过的文件需要等一会儿才能恢复快速状态,原因在下一篇 racy git。", "s": {"t": {"lines": ["  stat 缓存有效:git status 29 ms", "  把 10,000 个文件的 mtime 全部改掉(内容不变)后的第一次 git status(要重读全部文件算 hash)204 ms", "  等过 1 秒、再跑一次让 index 刷新之后的 git status(原因见下一篇 racy git:刚被改过的文件会被认为“可能 racy”)29 ms"], "cur": [], "mark": [], "done": []}, "mark": [1], "done": [0, 2], "b": {"items": [["stat 缓存有效", 29, "29 ms"], ["mtime 全被改后的第一次", 204, "204 ms"], ["index 刷新之后", 29, "29 ms"]], "max": 204, "cur": [], "mark": [1], "done": [0, 2]}, "kv": {"items": [["10,000 个文件", "stat 对 vs 重新哈希"], ["缓存有效", "29 ms"], ["缓存失效", "204 ms(约 7 倍)"]], "hl": ["缓存失效"]}}}, {"note": "cp -a 把整个仓库复制到别处:文件内容和 mtime 保留,但 inode 和 ctime 变了,index 里的 ino、ctime 全部失效,第一次 git status 要重新哈希全部文件,734 ms,第二次又回到 28 ms。如果设置 core.checkStat=minimal 和 core.trustctime=false(只比 mtime 和 size),同样的 cp -a 之后第一次 git status 就只要 29 ms。这是搬仓库后第一次 status 特别慢的原因。", "s": {"t": {"lines": ["  cp -a 之后第一次 git status 734 ms,第二次 28 ms", "  同样 cp -a,设置 core.checkStat=minimal(只看 mtime 和 size)和 core.trustctime=false 之后第一次 git status 29 ms"], "cur": [], "mark": [], "done": []}, "mark": [0, 1], "done": [0], "b": {"items": [["cp -a 后第一次", 734, "734 ms"], ["cp -a 后第二次", 28, "28 ms"], ["minimal + 无 ctime", 29, "29 ms"]], "max": 734, "cur": [], "mark": [0], "done": [1, 2]}, "kv": {"items": [["cp -a", "inode、ctime 变了,stat 缓存全部失效"], ["第二次", "回到快速状态"], ["minimal", "只比较 mtime 和 size,不受影响"]], "hl": ["cp -a"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / git 2.54.0(Apple Git-157);每个实验在临时目录里新建仓库,HOME 和全局配置指向实验专用的空目录(不读用户自己的 git 配置),提交的作者与时间固定以便复现;需要网络协议的实验用本机的 file:// 或 git daemon 回环端口(9800 以上),不碰任何远程仓库;计时用 time.perf_counter,数字每次运行会有小幅抖动。文件系统是 macOS APFS(纳秒级时间戳);index 解析器是我写的 Python(ll.py 的 parse_index,只处理 v2/v3);耗时 3 次中位数,含进程启动;第四节在每次计时前等过 1 秒以避开 racy 窗口(原因见下一篇)</li><li>没有验证:index v4(路径前缀压缩)、split index、sparse index 的 stat 保存;Linux / Windows 上 stat 字段的差异(dev、ino 的稳定性);core.checkStat 的 default 与 minimal 之间每个字段的具体取舍;fsmonitor 与 untracked cache(见后面一篇)</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="git-racy-git.html">
+    <div>
+      <div class="t1">下一篇 · GIT 36</div>
+      <div class="t2">racy git:时间戳相同时怎么避免误判</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Git · index 的 stat 缓存:git status 为什么快 · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

@@ -1,0 +1,22 @@
+from lib import *
+S = SS('g95')
+steps = [
+    step("并行子测试里捕获循环变量(同一份测试代码,只改 go.mod 里的 go 版本):每个子测试里检查 t.Name() 是否以 \"/\" + tc.name 结尾。go.mod 写 go 1.21:退出码 1,子测试 TestCapture/two 里看到的 tc.name 是 \"three\",TestCapture/one 里看到的也是 \"three\"(它们测的是别人的用例),只有 TestCapture/three 通过;go.mod 写 go 1.22:3 个子测试全部通过。(检查 tc.in 和 tc.want 是否一致发现不了问题——它们同属最后一个用例,恰好互相一致。)", t=tl(S(1)), mark=lidx(S(1), 'go 1.21', '看到的 tc.name', '--- FAIL'), done=lidx(S(1), 'go 1.22', 'TestCapture/three', 'PASS'), b=bars([['go 1.21:通过的子测试', 1, '1/3'], ['go 1.22:通过的子测试', 3, '3/3']], 3, mark=[0], done=[1]), kv=KV([['go 1.21 语义', '所有子测试共享同一个 tc,都看到最后一个'], ['go 1.22 起', '每次迭代一个新变量,正确'], ['陷阱', '检查值与期望一致仍可能掩盖问题']], ['go 1.21 语义'])),
+    step("子测试名里的空格、重复、斜杠、空串:名字 \"a b\" 变成 TestNames/a_b(空格换成下划线);重复的 \"a b\" 变成 TestNames/a_b#01;\"x/y\" 保留成 TestNames/x/y(斜杠不转义,会被当成层级);空字符串变成 TestNames/#00;\"UPPER\" 不变;含制表符的名字里的制表符变成下划线(TestNames/tab_here)。", t=tl(S(2)), mark=lidx(S(2), 'a_b#01', '#00', 'x/y'), done=lidx(S(2), 'TestNames/a_b', 'UPPER', 'tab_here'), kv=KV([['空格', '换成 _'], ['重名', '加 #01、#02…'], ['空串', '#00'], ['斜杠', '不转义,会被当成层级']], ['斜杠'])),
+    step("用 -run 选子测试(斜杠分隔,每一段是一个正则):go test -run \"TestNames/a_b\" 运行了 TestNames、TestNames/a_b 和 TestNames/a_b#01(正则匹配到两个);go test -run \"TestNames/^a_b#01$\" 只运行 TestNames 和 TestNames/a_b#01。", t=tl(S(3)), mark=lidx(S(3), 'TestNames/a_b" 运行了', '^a_b#01'), kv=KV([['-run 的每一段', '都是正则,用 ^ 和 $ 精确匹配'], ['重名的用例', '用 #01 区分']], ['-run 的每一段'])),
+    step("-parallel 限制并行子测试的数量(8 个各睡 30 ms 的并行子测试;总用时含测试二进制启动约 0.1 秒):-parallel=1:同时在跑的最多 1 个,总用时 0.356 s;-parallel=2:最多 2 个,0.245 s;-parallel=4:最多 4 个,0.168 s;-parallel=8:最多 8 个,0.134 s。", t=tl(S(4)), mark=lidx(S(4), '-parallel=1', '-parallel=2'), done=lidx(S(4), '-parallel=4', '-parallel=8'), b=bars([['-parallel=1:总用时 (ms)', 356, '356'], ['-parallel=2', 245, '245'], ['-parallel=4', 168, '168'], ['-parallel=8', 134, '134']], 356, mark=[0, 1], done=[2, 3]), kv=KV([['-parallel', '限制同时运行的并行测试数量'], ['默认值', 'GOMAXPROCS'], ['这里', '同时在跑的最多个数 = -parallel']], ['-parallel'])),
+    step("文档:语言规范(go_spec.html)——Each iteration has its own separate declared variable (or variables) [Go 1.22]。后面一次迭代使用的变量在执行 post 语句之前隐式声明,并用上一次迭代那个变量此刻的值初始化。testing.T.Run:在单独的 goroutine 里运行 f 作为名为 name 的子测试,并阻塞到 f 返回或调用 t.Parallel 成为并行测试;外层测试函数返回之前,所有对 Run 的调用必须已返回。", t=tl(S(5)), done=lidx(S(5), 'Each iteration has its own separate'), mark=lidx(S(5), 'Run runs f as a subtest'), kv=KV([['Go 1.22 起', '每次迭代一个新的循环变量'], ['t.Run', '在单独的 goroutine 里运行子测试'], ['t.Parallel', '把子测试放到外层测试结束后并行运行']], ['Go 1.22 起'])),
+]
+A = mkartg('g95', 95, 'Go,表驱动测试,子测试,t.Parallel,循环变量,真实验证,动画演示',
+    '在 Go 1.27.1 里复现并行子测试的循环变量捕获问题:同一份测试代码,go.mod 写 go 1.21 时两个子测试看到的是最后一个用例的名字(3 个里只有 1 个通过),写 go 1.22 时全部通过;子测试名的转义规则(空格→_、重名→#01、空串→#00、斜杠保留);-run 的斜杠分隔与正则;-parallel 限制并行度。',
+    '表驱动测试配合 t.Parallel 的子测试,是 Go 1.22 之前最经典的循环变量陷阱:所有子测试看到的都是最后一个用例。这篇用同一份代码、只改 go.mod 的 go 版本复现它,并验证子测试名的转义规则、-run 怎么选子测试、-parallel 如何限制并行度。',
+    [('1/3 vs 3/3', '同一份并行子测试代码,go.mod 写 go 1.21 与 go 1.22 时通过的子测试数'), ('a_b#01', '重名的子测试名 "a b" 第二个被命名的结果'), ('-parallel=N', '同时在跑的并行子测试最多就是 N 个(实测 1、2、4、8)')],
+    [('Go 1.22 之前的陷阱', '<p>子测试里调用了 <code>t.Parallel()</code> 就会暂停,等外层循环跑完才继续,这时共享的循环变量 <code>tc</code> 已经是最后一个用例。go.mod 写 <code>go 1.21</code> 时,"one" 和 "two" 两个子测试都看到了 <code>tc.name == "three"</code>,而且因为 <code>tc.in</code> 与 <code>tc.want</code> 同属最后一个用例,用它们互相比较是检查不出来的——必须拿子测试的名字之类的独立信息来对照。</p>'),
+     ('Go 1.22 起', '<p>规范规定每次迭代有自己独立的变量。同一份代码在 <code>go 1.22</code> 的模块里全部通过。注意这是按模块的 go 版本决定的:Go 1.27.1 工具链编译 <code>go 1.21</code> 的模块仍然是旧语义,老项目升级工具链后不改 go.mod 不会自动获得新语义。</p>'),
+     ('子测试名', '<p>空格变成下划线,重名加 <code>#01</code>,空字符串是 <code>#00</code>,斜杠不转义(<code>x/y</code> 会被当作层级),制表符也变成下划线。<code>-run</code> 用斜杠分隔每一层,每层都是正则,所以 <code>TestNames/a_b</code> 匹配到两个,要精确选择就加 <code>^</code> 和 <code>$</code>。</p>'),
+     ('并行度', '<p><code>-parallel=N</code> 限制同时运行的并行测试数,实验里同时在跑的子测试最多正好是 N(1、2、4、8)。总用时从 0.356 s 降到 0.134 s(含测试二进制启动的约 0.1 秒)。</p>'),
+     ('文档', '<p>语言规范明确写着 “Each iteration has its own separate declared variable”,并标注 [Go 1.22]。<code>t.Run</code> 的文档说明子测试在单独的 goroutine 里运行,调用 <code>t.Parallel</code> 之前它阻塞外层。</p>')],
+    steps,
+    [ENV_G + '。同一份测试代码放在两个模块里,仅 go.mod 的 go 行不同(1.21 / 1.22);检查方式是比较 t.Name() 的后缀与 tc.name;并行度实验 8 个各睡 30 ms 的并行子测试,总用时含测试二进制启动;读过的文档:go_spec.html 里 for 语句一节,go doc testing.T.Run',
+     '没有验证:t.Setenv 与 t.Parallel 的冲突、子测试里 t.Fatal 的传播细节、-shuffle、testing/synctest 配合表驱动测试、基于 map 的表驱动用例的随机顺序、go vet 对循环变量捕获的检查'],
+    '表驱动测试与子测试')

@@ -1,0 +1,534 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>有了 GIL,为什么还要手动加锁</title>
+<meta name="description" content="字节码级别原子性与语句级别竞态条件的边界。">
+<link rel="canonical" href="https://bigywater.tech/lock.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="有了 GIL,为什么还要手动加锁">
+<meta property="og:description" content="字节码级别原子性与语句级别竞态条件的边界。">
+<meta property="og:url" content="https://bigywater.tech/lock.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="有了 GIL,为什么还要手动加锁">
+<meta name="twitter:description" content="字节码级别原子性与语句级别竞态条件的边界。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F3F6FA; --paper:#FFFFFF; --ink:#1A2233; --ink-dim:#5A6B80; --line:#DCE4EE;
+  --py-c:#2F6FB0; --py-c-soft:#E4EEF9;
+  --mem-c:#C99A2E; --mem-c-soft:#FBF2DC;
+  --gil-c:#7B4FA8; --gil-c-soft:#EFE6F7;
+  --code-bg:#1B2233; --code-ink:#E7ECF5;
+  --shadow: 0 1px 2px rgba(20,30,50,.06), 0 8px 24px -12px rgba(20,30,50,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#10151F; --paper:#1A2233; --ink:#E7ECF5; --ink-dim:#9AAAC0; --line:#2C3850;
+    --py-c:#6FA8E0; --py-c-soft:#1E3350;
+    --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+    --gil-c:#B08AE0; --gil-c-soft:#332545;
+    --code-bg:#0D1119; --code-ink:#E2E8F5;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#10151F; --paper:#1A2233; --ink:#E7ECF5; --ink-dim:#9AAAC0; --line:#2C3850;
+  --py-c:#6FA8E0; --py-c-soft:#1E3350;
+  --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+  --gil-c:#B08AE0; --gil-c-soft:#332545;
+  --code-bg:#0D1119; --code-ink:#E2E8F5;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--py-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--py-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--py-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--py-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.a .tag{background:var(--py-c-soft); color:var(--py-c);}
+.card.b .tag{background:var(--mem-c-soft); color:var(--mem-c);}
+.card.c .tag{background:var(--gil-c-soft); color:var(--gil-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#8FA0BC; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#9FC3EE;}
+
+.callout{border-left:3px solid var(--py-c); background:var(--py-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+.callout.c{border-color:var(--gil-c); background:var(--gil-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--py-c-soft); color:var(--py-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#9FC3EE;}
+.term pre.code{margin:0 0 10px; color:#9FC3EE; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+.term .cm{color:#7C8CA8;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--mem-c-soft); color:var(--mem-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:22px 20px;}
+.scenario-tag{display:inline-block; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.05em; text-transform:uppercase; padding:3px 10px; border-radius:6px; margin-bottom:16px;}
+.scenario-tag.no-lock{background:var(--gil-c-soft); color:var(--gil-c);}
+.scenario-tag.with-lock{background:var(--py-c-soft); color:var(--py-c);}
+.race-grid{display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px;}
+@media (max-width:640px){.race-grid{grid-template-columns:1fr;}}
+.race-box{border:1px solid var(--line); border-radius:10px; padding:14px 16px; background:var(--bg); text-align:center;}
+.race-box.active{border-color:var(--py-c); box-shadow:0 0 0 2px var(--py-c-soft) inset;}
+.race-box h5{margin:0 0 8px; font-size:.72rem; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-dim); font-weight:700;}
+.race-box .val{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.6rem; font-weight:700; color:var(--ink);}
+.race-box .val.empty{color:var(--ink-dim); font-size:1.1rem;}
+.race-box.locked{border-color:var(--gil-c);}
+.lock-badge{display:inline-block; margin-top:8px; font-size:.7rem; padding:2px 8px; border-radius:5px; background:var(--gil-c-soft); color:var(--gil-c); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+.stat-row{display:flex; gap:16px; flex-wrap:wrap; margin:14px 0 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem;}
+.stat{border:1px solid var(--line); border-radius:8px; padding:8px 12px; background:var(--bg);}
+.stat b{color:var(--py-c); display:block; font-size:1rem; font-variant-numeric:tabular-nums;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--py-c); color:var(--py-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--py-c); border-color:var(--py-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{display:flex; align-items:center; gap:10px; margin-bottom:24px; font-size:.88rem; color:var(--ink-dim); flex-wrap:wrap;}
+.prev-post a{font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--py-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Python 系列 · 第二篇</div>
+    <h1>GIL 都保证同一时刻只有一个线程在跑了,为什么代码里还要 <span class="mono">threading.Lock</span>?</h1>
+    <p>上一篇验证了 GIL 让纯计算多线程完全没有加速——很容易顺着这个结论推出"既然同一时刻只有一个线程在执行,那共享变量肯定不会出问题"。这一篇专门戳破这个推论:GIL 保证的是"字节码指令级别不会被打断",不是"一段 Python 语句、更不是一整个业务逻辑不会被打断"。本机实验里,先是怎么都没能把一个经典的计数器竞争条件测出来(一个意外的结果),查源码搞清楚原因之后,换一种会触发切换的写法,稳定复现了丢更新,最后用真锁修复。</p>
+    <div class="hero-fact">
+      <div><div class="num">2034 / 2400</div><div class="lbl">本机真实实测:不加锁,故意制造切换窗口后丢失的更新数</div></div>
+      <div><div class="num">0 / 2400</div><div class="lbl">同样的代码,加上 <span class="mono">threading.Lock</span> 后,真实实测零丢失</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <div class="prev-post">← 接上篇 <a href="gil.html" target="_blank" rel="noopener">Python GIL 全局解释器锁</a></div>
+  <h2>官方文档早就说清楚了:哪些操作是原子的</h2>
+  <p class="h2-sub">CPython 官方 FAQ 里有一份明确的清单,列出了哪些"看起来简单"的操作因为对应单条字节码而是原子的,哪些不是。</p>
+  <blockquote class="src">
+    <span class="path">Doc/faq/library.rst · <a href="https://github.com/python/cpython/blob/v3.14.7/Doc/faq/library.rst#L377" target="_blank" rel="noopener">cpython @ v3.14.7, L377</a></span>
+For example, the following operations are all atomic (L, L1, L2 are lists, D,
+D1, D2 are dicts, x, y are objects, i, j are ints)::
+
+   L.append(x)
+   x = L[i]
+   x = L.pop()
+   x = y
+   x.field = y
+   D[x] = y
+
+These aren't::
+
+   i = i+1
+   L.append(L[-1])
+   L[i] = L[j]
+   D[x] = D[x] + 1
+  </blockquote>
+  <p>区分标准很直接:一个操作如果对应<b>单条</b>字节码指令(比如简单赋值、下标读取),中间没有机会被打断,就是原子的;凡是"先读、再算、再写回"这种拆成好几步的复合操作,理论上都可能在读和写之间被切换到别的线程。</p>
+</section>
+
+<section>
+  <h2>实验(一):想验证"不是原子的",结果怎么都测不出来</h2>
+  <p class="h2-sub">按官方文档说的,<span class="mono">counter += 1</span> 应该不是原子的。本机用 8 个线程各累加 20 万次试了一遍。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cmd">$ python3 exp_race.py</span>
+<span class="ok">expected: 1600000
+actual  : 1600000
+lost updates: 0
+time: 0.042s</span>
+  </div>
+  <p>一次没丢可能是运气。把 <span class="mono">sys.setswitchinterval()</span> 调到 1 微秒(默认是 5000 微秒,相当于把切换频率提高了 5000 倍),线程数加到 32、总操作数加到 1600 万,再试:</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cmd">$ python3 exp_race6.py   # switchinterval=1e-6, 40 线程 x 30万次,连跑 3 轮</span>
+<span class="ok">trial 0: expected=12000000 actual=12000000 lost=0 time=6.62s
+trial 1: expected=12000000 actual=12000000 lost=0 time=7.50s
+trial 2: expected=12000000 actual=12000000 lost=0 time=6.39s</span>
+  </div>
+  <p>三轮,一次都没丢。这和官方文档"<span class="mono">i = i+1</span> 不是原子的"这个明确说法对不上——不是文档错了,是这背后有一个值得挖一挖的原因。</p>
+</section>
+
+<section>
+  <h2>源码调查:切换检查点根本不在这条语句的字节码里</h2>
+  <p class="h2-sub">GIL 会不会被打断,不取决于"这个操作是不是原子的"这种笼统说法,取决于解释器主循环<b>在哪些字节码指令上真的检查了</b>"该让出去了吗"这个信号。</p>
+  <blockquote class="src">
+    <span class="path">Python/bytecodes.c · <a href="https://github.com/python/cpython/blob/v3.14.7/Python/bytecodes.c#L155" target="_blank" rel="noopener">cpython @ v3.14.7, L155</a></span>
+op(_CHECK_PERIODIC, (--)) {
+    _Py_CHECK_EMSCRIPTEN_SIGNALS_PERIODICALLY();
+    QSBR_QUIESCENT_STATE(tstate);
+    if (_Py_atomic_load_uintptr_relaxed(&tstate->eval_breaker) & _PY_EVAL_EVENTS_MASK) {
+        int err = _Py_HandlePending(tstate);
+        ERROR_IF(err != 0);
+    }
+}
+  </blockquote>
+  <p>这段 <span class="mono">_CHECK_PERIODIC</span> 就是真正检查"要不要把 GIL 让出去"的地方。搜遍源码,它只被组装进了两种指令的宏定义里:</p>
+  <blockquote class="src">
+    <span class="path">Python/bytecodes.c · <a href="https://github.com/python/cpython/blob/v3.14.7/Python/bytecodes.c#L2927" target="_blank" rel="noopener">cpython @ v3.14.7, L2927</a> / <a href="https://github.com/python/cpython/blob/v3.14.7/Python/bytecodes.c#L3836" target="_blank" rel="noopener">L3836</a></span>
+macro(JUMP_BACKWARD) =
+    unused/1 + _SPECIALIZE_JUMP_BACKWARD + _CHECK_PERIODIC + JUMP_BACKWARD_NO_INTERRUPT;
+
+macro(CALL) = _SPECIALIZE_CALL + unused/2 + _MAYBE_EXPAND_METHOD + _DO_CALL + _CHECK_PERIODIC;
+  </blockquote>
+  <p><span class="mono">LOAD_GLOBAL</span>、<span class="mono">BINARY_OP</span>、<span class="mono">STORE_GLOBAL</span> 这几条指令本身都没有嵌 <span class="mono">_CHECK_PERIODIC</span>。用 <span class="mono">dis</span> 模块把 <span class="mono">counter += 1</span> 反汇编一下,能直接看到这条语句对应的完整指令序列(<span class="mono">RESUME</span>/<span class="mono">RETURN_VALUE</span> 是函数进出的固定开销,和这次加法本身无关):</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">import dis
+def f():
+    global counter
+    counter += 1
+dis.dis(f)</pre>
+<span class="ok">  3           RESUME                   0
+
+  5           LOAD_GLOBAL              0 (counter)
+              LOAD_SMALL_INT           1
+              BINARY_OP               13 (+=)
+              STORE_GLOBAL             0 (counter)
+              LOAD_CONST               1 (None)
+              RETURN_VALUE</span>
+  </div>
+  <p>"读、算、写"三步,对应四条指令:<span class="mono">LOAD_GLOBAL</span>(读)、<span class="mono">LOAD_SMALL_INT</span>(准备操作数 1)、<span class="mono">BINARY_OP</span>(算)、<span class="mono">STORE_GLOBAL</span>(写回)。四条里没有一条是 <span class="mono">CALL</span> 或 <span class="mono">JUMP_BACKWARD</span>——对照上面 <span class="mono">_CHECK_PERIODIC</span> 只嵌在这两种指令里的事实,这条语句从头到尾就不存在真正的切换检查点。也就是说:<b>只有在循环跳回起点(<span class="mono">JUMP_BACKWARD</span>)或者发生函数调用(<span class="mono">CALL</span>)的时候,解释器才会真的检查该不该让出 GIL。</b>纵使别的线程已经"申请"了切换,当前线程也会一口气把这四条指令执行完才可能被打断。这就是为什么无论怎么调 <span class="mono">switchinterval</span>、开多少线程,单纯的 <span class="mono">i = i+1</span> 在这台机器这个版本上都测不出丢失。</p>
+  <div class="callout c">
+    <b>但这不是一个可以依赖的保证。</b> 官方 FAQ 白纸黑字写着"这不是原子的"——它描述的是语言层面不做任何承诺,不是这一个 CPython 版本的具体实现细节。检查点插在哪些指令上,是解释器内部实现,不同版本之间完全可能变化(更早的 CPython 版本是按固定数量的字节码计数来检查,粒度更细,同样的代码在那些版本上是真的会丢的)。本文接下来会构造一个不依赖任何版本细节、能在任何 Python 实现上稳定复现的反例。
+  </div>
+</section>
+
+<section>
+  <h2>实验(二):插入一个会触发切换的调用点,稳定复现</h2>
+  <p class="h2-sub"><span class="mono">time.sleep()</span> 这类阻塞调用不受 <span class="mono">interval</span> 计时器控制,进去就无条件释放 GIL——在读和写之间插一个的 <span class="mono">time.sleep(0)</span>,制造一个必然存在的切换窗口。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cmd">$ cat exp_race4.py</span>
+<span class="cm">def bump_forced_race():
+    global counter
+    tmp = counter        # 读
+    time.sleep(0)         # 无条件让出 GIL,的切换点
+    counter = tmp + 1      # 写回——这时候别的线程可能已经用同一个 tmp 写过了</span>
+
+<span class="cmd">$ python3 exp_race4.py   # 8 线程,每个线程 300 次</span>
+<span class="ok">expected: 2400
+actual  : 366
+lost updates: 2034</span>
+  </div>
+  <p>2400 次递增,丢了 2034 次——绝大多数更新都因为多个线程用同一个"读到的旧值"覆盖式写回而消失了。这才是官方 FAQ 那句"<span class="mono">i = i+1</span> 不是原子的"真正想说明的风险:一旦复合操作中间存在任何的让出点(阻塞 I/O、<span class="mono">sleep</span>、甚至纯粹运气不好被中断在循环跳转处),竞争就会发生。</p>
+</section>
+
+<section>
+  <h2>实验(三):加上真锁,零丢失</h2>
+  <p class="h2-sub">一字不改前面的竞态逻辑,只是把"读、等待、写"三步包进 <span class="mono">with lock:</span>。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cmd">$ python3 exp_race5.py   # 同样的 8 线程 x 300 次,多了 threading.Lock()</span>
+<span class="ok">expected: 2400
+actual  : 2400
+lost updates: 0</span>
+  </div>
+  <p>完全修复。锁保证的不是"字节码不被打断"(GIL 已经在做类似的事,但粒度是指令级、不是语句级),而是"临界区(读+算+写)作为一个整体,不允许被第二个线程插入"——这正是 GIL 本身不提供、也从来没打算提供的保证。</p>
+</section>
+
+<section>
+  <h2>演示:同一段竞态逻辑,加锁前后逐步对比</h2>
+  <p class="h2-sub">两个线程各做一次"读、算、写",初始值 5。第一遍不加锁,按最坏情况交替执行;第二遍加锁,重放同样的交替请求。</p>
+  <div class="demo" id="raceDemo">
+    <div class="demo-head">竞态条件 vs 加锁 演示</div>
+    <div class="demo-narration" id="raceNarration"></div>
+    <div class="demo-body">
+      <span class="scenario-tag no-lock" id="raceTag">不加锁</span>
+      <div class="race-grid">
+        <div class="race-box" id="raceBoxA"><h5>线程 A 本地值</h5><div class="val empty" id="raceValA">—</div></div>
+        <div class="race-box" id="raceBoxCounter"><h5>共享 counter</h5><div class="val" id="raceValCounter">5</div></div>
+        <div class="race-box" id="raceBoxB"><h5>线程 B 本地值</h5><div class="val empty" id="raceValB">—</div></div>
+      </div>
+      <div class="stat-row" id="raceStats"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="raceReset">⏮ 重来</button>
+      <button class="btn" id="racePrev">‹ 上一步</button>
+      <button class="btn primary" id="raceNext">下一步 ›</button>
+      <button class="btn" id="racePlay">▶ 自动播放</button>
+      <span class="step-counter" id="raceCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">数据来自独立验证过的 Python 模拟(读/算/写三个微步骤,和字节码序列对应),两种场景的最终结果、每一步"谁读到了什么值",都用一套独立的暴力回放算法核对过;加锁场景还额外校验过"任意时刻临界区内不会同时出现两个线程"。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文全部五组实验(<span class="mono">exp_race.py</span> 到 <span class="mono">exp_race6.py</span>)均在本机运行的 Python 3.14.7 上完成,数据未做删改,包括"没能测出竞争"的负面结果——这一点在正文里如实呈现并顺着它去查了源码,而不是换个例子回避掉。</li>
+      <li>源码引用(<span class="mono">Doc/faq/library.rst</span> 的原子操作清单、<span class="mono">Python/bytecodes.c</span> 的 <span class="mono">_CHECK_PERIODIC</span>、<span class="mono">JUMP_BACKWARD</span>/<span class="mono">CALL</span> 宏组装)取自 <span class="mono">python/cpython</span> 仓库 <span class="mono">v3.14.7</span> 标签,与本机安装的 Python 3.14.7 完全一致;用 <span class="mono">dis.dis()</span> 反汇编过 <span class="mono">counter += 1</span> 对应的字节码序列(<span class="mono">LOAD_GLOBAL</span>/<span class="mono">LOAD_SMALL_INT</span>/<span class="mono">BINARY_OP</span>/<span class="mono">STORE_GLOBAL</span>),确认其中确实不含 <span class="mono">CALL</span> 或 <span class="mono">JUMP_BACKWARD</span>。</li>
+      <li>"检查点只在 <span class="mono">JUMP_BACKWARD</span>/<span class="mono">CALL</span> 里"这一结论,是这次调查过程中读源码得出的具体版本实现细节,不是语言规范的一部分——本文正文和这里都刻意强调了这一点,避免读者把"这个版本测不出来"误当成"可以不用加锁"的通用结论。</li>
+      <li>没有涉及:<span class="mono">RLock</span>(可重入锁)、<span class="mono">Condition</span>/<span class="mono">Semaphore</span> 等其他同步原语、死锁的产生与检测、以及自由线程(no-GIL)构建下这套"检查点"机制会发生什么变化(自由线程版本没有 GIL,需要更细粒度的原子操作或锁,行为和本文测的标准版完全不同)。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="refcount.html" target="_blank" rel="noopener">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">引用计数:对象什么时候真的被释放</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Python 系列 · 第二篇 · GIL 与手动加锁 · 数据来自本机运行的 Python 3.14.7</footer>
+
+<script>
+const DATA = {"combined": [{"thread": "A", "value": 5, "type": "read", "scenario": "no-lock"}, {"thread": "B", "value": 5, "type": "read", "scenario": "no-lock"}, {"thread": "A", "newLocalValue": 6, "type": "compute", "scenario": "no-lock"}, {"thread": "B", "newLocalValue": 6, "type": "compute", "scenario": "no-lock"}, {"thread": "A", "wroteValue": 6, "type": "write", "scenario": "no-lock"}, {"thread": "B", "wroteValue": 6, "type": "write", "scenario": "no-lock"}, {"type": "divider", "scenario": "divider"}, {"thread": "A", "type": "lock-acquire", "scenario": "with-lock"}, {"thread": "A", "value": 5, "type": "read", "scenario": "with-lock"}, {"thread": "B", "waitingFor": "A", "type": "blocked", "scenario": "with-lock"}, {"thread": "A", "newLocalValue": 6, "type": "compute", "scenario": "with-lock"}, {"thread": "B", "waitingFor": "A", "type": "blocked", "scenario": "with-lock"}, {"thread": "A", "wroteValue": 6, "type": "write", "scenario": "with-lock"}, {"thread": "A", "type": "lock-release", "scenario": "with-lock"}, {"thread": "B", "type": "lock-acquire", "scenario": "with-lock"}, {"thread": "B", "value": 6, "type": "read", "scenario": "with-lock"}, {"thread": "B", "newLocalValue": 7, "type": "compute", "scenario": "with-lock"}, {"thread": "B", "wroteValue": 7, "type": "write", "scenario": "with-lock"}, {"thread": "B", "type": "lock-release", "scenario": "with-lock"}], "noLockResult": 6, "withLockResult": 7, "initial": 5};
+
+(function(){
+  const steps = DATA.combined;
+  const narration = document.getElementById('raceNarration');
+  const tag = document.getElementById('raceTag');
+  const boxA = document.getElementById('raceBoxA');
+  const boxB = document.getElementById('raceBoxB');
+  const boxCounter = document.getElementById('raceBoxCounter');
+  const valA = document.getElementById('raceValA');
+  const valB = document.getElementById('raceValB');
+  const valCounter = document.getElementById('raceValCounter');
+  const statsBox = document.getElementById('raceStats');
+  const counterEl = document.getElementById('raceCounter');
+  let idx = 0, playing=false, playTimer=null;
+
+  function describe(e){
+    if (e.type === 'divider') return `<b>现在换成加锁版本</b>,重放同样的交替请求顺序。`;
+    if (e.type === 'lock-acquire') return `线程 <span class="k">${e.thread}</span> 拿到锁,进入临界区。`;
+    if (e.type === 'lock-release') return `线程 <span class="k">${e.thread}</span> 释放锁。`;
+    if (e.type === 'blocked') return `线程 <span class="k">${e.thread}</span> 想读,但锁被 <span class="k">${e.waitingFor}</span> 占着,只能等。`;
+    if (e.type === 'read') return `线程 <span class="k">${e.thread}</span> 读到 counter = ${e.value}。`;
+    if (e.type === 'compute') return `线程 <span class="k">${e.thread}</span> 算出新值 = ${e.newLocalValue}。`;
+    if (e.type === 'write') return `线程 <span class="k">${e.thread}</span> 把 ${e.wroteValue} 写回 counter。`;
+    return e.type;
+  }
+
+  function replayUpTo(uptoIdx){
+    // reconstruct display state purely from the verified event log
+    let counter = DATA.initial;
+    let a = null, b = null;
+    let scenario = 'no-lock';
+    let lockHolder = null;
+    for (let i = 0; i <= uptoIdx; i++){
+      const e = steps[i];
+      if (e.type === 'divider'){ scenario = 'with-lock'; a = null; b = null; lockHolder = null; continue; }
+      if (e.type === 'lock-acquire') lockHolder = e.thread;
+      if (e.type === 'lock-release') lockHolder = null;
+      if (e.type === 'read'){ if (e.thread === 'A') a = e.value; else b = e.value; }
+      if (e.type === 'compute'){ if (e.thread === 'A') a = e.newLocalValue; else b = e.newLocalValue; }
+      if (e.type === 'write'){ counter = e.wroteValue; }
+    }
+    return {counter, a, b, scenario, lockHolder};
+  }
+
+  function render(){
+    idx = Math.max(0, Math.min(steps.length-1, idx));
+    const e = steps[idx];
+    narration.innerHTML = describe(e);
+    const state = replayUpTo(idx);
+
+    tag.textContent = state.scenario === 'with-lock' ? '加锁' : '不加锁';
+    tag.className = 'scenario-tag ' + state.scenario;
+
+    valA.textContent = state.a === null ? '—' : state.a;
+    valA.className = 'val' + (state.a === null ? ' empty' : '');
+    valB.textContent = state.b === null ? '—' : state.b;
+    valB.className = 'val' + (state.b === null ? ' empty' : '');
+    valCounter.textContent = state.counter;
+
+    boxA.className = 'race-box' + (e.thread === 'A' ? ' active' : '') + (state.lockHolder === 'A' ? ' locked' : '');
+    boxB.className = 'race-box' + (e.thread === 'B' ? ' active' : '') + (state.lockHolder === 'B' ? ' locked' : '');
+    boxCounter.className = 'race-box' + (e.type === 'write' ? ' active' : '');
+
+    const finalNoLock = DATA.noLockResult;
+    const finalWithLock = DATA.withLockResult;
+    statsBox.innerHTML = `<div class="stat">不加锁最终结果<b>${finalNoLock}(期望 7,丢了 1 次)</b></div><div class="stat">加锁最终结果<b>${finalWithLock}(期望 7,完全正确)</b></div>`;
+
+    counterEl.textContent = `${idx+1} / ${steps.length}`;
+    document.getElementById('racePrev').disabled = idx===0;
+    document.getElementById('raceNext').disabled = idx===steps.length-1;
+  }
+  document.getElementById('racePrev').onclick=()=>{idx--;render();stopPlay();};
+  document.getElementById('raceNext').onclick=()=>{idx++;render();stopPlay();};
+  document.getElementById('raceReset').onclick=()=>{idx=0;render();stopPlay();};
+  function stopPlay(){ playing=false; clearInterval(playTimer); document.getElementById('racePlay').textContent='▶ 自动播放'; }
+  document.getElementById('racePlay').onclick=()=>{
+    if(playing){ stopPlay(); return; }
+    playing=true; document.getElementById('racePlay').textContent='⏸ 暂停';
+    playTimer = setInterval(()=>{
+      if(idx>=steps.length-1){ stopPlay(); return; }
+      idx++; render();
+    }, 1000);
+  };
+  render();
+})();
+</script>
+
+</body>
+</html>

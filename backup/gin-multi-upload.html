@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>多文件上传</title>
+<meta name="description" content="在 Gin v1.12.0 里实测多文件上传:FormFile 只返回同名字段的第一个文件,MultipartForm().File 返回全部;[]*multipart.FileHeader 可绑定到结构体;文件名先经 filepath.Base 但反斜杠原样保留;SaveUploadedFile 会 MkdirAll 并把已有目录 chmod 成 0750;一个请求最多 1000 个 part。">
+<link rel="canonical" href="https://bigywater.tech/gin-multi-upload.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="多文件上传">
+<meta property="og:description" content="在 Gin v1.12.0 里实测多文件上传:FormFile 只返回同名字段的第一个文件,MultipartForm().File 返回全部;[]*multipart.FileHeader 可绑定到结构体;文件名先经 filepath.Base 但反斜杠原样保留;SaveUploadedFile 会 MkdirAll 并把已有目录 chmod 成 0750;一个请求最多 1000 个 part。">
+<meta property="og:url" content="https://bigywater.tech/gin-multi-upload.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="多文件上传">
+<meta name="twitter:description" content="在 Gin v1.12.0 里实测多文件上传:FormFile 只返回同名字段的第一个文件,MultipartForm().File 返回全部;[]*multipart.FileHeader 可绑定到结构体;文件名先经 filepath.Base 但反斜杠原样保留;SaveUploadedFile 会 MkdirAll 并把已有目录 chmod 成 0750;一个请求最多 1000 个 part。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">2262</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">97</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">29</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">114</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">111</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#C23B6B; --series-c-soft:#F9E1EA;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#E8789D; --series-c-soft:#3A1522;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#E8789D; --series-c-soft:#3A1522;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Gin · 38</div>
+  <h1>多文件上传</h1>
+  <p>一次上传好几个文件,该用 FormFile 还是 MultipartForm?怎么绑定到结构体?客户端给的文件名能不能直接用来保存?SaveUploadedFile 会对目录做什么?这篇用真实的 multipart 请求把这些问题一一实测。</p>
+  <div class="hero-fact">
+<div><div class="num">b.txt</div><div class="lbl">c.FormFile("files") 对 3 个同名文件返回的那一个(第一个)</div></div><div><div class="num">..\..\win.ini</div><div class="lbl">反斜杠的文件名在 Unix 上原样保留,不会被 filepath.Base 处理</div></div><div><div class="num">1000 → 1001</div><div class="lbl">一个请求最多 1000 个 part,第 1001 个报 multipart: message too large</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="gin-upload-memory-limit.html">文件上传:MaxMultipartMemory 与临时文件</a></div>
+<section>
+  <h2>FormFile 与 MultipartForm</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">    请求里的顺序:b.txt、a.png、c.bin(都叫 files),另有 other 字段的 o.txt
+     FormFile(files) → b.txt 3 字节
+     File["files"] = b.txt(3 字节,text/plain) a.png(10 字节,image/png) c.bin(0 字节,application/octet-stream);表单里共有的文件字段名:2 个;Value=map[title:[t]]
+    --- 没有这个字段时:
+     http: no such file</pre></div>
+  <p><code>FormFile(name)</code> 只能拿到该字段的第一个文件;要全部文件用 <code>MultipartForm()</code> 再取 <code>File[name]</code>,顺序与请求一致。每个 <code>FileHeader</code> 带文件名、大小和原始的 part 头(包含客户端声明的 Content-Type,不可信)。</p>
+</section>
+<section>
+  <h2>绑定到结构体</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">    全部给出         → Title="t" Avatar=me.png Files=[1.txt 2.txt] err=&lt;nil&gt;
+    缺 avatar     → Title="t" Avatar=nil Files=[1.txt] err=Key: 'Up.Avatar' Error:Field validation for 'Avatar' failed on the 'required' tag
+    缺 title      → Title="" Avatar=me.png Files=[] err=Key: 'Up.Title' Error:Field validation for 'Title' failed on the 'required' tag
+    files 只有一个   → Title="t" Avatar=me.png Files=[only.txt] err=&lt;nil&gt;</pre></div>
+  <p>表单绑定认识 <code>*multipart.FileHeader</code> 和 <code>[]*multipart.FileHeader</code> 两种字段类型,和普通字段、<code>binding</code> 校验标签一起工作。只上传一个文件时切片字段长度为 1,不会变成 nil。</p>
+</section>
+<section>
+  <h2>客户端文件名不可信</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">    客户端发送 filename="report.pdf"               → 服务端读到 "report.pdf"(200)
+    客户端发送 filename="../../etc/passwd"         → 服务端读到 "passwd"(200)
+    客户端发送 filename="/etc/passwd"              → 服务端读到 "passwd"(200)
+    客户端发送 filename="a/b/c.txt"                → 服务端读到 "c.txt"(200)
+    客户端发送 filename="..\\..\\win.ini"          → 服务端读到 "..\\..\\win.ini"(200)
+    客户端发送 filename="C:\\Users\\x\\a.txt"      → 服务端读到 "C:\\Users\\x\\a.txt"(200)
+    客户端发送 filename=".."                       → 服务端读到 ".."(200)
+    客户端发送 filename="."                        → 服务端读到 "."(200)
+    客户端发送 filename="a\x00b.txt"               → 服务端读到 malformed MIME header line: "Content-Disposition: form-data; name=\"f\"; filename=\"a\x00b.txt\""(400)
+    客户端发送 filename="  spaced name .txt"       → 服务端读到 "  spaced name .txt"(200)</pre></div>
+  <p>Go 在解析时先对文件名做 <code>filepath.Base</code>,所以 <code>../../etc/passwd</code> 只剩 <code>passwd</code>。但这是按服务器平台的规则:在 Unix 上反斜杠不是分隔符,<code>..\..\win.ini</code> 原样保留;<code>..</code>、<code>.</code> 也原样保留。保存文件时最稳妥的做法是不用客户端的文件名,自己生成(如 UUID + 白名单扩展名)。</p>
+</section>
+<section>
+  <h2>SaveUploadedFile 的副作用</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  context.go 的 SaveUploadedFile(Gin v1.12.0):
+     719 | func (c *Context) SaveUploadedFile(file *multipart.FileHeader, dst string, perm ...fs.FileMode) error {
+     720 |     src, err := file.Open()
+     721 |     if err != nil {
+     722 |         return err
+     723 |     }
+     724 |     defer src.Close()
+     725 | 
+     726 |     var mode os.FileMode = 0o750
+     727 |     if len(perm) &gt; 0 {
+     728 |         mode = perm[0]
+     729 |     }
+     730 |     dir := filepath.Dir(dst)
+     731 |     if err = os.MkdirAll(dir, mode); err != nil {
+     732 |         return err
+     733 |     }
+     734 |     if err = os.Chmod(dir, mode); err != nil {
+     735 |         return err
+     736 |     }
+     737 | 
+     738 |     out, err := os.Create(dst)
+     739 |     if err != nil {
+     740 |         return err
+     741 |     }
+     742 |     defer out.Close()
+     743 | 
+     744 |     _, err = io.Copy(out, src)
+     745 |     return err
+     746 | }
+    保存之前 exist 目录权限: drwxr-xr-x
+    保存之后 exist 目录权限: drwxr-x---  新建的 new/deep: drwxr-x---  new: drwxr-x---  perm(传了 0700): drwx------
+    b.txt 内容长度: 7</pre></div>
+  <p>它先 <code>MkdirAll</code> 创建多级目录,再对目标目录 <code>Chmod</code>(默认 0750)。已经存在的目录权限会被悄悄收紧——保存到一个 0755 的共享目录,之后这个目录对其它用户不可读了。需要不同权限时给它传 <code>perm</code> 参数,或者自己创建目录再保存。</p>
+</section>
+<section>
+  <h2>part 数量上限</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">     999 个文件 → 200 收到 999 个文件
+    1000 个文件 → 200 收到 1000 个文件
+    1001 个文件 → 400 multipart: message too large</pre></div>
+  <p>一个 multipart 请求最多 1000 个 part(包括普通字段),超过时 <code>multipart: message too large</code>。这是 Go 标准库的限制,可以用环境变量 <code>GODEBUG=multipartmaxparts=…</code> 调整(本文没有验证调整)。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">多文件上传</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "b", "kind": "bars", "label": "数字对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "同一个字段名 files 上传了 3 个文件(b.txt、a.png、c.bin),另有 other 字段的 o.txt:c.FormFile(\"files\") 只返回第一个(b.txt,3 字节);c.MultipartForm().File[\"files\"] 返回全部,按请求里的顺序,每个有 Filename、Size 和 Header(Content-Type,没写时是 application/octet-stream);表单里共有 2 个文件字段名;普通字段在 Value 里。字段不存在时 FormFile 返回 http: no such file。", "s": {"t": {"lines": ["    请求里的顺序:b.txt、a.png、c.bin(都叫 files),另有 other 字段的 o.txt", "     FormFile(files) → b.txt 3 字节", "     File[\"files\"] = b.txt(3 字节,text/plain) a.png(10 字节,image/png) c.bin(0 字节,application/octet-stream);表单里共有的文件字段名:2 个;Value=map[title:[t]]", "    --- 没有这个字段时:", "     http: no such file"], "cur": [], "mark": [], "done": []}, "mark": [1, 2], "done": [4], "kv": {"items": [["FormFile", "只取第一个"], ["MultipartForm().File[name]", "全部,保持请求顺序"], ["不存在", "http: no such file"]], "hl": ["FormFile"]}}}, {"note": "绑定到结构体:*multipart.FileHeader 字段接单个文件,[]*multipart.FileHeader 接多个(files 只有一个时也是长度 1 的切片);binding:\"required\" 对文件头指针同样有效——缺 avatar 报 Up.Avatar required,缺 title 报 Up.Title required;普通字段、文件字段、校验一次完成。", "s": {"t": {"lines": ["    全部给出         → Title=\"t\" Avatar=me.png Files=[1.txt 2.txt] err=<nil>", "    缺 avatar     → Title=\"t\" Avatar=nil Files=[1.txt] err=Key: 'Up.Avatar' Error:Field validation for 'Avatar' failed on the 'required' tag", "    缺 title      → Title=\"\" Avatar=me.png Files=[] err=Key: 'Up.Title' Error:Field validation for 'Title' failed on the 'required' tag", "    files 只有一个   → Title=\"t\" Avatar=me.png Files=[only.txt] err=<nil>"], "cur": [], "mark": [], "done": []}, "mark": [1, 2], "done": [0, 3], "kv": {"items": [["*multipart.FileHeader", "单个文件"], ["[]*multipart.FileHeader", "多个文件"], ["required", "文件头指针也适用"]], "hl": ["[]*multipart.FileHeader"]}}}, {"note": "客户端给的文件名:Go 先对它做 filepath.Base——../../etc/passwd → passwd,/etc/passwd → passwd,a/b/c.txt → c.txt;但反斜杠在 Unix 上不是分隔符,..\\..\\win.ini 和 C:\\Users\\x\\a.txt 原样保留(如果服务器跑在 Windows 上就是路径);\"..\" 和 \".\" 也原样保留;带 NUL 的文件名在解析 MIME 头时就被拒绝(400);前后空格保留。", "s": {"t": {"lines": ["    客户端发送 filename=\"report.pdf\"               → 服务端读到 \"report.pdf\"(200)", "    客户端发送 filename=\"../../etc/passwd\"         → 服务端读到 \"passwd\"(200)", "    客户端发送 filename=\"/etc/passwd\"              → 服务端读到 \"passwd\"(200)", "    客户端发送 filename=\"a/b/c.txt\"                → 服务端读到 \"c.txt\"(200)", "    客户端发送 filename=\"..\\\\..\\\\win.ini\"          → 服务端读到 \"..\\\\..\\\\win.ini\"(200)", "    客户端发送 filename=\"C:\\\\Users\\\\x\\\\a.txt\"      → 服务端读到 \"C:\\\\Users\\\\x\\\\a.txt\"(200)", "    客户端发送 filename=\"..\"                       → 服务端读到 \"..\"(200)", "    客户端发送 filename=\".\"                        → 服务端读到 \".\"(200)", "    客户端发送 filename=\"a\\x00b.txt\"               → 服务端读到 malformed MIME header line: \"Content-Disposition: form-data; name=\\\"f\\\"; filename=\\\"a\\x00b.txt\\\"\"(400)", "    客户端发送 filename=\"  spaced name .txt\"       → 服务端读到 \"  spaced name .txt\"(200)"], "cur": [], "mark": [], "done": []}, "mark": [4, 5, 6, 7], "done": [1, 2, 3], "kv": {"items": [["Go 的处理", "先 filepath.Base,去掉目录部分"], ["反斜杠", "Unix 上不处理,原样保留"], ["\"..\" / \".\"", "原样保留"]], "hl": ["反斜杠"]}}}, {"note": "SaveUploadedFile(v1.12):先 MkdirAll(目录, 0750),再对这个目录 Chmod(目录, 0750),然后创建文件复制内容。已存在的目录权限被改掉:保存前 exist 是 drwxr-xr-x,保存后 drwxr-x---;新建的 new 与 new/deep 都是 drwxr-x---;传了 perm 0700 的 perm 目录是 drwx------。", "s": {"t": {"lines": ["  context.go 的 SaveUploadedFile(Gin v1.12.0):", "     719 | func (c *Context) SaveUploadedFile(file *multipart.FileHeader, dst string, perm ...fs.FileMode) error {", "     720 |     src, err := file.Open()", "     721 |     if err != nil {", "     722 |         return err", "     723 |     }", "     724 |     defer src.Close()", "     725 | ", "     726 |     var mode os.FileMode = 0o750", "     727 |     if len(perm) > 0 {", "     728 |         mode = perm[0]", "     729 |     }", "     730 |     dir := filepath.Dir(dst)", "     731 |     if err = os.MkdirAll(dir, mode); err != nil {", "     732 |         return err", "     733 |     }", "     734 |     if err = os.Chmod(dir, mode); err != nil {", "     735 |         return err", "     736 |     }", "     737 | ", "     738 |     out, err := os.Create(dst)", "     739 |     if err != nil {", "     740 |         return err", "     741 |     }", "     742 |     defer out.Close()", "     743 | ", "     744 |     _, err = io.Copy(out, src)", "     745 |     return err", "     746 | }", "    保存之前 exist 目录权限: drwxr-xr-x", "    保存之后 exist 目录权限: drwxr-x---  新建的 new/deep: drwxr-x---  new: drwxr-x---  perm(传了 0700): drwx------", "    b.txt 内容长度: 7"], "cur": [], "mark": [], "done": []}, "mark": [16, 30], "done": [13, 29, 31], "kv": {"items": [["MkdirAll", "自动建多级目录,权限 0750"], ["Chmod", "已存在目录的权限也被改成 0750"], ["perm 参数", "可覆盖默认的 0750"]], "hl": ["Chmod"]}}}, {"note": "一个请求里的 part 数量上限:999、1000 个文件都成功;1001 个报 400 multipart: message too large——这是 Go 标准库 mime/multipart 的限制(formdata.go 第 53 行 maxParts := 1000,可用 GODEBUG multipartmaxparts 调整),不是 Gin 的。", "s": {"t": {"lines": ["     999 个文件 → 200 收到 999 个文件", "    1000 个文件 → 200 收到 1000 个文件", "    1001 个文件 → 400 multipart: message too large"], "cur": [], "mark": [], "done": []}, "mark": [2], "done": [0, 1], "b": {"items": [["999 个文件", 999, "成功"], ["1000 个文件", 1000, "成功"], ["1001 个文件", 1001, "400 message too large"]], "max": 1001, "cur": [], "mark": [2], "done": [0, 1]}, "kv": {"items": [["上限", "1000 个 part"], ["超过", "400 multipart: message too large"], ["来源", "Go 标准库,与 Gin 无关"]], "hl": ["来源"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / Go 1.27.1(brew)/ Gin v1.12.0(go.mod 里 require,源码在模块缓存里);用 go run / go test 直接编译运行,需要库时经代理从 proxy.golang.org 下载;HTTP 实验用 httptest 或本机回环端口(9700 以上);计时用 time.Now / testing.B,数字每次运行会有小幅抖动。用真实的 httptest.NewServer 与手工构造的 multipart 请求;文件内容是占位字节;SaveUploadedFile 的目录在临时目录里,实验后删除;每种情形各一次</li><li>读过的 Go 源码:mime/multipart/formdata.go(maxParts 默认 1000);没有验证:Windows 服务器上的文件名处理;GODEBUG=multipartmaxparts 的调整;上传文件的内容类型嗅探(http.DetectContentType);SaveUploadedFile 在符号链接目录下的行为;并发保存同名文件的竞争</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="gin-json-render-variants.html">
+    <div>
+      <div class="t1">下一篇 · GIN 39</div>
+      <div class="t2">JSON、PureJSON、AsciiJSON、SecureJSON 的输出差别</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Gin · 多文件上传 · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

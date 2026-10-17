@@ -1,0 +1,24 @@
+from lib import *
+S = SS('m1')
+steps = [
+    step("最小的文档 {\"a\": 1} 编码成 12 字节:前 4 字节是小端的总长度 12(等于整个字节串的长度);第 5 字节 0x10 是类型(int32);然后是键名 a 加一个 0 字节;值 01000000 是小端 int32 = 1;最后一个字节 0x00 结束文档。空文档 {} 只有 5 字节(4 字节长度加 1 字节结尾 0)。纯 Python 解析得到 ('a', 16, 4, 1)。", t=tl(S(1)), mark=lidx(S(1), '0x10', '空文档'), done=lidx(S(1), '0000  0c 00', '前 4 字节', '纯 Python 解析'), kv=KV([['总长度', '开头 4 字节,小端,含自身'], ['元素', '类型字节 + 键名 + 0 + 值'], ['结尾', '一个 0 字节'], ['空文档', '5 字节']], ['总长度'])),
+    step("每种类型的类型字节和值占的字节数:int32 0x10 / 4 字节,int64 0x12 / 8,double 0x01 / 8,bool 0x08 / 1,null 0x0a / 0,ObjectId 0x07 / 12,datetime 0x09 / 8,Decimal128 0x13 / 16,Timestamp 0x11 / 8;字符串 \"abc\" 0x02 / 8(4 字节长度 + 3 字节内容 + 结尾 0);4 字节的 binary 0x05 / 9(长度 4 + 子类型 1 + 数据 4);空数组 0x04 / 5,数组 [1,2] 0x04 / 19;空子文档 0x03 / 5。外层 {\"x\": 值} 多出 8 字节(4 长度 + 1 类型 + 键名 x 与 0 共 2 + 结尾 1)。", t=tl(S(2)), mark=lidx(S(2), 'string "abc"', 'binary 4 字节', '数组 [1,2]', 'null'), done=lidx(S(2), 'int32 ', 'int64', 'double', 'ObjectId', 'Decimal128'), b=bars([['int32', 4, '4 字节'], ['double / int64 / datetime', 8, '8 字节'], ['ObjectId', 12, '12 字节'], ['Decimal128', 16, '16 字节'], ['空数组 / 空子文档', 5, '5 字节'], ['null', 0, '0 字节']], 16, mark=[3], done=[0, 1, 2]), kv=KV([['定长类型', 'int32 4,int64 / double 8,ObjectId 12'], ['变长类型', '前面带长度'], ['null', '只有类型字节,值 0 字节']], ['定长类型'])),
+    step("字符串带 4 字节长度前缀(= 字节数 + 1,算上结尾的 0)和结尾 0:\"abc\" 长度前缀 4,\"\" 是 1,中文 \"中文\" 字符数 2 但 UTF-8 是 6 字节,前缀 7;emoji 1 个字符 4 字节,前缀 5。键名是 C 字符串,含 NUL 直接报错 InvalidDocument(Key names must not contain the NULL byte);字符串值里含 NUL 是允许的(因为有长度前缀)。", t=tl(S(3)), mark=lidx(S(3), '键名含 NUL', '字符串值里含 NUL'), done=lidx(S(3), '"abc"', '"中文"', '"😀"'), kv=KV([['字符串值', '长度前缀 + 内容 + 0,可以含 NUL'], ['键名', 'C 字符串,不能含 NUL'], ['长度', '字节数,不是字符数']], ['键名'])),
+    step("数组就是键为 \"0\"、\"1\" 的子文档,类型字节是 4:{arr: ['x','y']} 外层键 arr、类型 4,子文档长度 23,里面的键是 '0' 和 '1'。把它和 {\"0\":\"x\",\"1\":\"y\"} 这个普通子文档的 33 个字节逐字节比较,只有位置 4 的类型字节不同(04 对 03)。", t=tl(S(4)), mark=lidx(S(4), '类型 4', '差异位置'), done=lidx(S(4), '0000  21 00', '外层'), kv=KV([['数组', '键 \"0\",\"1\",… 的子文档'], ['与普通子文档的区别', '只差一个类型字节']], ['数组'])),
+    step("键名每个文档都存一遍:3 个字段的文档,键名 1 个字符时 26 字节,键名 30 个字符时 113 字节。放进集合各 20,000 个(加上 _id 后 avgObjSize 43 对 130 字节,数据总大小 860,000 对 2,600,000 字节),fsync 之后 storageSize 却只有 421,888 对 544,768 字节——数据大小差 3 倍,磁盘上只差约 29%,因为磁盘上的块被压缩了。", t=tl(S(5)), mark=lidx(S(5), 'long', '键名 30 字符'), done=lidx(S(5), 'short', '键名 1 字符'), b=bars([['短键名 size', 860000, '860,000'], ['长键名 size', 2600000, '2,600,000'], ['短键名 storageSize', 421888, '421,888'], ['长键名 storageSize', 544768, '544,768']], 2600000, mark=[1, 3], done=[0, 2]), kv=KV([['内存 / 传输', '键名占的字节全算'], ['磁盘', '块压缩后差距小很多'], ['avgObjSize', '43 对 130 字节']], ['内存 / 传输'])),
+    step("服务端验证:同一个文档 {_id, name: '中文', tags: ['a','b'], n: Long(7), sub: {ok: true}},Python 编码出 86 字节,字段依次是 _id int32 4 字节、name string 11、tags array 23、n int64 8、sub document 10;mongosh 的 bsonsize(db.t.findOne()) 返回 86,聚合里的 $bsonSize 也是 86,$type 依次是 int / string / array / long / object。", t=tl(S(6)), mark=lidx(S(6), 'bsonsize(db.t.findOne())', 'size: 86'), done=lidx(S(6), 'Python 编码长度 86', '  86', "t: 'int'", "t: 'long'", "t: 'object'"), kv=KV([['bsonsize()', 'mongosh 里的 BSON 字节数'], ['$bsonSize', '聚合里的同一个数'], ['结论', '与 Python 编码一致,都是 86']], ['结论'])),
+]
+A = mkartm('m1', 1, 'MongoDB,BSON,编码,字节,pymongo,真实验证,动画演示',
+    '把 BSON 文档逐字节拆开:总长度、类型字节、键名 C 字符串、各类型值的字节数、字符串长度前缀、数组就是键为 "0""1" 的子文档;键名每个文档都存一遍,在内存里差 3 倍、压缩后的磁盘上只差约 29%;用 mongosh 的 bsonsize 与 $bsonSize 验证 Python 编码的字节数。',
+    '一个文档在 MongoDB 里到底长什么样?这篇用 pymongo 编码,用不到 50 行的纯 Python 解析器把字节拆开,看总长度、类型字节、键名和值各占多少,再放到真实的 mongod 里用 bsonsize 和 $bsonSize 对账。',
+    [('12 字节', '{"a": 1} 的 BSON 编码长度;空文档 {} 是 5 字节'), ('26 → 113', '同样 3 个整数字段,键名从 1 个字符变成 30 个字符,单个文档的字节数'), ('86', '服务端的 bsonsize 与 $bsonSize 返回的字节数,和 Python 编码出的长度一致')],
+    [('文档的结构', '<p>BSON 文档 = 4 字节小端总长度 + 若干元素 + 1 个 0 结尾。每个元素是 1 字节类型、键名(C 字符串)、值。最小的 <code>{"a": 1}</code> 一共 12 字节。</p>'),
+     ('每种类型多大', '<p>定长类型:int32 4 字节、int64 / double / datetime / Timestamp 8 字节、ObjectId 12 字节、Decimal128 16 字节、bool 1 字节、null 0 字节。字符串、binary、数组、子文档都是长度在前的变长类型。</p>'),
+     ('字符串与键名', '<p>字符串前面是字节数 + 1 的长度前缀,以 0 结尾;中文每字 3 字节,emoji 4 字节。键名是 C 字符串,不能含 NUL 字节(pymongo 在客户端就报错);字符串值有长度前缀,可以含 NUL。</p>'),
+     ('数组是特殊的子文档', '<p>数组在 BSON 里是键为 <code>"0"</code>、<code>"1"</code>… 的子文档,和同样内容的普通子文档只有类型字节不同(4 对 3)。</p>'),
+     ('键名的代价', '<p>键名在每个文档里都完整存一遍:3 个字段的文档,键名 30 个字符比 1 个字符多 87 字节。集合里的数据总大小差 3 倍,但磁盘上的块被压缩,storageSize 只差约 29%。网络传输和内存里的文档则是原样的大小。</p>'),
+     ('对账', '<p>mongosh 的 <code>bsonsize()</code> 和聚合表达式 <code>$bsonSize</code> 给出的字节数与客户端编码出的长度完全一致,都是 86;<code>$type</code> 给出的名字(int、long、object)与类型字节对应。</p>')],
+    steps,
+    [ENV_M + '。纯 Python 解析器只实现了本文用到的类型;字节来自 pymongo 的 bson.encode,服务端对账用 mongosh',
+     '没有验证:压缩算法对 storageSize 的具体影响(只比较了默认 snappy 下的两个集合);非 UTF-8 的字符串怎么处理;BSON 的 deprecated 类型(undefined、DBPointer、symbol 等);JavaScript 代码类型;binary 各子类型(UUID 等)的差别;最大嵌套深度与 16MB 上限(见后面的文章);big-endian 平台'],
+    'BSON 编码')

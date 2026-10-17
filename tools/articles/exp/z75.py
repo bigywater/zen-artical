@@ -1,0 +1,36 @@
+import sys, os, time, json, re, statistics, ssl; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from zkl import *
+tee('z75'); R = {}
+d = pki(True)
+def one(o): return ' | '.join(l.strip() for l in (o or '(无输出)').splitlines()[:2])[:170]
+print('== 一:服务端同时开放明文端口 7300 和 TLS 端口 7301(secureClientPort + Netty,PKCS12 密钥库);用官方 CLI 连接')
+n = Node('z75', 7300, conf=tls_conf(d, 7301)).start()
+c = lambda *a, **k: one(cli(*a, **k)[0])
+R['plain_to_tls'] = c(7301, 'ls /', timeout=25); print('  明文客户端连 TLS 端口 7301 →', R['plain_to_tls'])
+R['tls_ok'] = c(7301, 'ls /', jvm=tls_cli_jvm(d), timeout=30); print('  TLS 客户端(信任 CA)连 7301 → ', R['tls_ok'])
+R['tls_notrust'] = c(7301, 'ls /', jvm=tls_cli_jvm(d, trust=False), timeout=30); print('  TLS 客户端(不信任这个 CA,用 JVM 默认信任库)连 7301 →', R['tls_notrust'])
+R['plain_ok'] = c(7300, 'ls /'); print('  同一个服务端的明文端口 7300 仍然可用 →', R['plain_ok'], '(这就是「开了 TLS 还留着明文端口」的风险)')
+print()
+print('== 二:主机名校验:连的是 127.0.0.1;服务端证书的 SAN 包含 IP:127.0.0.1 和 localhost')
+R['hostname_ok'] = c(7301, 'ls /', jvm=tls_cli_jvm(d), timeout=30); print('  SAN 匹配 → ', R['hostname_ok'])
+n.stop(); m = Node('z75b', 7302, conf=tls_conf(d, 7303, keystore='wronghost.p12')).start()
+R['hostname_bad'] = c(7303, 'ls /', jvm=tls_cli_jvm(d), timeout=30); print('  换成 CN=wrong.example.com、没有 SAN 的服务端证书 →', R['hostname_bad'])
+R['hostname_off'] = c(7303, 'ls /', jvm=tls_cli_jvm(d, hostver=False), timeout=30); print('  客户端关掉主机名校验(zookeeper.ssl.hostnameVerification=false)→', R['hostname_off'], '(能连上,但失去了防冒充的保护)')
+m.stop()
+print()
+print('== 三:只开 TLS 端口(去掉明文 clientPort):明文客户端连不上')
+o = Node('z75c', 7304, conf=tls_conf(d, 7305, plain=False)); o.prepare(); o.start(wipe=False, wait=False); time.sleep(5)
+R['only_tls_plain'] = one(cli(7305, 'ls /', timeout=25)[0]); print('  明文客户端连 7305 →', R['only_tls_plain']); R['only_tls_tls'] = one(cli(7305, 'ls /', jvm=tls_cli_jvm(d), timeout=30)[0]); print('  TLS 客户端连 7305 →', R['only_tls_tls'])
+o.stop()
+print()
+print('== 四:kazoo(Python)用 PEM 证书走 TLS;TLS 与明文的同步写延迟(各 300 次中位数)')
+n = Node('z75d', 7306, conf=tls_conf(d, 7307)).start()
+from kazoo.client import KazooClient
+import logging; logging.getLogger('kazoo').setLevel(logging.CRITICAL)
+zt = KazooClient(hosts='127.0.0.1:7307', use_ssl=True, ca=str(d / 'ca.crt'), verify_certs=True, timeout=10); zt.start(timeout=10); zp = client('127.0.0.1:7306')
+def lat(z, p):
+    z.ensure_path(p); xs = []
+    for i in range(300): t0 = time.perf_counter(); z.create(f'{p}/n{i}', b'x' * 100); xs.append((time.perf_counter() - t0) * 1000)
+    return statistics.median(xs)
+a, b = lat(zp, '/plain'), lat(zt, '/tls'); print(f'  明文 p50 {a:.2f} ms;TLS p50 {b:.2f} ms'); R['lat'] = dict(plain=a, tls=b)
+zt.stop(); zp.stop(); n.stop(); save('z75', R)

@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>多阶段构建:编译产物怎么从一个阶段"抽"到另一个阶段,体积真实差了多少</title>
+<meta name="description" content="真实验证 FROM scratch 的构建阶段也能用 exec-form RUN 执行程序生成产物、单阶段镜像 3.71MB 对比多阶段镜像 11kB(体积差约 300 多倍)、把镜像 docker save 展开后真实确认最终层里只有产物文件、编译工具本身完全没有进入最终镜像,对照 Dockerfile 官方文档里 FROM...AS 与 COPY --from 的定义。">
+<link rel="canonical" href="https://bigywater.tech/docker-multistage.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="多阶段构建:编译产物怎么从一个阶段"抽"到另一个阶段,体积真实差了多少">
+<meta property="og:description" content="真实验证 FROM scratch 的构建阶段也能用 exec-form RUN 执行程序生成产物、单阶段镜像 3.71MB 对比多阶段镜像 11kB(体积差约 300 多倍)、把镜像 docker save 展开后真实确认最终层里只有产物文件、编译工具本身完全没有进入最终镜像,对照 Dockerfile 官方文档里 FROM...AS 与 COPY --from 的定义。">
+<meta property="og:url" content="https://bigywater.tech/docker-multistage.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="多阶段构建:编译产物怎么从一个阶段"抽"到另一个阶段,体积真实差了多少">
+<meta name="twitter:description" content="真实验证 FROM scratch 的构建阶段也能用 exec-form RUN 执行程序生成产物、单阶段镜像 3.71MB 对比多阶段镜像 11kB(体积差约 300 多倍)、把镜像 docker save 展开后真实确认最终层里只有产物文件、编译工具本身完全没有进入最终镜像,对照 Dockerfile 官方文档里 FROM...AS 与 COPY --from 的定义。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F2F6FA; --paper:#FFFFFF; --ink:#132029; --ink-dim:#5C6B75; --line:#DCE6EC;
+  --dk-c:#2496ED; --dk-c-soft:#DEEEFC;
+  --mem-c:#B8791E; --mem-c-soft:#F6ECD9;
+  --meta-c:#7B4FA8; --meta-c-soft:#EFE6F7;
+  --err-c:#B23B3B; --err-c-soft:#F7E3E1;
+  --code-bg:#0F1E2B; --code-ink:#E6EEF5;
+  --shadow: 0 1px 2px rgba(15,25,35,.06), 0 8px 24px -12px rgba(15,25,35,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0C1620; --paper:#16232F; --ink:#E6EEF5; --ink-dim:#96A8B5; --line:#2A3A46;
+    --dk-c:#5FB7F5; --dk-c-soft:#183246;
+    --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+    --meta-c:#B08AE0; --meta-c-soft:#332545;
+    --err-c:#E08585; --err-c-soft:#3A1F1F;
+    --code-bg:#09131B; --code-ink:#DCE7EE;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0C1620; --paper:#16232F; --ink:#E6EEF5; --ink-dim:#96A8B5; --line:#2A3A46;
+  --dk-c:#5FB7F5; --dk-c-soft:#183246;
+  --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+  --meta-c:#B08AE0; --meta-c-soft:#332545;
+  --err-c:#E08585; --err-c-soft:#3A1F1F;
+  --code-bg:#09131B; --code-ink:#DCE7EE;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--dk-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--dk-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--dk-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--dk-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#8FC4E8; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#9FD4F0;}
+
+.callout{border-left:3px solid var(--dk-c); background:var(--dk-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--dk-c-soft); color:var(--dk-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#8FD4F0;}
+.term pre.code{margin:0 0 10px; color:#8FD4F0; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+.term .cm{color:#7C93A0;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--mem-c-soft); color:var(--mem-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:22px 20px;}
+.stage-box{border:2px solid var(--line); border-radius:12px; padding:16px; margin-bottom:10px; transition:border-color .2s, background .2s;}
+.stage-box.active{border-color:var(--dk-c); background:var(--dk-c-soft);}
+.stage-box h4{margin:0 0 8px; font-size:.9rem; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+.stage-box ul{margin:0; padding-left:20px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem;}
+.stage-box li{margin-bottom:4px;}
+.stage-box li.discarded{color:var(--err-c); text-decoration:line-through;}
+.stage-box li.kept{color:var(--dk-c); font-weight:700;}
+.stat-row{display:flex; gap:16px; flex-wrap:wrap; margin:14px 0 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem;}
+.stat{border:1px solid var(--line); border-radius:8px; padding:8px 12px; background:var(--bg);}
+.stat b{color:var(--dk-c); display:block; font-size:1rem; font-variant-numeric:tabular-nums;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--dk-c); color:var(--dk-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--dk-c); border-color:var(--dk-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{display:flex; align-items:center; gap:10px; margin-bottom:24px; font-size:.88rem; color:var(--ink-dim); flex-wrap:wrap;}
+.prev-post a{font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--dk-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Docker 系列 · 第五篇</div>
+    <h1>多阶段构建里,"编译工具"真的会被完全丢在半路,一点都不带进最终镜像吗?</h1>
+    <p>这个系列一直没法拉基础镜像,连多阶段构建常见的 <span class="mono">FROM golang AS builder</span> 都用不了——干脆自己动手验证清楚 <span class="mono">FROM scratch</span> 能不能撑起一个真正的构建阶段:先证明 <span class="mono">RUN</span> 在没有 shell 的 scratch 阶段里也能跑(用 exec-form),再用它跑一个真实的"构建工具"生成产物,最后对比单阶段和多阶段两个真实构建出来的镜像,量出体积到底差多少。</p>
+    <div class="hero-fact">
+      <div><div class="num">3.71MB → 11kB</div><div class="lbl">本机真实实测:单阶段镜像(带着构建工具)对比多阶段镜像(只留产物),体积差了三百多倍</div></div>
+      <div><div class="num">0 字节工具残留</div><div class="lbl">本机真实实测:把多阶段镜像 docker save 展开,层里真实只有产物文件,构建工具一个字节都没进去</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <div class="prev-post">← 接上篇 <a href="docker-network.html" target="_blank" rel="noopener">容器网络:两个容器在默认 bridge 下,为什么互相 ping 不通名字,换个网络就通了</a></div>
+  <h2>真实实测:FROM scratch 的阶段里,RUN 也能跑——只要不需要 shell</h2>
+  <p class="h2-sub"><span class="mono">RUN</span> 平时写的 <span class="mono">RUN apt install ...</span> 这种是"shell 形式",背后是 <span class="mono">/bin/sh -c "..."</span>——scratch 里没有 shell,这种写法必然失败。但 <span class="mono">RUN</span> 还有一种"exec 形式",直接执行一个可执行文件,不经过 shell。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">FROM scratch
+COPY tool /tool
+RUN ["/tool", "--build"]
+
+$ docker build -f Dockerfile.exectest -t exectest:scratch .</pre>
+<span class="ok">#5 [2/2] RUN ["/tool", "--build"]
+#5 0.100 tool 正在运行,参数: [--build]
+#5 DONE 0.1s</span>
+  </div>
+  <p>构建日志里真实打印出了 <span class="mono">/tool</span> 自己的输出——它在构建过程中被真实执行了一次,而且真的往镜像文件系统里写了一个 <span class="mono">/output.txt</span> 文件。这条 exec-form 的 <span class="mono">RUN</span> 是撑起后面整个实验的关键:不需要任何基础镜像里的 shell,scratch 阶段照样可以"运行一个程序、产出一个文件"。</p>
+</section>
+
+<section>
+  <h2>真实文档:多阶段构建的两个关键字——FROM ... AS 和 COPY --from</h2>
+  <blockquote class="src">
+    <span class="path">Docker 官方文档 · Dockerfile reference · <a href="https://docs.docker.com/reference/dockerfile/" target="_blank" rel="noopener">docs.docker.com/reference/dockerfile</a></span>
+To copy from a build stage in a multi-stage build, specify the name
+of the stage you want to copy from.
+  </blockquote>
+  <p><span class="mono">FROM &lt;image&gt; AS &lt;name&gt;</span> 给某一个构建阶段起个名字,后面任意一个阶段都可以用 <span class="mono">COPY --from=&lt;name&gt;</span> 从它那里拿文件——只拿点名要的那几个路径,阶段里其它一切(工具、源码、中间产物)都不会跟着过来。这跟前一篇讲的"层缓存链"是两回事:多阶段构建关心的是"最终镜像里到底带不带某个文件",不是缓存命中与否。</p>
+</section>
+
+<section>
+  <h2>真实实测:单阶段 vs 多阶段,镜像体积真实差了三百多倍</h2>
+  <p class="h2-sub">同一个"构建工具" <span class="mono">/tool</span>,单阶段版本让它留在最终镜像里;多阶段版本只 <span class="mono">COPY --from=builder</span> 它生成的 <span class="mono">/output.txt</span>。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code"># 单阶段:工具本身也在最终镜像里
+FROM scratch
+COPY tool /tool
+RUN ["/tool", "--build"]
+ENTRYPOINT ["/tool"]
+
+# 多阶段:只把产物抽出来
+FROM scratch AS builder
+COPY tool /tool
+RUN ["/tool", "--build"]
+
+FROM scratch
+COPY --from=builder /output.txt /output.txt
+
+$ docker images | grep buildtest</pre>
+<span class="ok">buildtest:multi    11kB      2.85kB
+buildtest:single   3.71MB    1.34MB</span>
+  </div>
+  <p><span class="mono">docker save</span> 导出的真实 tar 包大小更直观:单阶段 <span class="mono">1,352,704</span> 字节,多阶段 <span class="mono">13,824</span> 字节——差了将近 100 倍。这个 <span class="mono">/tool</span> 只有 2.3MB 出头(实际项目里的编译工具链动辄几百 MB 到几 GB),差距已经这么明显,真实项目里省下来的体积只会更夸张。</p>
+</section>
+
+<section>
+  <h2>真实实测:把最终镜像"拆开"看,工具真的一个字节都没进去</h2>
+  <p class="h2-sub">不满足于看总大小,直接把镜像导出来,看真正的层 tar 里装了什么。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ docker save buildtest:multi -o multi.tar
+$ tar -xf multi.tar -C multi_inspect
+$ for f in multi_inspect/blobs/sha256/*; do
+    tar -tvf "$f" 2>/dev/null && echo "^^^ $f"
+  done</pre>
+<span class="ok">-rw-r--r--  0 0  0  57 Sep 20 11:35 output.txt
+^^^ multi_inspect/blobs/sha256/dcdca3c8...</span>
+  </div>
+  <p>翻遍多阶段镜像里所有的层 blob,真正带文件内容的只有这一层,里面只有一个 <span class="mono">57</span> 字节的 <span class="mono">output.txt</span>——<span class="mono">/tool</span> 这个 2.3MB 的"编译工具"从头到尾没有出现在最终镜像的任何一层里。<span class="mono">builder</span> 阶段发生的一切(拷贝工具、真实执行、产出文件),对最终镜像来说,只有 <span class="mono">COPY --from=builder</span> 那一行点名要的文件才算数,其余的全部留在构建过程中,不会被打进最后交付的镜像。</p>
+</section>
+
+<section>
+  <h2>演示:同一次构建,两个阶段各自留下了什么</h2>
+  <p class="h2-sub">对应上面真实实验的 <span class="mono">builder</span> 阶段和最终阶段,看 <span class="mono">COPY --from</span> 到底带走了什么、扔下了什么。</p>
+  <div class="demo" id="msDemo">
+    <div class="demo-head">多阶段构建 · 文件流向演示</div>
+    <div class="demo-narration" id="msNarration"></div>
+    <div class="demo-body">
+      <div class="stage-box" id="msBuilderBox">
+        <h4>builder 阶段</h4>
+        <ul id="msBuilderList"></ul>
+      </div>
+      <div class="stage-box" id="msFinalBox">
+        <h4>最终阶段</h4>
+        <ul id="msFinalList"></ul>
+      </div>
+      <div class="stat-row" id="msStats"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="msReset">⏮ 重来</button>
+      <button class="btn" id="msPrev">‹ 上一步</button>
+      <button class="btn primary" id="msNext">下一步 ›</button>
+      <button class="btn" id="msPlay">▶ 自动播放</button>
+      <span class="step-counter" id="msCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">数据直接对应上面真实实测的 <span class="mono">buildtest:multi</span> 构建过程和真实展开的层内容——<span class="mono">tool</span> 和 <span class="mono">output.txt</span> 都在 <span class="mono">builder</span> 阶段真实生成过,最终阶段真实只拿到了 <span class="mono">output.txt</span>。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文全部真实实验(exec-form <span class="mono">RUN</span> 在 <span class="mono">FROM scratch</span> 阶段真实执行、单阶段与多阶段镜像的真实体积对比、多阶段镜像 <span class="mono">docker save</span> 展开后层内容的真实核对)均在本机真实运行的 Docker Desktop(BuildKit)上完成,用的是跟前几篇一样的本机交叉编译静态二进制技巧,全程零网络镜像拉取,数据未做删改。</li>
+      <li>行为引用(<span class="mono">FROM ... AS</span> 与 <span class="mono">COPY --from</span> 的多阶段构建语义)取自 Docker 官方文档 <span class="mono">docs.docker.com/reference/dockerfile</span>,已用上面的真实构建结果逐条验证过。</li>
+      <li>演示动画的文件流向数据直接取自真实的构建产物和真实展开的层内容,没有额外模拟或编造的文件列表。</li>
+      <li>没有涉及:真实项目里用 <span class="mono">golang</span>/<span class="mono">node</span> 这类完整语言工具链镜像做 <span class="mono">builder</span> 阶段的实际编译过程(受限于这台机器拉不了基础镜像)、<span class="mono">--target</span> 只构建到某个中间阶段就停下的用法、多个阶段之间用 <span class="mono">COPY --from=<N></span> 按下标而不是按名字引用的写法、BuildKit 对多阶段构建里不相关阶段的并行调度。</li>
+    </ul>
+  </div>
+
+  <div class="next-post">
+    <div>
+      <div class="t1">下一篇 · 即将发布</div>
+      <div class="t2">Docker 系列,持续更新</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </div>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Docker 系列 · 第五篇 · 多阶段构建 · 数据来自本机真实运行的 Docker Desktop</footer>
+
+<script>
+const DATA = {"steps": [
+  {"stage": "builder", "action": "copy", "file": "tool (2.3MB)", "narration": "builder 阶段:COPY tool /tool"},
+  {"stage": "builder", "action": "run", "file": "output.txt (57B)", "narration": "builder 阶段:RUN [\"/tool\", \"--build\"],真实生成 output.txt"},
+  {"stage": "final", "action": "copy-from", "file": "output.txt (57B)", "narration": "最终阶段:COPY --from=builder /output.txt /output.txt —— 只点名要这一个文件"},
+  {"stage": "done", "action": "done", "file": null, "narration": "最终镜像里:只有 output.txt。tool 从头到尾没有被点名,留在 builder 阶段,不会进入最终镜像。"}
+]};
+
+(function(){
+  const steps = DATA.steps;
+  const totalSteps = steps.length;
+  const builderBox = document.getElementById('msBuilderBox');
+  const finalBox = document.getElementById('msFinalBox');
+  const builderList = document.getElementById('msBuilderList');
+  const finalList = document.getElementById('msFinalList');
+  const narration = document.getElementById('msNarration');
+  const statsBox = document.getElementById('msStats');
+  const counter = document.getElementById('msCounter');
+  let idx = 0, playing=false, playTimer=null;
+
+  function render(){
+    idx = Math.max(0, Math.min(totalSteps-1, idx));
+    const s = steps[idx];
+    narration.innerHTML = s.narration;
+
+    const hasTool = idx >= 0;
+    const hasOutput = idx >= 1;
+    const finalHasOutput = idx >= 2;
+    const toolDiscarded = idx >= 3;
+
+    builderBox.className = 'stage-box' + (s.stage === 'builder' ? ' active' : '');
+    finalBox.className = 'stage-box' + (s.stage === 'final' || s.stage === 'done' ? ' active' : '');
+
+    builderList.innerHTML = [
+      hasTool ? `<li class="${toolDiscarded ? 'discarded' : ''}">tool (2.3MB)${toolDiscarded ? ' — 没被 COPY --from 点名,留在这里' : ''}</li>` : '',
+      hasOutput ? `<li>output.txt (57B)</li>` : ''
+    ].join('');
+
+    finalList.innerHTML = finalHasOutput ? `<li class="kept">output.txt (57B) — 唯一被 COPY --from 带过来的文件</li>` : '<li style="color:var(--ink-dim)">(还没有文件)</li>';
+
+    statsBox.innerHTML = `<div class="stat">builder 阶段文件数<b>${hasOutput ? 2 : (hasTool ? 1 : 0)}</b></div><div class="stat">最终阶段文件数<b>${finalHasOutput ? 1 : 0}</b></div>`;
+
+    counter.textContent = `${idx+1} / ${totalSteps}`;
+    document.getElementById('msPrev').disabled = idx===0;
+    document.getElementById('msNext').disabled = idx===totalSteps-1;
+  }
+  document.getElementById('msPrev').onclick=()=>{idx--;render();stopPlay();};
+  document.getElementById('msNext').onclick=()=>{idx++;render();stopPlay();};
+  document.getElementById('msReset').onclick=()=>{idx=0;render();stopPlay();};
+  function stopPlay(){ playing=false; clearInterval(playTimer); document.getElementById('msPlay').textContent='▶ 自动播放'; }
+  document.getElementById('msPlay').onclick=()=>{
+    if(playing){ stopPlay(); return; }
+    playing=true; document.getElementById('msPlay').textContent='⏸ 暂停';
+    playTimer = setInterval(()=>{
+      if(idx>=totalSteps-1){ stopPlay(); return; }
+      idx++; render();
+    }, 1300);
+  };
+  render();
+})();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,22 @@
+from lib import *
+S = SS('q28')
+steps = [
+    step("经典队列、持久化、带 confirm 异步发布(在途 1000),不同消息大小的吞吐:10 B 59713 条/秒(0.6 MiB/秒);100 B 58765 条/秒;1 KiB 54651 条/秒(53.4 MiB/秒);10 KiB 47041 条/秒(459.4 MiB/秒);100 KiB 13876 条/秒(1355.1 MiB/秒);1 MiB 1436 条/秒(1435.7 MiB/秒)。小消息时条数基本不变(每条的处理开销主导),从 10 KiB 起条数下降而带宽(MiB/秒)上升到约 1.4 GiB/秒——由条数限制转为由字节数限制。", t=tl(S(1)), mark=lidx(S(1), '10 KiB', '100 KiB', '1 MiB'), done=lidx(S(1), '10 B', '100 B', '1 KiB'), b=bars([['10 B', 59713, '59713 条/秒'], ['1 KiB', 54651, '54651 条/秒'], ['10 KiB', 47041, '47041 条/秒'], ['100 KiB', 13876, '13876 条/秒'], ['1 MiB', 1436, '1436 条/秒']], 59713, mark=[3, 4], done=[0, 1, 2]), kv=KV([['小消息', '约 5~6 万条/秒,每条开销主导'], ['大消息', '带宽约 1.4 GiB/秒,字节数主导'], ['拐点', '10 KiB ~ 100 KiB']], ['拐点'])),
+    step("quorum 队列(单节点,没有多副本的代价)的同样扫描:10 B 55621、100 B 58295、1 KiB 54962、10 KiB 46703、100 KiB 14035 条/秒(1370.6 MiB/秒),与经典队列几乎一致。在单节点上两种队列的吞吐曲线重合,消息大小的影响远大于队列类型。", t=tl(S(2)), mark=lidx(S(2), '100 KiB'), done=lidx(S(2), '10 B', '100 B', '1 KiB', '10 KiB'), b=bars([['classic 100 KiB', 13876, '13876 条/秒'], ['quorum 100 KiB', 14035, '14035 条/秒'], ['classic 10 KiB', 47041, '47041 条/秒'], ['quorum 10 KiB', 46703, '46703 条/秒']], 47041, mark=[1, 3], done=[0, 2]), kv=KV([['classic vs quorum(单节点)', '几乎重合'], ['影响吞吐的主要因素', '消息大小'], ['多副本', '这里没有测']], ['影响吞吐的主要因素'])),
+    step("大消息要拆成多个帧:协商的 frame_max = 131072。经过代理发一条 300 KiB 的消息,线上是 1 个 Basic.Publish + 1 个 ContentHeader + 3 个 ContentBody 帧——前两个 ContentBody 各 131072 字节(含 8 字节帧开销),最后一个 45080 字节。ContentHeader 里记着消息总长度,接收方按总长度把多个 ContentBody 拼起来。", t=tl(S(3)), mark=lidx(S(3), '一条 300 KiB'), done=lidx(S(3), '协商的 frame_max'), b=bars([['ContentBody 帧 1', 131072, '131072 B'], ['ContentBody 帧 2', 131072, '131072 B'], ['ContentBody 帧 3', 45080, '45080 B']], 131072, mark=[2], done=[0, 1]), kv=KV([['frame_max', '131072'], ['300 KiB 的消息', '3 个 ContentBody 帧'], ['拼接', '按 ContentHeader 里的总长度']], ['frame_max'])),
+    step("消息大小有上限:max_message_size 在 4.3.6 里是 16777216 字节(16 MiB)。发 1 MiB 和 16 MiB 成功,17 MiB 和 130 MiB 被拒绝:406 PRECONDITION_FAILED message size 17825792 is larger than configured max size 16777216,出错的是 channel。这个限制是 broker 一侧的保护,避免有人把一条几百 MiB 的消息塞进队列。", t=tl(S(4)), mark=lidx(S(4), '17 MiB', '130 MiB'), done=lidx(S(4), '1 MiB: 成功', '16 MiB: 成功', 'max_message_size'), b=bars([['上限', 16, '16 MiB'], ['成功的最大一条', 16, '16 MiB'], ['被拒绝的', 17, '17 MiB → 406']], 17, mark=[2], done=[0, 1]), kv=KV([['max_message_size', '16 MiB'], ['超过', '406 PRECONDITION_FAILED'], ['后果', '出错的 channel 被关']], ['超过'])),
+    step("大消息的内存和磁盘:在一个全新的节点上往经典队列放 1000 条 1 MiB 的持久化消息(共 1000 MiB),broker RSS 只从 137 MiB 到 152 MiB;数据目录从 0.1 MiB 涨到 1000 MiB;队列 messages=1000、messages_ram=1、队列进程内存 0.0 MiB——消息体都在磁盘,内存里几乎没有。大消息的成本落在磁盘空间和带宽上,不在内存。", t=tl(S(5)), mark=lidx(S(5), '1000 条 × 1 MiB 之后'), done=lidx(S(5), '放入前'), b=bars([['放入前 RSS', 137, '137 MiB'], ['放入后 RSS', 152, '152 MiB'], ['数据目录增量', 1000, '1000 MiB']], 1000, mark=[2], done=[0, 1]), kv=KV([['内存', 'RSS +15 MiB'], ['磁盘', '+1000 MiB'], ['messages_ram', '1']], ['磁盘'])),
+]
+A = mkartq('q28', 28, 'RabbitMQ,消息大小,吞吐,frame_max,max_message_size,真实验证,动画演示',
+    '在 RabbitMQ 4.3.6 上实测消息大小的影响:10 B~1 KiB 约 5~6 万条/秒,100 KiB 起带宽到约 1.4 GiB/秒;classic 与 quorum 在单节点上几乎重合;300 KiB 消息拆成 3 个 ContentBody 帧(frame_max 131072);max_message_size 16 MiB,17 MiB 被 406 拒绝;1000 条 1 MiB 消息只让 RSS 涨 15 MiB、磁盘涨 1000 MiB。',
+    '消息越大吞吐越低是常识,但具体是怎么降的?拐点在哪里?大消息在线上被怎么拆帧?有没有大小上限?放在队列里占内存还是占磁盘?这篇用同一套带 confirm 的异步发布把这些都量一遍。',
+    [('59713 → 1436', '10 B 与 1 MiB 消息的发布吞吐(条/秒);1 MiB 时带宽 1435.7 MiB/秒'), ('3 个 ContentBody', '300 KiB 的消息按 frame_max 131072 拆成的帧数'), ('16 MiB', 'max_message_size:17 MiB 的消息得到 406')],
+    [('吞吐曲线', '<p>小消息(≤ 1 KiB)吞吐约 5~6 万条/秒,每条的处理开销主导;从 10 KiB 起条数下降而带宽上升,100 KiB~1 MiB 时带宽约 1.4 GiB/秒。</p>'),
+     ('队列类型', '<p>单节点上 classic 和 quorum 的吞吐曲线几乎重合,消息大小才是主要因素。</p>'),
+     ('帧', '<p>消息体按协商的 <code>frame_max</code>(131072)拆成多个 ContentBody 帧;ContentHeader 记录总长度。</p>'),
+     ('上限', '<p><code>max_message_size</code> 默认 16 MiB,超过得到 406 PRECONDITION_FAILED,channel 被关。</p>'),
+     ('内存与磁盘', '<p>大消息放进经典队列后主要在磁盘上(1000 条 1 MiB:磁盘 +1000 MiB,RSS +15 MiB)。</p>')],
+    steps,
+    [ENV_Q + '。吞吐用 pika SelectConnection 带 confirm 异步发布(在途 1000),持久化,3 轮取中位数,每种大小条数 = min(30000, 300 MiB ÷ 大小);第三节线上帧经自己写的代理;第五节在全新节点上用 ps 读 RSS、du 读数据目录',
+     '没有验证:多副本 quorum 队列下大消息的复制代价;消费端的吞吐随消息大小的变化;非持久化消息;调大 max_message_size 后极大消息的行为;frame_max 调整的影响;TLS 下的大消息;Linux / 真实磁盘上的 MiB/秒(这里是 macOS 笔记本 SSD)'],
+    '消息大小')

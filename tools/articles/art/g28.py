@@ -1,0 +1,26 @@
+from lib import *
+S = SS('g28')
+steps = [
+    step("读字段(7 轮取中位数):直接读 t.D 1.90 ns/op;reflect 预先取好 Value 之后 Field(3).Int() 2.26 ns/op;每次都 reflect.ValueOf(t).Elem().Field(3).Int() 3.61 ns/op;按名字 FieldByName(\"D\").Int() 29.61 ns/op,其中只做字段信息查找的 Type.FieldByName(\"D\") 就占 26.48 ns/op。按下标访问接近直接访问,按名字查才是大头。", t=tl(S(1)), done=lidx(S(1), '直接读', 'Field(3).Int()(预先'), mark=lidx(S(1), 'ValueOf(t).Elem()', 'FieldByName(\"D\").Int()', 'Type.FieldByName'), b=bars([['直接读 t.D', 1.90, '1.90'], ['Field(3)(预取 Value)', 2.26, '2.26'], ['ValueOf+Elem+Field(3)', 3.61, '3.61'], ['FieldByName(\"D\")', 29.61, '29.61'], ['Type.FieldByName(\"D\")', 26.48, '26.48']], 29.61, done=[0, 1], mark=[2, 3, 4]), kv=KV([['按下标', '2.26–3.61 ns/op,与直接读 1.90 同量级'], ['按名字', '29.61 ns/op(约 15 倍)'], ['名字查找本身', '26.48 ns/op']], ['按名字'])),
+    step("写字段:直接写 t.D = i 是 0.30 ns/op(这是空循环的下限,编译器把存储合并掉了,不要当作真实的写成本),reflect Field(3).SetInt(i) 是 3.02 ns/op。", t=tl(S(2)), mark=lidx(S(2), 'reflect Field(3).SetInt'), kv=KV([['直接写', '0.30 ns/op(接近空循环)'], ['reflect SetInt', '3.02 ns/op']], ['reflect SetInt'])),
+    step("调用:直接调用 add(1, 2) 1.96 ns/op,reflect Value.Call(预先准备好 args)121.20 ns/op(约 62 倍);直接调用方法 t.Add(1, 2) 2.32 ns/op,预先取好 Method 再 Call 140.11 ns/op;每次都 MethodByName(\"Add\") 查找再 Call 335.39 ns/op。", t=tl(S(3)), done=lidx(S(3), '直接调用 add', '直接调用 t.Add'), mark=lidx(S(3), 'Value.Call', 'Method 预先取好', 'MethodByName'), b=bars([['直接调用 add', 1.96, '1.96'], ['reflect Call(函数)', 121.20, '121.20'], ['reflect Call(方法,预取)', 140.11, '140.11'], ['MethodByName + Call', 335.39, '335.39']], 335.39, done=[0], mark=[1, 2, 3]), kv=KV([['直接调用', '约 2 ns'], ['reflect Call', '121–140 ns(约 60–70 倍)'], ['每次 MethodByName', '335 ns']], ['reflect Call'])),
+    step("类型判断:类型断言 x.(*T) 2.09 ns/op,reflect.TypeOf(x).Kind() == Pointer 1.99 ns/op——只取类型信息的反射几乎没有成本。", t=tl(S(4)), done=lidx(S(4), '类型断言', 'reflect.TypeOf'), kv=KV([['x.(*T)', '2.09 ns/op'], ['reflect.TypeOf(x).Kind()', '1.99 ns/op'], ['结论', '只读类型信息便宜']], ['结论'])),
+    step("比较:手写字段比较 4.55 ns/op;reflect.DeepEqual(a1, a2)(6 个字段含一个切片)180.26 ns/op(约 40 倍)。", t=tl(S(5)), mark=lidx(S(5), 'DeepEqual'), b=bars([['手写比较', 4.55, '4.55'], ['reflect.DeepEqual', 180.26, '180.26']], 180.26, done=[0], mark=[1]), kv=KV([['手写比较', '4.55 ns/op'], ['reflect.DeepEqual', '180.26 ns/op(约 40 倍)']], ['reflect.DeepEqual'])),
+    step("创建:new(T) 0.30 ns/op(编译器没有真的分配,不能当作真实成本),reflect.New(rt).Interface().(*T) 24.41 ns/op。", t=tl(S(6)), mark=lidx(S(6), 'reflect.New'), kv=KV([['new(T)', '0.30 ns/op(被优化掉)'], ['reflect.New', '24.41 ns/op,1 次分配']], ['reflect.New'])),
+    step("分配次数(AllocsPerRun):Field(3).Int() 0 次、FieldByName(\"D\").Int() 0 次;函数的 Value.Call(2 个参数)2 次;方法的 Call 3 次;每次 MethodByName + Call 6 次;reflect.DeepEqual 2 次;reflect.TypeOf(x).Kind() 0 次;reflect.New 1 次。", t=tl(S(7)), done=lidx(S(7), 'Field(3).Int()', 'FieldByName', 'TypeOf'), mark=lidx(S(7), 'fn.Call', 'm.Call', 'MethodByName', 'DeepEqual'), b=bars([['Field(3).Int()', 0, '0'], ['函数 Call', 2, '2'], ['方法 Call', 3, '3'], ['MethodByName + Call', 6, '6'], ['DeepEqual', 2, '2']], 6, done=[0], mark=[1, 2, 3, 4]), kv=KV([['读字段', '0 次分配'], ['Call', '函数 2 次、方法 3 次'], ['MethodByName + Call', '6 次'], ['DeepEqual', '2 次']], ['MethodByName + Call'])),
+]
+A = mkartg('g28', 28, 'Go,反射,reflect,性能,真实验证,动画演示',
+    '在 Go 1.27.1(arm64)上量 reflect 的成本:按下标读字段 2.26–3.61 ns(直接读 1.90 ns),按名字 FieldByName 29.61 ns;reflect.Value.Call 调函数 121.20 ns(直接调 1.96 ns,约 62 倍)、调方法 140.11 ns,每次 MethodByName 335.39 ns;reflect.DeepEqual 180.26 ns(手写比较 4.55 ns);只取类型信息的 reflect.TypeOf().Kind() 与类型断言一样快;并统计各操作的分配次数。',
+    '“反射很慢”到底慢多少、慢在哪里?这篇逐项量:读写字段、调用函数与方法、类型判断、比较、创建,并数每一项的分配次数,看看哪些写法可以把反射的成本压下来(缓存字段下标与方法)。',
+    [('按名字 vs 按下标', 'FieldByName 29.61 ns,按下标 Field(3) 2.26 ns:查找名字占了绝大部分'), ('62 倍', 'reflect.Value.Call 调函数(121.20 ns)与直接调用(1.96 ns)的差距'), ('0 次', '读字段与 TypeOf().Kind() 不分配内存;Call 要分配 2 到 3 次')],
+    [('字段访问', '<p>反射读写字段本身只比直接访问慢一点(预先取好 <code>Value</code>、按下标:2–4 ns),昂贵的是<b>按名字查找</b>(约 30 ns,其中 26 ns 是在类型信息里查名字)。所以序列化库等会在第一次遇到某个类型时算好每个字段的下标并缓存,之后只按下标访问。这是对数字的解释,没有读具体库的代码。</p>'),
+     ('写字段', '<p>直接写那一项只有 0.30 ns,是因为编译器把循环里的重复存储合并了,接近空循环的下限,不能作为“写字段的真实成本”;反射写 <code>SetInt</code> 是 3.02 ns。</p>'),
+     ('调用', '<p>反射调用要把参数装进 <code>[]reflect.Value</code>、检查类型、间接调用,再把结果装回 <code>[]reflect.Value</code>,所以比直接调用慢约 60 到 70 倍,并且每次分配 2 到 3 次;每次还做 <code>MethodByName</code> 就更贵(335 ns,6 次分配)。能预先取好 <code>Method</code> 就别每次查。</p>'),
+     ('类型信息', '<p><code>reflect.TypeOf(x).Kind()</code> 只读类型字,没有分配,与类型断言同一量级(约 2 ns)。只是“看一眼类型”的反射用法并不贵。</p>'),
+     ('DeepEqual', '<p><code>reflect.DeepEqual</code> 递归比较任意类型,方便但慢(这个 6 字段结构体约 180 ns,手写 4.55 ns,约 40 倍),并且会分配。在热路径里比较已知类型时手写比较,或者用 Go 1.21 以后的 <code>slices.Equal</code> 等(本文没有测)。</p>'),
+     ('创建', '<p><code>reflect.New</code> 约 24 ns 并分配一次;<code>new(T)</code> 在这个微基准里被优化掉了(0.30 ns),不能比较。</p>'),
+     ('分配', '<p>读字段、取类型信息不分配;<code>Call</code> 与 <code>DeepEqual</code> 会分配。反射的成本不只是时间,也包括这些给 GC 增加的压力。</p>')],
+    steps,
+    [ENV_G + '。基准测试每个变体 7 轮取中位数(为了跑完不超时,总共约 3 分钟);分配次数来自 testing.AllocsPerRun(1000 次);被编译器优化掉的两项(直接写 t.D、new(T))已在文中标注',
+     '没有验证:缓存字段下标后的序列化库的真实性能(见 encoding/json 一篇)、reflect.Value.Call 在不同参数个数与变参下的成本、泛型作为反射替代方案的对比、reflect.TypeFor、MakeSlice/Append 等其它创建与修改操作、amd64 上的数字'],
+    'reflect 的成本')

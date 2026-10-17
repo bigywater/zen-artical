@@ -1,0 +1,467 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>测试中的时间、随机数和网络隔离</title>
+<meta name="description" content="本机真实验证:依赖真实时钟的测试在一天 24 个整点里只有 8 个通过;patch(&quot;time.time&quot;) 对 from time import time 拿走的引用无效、patch 内置类型 datetime.now 报 TypeError;把时钟当参数传入可免于 patch;共享全局 random 状态会造成 a→b 通过而 b→a 失败;禁外网 fixture 让不可达地址的连接由 0.60 s 超时变成 0.0003 s 立刻报错;patch 掉 sleep 让重试测试从 1.12 s 降到 0.07 s。">
+<link rel="canonical" href="https://bigywater.tech/python-time-random-isolation.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="测试中的时间、随机数和网络隔离">
+<meta property="og:description" content="本机真实验证:依赖真实时钟的测试在一天 24 个整点里只有 8 个通过;patch(&quot;time.time&quot;) 对 from time import time 拿走的引用无效、patch 内置类型 datetime.now 报 TypeError;把时钟当参数传入可免于 patch;共享全局 random 状态会造成 a→b 通过而 b→a 失败;禁外网 fixture 让不可达地址的连接由 0.60 s 超时变成 0.0003 s 立刻报错;patch 掉 sleep 让重试测试从 1.12 s 降到 0.07 s。">
+<meta property="og:url" content="https://bigywater.tech/python-time-random-isolation.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="测试中的时间、随机数和网络隔离">
+<meta name="twitter:description" content="本机真实验证:依赖真实时钟的测试在一天 24 个整点里只有 8 个通过;patch(&quot;time.time&quot;) 对 from time import time 拿走的引用无效、patch 内置类型 datetime.now 报 TypeError;把时钟当参数传入可免于 patch;共享全局 random 状态会造成 a→b 通过而 b→a 失败;禁外网 fixture 让不可达地址的连接由 0.60 s 超时变成 0.0003 s 立刻报错;patch 掉 sleep 让重试测试从 1.12 s 降到 0.07 s。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">1937</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#306998; --series-c-soft:#E3EBF5;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#5B9BD5; --series-c-soft:#1B2F4D;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#5B9BD5; --series-c-soft:#1B2F4D;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Python · 105</div>
+  <h1>测试中的时间、随机数和网络隔离</h1>
+  <p>测试最怕「不确定」:现在几点、随机数是多少、网络通不通。这三样不受你控制,测试就会间歇失败。这篇把三类问题各用一个真实实验讲清:怎么让时间、随机、网络变得可控,以及 <code>patch</code> 最容易踩的那个坑。</p>
+  <div class="hero-fact">
+<div><div class="num">8 / 24</div><div class="lbl">不控制时间的测试,一天 24 个整点里通过的个数</div></div><div><div class="num">0.60 s → 0.0003 s</div><div class="lbl">连接不可达地址:无保护(超时)与「禁外网」fixture 下的耗时</div></div><div><div class="num">1.12 s → 0.07 s</div><div class="lbl">带两次重试等待的测试:真实 sleep 与 patch 掉 sleep</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="python-mutation-testing.html">变异测试：测试用例真的能发现错误吗</a></div>
+<section>
+  <h2>验证一:依赖「现在」的测试是不稳定的</h2>
+  
+  <blockquote class="src"><span class="path">shop.py</span>
+def is_business_hours():
+    h = datetime.datetime.fromtimestamp(time.time()).hour
+    return 9 &lt;= h &lt; 17</blockquote>
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">不打补丁的测试 assert is_business_hours() 在一天 24 个整点里会通过的时刻: [9, 10, 11, 12, 13, 14, 15, 16]
+  → 24 小时里 8 小时通过, 16 小时失败: 同一份代码、同一个测试, 结果取决于你在几点跑</pre></div>
+  <p>这里为了统计,我用 <code>patch</code> 把时间依次设到 24 个整点。结论是:一个直接断言 <code>is_business_hours()</code> 为 True 的测试,只在 9 到 16 点之间通过,其余 16 个小时都会失败——CI 半夜跑就红了。</p>
+</section>
+<section>
+  <h2>验证二:patch 打在哪里</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">patch('time.time') 之后: shop.is_business_hours() 看到的 time.time() = 1234.0 (生效, 因为它写的是 time.time())
+  但 from time import time as time_fn 的那份: 1790690773.009121   ← 没有被替换, 仍是真实时间戳(≈ 现在)
+改成 patch('shop.time_fn') 之后: 1234.0 (patch 要打在「使用它的地方」)
+patch('datetime.datetime.now') → TypeError: cannot set 'now' attribute of immutable type 'datetime.datetime'</pre></div>
+  <p>这是最常见的 <code>patch</code> 陷阱:<code>patch("time.time")</code> 替换的是 <code>time</code> 模块里的名字,代码里写 <code>time.time()</code> 的地方会生效,但如果是 <code>from time import time as time_fn</code> 那样把名字拿到自己模块里,拿走的那份引用不会变,得 <code>patch("shop.time_fn")</code>——<b>要 patch「被使用的地方」,而不是「被定义的地方」</b>。另外 <code>datetime.datetime.now</code> 是内置类型上的属性,不能直接替换,会得到 <code>TypeError</code>(常见做法是 patch 整个 <code>datetime</code> 名字,或者用专门的库)。</p>
+</section>
+<section>
+  <h2>验证三:更好的办法——把时钟传进去</h2>
+  
+  <blockquote class="src"><span class="path">clock.py</span>
+def is_business_hours(now=None):
+    now = now or datetime.datetime.now()
+    return 9 &lt;= now.hour &lt; 17</blockquote>
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">is_business_hours(datetime(2026,9,29,10,0)) = True
+  is_business_hours(datetime(2026,9,29,23,0)) = False
+  (不需要任何 patch, 也不依赖真实时钟)</pre></div>
+  <p>如果时间是函数的参数,测试就直接传一个固定时间——不需要 patch、不依赖真实时钟、不会有「打在哪里」的困扰。生产代码不传参数时走默认。这种「依赖注入」比 patch 更直接,代价是需要改接口。</p>
+</section>
+<section>
+  <h2>验证四:随机数——种子与独立实例</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">全局 random 无种子,连跑 8 次 roll(): [4, 1, 3, 4, 1, 4, 2, 5]
+  random.seed(42) 两次: [6, 1, 1, 6, 3, 2] [6, 1, 1, 6, 3, 2] 相同: True
+  注入独立的 Random(7) 实例: [3, 2, 4, 6, 1, 1] [3, 2, 4, 6, 1, 1]
+  全局 seed(1) 与 Random(1) 产生同一个序列: True
+  seed(99) 后另造并使用一个 Random(5), 全局序列是否完全不受影响? True
+  (seed(0) 之后依次得到 50, 98;test_a 断言第一个值,test_b 没设种子却断言第二个值)
+  两个测试共用全局随机状态: 顺序 a → b: 2 passed in 0.07s
+  顺序 b → a:                             1 failed, 1 passed in 0.08s</pre></div>
+  <p><code>random.seed(42)</code> 两次能复现同一串数;更稳妥的是给函数传一个独立的 <code>random.Random(种子)</code> 实例,它和全局状态互不干扰。全局状态的坏处在最后两行:<code>test_a</code> 设了种子并断言第一个值,<code>test_b</code> 没设种子,「碰巧」断言了第二个值。按 a→b 运行,两个都通过;按 b→a 运行,b 失败——它的结果取决于测试的执行顺序。这类 bug 在开启随机测试顺序或并行运行时才会暴露。</p>
+</section>
+<section>
+  <h2>验证五:禁止真实网络</h2>
+  
+  <blockquote class="src"><span class="path">conftest.py(节选)</span>
+@pytest.fixture
+def no_network(monkeypatch):
+    real = socket.socket.connect
+    def guard(self, addr, *a, **k):
+        host = addr[0] if isinstance(addr, tuple) else addr
+        if host not in ("127.0.0.1", "::1", "localhost"):
+            raise RuntimeError(f"测试里不允许访问外部网络: {addr}")
+        return real(self, addr, *a, **k)
+    monkeypatch.setattr(socket.socket, "connect", guard)</blockquote>
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [无保护] TimeoutError 用时 0.60 s
+  [有保护] RuntimeError: 测试里不允许访问外部网络: ('203.0.113.1', 80) 用时 0.0003 s
+  [有保护] 连接本机回环地址仍然可以
+   3 passed in 0.71s</pre></div>
+  <p>用一个 fixture 替换 <code>socket.connect</code>:除回环地址外一律抛异常。实验里连的是 <code>203.0.113.1</code>(文档保留地址,不会有真实主机应答,不会对任何人发流量):没有保护时要等 0.60 s 才超时;有保护时 0.3 毫秒就报错,而且报错信息直接说明「测试里试图访问外网」——比一个莫名其妙的超时好排查得多,也让测试不再因为网络抖动而随机失败。</p>
+</section>
+<section>
+  <h2>验证六:别真的 sleep</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  test_real_sleep      → 1 passed in 1.12s
+  test_patched_sleep   → 1 passed in 0.07s</pre></div>
+  <p>带重试的函数每次失败后 <code>time.sleep(delay)</code>。把 <code>time.sleep</code> 换成「往列表里记一下」的函数,测试从 1.12 s 降到 0.07 s,而且可以顺便断言「一共等了 [0.5, 0.5]」——既快又验证了重试的间隔逻辑。</p>
+</section>
+<section>
+  <h2>分步演示:让时间、随机、网络、sleep 都变得可控</h2>
+  <div class="h2-sub">所有数字取自上面的真实实验</div>
+  <div class="demo" id="demo"><div class="demo-head">测试的不确定性</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>当前主题</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "fl", "kind": "flow", "label": "哪一类"}, {"id": "kv", "kind": "kv", "label": "观察"}, {"id": "b", "kind": "bars", "label": "耗时(ms)"}], "steps": [{"note": "依赖真实时钟的测试:is_business_hours()(9 点到 17 点返回 True)。一天 24 个整点里只有 8 个通过——同一个测试,几点跑结果不同,这就是「间歇失败」的来源。", "s": {"fl": {"nodes": [["时间", "依赖「现在」"], ["patch 陷阱", "打在哪里"], ["随机数", "种子 / 注入"], ["网络", "禁止外连"], ["sleep", "别真的等"]], "cur": [0], "done": []}, "kv": {"items": [["通过的整点", "9 10 11 12 13 14 15 16"], ["24 小时里", "8 小时通过 / 16 小时失败"]], "hl": ["24 小时里"]}}}, {"note": "patch('time.time') 只替换 time 模块里的属性:代码写成 time.time() 的地方生效了(1234.0);但代码里 from time import time as time_fn 拿走的那份引用没被替换,仍然是真实时间戳。", "s": {"fl": {"nodes": [["时间", "依赖「现在」"], ["patch 陷阱", "打在哪里"], ["随机数", "种子 / 注入"], ["网络", "禁止外连"], ["sleep", "别真的等"]], "cur": [1], "done": [0]}, "kv": {"items": [["time.time()", "1234.0(被替换)"], ["shop.time_fn()", "≈ 1.79e9(仍是真实时间戳)"]], "hl": ["shop.time_fn()"]}}}, {"note": "要 patch「使用它的地方」:patch('shop.time_fn') 才生效。而 datetime.datetime.now 是内置类型的属性,直接 patch 报 TypeError: immutable type。", "s": {"fl": {"nodes": [["时间", "依赖「现在」"], ["patch 陷阱", "打在哪里"], ["随机数", "种子 / 注入"], ["网络", "禁止外连"], ["sleep", "别真的等"]], "cur": [1], "done": [0]}, "kv": {"items": [["patch('shop.time_fn')", "1234.0(生效)"], ["patch('datetime.datetime.now')", "TypeError: cannot set 'now' attribute of immutable type"]], "hl": ["patch('datetime.datetime.now')"]}}}, {"note": "更好的办法:把「现在」当作参数传进去(now=None 默认取真实时间)。测试直接传 datetime(2026,9,29,10,0) 得 True、23:00 得 False,不需要任何 patch。", "s": {"fl": {"nodes": [["时间", "依赖「现在」"], ["patch 陷阱", "打在哪里"], ["随机数", "种子 / 注入"], ["网络", "禁止外连"], ["sleep", "别真的等"]], "cur": [0], "done": [1]}, "kv": {"items": [["is_business_hours(10:00)", "True"], ["is_business_hours(23:00)", "False"]], "hl": ["is_business_hours(10:00)"]}}}, {"note": "随机数:seed(42) 两次得到同一串 [6,1,1,6,3,2];注入一个独立的 Random(7) 实例也可复现,并且完全不碰全局状态。", "s": {"fl": {"nodes": [["时间", "依赖「现在」"], ["patch 陷阱", "打在哪里"], ["随机数", "种子 / 注入"], ["网络", "禁止外连"], ["sleep", "别真的等"]], "cur": [2], "done": [0, 1]}, "kv": {"items": [["seed(42) 两次", "[6, 1, 1, 6, 3, 2] 相同"], ["Random(7) 两个实例", "[3, 2, 4, 6, 1, 1] 相同"]], "hl": ["Random(7) 两个实例"]}}}, {"note": "依赖全局随机状态的测试有顺序耦合:test_b 没有设种子,却期望 seed(0) 之后的第二个值 98。顺序 a→b:2 passed;顺序 b→a:1 failed。", "s": {"fl": {"nodes": [["时间", "依赖「现在」"], ["patch 陷阱", "打在哪里"], ["随机数", "种子 / 注入"], ["网络", "禁止外连"], ["sleep", "别真的等"]], "cur": [2], "done": [0, 1]}, "kv": {"items": [["a → b", "2 passed"], ["b → a", "1 failed, 1 passed"]], "hl": ["b → a"]}}}, {"note": "网络:连一个不会应答的地址(203.0.113.1,文档保留地址)。无保护:等到 0.60 s 超时(TimeoutError);加了「禁外网」fixture:0.0003 s 内立刻 RuntimeError;连本机回环地址仍然允许。", "s": {"fl": {"nodes": [["时间", "依赖「现在」"], ["patch 陷阱", "打在哪里"], ["随机数", "种子 / 注入"], ["网络", "禁止外连"], ["sleep", "别真的等"]], "cur": [3], "done": [0, 1, 2]}, "b": {"items": [["无保护", 600, "0.60 s"], ["有保护", 0.3, "0.0003 s"]], "max": 600, "cur": [1]}}}, {"note": "sleep:一个带 2 次重试、每次等 0.5 s 的函数。真实 sleep 的测试 1.12 s;把 time.sleep 换成记录列表后 0.07 s,而且可以断言「睡了 [0.5, 0.5]」。", "s": {"fl": {"nodes": [["时间", "依赖「现在」"], ["patch 陷阱", "打在哪里"], ["随机数", "种子 / 注入"], ["网络", "禁止外连"], ["sleep", "别真的等"]], "cur": [4], "done": [0, 1, 2, 3]}, "b": {"items": [["真实 sleep", 1120, "1.12 s"], ["patch 掉 sleep", 70, "0.07 s"]], "max": 1120, "cur": [1]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 / Python 3.14.7,pytest 9.1.1(临时虚拟环境),标准库 <code>unittest.mock</code>;网络实验只访问文档保留地址 203.0.113.1(不会有应答)和本机回环</li><li>没有验证:freezegun / time-machine / pytest-socket 等专门的库、asyncio 的事件循环时钟(<code>loop.time</code>)、时区与夏令时相关的问题</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="python-concurrent-testing.html">
+    <div>
+      <div class="t1">下一篇 · PYTHON 106</div>
+      <div class="t2">并发代码如何稳定测试而不是靠运气</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Python · 测试中的时间、随机数和网络隔离 · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

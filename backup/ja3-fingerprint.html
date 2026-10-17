@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>requests 的 TLS 指纹:JA3 是怎么把 Python 爬虫和 curl 区分开的</title>
+<meta name="description" content="真实在本机起一个只收不回的假 TLS 服务器,分别用 requests 和系统 curl 连同一个端口,截获两边真实的 ClientHello 原始字节,现场算出两个完全不同的 JA3 哈希——全程没用到 User-Agent 或任何 Header;逐字段拆解 JA3 字符串,说明为什么只改 UA 骗不过基于 TLS 指纹的识别。">
+<link rel="canonical" href="https://bigywater.tech/ja3-fingerprint.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="requests 的 TLS 指纹:JA3 是怎么把 Python 爬虫和 curl 区分开的">
+<meta property="og:description" content="真实在本机起一个只收不回的假 TLS 服务器,分别用 requests 和系统 curl 连同一个端口,截获两边真实的 ClientHello 原始字节,现场算出两个完全不同的 JA3 哈希——全程没用到 User-Agent 或任何 Header;逐字段拆解 JA3 字符串,说明为什么只改 UA 骗不过基于 TLS 指纹的识别。">
+<meta property="og:url" content="https://bigywater.tech/ja3-fingerprint.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="requests 的 TLS 指纹:JA3 是怎么把 Python 爬虫和 curl 区分开的">
+<meta name="twitter:description" content="真实在本机起一个只收不回的假 TLS 服务器,分别用 requests 和系统 curl 连同一个端口,截获两边真实的 ClientHello 原始字节,现场算出两个完全不同的 JA3 哈希——全程没用到 User-Agent 或任何 Header;逐字段拆解 JA3 字符串,说明为什么只改 UA 骗不过基于 TLS 指纹的识别。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F6F6F1; --paper:#FFFFFF; --ink:#1E2016; --ink-dim:#666B57; --line:#E1E3D6;
+  --io-c:#6B8E23; --io-c-soft:#EDF1DC;
+  --mem-c:#3D6B8C; --mem-c-soft:#E2ECF2;
+  --bad-c:#B23B3B; --bad-c-soft:#F7E4E2;
+  --code-bg:#1C2118; --code-ink:#E9ECDD;
+  --shadow: 0 1px 2px rgba(20,22,14,.06), 0 8px 24px -12px rgba(20,22,14,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#12140D; --paper:#1B1E14; --ink:#E9ECDD; --ink-dim:#A6AB95; --line:#2E3226;
+    --io-c:#9BC24C; --io-c-soft:#26301A;
+    --mem-c:#7FB0D6; --mem-c-soft:#1C2C36;
+    --bad-c:#E38A8A; --bad-c-soft:#3A2320;
+    --code-bg:#14170F; --code-ink:#DDE2CC;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#12140D; --paper:#1B1E14; --ink:#E9ECDD; --ink-dim:#A6AB95; --line:#2E3226;
+  --io-c:#9BC24C; --io-c-soft:#26301A;
+  --mem-c:#7FB0D6; --mem-c-soft:#1C2C36;
+  --bad-c:#E38A8A; --bad-c-soft:#3A2320;
+  --code-bg:#14170F; --code-ink:#DDE2CC;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--io-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--io-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--io-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--io-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#B9C99C; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--io-c); background:var(--io-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--bad-c); background:var(--bad-c-soft);}
+.callout.m{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--io-c-soft); color:var(--io-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#C7D6A8;}
+.term pre.code{margin:0 0 10px; color:#C7D6A8; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>爬虫工程 · 开篇</div>
+    <h1>requests 的 TLS 指纹:JA3 是怎么把 Python 爬虫和 curl 区分开的</h1>
+    <p>很多人写爬虫第一反应是把 <span class="mono">User-Agent</span> 换成 Chrome 的字符串,觉得这样就"伪装成浏览器"了。但 HTTP 请求发出去之前,先要完成一次 TLS 握手——这一层完全在 <span class="mono">requests</span>/<span class="mono">urllib3</span>/OpenSSL 内部完成,应用代码一行都碰不到,却把"你到底是谁写的客户端"暴露得干干净净。本机真实抓了一次握手,现算了一遍 JA3,看看这东西到底有多诚实。</p>
+    <div class="hero-fact">
+      <div><div class="num">2 个不同哈希</div><div class="lbl">本机同一个端口,requests 和系统 curl 各连一次,真实算出两个完全不同的 JA3</div></div>
+      <div><div class="num">0 处用到 Header</div><div class="lbl">JA3 只看 ClientHello 原始字节,User-Agent、Cookie 一个字节都没参与运算</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <h2>思路:JA3 到底在指纹什么</h2>
+  <p class="h2-sub">它指纹的不是"你说你是谁",是"你的 TLS 库真实发出来的握手长什么样"。</p>
+  <p>HTTPS 连接建立时,客户端要先发一条 <span class="mono">ClientHello</span>,里面明明白白写着:愿意用哪个 TLS 版本、支持哪些加密套件(而且是<b>按什么顺序</b>列出来的)、带了哪些扩展(同样有顺序)、支持哪些椭圆曲线、支持哪些点压缩格式。这些内容不是应用代码决定的,是客户端用的 TLS 库(OpenSSL / LibreSSL / BoringSSL / SecureTransport ……)和它的默认配置决定的。JA3(Salesforce 2017 年提出,最早是给安全团队识别恶意软件 C2 流量用的)干的事很简单:把这五项按固定顺序拼成一个字符串,再取一次 MD5:</p>
+  <blockquote class="src">
+    <span class="path">JA3 的拼接规则</span>
+JA3 = MD5( TLSVersion,Ciphers,Extensions,EllipticCurves,EllipticCurvePointFormats )
+
+每一项内部本身是个列表,用 "-" 连起来;
+列表之间用 "," 分隔;
+关键的一点:列表顺序<b>原样保留</b>,不做排序 —— 顺序本身就是指纹的一部分。
+  </blockquote>
+  <p>换句话说,不管请求头里 <span class="mono">User-Agent</span> 怎么写,只要底层还是用 <span class="mono">requests</span> 默认的连接方式,握手阶段发出去的字节顺序就是 <span class="mono">requests</span>/urllib3/OpenSSL 那一套,跟"自称"是谁毫无关系。</p>
+</section>
+
+<section>
+  <h2>真实验证:自己起一个只收不回的假 TLS 服务器</h2>
+  <p class="h2-sub">不用连任何外部站点——自己在本机监听一个端口,对方一发 ClientHello 就截下来,根本不用真的握手成功。</p>
+  <p>用标准库 <span class="mono">socket</span> 起一个 TCP 服务器,<b>不</b>加载任何证书、<b>不</b>回任何 TLS 字节,客户端发来的第一批数据就是完整的 <span class="mono">ClientHello</span> 记录(TLS record header 5 字节 + Handshake header 4 字节 + 正文),按 TLS 规范里 record 的长度字段读够字节就收工:</p>
+  <blockquote class="src">
+    <span class="path">core.py —— 抓包 + 解析 ClientHello + 拼 JA3(节选)</span>
+def parse_client_hello(buf):
+    pos = 5                      # 跳过 TLS record header
+    pos += 4                     # 跳过 Handshake header(类型 + 3 字节长度)
+    client_version = struct.unpack('>H', buf[pos:pos+2])[0]; pos += 2
+    pos += 32                    # random
+    pos += 1 + buf[pos]          # session_id
+
+    cs_len = struct.unpack('>H', buf[pos:pos+2])[0]; pos += 2
+    ciphers = [struct.unpack('>H', buf[pos+i:pos+i+2])[0]
+               for i in range(0, cs_len, 2)]
+    ciphers = [c for c in ciphers if c not in GREASE]   # 见下文"GREASE"
+    pos += cs_len
+    pos += 1 + buf[pos]          # compression_methods
+
+    ext_len = struct.unpack('>H', buf[pos:pos+2])[0]; pos += 2
+    # ... 遍历扩展,分别取出扩展类型列表 / supported_groups / ec_point_formats
+
+def ja3_string(f):
+    return '{},{},{},{},{}'.format(
+        f['version'],
+        '-'.join(map(str, f['ciphers'])),
+        '-'.join(map(str, f['extensions'])),
+        '-'.join(map(str, f['curves'])),
+        '-'.join(map(str, f['point_formats'])))
+  </blockquote>
+  <p>分别用 <span class="mono">requests.get()</span> 和系统自带的 <span class="mono">curl</span> 去连这个假服务器,两次都必然会因为握手不完整而报错(<span class="mono">SSLError</span> / 超时),但这不重要——需要的字节在报错之前就已经被服务器截下来了:</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">=== python requests (urllib3 + OpenSSL) ===
+raw bytes: 1511
+JA3 string: 771,4866-4867-4865-49196-49200-49195-49199-52393-52392-49188-49192-49187-49191-159-158-107-103,65281-11-10-16-22-23-49-13-43-45-51,4588-29-23-30-24-25-256-257,0
+JA3 hash  : c03c05ae0046e4d0ba623919f6bbe326
+
+=== system curl (SecureTransport) ===
+raw bytes: 301
+JA3 string: 771,4867-4866-4865-52393-52392-52394-49200-49196-49192-49188-49172-49162-159-107-57-...(省略中段)...-10-255,43-51-11-10-13-16,29-23-24-25,0
+JA3 hash  : 4f2655722e37c542ebeaf1eed48cbbbb</pre>
+<span class="ok">requests 的握手包了 1511 字节,curl 只有 301 字节 —— 光是包大小就差了 5 倍</span>
+<span class="bad">两边 JA3 hash 完全不同,而且是在同一台机器、同一个端口、同一次实验里测出来的</span>
+  </div>
+  <p>同一台机器,同一个目标,唯一的变量是"用哪个库发起连接",JA3 就已经完全不一样了。这两个进程既没商量过 User-Agent,请求本身也从没到达任何应用层代码——区别在 TLS 握手那一层就已经定死了。</p>
+</section>
+
+<section>
+  <h2>拆解 JA3 字符串:每一段具体是什么</h2>
+  <p class="h2-sub">逐字段对照着看,能看出两边的 TLS 库在"怎么发起一次握手"这件事上,策略完全不是一套。</p>
+  <table class="mono">
+    <thead><tr><th>字段</th><th>requests(节选)</th><th>curl / SecureTransport(节选)</th></tr></thead>
+    <tbody>
+      <tr><td>version</td><td>771(0x0303,TLS1.2 legacy 值,实际靠扩展 43 宣布支持 TLS1.3)</td><td>771,同样靠扩展 43</td></tr>
+      <tr><td>ciphers 数量</td><td>17 个,过滤掉 GREASE 后</td><td>49 个,老式套件列表明显更长</td></tr>
+      <tr><td>extensions 顺序</td><td>65281-11-10-16-22-23-49-13-43-45-51</td><td>43-51-11-10-13-16(只有 6 个)</td></tr>
+      <tr><td>curves</td><td>4588-29-23-30-24-25-256-257</td><td>29-23-24-25</td></tr>
+      <tr><td>point_formats</td><td>0</td><td>0</td></tr>
+    </tbody>
+  </table>
+  <p>扩展类型的数字不是随便编的,是 IANA 登记过的固定编号,挑几个对得上号的:<span class="mono">10</span>=supported_groups、<span class="mono">11</span>=ec_point_formats、<span class="mono">13</span>=signature_algorithms、<span class="mono">16</span>=ALPN、<span class="mono">43</span>=supported_versions、<span class="mono">51</span>=key_share。requests 这边多带了 <span class="mono">65281</span>(renegotiation_info)、<span class="mono">22</span>(encrypt_then_mac)、<span class="mono">23</span>(extended_master_secret)、<span class="mono">49</span>(post_handshake_auth)、<span class="mono">45</span>(psk_key_exchange_modes)这些 curl 那边压根没出现的扩展——不是谁对谁错,纯粹是 OpenSSL 和 SecureTransport/LibreSSL 两套库各自的默认策略不一样。</p>
+  <div class="callout m">
+    <b>curves 里那个 4588 是什么?</b>0x11EC 换算成十进制正好是 4588——这是 OpenSSL 3.6(本机装的版本)新支持的后量子混合密钥交换组 <span class="mono">X25519MLKEM768</span> 的编号。连本机 OpenSSL 的具体版本,都会顺带烙进这个指纹里,不只是 urllib3 的选择。
+  </div>
+  <p>还有一个容易漏掉的细节:两边的 cipher/extension/curve 列表在真实抓到的原始字节里,其实各自还夹了几个形如 <span class="mono">0x0A0A</span>、<span class="mono">0x2A2A</span>、<span class="mono">0xBABA</span> 这种"高低字节相同"的怪值,叫 <span class="mono">GREASE</span>(RFC 8701)——TLS 库故意在列表里插几个不存在的值,逼下游的服务器/中间设备别把"目前见过的固定列表"当成永远不变的协议,防止生态僵化。这些值每次握手都会重新随机挑一个,如果不过滤掉,同一个客户端每次算出来的 JA3 都会不一样,指纹就失去意义了——上面的解析代码里 <span class="mono">GREASE</span> 集合就是干这个的,JA3 官方规范也明确要求剔除它们。</p>
+</section>
+
+<section>
+  <h2>这对写爬虫意味着什么</h2>
+  <p class="h2-sub">JA3 揭示的是一个更根本的点:反爬识别不是只看 Header 的。</p>
+  <p>如果一套反爬系统只核对 Header 里的 <span class="mono">User-Agent</span>,那把它改成 Chrome 的字符串确实能过关。但只要它在 TLS 握手层多看一眼 JA3(现在很多 CDN/WAF/反爬服务都会看),<span class="mono">requests</span> 发出来的握手包跟真实 Chrome 浏览器的握手包在 cipher 顺序、扩展列表、曲线列表上都对不上——这时候改 Header 完全没用,因为 Header 那时候还没发出去,TLS 层早就已经把身份亮出来了。</p>
+  <p>反过来,这也不是说 JA3 就能百分百认出"这是不是浏览器":同一个 TLS 库(同一个 OpenSSL 版本、同一套 urllib3 默认配置)发出来的握手必然长得一样,JA3 认的是"这是哪一套客户端软件栈",不是"这个人是谁"。社区里也有像 <span class="mono">curl_cffi</span>、<span class="mono">tls-client</span> 这类项目,做法是在更底层换掉 TLS 握手的实现(基于 BoringSSL 等),让握手包在字节层面贴近真实 Chrome/Firefox,这类工具本身也说明了一件事:要在 JA3 这个维度上跟浏览器一致,只能从 TLS 库这一层入手,应用层的 Header 再怎么改都够不着。而现在更完整的识别方案(比如 JA4、HTTP/2 帧顺序指纹、再加上行为特征)会把 JA3 当成众多信号里的一个,单独伪装一个信号并不代表能绕开整套检测。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文 JA3 均在本机真实抓包、真实解析原始字节、真实计算得出,没有连接任何外部站点——服务端只是一个不完成握手的裸 <span class="mono">socket</span> 监听器。</li>
+      <li>JA3 规范原文:Salesforce Engineering, "TLS Fingerprinting with JA3 and JA3S"(2017);GREASE 机制定义见 RFC 8701。</li>
+      <li>没有涉及:JA4 指纹算法的具体字段、HTTP/2 帧序指纹、浏览器自动化(Selenium/Playwright/CDP)层面的检测特征——这些留给系列后面的文章。</li>
+    </ul>
+  </div>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>爬虫工程 · JA3 指纹 · 数据来自本机真实抓包与真实计算</footer>
+
+</body>
+</html>

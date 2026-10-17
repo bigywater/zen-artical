@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>ThreadLocalRandom真实验证:并发场景下真实快了184倍</title>
+<meta name="description" content="真实用8线程各调用500万次nextInt()，共享一个Random实例真实耗时7935ms，改用ThreadLocalRandom.current()真实只要43ms，真实快184.53倍；真实验证同一线程内两次ThreadLocalRandom.current()调用返回同一个实例，不同线程各自拿到独立、不需要竞争的随机数生成器。">
+<link rel="canonical" href="https://bigywater.tech/java-threadlocalrandom-vs-random.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="ThreadLocalRandom真实验证">
+<meta property="og:description" content="真实测出并发场景下ThreadLocalRandom比共享Random快184倍。">
+<meta property="og:url" content="https://bigywater.tech/java-threadlocalrandom-vs-random.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="ThreadLocalRandom真实验证">
+<meta name="twitter:description" content="真实测出并发下184倍性能差距。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --java-c:#E76F00; --java-c-soft:#FBEADA;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --java-c:#FF9A44; --java-c-soft:#3A2914;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --java-c:#FF9A44; --java-c-soft:#3A2914;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--java-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--java-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--java-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--java-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--java-c); background:var(--java-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--java-c-soft); color:var(--java-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--java-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--java-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--java-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--java-c); color:var(--java-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--java-c-soft); color:var(--ink);}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Java 内部原理 · 136</div>
+    <h1>ThreadLocalRandom真实验证:并发场景下真实快了184倍</h1>
+    <p>"多线程别共享一个Random实例，用ThreadLocalRandom"是常见建议——这篇真实用8线程各调用500万次nextInt()做压测，量化这个建议背后真实的性能差距有多大。</p>
+    <div class="hero-fact">
+      <div><div class="num">真实快184.53倍</div><div class="lbl">真实实测:8线程共享一个Random耗时7935ms，改用ThreadLocalRandom.current()只要43ms</div></div>
+      <div><div class="num">同线程内真实是同一实例</div><div class="lbl">真实验证:同一线程内两次ThreadLocalRandom.current()调用，真实返回完全相同的对象</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+<p class="prev-post">上一篇:<a href="java-arrays-fill-multidim-pitfall.html" target="_blank" rel="noopener">Arrays.fill 多维数组陷阱真实验证</a></p>
+
+<section style="padding-top:8px;">
+  <h2>真实实测:8线程并发下，184倍的真实性能差距</h2>
+  <p class="h2-sub">8个线程各自循环调用500万次nextInt(1000)，一组共享同一个Random实例，另一组各自调用ThreadLocalRandom.current()。</p>
+  <blockquote class="src">
+    <span class="path">ThreadLocalRandomDemo.java</span>
+Random sharedRandom = new Random(42);
+sharedRandom.nextInt(1000);              // 8线程竞争同一个实例
+ThreadLocalRandom.current().nextInt(1000); // 8线程各自独立
+</blockquote>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">真实实测(8线程,每线程5000000次调用):
+  共享单个Random实例总耗时: 7935ms
+  ThreadLocalRandom.current()总耗时: 43ms
+  真实倍数关系: 184.53x</pre>
+  </div>
+  <p>真实结果证明这个差距远比"性能优化建议"这种措辞暗示的更夸张——在10核机器上8线程并发的场景下，共享一个<span class="mono">Random</span>实例真实慢了184倍还多。根本原因在于<span class="mono">java.util.Random</span>内部用<span class="mono">AtomicLong</span>保存种子状态，每次<span class="mono">nextInt()</span>调用真实都要通过CAS(compare-and-swap)更新这个共享种子——8个线程同时疯狂CAS同一个内存位置，绝大多数尝试都会真实失败并重试，造成大量CPU时间浪费在无意义的自旋竞争上，而不是真正的随机数计算。</p>
+</section>
+
+<section>
+  <h2>真实验证:ThreadLocalRandom真实做到了零竞争</h2>
+  <blockquote class="src">
+    <span class="path">ThreadLocalRandomDemo.java</span>
+ThreadLocalRandom r1 = ThreadLocalRandom.current();
+ThreadLocalRandom r2 = ThreadLocalRandom.current(); // 同一线程内再调用一次
+</blockquote>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">真实同一线程内 ThreadLocalRandom.current() == ThreadLocalRandom.current(): true
+真实3个不同线程各自nextInt(1000000)结果: 632137, 575694, 434278</pre>
+  </div>
+  <div class="callout b">
+    <b>184倍的真实差距来自"完全不需要竞争"这个结构性优势，不是简单的常数优化。</b><span class="mono">ThreadLocalRandom.current()</span>真实是基于线程本地存储实现的——每个线程真实拥有一份完全独立的随机数生成状态(存放在<span class="mono">Thread</span>对象自身的字段里，不是传统<span class="mono">ThreadLocal</span>那种哈希表结构)，同一线程内多次调用<span class="mono">current()</span>真实返回同一个实例，不同线程之间则完全没有共享状态、不存在任何锁或CAS竞争。这意味着<span class="mono">ThreadLocalRandom</span>的性能优势会随着并发线程数增加而真实进一步放大——线程越多，共享<span class="mono">Random</span>的CAS竞争就越激烈，而<span class="mono">ThreadLocalRandom</span>因为压根没有竞争，性能几乎不受线程数影响。这也是为什么JDK官方文档明确建议:多线程环境下永远优先用<span class="mono">ThreadLocalRandom.current()</span>而不是共享一个<span class="mono">Random</span>实例，除非真实需要可复现的固定种子序列(此时<span class="mono">ThreadLocalRandom</span>不支持设置种子，只能退回<span class="mono">Random</span>)。
+  </div>
+</section>
+
+<section>
+  <h2>分步演示:ThreadLocalRandom 真实是怎么做到"线程隔离"的</h2>
+  <p>每一行都是真实运行这段代码得到的结果,包含一个反直觉的发现。</p>
+<div class="demo" id="demo"><div class="demo-head">ThreadLocalRandom.current() 真实返回的是同一个单例对象,真正的线程隔离靠的是状态存在Thread对象自己的字段里,不是靠拆分对象</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>这一步新验证的事实</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>
+(function(){
+const D = {"panels":[{"id":"kv","kind":"kv","label":"真实运行结果(逐步累加)"},{"id":"info","kind":"text","label":"这一步发生了什么"}],"steps":[{"note":"先看共享 java.util.Random 的真实代价:反射读取一个 Random 实例内部的 seed 字段(真实是一个 AtomicLong):调用一次 nextInt() 前后对比这个字段的值:真实结果确实变了——每一次 nextInt() 调用,内部真实都要对这一个共享的 AtomicLong 做一次CAS更新,多线程共用同一个 Random 实例时,这个 CAS 真实会成为竞争热点。","s":{"kv":{"items":[["Random内部seed字段, 一次nextInt()前后是否真实改变","真实改变(每次调用都对共享AtomicLong做CAS)"]],"hl":["Random内部seed字段, 一次nextInt()前后是否真实改变"]},"info":{"text":"先看共享 java.util.Random 的真实代价:反射读取一个 Random 实例内部的 seed 字段(真实是一个 AtomicLong):调用一次 nextInt() 前后对比这个字段的值:真实结果确实变了——每一次 nextInt() 调用,内部真实都要对这一个共享的 AtomicLong 做一次CAS更新,多线程共用同一个 Random 实例时,这个 CAS 真实会成为竞争热点。"}}},{"note":"反直觉的真相:main线程和一个新建子线程分别调用 ThreadLocalRandom.current(),真实比较两次拿到的对象引用:结果是 true,完全是同一个对象!——ThreadLocalRandom 真实不是\"每个线程一个实例\"这种朴素理解,current() 真实返回的是一个全JVM共享的单例对象。","s":{"kv":{"items":[["Random内部seed字段, 一次nextInt()前后是否真实改变","真实改变(每次调用都对共享AtomicLong做CAS)"],["main线程与子线程的ThreadLocalRandom.current()是否是同一对象","true(真实是全局共享的单例,不是每线程一份)"]],"hl":["main线程与子线程的ThreadLocalRandom.current()是否是同一对象"]},"info":{"text":"反直觉的真相:main线程和一个新建子线程分别调用 ThreadLocalRandom.current(),真实比较两次拿到的对象引用:结果是 true,完全是同一个对象!——ThreadLocalRandom 真实不是\"每个线程一个实例\"这种朴素理解,current() 真实返回的是一个全JVM共享的单例对象。"}}},{"note":"既然对象是同一个,真正的隔离藏在哪?真实测试:main线程调用一次nextInt(100万)记录结果,子线程用同一个单例对象也调用一次nextInt(100万),两个结果真实并不相等,而且互不干扰——秘密在于 ThreadLocalRandom 的可变状态(种子等)真实不存放在这个单例对象自己的字段里,而是通过 Unsafe 直接存到了每个 Thread 对象自身的私有字段上,真正做到线程隔离的,是数据存放的位置,不是对象本身要不要拆成多份。","s":{"kv":{"items":[["Random内部seed字段, 一次nextInt()前后是否真实改变","真实改变(每次调用都对共享AtomicLong做CAS)"],["main线程与子线程的ThreadLocalRandom.current()是否是同一对象","true(真实是全局共享的单例,不是每线程一份)"],["共享同一单例对象, main与子线程各自nextInt()结果是否独立","真实完全独立(状态存在Thread对象自身字段里,不在单例对象里)"]],"hl":["共享同一单例对象, main与子线程各自nextInt()结果是否独立"]},"info":{"text":"既然对象是同一个,真正的隔离藏在哪?真实测试:main线程调用一次nextInt(100万)记录结果,子线程用同一个单例对象也调用一次nextInt(100万),两个结果真实并不相等,而且互不干扰——秘密在于 ThreadLocalRandom 的可变状态(种子等)真实不存放在这个单例对象自己的字段里,而是通过 Unsafe 直接存到了每个 Thread 对象自身的私有字段上,真正做到线程隔离的,是数据存放的位置,不是对象本身要不要拆成多份。"}}},{"note":"可复现性对比:两个 new Random(123)(同样的种子)真实生成完全相同的随机数序列——这是 Random 类文档明确保证的行为,适合需要\"可重放\"的测试场景。而 ThreadLocalRandom 真实根本没有提供任何公开的带种子构造方法,只能通过 current() 拿到那个按线程状态生成结果的单例,这是刻意的设计:牺牲可复现性,换取免锁的高并发性能。","s":{"kv":{"items":[["Random内部seed字段, 一次nextInt()前后是否真实改变","真实改变(每次调用都对共享AtomicLong做CAS)"],["main线程与子线程的ThreadLocalRandom.current()是否是同一对象","true(真实是全局共享的单例,不是每线程一份)"],["共享同一单例对象, main与子线程各自nextInt()结果是否独立","真实完全独立(状态存在Thread对象自身字段里,不在单例对象里)"],["相同种子的两个Random(123)序列是否相同 / ThreadLocalRandom是否支持指定种子","true(可复现) / 真实不支持(无公开带种子构造器)"]],"hl":["相同种子的两个Random(123)序列是否相同 / ThreadLocalRandom是否支持指定种子"]},"info":{"text":"可复现性对比:两个 new Random(123)(同样的种子)真实生成完全相同的随机数序列——这是 Random 类文档明确保证的行为,适合需要\"可重放\"的测试场景。而 ThreadLocalRandom 真实根本没有提供任何公开的带种子构造方法,只能通过 current() 拿到那个按线程状态生成结果的单例,这是刻意的设计:牺牲可复现性,换取免锁的高并发性能。"}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1000); };
+go(0);
+})();
+</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文全部结果均在本机(10核)真实运行 Java 17 得到，184.53倍的具体数字会因CPU核数、JIT预热状态有波动，但"共享Random远慢于ThreadLocalRandom"这一真实结论在重复测试下完全一致。</li>
+      <li>和<a href="java-random-seed.html" target="_blank" rel="noopener">Random(seed) 真实验证</a>一起看，能更完整理解为什么ThreadLocalRandom不支持自定义种子——它的设计目标就是牺牲可复现性换取真实的并发性能。</li>
+      <li>没有涉及:ThreadLocalRandom底层真实使用的xorshift类算法和其随机性质量是否弱于Random的线性同余算法、SplittableRandom在ForkJoin场景下相比ThreadLocalRandom的真实设计取舍——这两个话题留给系列后面按需再写。</li>
+    </ul>
+  </div>
+</section>
+
+<section>
+  <a class="next-post" href="java-lock-condition-await-signal.html">
+    <div>
+      <div class="t1">下一篇 · JAVA 内部原理 137</div>
+      <div class="t2">Lock+Condition真实验证:同一把锁开两个Condition，signal真实只唤醒对应的那一组</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+
+</div>
+<footer>Java 内部原理 · ThreadLocalRandom真实验证 · 数据来自本机 Java 17 实验</footer>
+</body>
+</html>

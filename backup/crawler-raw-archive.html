@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>原始响应归档:自己写 WARC 记录</title>
+<meta name="description" content="在本机用手写的 WARC 记录实测:套接字字节原样写入并用 warcio 读回、chunked 的摘要要算在存下的字节上、requests 解码后再存会让头与正文对不上、每条记录单独 gzip 才能被 warcio 读并按偏移随机访问、revisit 记录省 29%、写到一半被截断后怎么恢复。">
+<link rel="canonical" href="https://bigywater.tech/crawler-raw-archive.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="原始响应归档:自己写 WARC 记录">
+<meta property="og:description" content="在本机用手写的 WARC 记录实测:套接字字节原样写入并用 warcio 读回、chunked 的摘要要算在存下的字节上、requests 解码后再存会让头与正文对不上、每条记录单独 gzip 才能被 warcio 读并按偏移随机访问、revisit 记录省 29%、写到一半被截断后怎么恢复。">
+<meta property="og:url" content="https://bigywater.tech/crawler-raw-archive.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="原始响应归档:自己写 WARC 记录">
+<meta name="twitter:description" content="在本机用手写的 WARC 记录实测:套接字字节原样写入并用 warcio 读回、chunked 的摘要要算在存下的字节上、requests 解码后再存会让头与正文对不上、每条记录单独 gzip 才能被 warcio 读并按偏移随机访问、revisit 记录省 29%、写到一半被截断后怎么恢复。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">2502</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">62</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">97</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">56</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">78</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">114</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">111</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">86</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#5F7F1E; --series-c-soft:#E6EFD2;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#A3C45A; --series-c-soft:#222C0E;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#A3C45A; --series-c-soft:#222C0E;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>爬虫工程 · 62</div>
+  <h1>原始响应归档:自己写 WARC 记录</h1>
+  <p>爬虫存下的“原始响应”如果只留解析后的字段,规则改了就没法重新解析。把原始响应按 WARC 格式存起来,可以随时重放。这篇自己手写 WARC 记录,用 warcio 读回核对,逐项测写法上的坑。</p>
+  <div class="hero-fact">
+<div><div class="num">8640 对 16434</div><div class="lbl">gzip 响应在记录里存的正文字节(原样) 与 requests 的 .content 解压后的字节;后者接在原样的头(Content-Length=8640)后面就对不上了</div></div><div><div class="num">0.044 对 153 毫秒</div><div class="lbl">有偏移索引的随机读取 与 没有索引顺序扫描到第 3000 条(5000 条的文件)</div></div><div><div class="num">43.4 对 30.9 MiB</div><div class="lbl">30% 的重复正文,完整写入 与 写成 revisit 记录 的文件大小</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="crawler-cdp-network.html">CDP 网络事件:不用解析页面直接拿响应体</a></div>
+<section>
+  <h2>原样写一条</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  plain    套接字上收到 16577 字节(头 93、正文 16484);写成的记录 16951 字节;warcio 读回:类型 response、URI 正确 True、状态 200、content_stream 给出的正文(按头自动去 chunked/gzip)长度 16484,与原 HTML(长度 16484)相同:True;warcio 摘要核对:True
+  gzip     套接字上收到 8787 字节(头 116、正文 8671);写成的记录 9159 字节;warcio 读回:类型 response、URI 正确 True、状态 200、content_stream 给出的正文(按头自动去 chunked/gzip)长度 16484,与原 HTML(长度 16484)相同:True;warcio 摘要核对:True
+  chunked  套接字上收到 16625 字节(头 98、正文 16527);写成的记录 17001 字节;warcio 读回:类型 response、URI 正确 True、状态 200、content_stream 给出的正文(按头自动去 chunked/gzip)长度 16484,与原 HTML(长度 16484)相同:True;warcio 摘要核对:True
+  chunked 记录里的 WARC-Payload-Digest 如果改算"去掉分块之后的正文"的摘要:warcio 摘要核对 False,问题 ['payload digest failed sha1:ZV2UN6O4KWHSEB2Y75F4DUVALLZLLHS4'](它是对头后面的字节原样算的,即分块格式还在的那些字节);我没有去核对规范里对这一点怎么规定)</pre></div>
+  <p>WARC 记录由一组记录头(类型、记录 ID、时间、URL、摘要、Content-Length)加一段内容块组成;response 记录的内容块就是 HTTP 响应的完整字节(状态行、头、正文)。我从套接字读到响应字节后原样放入,用 warcio 1.8.1 读回:类型、URI、状态码、正文都对,摘要核对通过,plain、gzip、chunked 三种传输方式都一样。chunked 的响应,把 WARC-Payload-Digest 算成“去掉分块格式之后的正文”,warcio 的摘要核对会失败;它是对头后面存下来的字节原样算的。规范对此怎么规定我没有核对,这里只说 warcio 1.8.1 的行为:摘要要算在你实际存下的字节上。</p>
+</section>
+<section>
+  <h2>别存解码之后的字节</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  (a) 套接字上的字节原样:warcio 读回 16434 字节,与原 HTML 相同:True;记录里存的正文 8640 字节,头里 Content-Length=8640,Content-Encoding=gzip;存的正文与服务器发出的字节相同:True
+  (b) requests 的 .content(是解压后的 16434 字节)接在原样的头后面:warcio 读回 16434 字节,与原 HTML 相同:True;记录里存的正文 16434 字节,头里 Content-Length=8640,Content-Encoding=gzip;存的正文与服务器发出的字节相同:False
+  (c) 解压后的正文,头里去掉 Content-Encoding、Content-Length 改成解压后的长度:warcio 读回 16434 字节,与原 HTML 相同:True;记录里存的正文 16434 字节,头里 Content-Length=16434,Content-Encoding=None;存的正文与服务器发出的字节相同:False
+  从 requests 里拿原始字节:stream=True 后 resp.raw.read(decode_content=False) 得到 8640 字节,与套接字上的正文相同:True
+  chunked 的响应:套接字上的正文 16477 字节(含分块格式);requests 的 resp.raw 读出 16434 字节(分块格式已经被去掉),而 resp.headers 里仍有 Transfer-Encoding: chunked</pre></div>
+  <p>requests 的 .content 是解压后的,resp.raw 虽然没有分块格式了,但 resp.headers 里还有 Transfer-Encoding: chunked。把解码后的正文接在原来的头后面,头(Content-Length=8640、Content-Encoding: gzip)和正文(16434 字节)就对不上,而 warcio 读回时并没有报错——不报错不等于没问题。要原样保存,就在套接字层抓字节,或者 stream=True 后用 resp.raw.read(decode_content=False) 并自己处理分块;(c) 去掉头里的编码信息再存解压后的正文是自洽的,但存下的已不是服务器发出的字节。</p>
+</section>
+<section>
+  <h2>每条记录单独压缩</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  构造 5000 条记录:2.47 秒;未压缩 WARC 共 68.2 MiB(平均每条 14298 字节;其中 1/3 的正文本来就是 gzip 压缩过的,所以压缩率不高)
+  不压缩 .warc                       68.2 MiB   写入 0.03 秒
+  每条记录单独 gzip(.warc.gz)           43.4 MiB   写入 0.97 秒
+  整个文件一个 gzip 流                   40.2 MiB   写入 1.36 秒
+  warcio 读整个文件一个 gzip 流的那个文件:抛出 ArchiveLoadFailed:ERROR: non-chunked gzip file detected, gzip block continues</pre></div>
+  <p>每条记录压成一个独立的 gzip 成员再拼接,得到 43.4 MiB;整个文件一个 gzip 流是 40.2 MiB,只小了约 7%,但 warcio 读它直接抛出 ArchiveLoadFailed,要求每条记录一个成员。</p>
+</section>
+<section>
+  <h2>偏移索引</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  每条单独 gzip + 偏移索引:读 200 次随机记录,平均每次 0.044 毫秒,读出的字节和写入的完全一致
+  没有索引、按 URL 顺序扫描(warcio 迭代,目标是第 3000 条):153 毫秒(找到)
+  整个文件一个 gzip 流:解压整个文件 117 毫秒(这里没有测增量解压到某个位置就停的情形)</pre></div>
+  <p>每条记录单独压缩的好处是可以记下它的偏移和长度,以后 seek 过去只解压这一条:200 次随机读取平均 0.044 毫秒;没有索引要从头扫,找第 3000 条用了 153 毫秒。写入时把偏移记进索引(CDX 之类)是这种格式的用法。</p>
+</section>
+<section>
+  <h2>重复内容</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  5000 个 URL 里有 1500 个(30%)的正文与前面某个 URL 的字节完全相同(例如同一页面带不同的跟踪参数):全部写完整记录(每条单独 gzip)共 43.4 MiB;重复的写成 revisit 记录共 30.9 MiB,省下 29%</pre></div>
+  <p>正文与已有记录字节完全相同时,可以只存 HTTP 头,用 revisit 记录引用第一次(WARC-Refers-To、payload 摘要):实验里 30% 重复,文件小 29%。被引用的记录不能删。</p>
+</section>
+<section>
+  <h2>写到一半被杀</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  每条单独 gzip,截断在 26.1 MiB:warcio 顺序读到 3001 条,没有报错;摘要核对结果的分布 {True: 3000, None: 1};最后一条是 http://x.test/plain/3000,头里声明的 Content-Length=16366
+  用 zlib 逐个 gzip 成员地走:完整的成员 3000 个,最后一个完整成员结束在偏移 27324868,文件被截断多出 4526 字节;把文件截到 27324868 就能继续追加(走一遍用了 0.85 秒)
+  有偏移索引时:第 3000 条在索引里的结束偏移 27333920 大于文件大小 27329394,判定为不完整;前面的记录不受影响
+  整个文件一个 gzip 流,同样按位置比例(3000/5000)截断在 24.1 MiB:zlib 流式解压能得到 40.9 MiB 的未压缩数据,自己解析 Content-Length 数出完整记录 2999 条;但 warcio 不认这种文件(见第三节)</pre></div>
+  <p>进程被杀后,每条单独 gzip 的文件可以逐个成员地走到最后一个完整成员,截断后继续追加。但 warcio 顺序读被截断的文件时,最后那条残缺的记录不报错、摘要核对结果是 None(没有核对),所以读取侧不能只看“没报错”,要看摘要核对结果或比对声明的 Content-Length 与实际读到的长度。有偏移索引时,结束偏移大于文件大小就说明那条没写完。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">WARC 归档</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "b", "kind": "bars", "label": "数字对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "套接字上收到的 HTTP 响应字节原样放进 WARC response 记录(记录头:WARC-Type、WARC-Record-ID、WARC-Date、WARC-Target-URI、两个摘要、Content-Length),用 warcio 1.8.1 读回:plain、gzip、chunked 三种传输方式都读回了正确的类型、URI、状态 200,content_stream 给出的正文 16484 字节,和原 HTML 一致,warcio 的摘要核对都通过。记录大小:plain 16951 字节、gzip 9159 字节、chunked 17001 字节。另外:chunked 记录的 WARC-Payload-Digest 如果改成“去掉分块格式之后的正文”的摘要,warcio 的摘要核对失败(payload digest failed)——它是对头后面的原始字节算的;规范对此怎么规定我没有核对,只能说 warcio 1.8.1 是这样。", "s": {"t": {"lines": ["  plain    套接字上收到 16577 字节(头 93、正文 16484);写成的记录 16951 字节;warcio 读回:类型 response、URI 正确 True、状态 200、content_stream 给出的正文(按头自动去 chunked/gzip)长度 16484,与原 HTML(长度 16484)相同:True;warcio 摘要核对:True", "  gzip     套接字上收到 8787 字节(头 116、正文 8671);写成的记录 9159 字节;warcio 读回:类型 response、URI 正确 True、状态 200、content_stream 给出的正文(按头自动去 chunked/gzip)长度 16484,与原 HTML(长度 16484)相同:True;warcio 摘要核对:True", "  chunked  套接字上收到 16625 字节(头 98、正文 16527);写成的记录 17001 字节;warcio 读回:类型 response、URI 正确 True、状态 200、content_stream 给出的正文(按头自动去 chunked/gzip)长度 16484,与原 HTML(长度 16484)相同:True;warcio 摘要核对:True", "  chunked 记录里的 WARC-Payload-Digest 如果改算\"去掉分块之后的正文\"的摘要:warcio 摘要核对 False,问题 ['payload digest failed sha1:ZV2UN6O4KWHSEB2Y75F4DUVALLZLLHS4'](它是对头后面的字节原样算的,即分块格式还在的那些字节);我没有去核对规范里对这一点怎么规定)"], "cur": [], "mark": [], "done": []}, "done": [0], "mark": [3], "b": {"items": [["plain 记录", 16951, "16951"], ["gzip 记录", 9159, "9159"], ["chunked 记录", 17001, "17001"]], "max": 17500, "cur": [], "mark": [], "done": [0, 1, 2]}, "kv": {"items": [["写进去的", "套接字上的字节原样"], ["warcio 读回", "三种都与原 HTML 一致"], ["chunked 摘要算在去分块的正文上", "warcio 核对失败"]], "hl": ["写进去的"]}}}, {"note": "gzip 压缩的响应,三种写法:(a) 套接字字节原样——记录里的正文 8640 字节,头里 Content-Length=8640、Content-Encoding=gzip,和服务器发出的相同;(b) requests 的 .content(已解压 16434 字节)接在原样的头后面——正文 16434 字节,头里却还写着 Content-Length=8640 和 gzip,与服务器发出的字节不同;(c) 解压后的正文,头里去掉 Content-Encoding、Content-Length 改成 16434——自洽,但仍不是服务器发出的字节。三种 warcio 都读回 16434 字节、与原 HTML 相同——warcio 没有对(b)报错。要拿原始字节:stream=True 后 resp.raw.read(decode_content=False),8640 字节,与套接字相同;chunked 的响应 resp.raw 读出 16434 字节(分块格式已被去掉,套接字上是 16477),而 resp.headers 里仍有 Transfer-Encoding: chunked。", "s": {"t": {"lines": ["  (a) 套接字上的字节原样:warcio 读回 16434 字节,与原 HTML 相同:True;记录里存的正文 8640 字节,头里 Content-Length=8640,Content-Encoding=gzip;存的正文与服务器发出的字节相同:True", "  (b) requests 的 .content(是解压后的 16434 字节)接在原样的头后面:warcio 读回 16434 字节,与原 HTML 相同:True;记录里存的正文 16434 字节,头里 Content-Length=8640,Content-Encoding=gzip;存的正文与服务器发出的字节相同:False", "  (c) 解压后的正文,头里去掉 Content-Encoding、Content-Length 改成解压后的长度:warcio 读回 16434 字节,与原 HTML 相同:True;记录里存的正文 16434 字节,头里 Content-Length=16434,Content-Encoding=None;存的正文与服务器发出的字节相同:False", "  从 requests 里拿原始字节:stream=True 后 resp.raw.read(decode_content=False) 得到 8640 字节,与套接字上的正文相同:True", "  chunked 的响应:套接字上的正文 16477 字节(含分块格式);requests 的 resp.raw 读出 16434 字节(分块格式已经被去掉),而 resp.headers 里仍有 Transfer-Encoding: chunked"], "cur": [], "mark": [], "done": []}, "done": [0], "mark": [1], "b": {"items": [["(a) 记录里的正文", 8640, "8640"], ["(b)(c) 记录里的正文", 16434, "16434"], ["(b) 头里声明的长度", 8640, "8640"]], "max": 17000, "cur": [], "mark": [1, 2], "done": [0]}, "kv": {"items": [["(a)", "与服务器发出的字节相同"], ["(b)", "头与正文对不上,warcio 不报错"], ["(c)", "自洽,但不是原始字节"]], "hl": ["(b)"]}}}, {"note": "5000 条响应(每条正文约 16 KB,plain、gzip、chunked 轮流)的存储:未压缩 .warc 68.2 MiB(写 0.03 秒);每条记录单独 gzip 成一个成员 43.4 MiB(0.97 秒);整个文件一个 gzip 流 40.2 MiB(1.36 秒)。整流只小 3.2 MiB(约 7%),但 warcio 读它抛出 ArchiveLoadFailed:“non-chunked gzip file detected, gzip block continues…”——它要求每条记录是一个独立的 gzip 成员。", "s": {"t": {"lines": ["  构造 5000 条记录:2.47 秒;未压缩 WARC 共 68.2 MiB(平均每条 14298 字节;其中 1/3 的正文本来就是 gzip 压缩过的,所以压缩率不高)", "  不压缩 .warc                       68.2 MiB   写入 0.03 秒", "  每条记录单独 gzip(.warc.gz)           43.4 MiB   写入 0.97 秒", "  整个文件一个 gzip 流                   40.2 MiB   写入 1.36 秒", "  warcio 读整个文件一个 gzip 流的那个文件:抛出 ArchiveLoadFailed:ERROR: non-chunked gzip file detected, gzip block continues"], "cur": [], "mark": [], "done": []}, "done": [2], "mark": [3, 4], "b": {"items": [["不压缩 MiB", 68.2, "68.2"], ["每条单独 gzip MiB", 43.4, "43.4"], ["整个文件一个 gzip 流 MiB", 40.2, "40.2"]], "max": 70, "cur": [], "mark": [2], "done": [1]}, "kv": {"items": [["不压缩", "68.2 MiB"], ["每条单独 gzip", "43.4 MiB,warcio 能读"], ["整流 gzip", "40.2 MiB,warcio 报错"]], "hl": ["每条单独 gzip"]}}}, {"note": "随机读一条:有偏移索引(每条的起点和长度),seek 到起点读那么多字节再 gzip 解压,200 次随机读取平均每次 0.044 毫秒,读出的字节和写入的完全一致;没有索引,用 warcio 从头迭代去找第 3000 条,153 毫秒;整个文件一个 gzip 流则要解压整个文件,117 毫秒(没有测解压到某位置就停的情形)。5000 条的文件差距是 3000 倍以上;文件越大差距越大。", "s": {"t": {"lines": ["  每条单独 gzip + 偏移索引:读 200 次随机记录,平均每次 0.044 毫秒,读出的字节和写入的完全一致", "  没有索引、按 URL 顺序扫描(warcio 迭代,目标是第 3000 条):153 毫秒(找到)", "  整个文件一个 gzip 流:解压整个文件 117 毫秒(这里没有测增量解压到某个位置就停的情形)"], "cur": [], "mark": [], "done": []}, "done": [0], "mark": [1], "b": {"items": [["有索引(毫秒)", 0.044, "0.044"], ["无索引扫描到第 3000 条(毫秒)", 153, "153"], ["整流解压整个文件(毫秒)", 117, "117"]], "max": 160, "cur": [], "mark": [1, 2], "done": [0]}, "kv": {"items": [["有偏移索引", "0.044 毫秒"], ["顺序扫描到第 3000 条", "153 毫秒"], ["整流 gzip", "解压整个文件 117 毫秒"]], "hl": ["有偏移索引"]}}}, {"note": "revisit 记录:5000 个 URL 里 1500 个(30%)的正文与前面某个 URL 的字节完全相同,写成只含 HTTP 头、带 WARC-Refers-To 和 payload 摘要的 revisit 记录:每条单独 gzip 的文件从 43.4 MiB 降到 30.9 MiB,省 29%。revisit 只保留头,正文要到被引用的那条记录里去找,所以引用的记录必须保留。", "s": {"t": {"lines": ["  5000 个 URL 里有 1500 个(30%)的正文与前面某个 URL 的字节完全相同(例如同一页面带不同的跟踪参数):全部写完整记录(每条单独 gzip)共 43.4 MiB;重复的写成 revisit 记录共 30.9 MiB,省下 29%"], "cur": [], "mark": [], "done": []}, "done": [0], "b": {"items": [["完整写 MiB", 43.4, "43.4"], ["用 revisit MiB", 30.9, "30.9"]], "max": 45, "cur": [], "mark": [0], "done": [1]}, "kv": {"items": [["重复的 URL", "1500 / 5000"], ["完整写", "43.4 MiB"], ["revisit", "30.9 MiB,省 29%"]], "hl": ["revisit"]}}}, {"note": "写到第 3000 条中间被杀(截断):每条单独 gzip 的文件,warcio 顺序读到 3001 条,没有报错,摘要核对结果 3000 条通过、1 条为 None(没有核对),最后一条头里声明 Content-Length=16366。用 zlib 逐个成员地走:完整成员 3000 个,最后一个完整成员结束在偏移 27324868,文件多出 4526 字节(走一遍 0.85 秒),把文件截到那里就能继续追加。有偏移索引时:第 3000 条结束偏移 27333920 大于文件大小 27329394,可判定它不完整。整流 gzip 同样比例截断,zlib 流式解压得到 40.9 MiB,自己解析 Content-Length 数出完整记录 2999 条。", "s": {"t": {"lines": ["  每条单独 gzip,截断在 26.1 MiB:warcio 顺序读到 3001 条,没有报错;摘要核对结果的分布 {True: 3000, None: 1};最后一条是 http://x.test/plain/3000,头里声明的 Content-Length=16366", "  用 zlib 逐个 gzip 成员地走:完整的成员 3000 个,最后一个完整成员结束在偏移 27324868,文件被截断多出 4526 字节;把文件截到 27324868 就能继续追加(走一遍用了 0.85 秒)", "  有偏移索引时:第 3000 条在索引里的结束偏移 27333920 大于文件大小 27329394,判定为不完整;前面的记录不受影响", "  整个文件一个 gzip 流,同样按位置比例(3000/5000)截断在 24.1 MiB:zlib 流式解压能得到 40.9 MiB 的未压缩数据,自己解析 Content-Length 数出完整记录 2999 条;但 warcio 不认这种文件(见第三节)"], "cur": [], "mark": [], "done": []}, "done": [1], "mark": [0], "b": {"items": [["warcio 顺序读到", 3001, "3001"], ["摘要核对通过", 3000, "3000"], ["完整的 gzip 成员", 3000, "3000"]], "max": 3100, "cur": [], "mark": [0], "done": [1, 2]}, "kv": {"items": [["被截断的最后一条", "warcio 不报错,摘要核对为 None"], ["恢复", "走到最后一个完整成员再截断"], ["有偏移索引", "结束偏移 > 文件大小 → 不完整"]], "hl": ["被截断的最后一条"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / Python 3.14.8 / requests 2.34.2 / aiohttp 3.14.3 / lxml 6.1.1(系统 Python);所有请求只发给本机自己起的测试服务器(127.0.0.1,端口 9960 以上,不访问任何真实网站);服务器可以按实验需要制造延迟、断连、压缩、重定向等行为,并记录收到的原始请求;计时用 time.perf_counter,数字每次运行会有小幅抖动。服务器是本机的 Srv(每个请求返回由页面编号确定的约 16 KB HTML,plain / gzip / chunked 三种传输方式),用裸套接字抓取响应字节;WARC 记录是我手写的(WARC/1.1 头、Content-Length、sha1 base32 摘要),用临时安装的 warcio 1.8.1 读回核对(用完删除);5000 条记录的文件在临时目录里,用完删除;各情形跑一次,时间是单次测量(写入时间包含 gzip 压缩)</li><li>没有验证:WARC 规范原文(只验证了 warcio 1.8.1 的行为,比如 chunked 的摘要是怎么算的);request 记录、metadata 记录、warcinfo 记录;大文件(GB 级)和并发写入;WARC-Truncated(正文太大被截断时的标记);zstd 压缩的 WARC;其它读取工具(如 Wayback 的 pywb)对这些记录的处理;真实站点上带 Cookie、重定向链的响应怎么存</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="crawler-sqlite-wal-writes.html">
+    <div>
+      <div class="t1">下一篇 · 爬虫工程 63</div>
+      <div class="t2">sqlite 存抓取结果:WAL 与单写线程</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>爬虫工程 · 原始响应归档:自己写 WARC 记录 · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

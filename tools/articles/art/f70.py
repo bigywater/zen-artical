@@ -1,0 +1,17 @@
+from lib import *
+S = SS('f70')
+R = J('f70'); cs = R['cost']
+steps = [
+    step("没有工厂时:模块级的 app 在导入时就创建,视图模块要反过来导入它。bad/app.py 顶部 from bad import views,而 views.py 顶部 from bad.app import app,导入时得到 ImportError: cannot import name 'app' from partially initialized module 'bad.app'(循环导入)。常见绕法是把 from bad2 import views 放到 app.py 末尾,能工作(路由 ['/'] 已注册)。但整个进程里只有一个 app,config['NAME'] = 全局唯一,再导入一次得到的是同一个对象,想要两套不同配置的实例做不到。", t=tl(S(1)), done=lidx(S(1), '常见的绕法', '整个进程里只有一个 app 实例'), mark=lidx(S(1), 'ImportError'), kv=KV([['顶部互相导入', 'ImportError(循环导入)'], ['末尾导入的绕法', '能用,但 app 全局唯一']], ['顶部互相导入'])),
+    step("用工厂创建多个相互隔离的实例:create_app({'NAME': 'app-one'})、create_app({'NAME': 'app-two', 'EXTRA': 1})、create_app() 得到三个不同的对象(名字依次为 app-one、app-two、default);各自的响应来自各自的配置;EXTRA 只出现在第二个应用的配置里([False, True, False]);每个应用的路由表独立(各 2 条规则,含 /static)。测试里可以给每个用例一个全新的应用。", t=tl(S(2)), done=lidx(S(2), '三个实例', '各自的响应'), mark=lidx(S(2), 'EXTRA 只在 a2'), kv=KV([['3 次 create_app', '3 个不同的 app 对象'], ['配置', '各自独立'], ['EXTRA', '只在传了它的实例里']], ['3 次 create_app'])),
+    step("扩展对象在模块级创建一次(db_like = DbLike()),在工厂里 init_app(app) 绑定到具体的应用:同一个 db_like 对象先后被绑定到 app-one、app-two、default;每个应用自己的 extensions 字典里各存一份({'name': 'app-one'} 等)。扩展不持有「当前应用」,而是把状态放进 app.extensions。", t=tl(S(3)), done=lidx(S(3), '同一个 db_like 对象', '每个应用自己的 extensions'), kv=KV([['扩展对象', '模块级只创建一次'], ['绑定', 'init_app(app) 写进 app.extensions']], ['绑定'])),
+    step("视图里用 current_app 而不是导入 app:good/views.py 里没有 import app,用的是 current_app;在应用上下文之外访问 current_app 抛 RuntimeError「Working outside of application context」;with a2.app_context(): 里 current_app.config['NAME'] 是 app-two。", t=tl(S(4)), done=lidx(S(4), 'views.py 里 import 了 app 吗', 'with a2.app_context()'), mark=lidx(S(4), '在应用上下文之外'), kv=KV([['视图里', 'current_app'], ['没有上下文', 'RuntimeError']], ['视图里'])),
+    step("flask 命令与 gunicorn 找工厂:flask --app good(自动发现名叫 create_app 的函数)、--app \"good:create_app()\"、--app \"good:create_app({'NAME': 'cli'})\"(可以带参数)、--app mod_app(模块里有 app 变量)、--app mod_app:make_app(任意名字的工厂)都成功(退出码 0);--app nope 失败「Error: Could not import 'nope'.」退出码 2;gunicorn \"good:create_app()\" 启动后 GET / 得到 {\"ext\":{\"name\":\"default\"},\"name\":\"default\"}。", t=tl(S(5)), done=lidx(S(5), '--app good', 'good:create_app()', 'mod_app:make_app'), mark=lidx(S(5), '--app nope', 'gunicorn'), kv=KV([['--app 模块', '自动发现 create_app 或 app'], ['--app 模块:函数(参数)', '可传参数'], ['gunicorn', '\"模块:create_app()\"']], ['gunicorn'])),
+    step(f"创建一个应用的耗时:带 1 个蓝图与 1 个扩展 init_app 的工厂,500 次一组取最小,每次 {cs:.0f} µs。工厂本身很便宜,主要的成本在你自己加的扩展初始化与蓝图。", t=tl(S(6)), done=lidx(S(6), 'create_app(...) 每次'), kv=KV([['create_app()', f'{cs:.0f} µs']], ['create_app()'])),
+]
+A = mkartf('f70', 70, 'Flask,应用工厂,create_app,循环导入,真实验证,动画演示',
+    f'实测 Application Factory:模块级 app 的循环导入 ImportError 与绕法;工厂创建互相隔离的多个实例;扩展在模块级创建、init_app 绑定到每个 app;视图用 current_app;flask --app 与 gunicorn 找工厂的各种写法;create_app 每次约 {cs:.0f} µs。',
+    '为什么都说要用 create_app()?它解决了什么问题?扩展怎么配合?命令行与 gunicorn 怎么找到它?这篇先复现没有工厂的麻烦,再逐项验证工厂模式。',
+    [('ImportError', '没有工厂、顶部互相导入时的循环导入错误'), ('3 个', '本篇用同一个工厂创建的、配置各不相同的实例数'), (f'{cs:.0f} µs', 'create_app() 一次的耗时(1 蓝图 + 1 扩展)')],
+    [('没有工厂的问题', '<p>上一篇:<a href="flask-dev-test-prod-config.html">Development、Testing、Production 配置</a>;下一篇:<a href="flask-extension-init-timing.html">Extension 初始化时机</a>。</p>'), ('多个隔离的实例', None), ('扩展与 init_app', None), ('current_app', None), ('命令行与 gunicorn', None), ('创建耗时', None)],
+    steps, [ENV_F, '没有验证:大型项目里工厂的启动耗时构成、Celery 等后台进程里调用工厂的方式、工厂里创建的线程池或连接在多 worker fork 之后的表现(见第 145 篇)、flask --app 对带复杂参数工厂的解析限制'], 'Application Factory')

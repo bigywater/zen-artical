@@ -1,0 +1,551 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>Testcontainers:用真实依赖做集成测试</title>
+<meta name="description" content="在 Docker Desktop 29.8.2 上实测 Testcontainers:1.20.4 因为请求 API v1.32 被引擎拒绝(HTTP 400)而连不上,-Dapi.version=1.44 或升级到 1.21.4 才行;一个 postgres 容器 start 中位数 719 ms,每个测试方法一个容器比 static 容器慢 9.4 s 对 1.8 s;RYUK_DISABLED 加 kill -9 会泄漏容器;H2 会拒绝 4 / 12 条合法的 PostgreSQL 语句。">
+<link rel="canonical" href="https://bigywater.tech/java-testcontainers.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Testcontainers:用真实依赖做集成测试">
+<meta property="og:description" content="在 Docker Desktop 29.8.2 上实测 Testcontainers:1.20.4 因为请求 API v1.32 被引擎拒绝(HTTP 400)而连不上,-Dapi.version=1.44 或升级到 1.21.4 才行;一个 postgres 容器 start 中位数 719 ms,每个测试方法一个容器比 static 容器慢 9.4 s 对 1.8 s;RYUK_DISABLED 加 kill -9 会泄漏容器;H2 会拒绝 4 / 12 条合法的 PostgreSQL 语句。">
+<meta property="og:url" content="https://bigywater.tech/java-testcontainers.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Testcontainers:用真实依赖做集成测试">
+<meta name="twitter:description" content="在 Docker Desktop 29.8.2 上实测 Testcontainers:1.20.4 因为请求 API v1.32 被引擎拒绝(HTTP 400)而连不上,-Dapi.version=1.44 或升级到 1.21.4 才行;一个 postgres 容器 start 中位数 719 ms,每个测试方法一个容器比 static 容器慢 9.4 s 对 1.8 s;RYUK_DISABLED 加 kill -9 会泄漏容器;H2 会拒绝 4 / 12 条合法的 PostgreSQL 语句。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">1937</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#B85C00; --series-c-soft:#FBE7D1;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#F29A4A; --series-c-soft:#3B2208;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#F29A4A; --series-c-soft:#3B2208;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Java · 379</div>
+  <h1>Testcontainers:用真实依赖做集成测试</h1>
+  <p>Testcontainers 的价值在于用真实依赖替代进程内替身。这篇在真实的 Docker 上验证:先要解决 Docker 29 与旧版 Testcontainers 的 API 版本不兼容,再量容器的启动成本、Ryuk 的清理行为、每个测试方法一个容器的代价,最后用真实 PostgreSQL 对照 H2。</p>
+  <div class="hero-fact">
+<div><div class="num">HTTP 400</div><div class="lbl">Testcontainers 1.20.4 请求 /v1.32/info,Docker 29.8.2(最低 API 1.40)返回的状态码;-Dapi.version=1.44 或 1.21.4 可解决</div></div><div><div class="num">719 ms</div><div class="lbl">启动一个 postgres:16-alpine 容器的中位数(第一次含 Ryuk 1222 ms);每个测试方法一个容器 9.4 s,static 容器 1.8 s</div></div><div><div class="num">4 / 12</div><div class="lbl">合法的 PostgreSQL 语句被 H2 2.3 拒绝的数量(ON CONFLICT DO UPDATE、RETURNING、jsonb、@>)</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="java-concurrent-resource-leak-test.html">测试并发资源泄漏</a></div>
+<section>
+  <h2>Docker 29 与 API 版本</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  docker 服务端(GET /version):Version 29.8.2 / ApiVersion 1.56 / MinAPIVersion 1.40
+  GET /v1.32/info 返回 HTTP 400(1.20.4 的 docker-java 默认请求这个版本),GET /v1.44/info 返回 HTTP 200
+  Testcontainers 1.20.4,没有任何设置:PgIT 用时 0.4 s;│ └─ PgIT ✘ Could not find a valid Docker environment. Please see logs and check configuration / [ 0 tests successful ]
+  1.20.4 + 环境变量 DOCKER_API_VERSION=1.44:PgIT 用时 0.5 s;│ └─ PgIT ✘ Could not find a valid Docker environment. Please see logs and check configuration / [ 0 tests successful ]
+  1.20.4 + -Dapi.version=1.44:PgIT 用时 1.7 s;│ └─ PgIT ✔ / [ 1 tests successful ]
+  Testcontainers 1.21.3,没有任何设置:PgIT 用时 0.5 s;│ └─ PgIT ✘ Could not find a valid Docker environment. Please see logs and check configuration / [ 0 tests successful ]
+  Testcontainers 1.21.4,没有任何设置:PgIT 用时 1.7 s;│ └─ PgIT ✔ / [ 1 tests successful ]</pre></div>
+</section>
+<section>
+  <h2>一个真实的容器</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  pg.start() 用时 1225 ms(含连接 Docker、启动 Ryuk 容器、启动 postgres 并等到日志里出现 ready)
+  镜像 postgres:16-alpine,容器内 5432 映射到宿主机的 随机高位端口,host localhost,默认库名 / 用户:test / test
+  select version() = PostgreSQL 16.15 on aarch64-unknown-
+  测试运行期间 docker ps:postgres:16-alpine | Up Less than a second
+  测试运行期间 docker ps:testcontainers/ryuk:0.11.0 | Up Less than a second</pre></div>
+</section>
+<section>
+  <h2>Ryuk 与容器泄漏</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  Ryuk 开启(默认),JVM 正常退出(没有调用 stop):JVM 结束时 docker ps -a 里有 2 个容器;10.4 秒后全部消失
+  Ryuk 开启(默认),JVM 被 kill -9:JVM 结束时 docker ps -a 里有 2 个容器;10.5 秒后全部消失
+  TESTCONTAINERS_RYUK_DISABLED=true,JVM 正常退出:JVM 结束时 docker ps -a 里有 0 个容器;0.0 秒后全部消失
+  TESTCONTAINERS_RYUK_DISABLED=true,JVM 被 kill -9:JVM 结束时 docker ps -a 里有 1 个容器;45 秒后还剩 1 个:postgres:16-alpine | Up 46 seconds</pre></div>
+</section>
+<section>
+  <h2>容器的成本</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  第 1 次:start 1222 ms(含第一次连接 Docker 与启动 Ryuk),第一个连接加查询 113 ms,stop 127 ms
+  第 2 次:start 714 ms(Ryuk 已在运行),第一个连接加查询 18 ms,stop 111 ms
+  第 3 次:start 721 ms(Ryuk 已在运行),第一个连接加查询 18 ms,stop 120 ms
+  第 4 次:start 704 ms(Ryuk 已在运行),第一个连接加查询 12 ms,stop 119 ms
+  第 5 次:start 719 ms(Ryuk 已在运行),第一个连接加查询 13 ms,stop 123 ms
+  start 的中位数 719 ms(后 4 次 704–721 ms),stop 的中位数 120 ms
+  同一个容器里(含 1000 行的 tpl 模板库)连续 20 次 CREATE DATABASE ... TEMPLATE tpl(通过 JDBC,不含进程启动)中位数 6 ms(最小 5、最大 16),DROP DATABASE 中位数 2 ms
+  PerMethod:10 个测试方法,@Container 是非静态字段(每个测试方法一个容器):总用时 9.4 s,创建的容器(按镜像):{'postgres:16-alpine': 11, 'testcontainers/ryuk:0.11.0': 1};[ 10 tests successful ] / [ 0 tests failed ]
+  Shared:同样 10 个测试方法,@Container 是 static(整个类一个容器):总用时 1.8 s,创建的容器(按镜像):{'testcontainers/ryuk:0.11.0': 1, 'postgres:16-alpine': 1};[ 10 tests successful ] / [ 0 tests failed ]</pre></div>
+</section>
+<section>
+  <h2>没有 Docker 时</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [PgIT] 用时 0.4 s
+      ├─ JUnit Platform Suite ✔
+      ├─ JUnit Jupiter ✔
+      │ └─ PgIT ✘ Could not find a valid Docker environment. Please see logs and check configuration
+      └─ JUnit Vintage ✔
+      =&gt; java.lang.IllegalStateException: Could not find a valid Docker environment. Please see logs and check configuration
+      [ 4 containers found ]
+      [ 0 containers skipped ]
+      [ 3 containers successful ]
+      [ 1 containers failed ]
+      [ 1 tests found ]
+      [ 0 tests skipped ]
+      [ 0 tests successful ]
+      [ 0 tests failed ]
+  --- 同一个类加 @Testcontainers(disabledWithoutDocker = true),并多一个根本不需要容器的 plain() 测试;对照一个没有容器的 Plain 类
+  [PgSkip] 用时 0.3 s
+      ├─ JUnit Platform Suite ✔
+      ├─ JUnit Jupiter ✔
+      │ └─ PgSkip ↷ disabledWithoutDocker is true and Docker is not available
+      └─ JUnit Vintage ✔
+      [ 4 containers found ]
+      [ 1 containers skipped ]
+      [ 3 containers successful ]
+      [ 0 containers failed ]
+      [ 2 tests found ]
+      [ 2 tests skipped ]
+      [ 0 tests successful ]
+      [ 0 tests failed ]
+  [Plain] 用时 0.3 s
+      ├─ JUnit Platform Suite ✔
+      ├─ JUnit Jupiter ✔
+      │ └─ Plain ✔
+      │ └─ plain() ✔
+      └─ JUnit Vintage ✔
+      [ 4 containers found ]
+      [ 0 containers skipped ]
+      [ 4 containers successful ]
+      [ 0 containers failed ]
+      [ 1 tests found ]
+      [ 0 tests skipped ]
+      [ 1 tests successful ]
+      [ 0 tests failed ]</pre></div>
+</section>
+<section>
+  <h2>H2 与真实数据库</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  [ON CONFLICT DO UPDATE]
+      H2 2.3 默认模式:失败 [42000] Syntax error in SQL statement "INSERT INTO t(id, name) VALUES (1, 'x') [*]ON CONFLICT (id) DO UPDATE SET name = 'y'"
+      H2 2.3 MODE=PostgreSQL:失败 [42000] Syntax error in SQL statement "INSERT INTO t(id, name) VALUES (1, 'x') [*]ON CONFLICT (id) DO UPDATE SET name = 'y'"
+      PostgreSQL 16 真实:成功(更新 1)
+  [RETURNING]
+      H2 2.3 默认模式:失败 [42000] Syntax error in SQL statement "INSERT INTO t(id, name) VALUES (9, 'r') [*]RETURNING id"
+      H2 2.3 MODE=PostgreSQL:失败 [42000] Syntax error in SQL statement "INSERT INTO t(id, name) VALUES (9, 'r') [*]RETURNING id"
+      PostgreSQL 16 真实:成功 9
+  [jsonb 运算符]
+      H2 2.3 默认模式:失败 [HY004] Unknown data type: "JSONB"
+      H2 2.3 MODE=PostgreSQL:失败 [42000] Syntax error in SQL statement "SELECT '{""a"":1}'::jsonb -[*]&gt;&gt; 'a'"
+      PostgreSQL 16 真实:成功 1
+  [generate_series]
+      H2 2.3 默认模式:成功 1,2,3
+      H2 2.3 MODE=PostgreSQL:成功 1,2,3
+      PostgreSQL 16 真实:成功 1,2,3
+  [数组包含 @&gt;]
+      H2 2.3 默认模式:失败 [42000] Syntax error in SQL statement "SELECT ARRAY[1,2,3] [*]@&gt; ARRAY[2]"
+      H2 2.3 MODE=PostgreSQL:失败 [42000] Syntax error in SQL statement "SELECT ARRAY[1,2,3] [*]@&gt; ARRAY[2]"
+      PostgreSQL 16 真实:成功 true
+  [text 列 = 整数]
+      H2 2.3 默认模式:失败 [22018] Data conversion error converting "CHARACTER VARYING to DECFLOAT"
+      H2 2.3 MODE=PostgreSQL:失败 [22018] Data conversion error converting "CHARACTER VARYING to DECFLOAT"
+      PostgreSQL 16 真实:失败 [42883] ERROR: operator does not exist: character varying = integer
+  [FOR UPDATE SKIP LOCKED]
+      H2 2.3 默认模式:成功 1,2,3
+      H2 2.3 MODE=PostgreSQL:成功 1,2,3
+      PostgreSQL 16 真实:成功 1,2,3
+  [DISTINCT ON]
+      H2 2.3 默认模式:成功 4,1,3
+      H2 2.3 MODE=PostgreSQL:成功 4,1,3
+      PostgreSQL 16 真实:成功 4,1,3
+  [to_char(date)]
+      H2 2.3 默认模式:成功 2026-03-08
+      H2 2.3 MODE=PostgreSQL:成功 2026-03-08
+      PostgreSQL 16 真实:成功 2026-03-08
+  [字符串比较 'a' &lt; 'B']
+      H2 2.3 默认模式:成功 false
+      H2 2.3 MODE=PostgreSQL:成功 false
+      PostgreSQL 16 真实:成功 false
+  [除零]
+      H2 2.3 默认模式:失败 [22012] Division by zero: "1"
+      H2 2.3 MODE=PostgreSQL:失败 [22012] Division by zero: "1"
+      PostgreSQL 16 真实:失败 [22012] ERROR: division by zero
+  [整数溢出 2147483647 + 1]
+      H2 2.3 默认模式:失败 [22003] Numeric value out of range: "2147483648"
+      H2 2.3 MODE=PostgreSQL:失败 [22003] Numeric value out of range: "2147483648"
+      PostgreSQL 16 真实:失败 [22003] ERROR: integer out of range</pre></div>
+</section>
+<section>
+  <h2>事务里的 DDL</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  H2 2.3 默认模式:CREATE TABLE 之后 ROLLBACK → 回滚之后表还在(DDL 没有被回滚)
+  H2 2.3 MODE=PostgreSQL:CREATE TABLE 之后 ROLLBACK → 回滚之后表还在(DDL 没有被回滚)
+  PostgreSQL 16 真实:CREATE TABLE 之后 ROLLBACK → 回滚之后表不存在(DDL 被回滚)</pre></div>
+</section>
+<section>
+  <h2>不用容器的隔离</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  模板库里有 orders 表,1000 行;连续 20 次 CREATE DATABASE ... TEMPLATE tpl 的中位数 57 ms(最小 55,最大 59);DROP DATABASE 中位数 30 ms(含 psql 进程启动)
+  对照:一次 psql -c "SELECT 1"(只有进程启动与连接)约 18 ms
+  共享一个库:测试类 A 插入 1 行后没清理,测试类 B 执行 SELECT count(*) FROM orders WHERE status = 'A-left' 看到 1 行;各自一个克隆库:A 在 cla 里插入同样的行,B 在 clb 里看到 0 行(A 自己看到 1 行)</pre></div>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">Testcontainers</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "先看 Testcontainers 能不能连上这台机器的 Docker:Docker Desktop 服务端 29.8.2,ApiVersion 1.56、MinAPIVersion 1.40。Testcontainers 1.20.4 的 docker-java 请求 GET /v1.32/info,引擎返回 HTTP 400(/v1.44/info 返回 200),于是 PgIT 用 0.4 s 失败,IllegalStateException: Could not find a valid Docker environment——并不是 Docker 没起来。环境变量 DOCKER_API_VERSION=1.44 没有用(仍然 0.5 s 失败),系统属性 -Dapi.version=1.44 有用(1.7 s,PgIT 通过);Testcontainers 1.21.3 不设置仍然失败,1.21.4 不设置就通过(1.7 s)。", "s": {"t": {"lines": ["  docker 服务端(GET /version):Version 29.8.2 / ApiVersion 1.56 / MinAPIVersion 1.40", "  GET /v1.32/info 返回 HTTP 400(1.20.4 的 docker-java 默认请求这个版本),GET /v1.44/info 返回 HTTP 200", "  Testcontainers 1.20.4,没有任何设置:PgIT 用时 0.4 s;│ └─ PgIT ✘ Could not find a valid Docker environment. Please see logs and check configuration / [ 0 tests successful ]", "  1.20.4 + 环境变量 DOCKER_API_VERSION=1.44:PgIT 用时 0.5 s;│ └─ PgIT ✘ Could not find a valid Docker environment. Please see logs and check configuration / [ 0 tests successful ]", "  1.20.4 + -Dapi.version=1.44:PgIT 用时 1.7 s;│ └─ PgIT ✔ / [ 1 tests successful ]", "  Testcontainers 1.21.3,没有任何设置:PgIT 用时 0.5 s;│ └─ PgIT ✘ Could not find a valid Docker environment. Please see logs and check configuration / [ 0 tests successful ]", "  Testcontainers 1.21.4,没有任何设置:PgIT 用时 1.7 s;│ └─ PgIT ✔ / [ 1 tests successful ]"], "cur": [], "mark": [], "done": []}, "done": [0, 1, 2], "mark": [3, 4, 5, 6], "kv": {"items": [["引擎", "API 1.56,最低 1.40"], ["1.20.4 默认请求", "v1.32 → HTTP 400 → 连不上"], ["DOCKER_API_VERSION=1.44", "没有用"], ["-Dapi.version=1.44", "PgIT 通过(1.7 s)"], ["1.21.4", "不用设置就通过"]], "hl": ["-Dapi.version=1.44"]}}}, {"note": "连上之后看一个真实的 postgres:16-alpine 容器:pg.start() 用了 1225 ms(包含连接 Docker、启动 Ryuk 容器、启动 postgres 并等到日志里出现 ready);容器内 5432 映射到宿主机的随机高位端口,默认库 test、用户 test,select version() 返回 PostgreSQL 16.15;测试运行期间 docker ps 里有两个容器:postgres:16-alpine 与 testcontainers/ryuk:0.11.0。", "s": {"t": {"lines": ["  pg.start() 用时 1225 ms(含连接 Docker、启动 Ryuk 容器、启动 postgres 并等到日志里出现 ready)", "  镜像 postgres:16-alpine,容器内 5432 映射到宿主机的 随机高位端口,host localhost,默认库名 / 用户:test / test", "  select version() = PostgreSQL 16.15 on aarch64-unknown-", "  测试运行期间 docker ps:postgres:16-alpine | Up Less than a second", "  测试运行期间 docker ps:testcontainers/ryuk:0.11.0 | Up Less than a second"], "cur": [], "mark": [], "done": []}, "done": [0, 1], "mark": [2, 3, 4], "b": {"items": [["pg.start()(含 Ryuk)", 1225, "1225 ms"]], "max": 1300, "cur": [], "mark": [], "done": [0]}, "kv": {"items": [["pg.start()", "1225 ms(含启动 Ryuk)"], ["端口映射", "5432 → 随机高位端口"], ["运行中的容器", "postgres:16-alpine + testcontainers/ryuk:0.11.0"]], "hl": ["pg.start()"]}}}, {"note": "JVM 结束之后容器去哪了:Ryuk 开启(默认)时,JVM 正常退出(没有调用 stop)或被 kill -9,结束时 docker ps -a 里都有 2 个容器,约 10.4 / 10.5 秒后全部消失(Ryuk 发现连接断开后删除它们);TESTCONTAINERS_RYUK_DISABLED=true 时 JVM 正常退出,结束时容器已经是 0 个(退出钩子清理了);但 RYUK_DISABLED 加 kill -9,45 秒后 postgres:16-alpine 仍然在运行(Up 46 seconds)——容器泄漏。", "s": {"t": {"lines": ["  Ryuk 开启(默认),JVM 正常退出(没有调用 stop):JVM 结束时 docker ps -a 里有 2 个容器;10.4 秒后全部消失", "  Ryuk 开启(默认),JVM 被 kill -9:JVM 结束时 docker ps -a 里有 2 个容器;10.5 秒后全部消失", "  TESTCONTAINERS_RYUK_DISABLED=true,JVM 正常退出:JVM 结束时 docker ps -a 里有 0 个容器;0.0 秒后全部消失", "  TESTCONTAINERS_RYUK_DISABLED=true,JVM 被 kill -9:JVM 结束时 docker ps -a 里有 1 个容器;45 秒后还剩 1 个:postgres:16-alpine | Up 46 seconds"], "cur": [], "mark": [], "done": []}, "done": [0, 1], "mark": [2, 3], "b": {"items": [["Ryuk 开启 + 正常退出(秒)", 10.4, "10.4"], ["Ryuk 开启 + kill -9(秒)", 10.5, "10.5"], ["RYUK_DISABLED + 正常退出(秒)", 0, "0"], ["RYUK_DISABLED + kill -9(秒)", 45, "45 秒后还在"]], "max": 45, "cur": [], "mark": [], "done": [0, 1, 2, 3]}, "kv": {"items": [["Ryuk 开启", "正常退出与 kill -9 都约 10.4 秒后清理"], ["RYUK_DISABLED + 正常退出", "JVM 退出钩子清理,0 个容器"], ["RYUK_DISABLED + kill -9", "45 秒后容器还在运行(泄漏)"]], "hl": ["RYUK_DISABLED + kill -9"]}}}, {"note": "一个容器的成本:连续启动 5 个 postgres 容器,第 1 次 start 1222 ms(含第一次连接 Docker 与启动 Ryuk),后 4 次 704–721 ms,中位数 719 ms,stop 中位数 120 ms;同一个容器里用 JDBC 做 20 次 CREATE DATABASE ... TEMPLATE tpl(1000 行)中位数只有 6 ms,DROP DATABASE 2 ms。10 个测试方法:@Container 是非静态字段时总用时 9.4 s,创建了 11 个 postgres 容器(10 个测试方法,多出的 1 个我没有追查原因);@Container 是 static 时总用时 1.8 s,只创建 1 个 postgres 容器。", "s": {"t": {"lines": ["  第 1 次:start 1222 ms(含第一次连接 Docker 与启动 Ryuk),第一个连接加查询 113 ms,stop 127 ms", "  第 2 次:start 714 ms(Ryuk 已在运行),第一个连接加查询 18 ms,stop 111 ms", "  第 3 次:start 721 ms(Ryuk 已在运行),第一个连接加查询 18 ms,stop 120 ms", "  第 4 次:start 704 ms(Ryuk 已在运行),第一个连接加查询 12 ms,stop 119 ms", "  第 5 次:start 719 ms(Ryuk 已在运行),第一个连接加查询 13 ms,stop 123 ms", "  start 的中位数 719 ms(后 4 次 704–721 ms),stop 的中位数 120 ms", "  同一个容器里(含 1000 行的 tpl 模板库)连续 20 次 CREATE DATABASE ... TEMPLATE tpl(通过 JDBC,不含进程启动)中位数 6 ms(最小 5、最大 16),DROP DATABASE 中位数 2 ms", "  PerMethod:10 个测试方法,@Container 是非静态字段(每个测试方法一个容器):总用时 9.4 s,创建的容器(按镜像):{'postgres:16-alpine': 11, 'testcontainers/ryuk:0.11.0': 1};[ 10 tests successful ] / [ 0 tests failed ]", "  Shared:同样 10 个测试方法,@Container 是 static(整个类一个容器):总用时 1.8 s,创建的容器(按镜像):{'testcontainers/ryuk:0.11.0': 1, 'postgres:16-alpine': 1};[ 10 tests successful ] / [ 0 tests failed ]"], "cur": [], "mark": [], "done": []}, "done": [0, 5], "mark": [6, 7, 8], "b": {"items": [["start 中位数(ms)", 719, "719"], ["容器里克隆库(ms)", 6, "6"], ["PerMethod 10 个测试(s×100)", 940, "9.4 s"], ["Shared 10 个测试(s×100)", 180, "1.8 s"]], "max": 940, "cur": [], "mark": [], "done": [0, 1, 2, 3]}, "kv": {"items": [["start 中位数", "719 ms(第一次 1222 ms)"], ["容器里 CREATE DATABASE ... TEMPLATE", "6 ms"], ["10 个测试:每个方法一个容器", "9.4 s,11 个容器"], ["10 个测试:static 容器", "1.8 s,1 个容器"]], "hl": ["10 个测试:static 容器"]}}}, {"note": "没有 Docker 时的表现(把 user.home 指向空目录,让 Testcontainers 看不到 ~/.docker/run/docker.sock;Docker Desktop 本身仍在运行):PgIT 0.4 s 失败,1 个 container failed,测试一次也没执行;加 @Testcontainers(disabledWithoutDocker = true) 的 PgSkip(同一个类里还有一个根本不需要容器的 plain() 测试):2 tests found、2 tests skipped、0 successful、0 failed——连不需要容器的 plain() 也被跳过;对照 Plain 类:1 个测试成功。CI 里 Docker 没起来又用了这个开关,看到的是“全绿”而不是“没跑”。", "s": {"t": {"lines": ["  [PgIT] 用时 0.4 s", "      ├─ JUnit Platform Suite ✔", "      ├─ JUnit Jupiter ✔", "      │ └─ PgIT ✘ Could not find a valid Docker environment. Please see logs and check configuration", "      └─ JUnit Vintage ✔", "      => java.lang.IllegalStateException: Could not find a valid Docker environment. Please see logs and check configuration", "      [ 4 containers found ]", "      [ 0 containers skipped ]", "      [ 3 containers successful ]", "      [ 1 containers failed ]", "      [ 1 tests found ]", "      [ 0 tests skipped ]", "      [ 0 tests successful ]", "      [ 0 tests failed ]", "  --- 同一个类加 @Testcontainers(disabledWithoutDocker = true),并多一个根本不需要容器的 plain() 测试;对照一个没有容器的 Plain 类", "  [PgSkip] 用时 0.3 s", "      ├─ JUnit Platform Suite ✔", "      ├─ JUnit Jupiter ✔", "      │ └─ PgSkip ↷ disabledWithoutDocker is true and Docker is not available", "      └─ JUnit Vintage ✔", "      [ 4 containers found ]", "      [ 1 containers skipped ]", "      [ 3 containers successful ]", "      [ 0 containers failed ]", "      [ 2 tests found ]", "      [ 2 tests skipped ]", "      [ 0 tests successful ]", "      [ 0 tests failed ]", "  [Plain] 用时 0.3 s", "      ├─ JUnit Platform Suite ✔", "      ├─ JUnit Jupiter ✔", "      │ └─ Plain ✔", "      │ └─ plain() ✔", "      └─ JUnit Vintage ✔", "      [ 4 containers found ]", "      [ 0 containers skipped ]", "      [ 4 containers successful ]", "      [ 0 containers failed ]", "      [ 1 tests found ]", "      [ 0 tests skipped ]", "      [ 1 tests successful ]", "      [ 0 tests failed ]"], "cur": [], "mark": [], "done": []}, "done": [0, 3, 5, 9], "mark": [14, 15, 25, 28], "kv": {"items": [["PgIT", "0.4 s 失败,测试没执行"], ["PgSkip(disabledWithoutDocker)", "2 tests skipped,包括不需要容器的 plain()"], ["Plain(无容器)", "1 个测试成功"]], "hl": ["PgSkip(disabledWithoutDocker)"]}}}, {"note": "真实依赖与替身的差异:同样 12 条 SQL 在 H2 2.3(默认 / MODE=PostgreSQL)与真实 PostgreSQL 16.15 上。H2 上失败 7 条,PostgreSQL 上失败 3 条(text 列 = 整数、除零、整数溢出,它们是真错误);也就是 4 条合法的 PostgreSQL 语句 H2 拒绝了:INSERT ... ON CONFLICT (id) DO UPDATE、INSERT ... RETURNING、'{\"a\":1}'::jsonb ->> 'a'、ARRAY[1,2,3] @> ARRAY[2](报 Syntax error / Unknown data type JSONB)。另外 5 条两边都成功且结果一样(generate_series、FOR UPDATE SKIP LOCKED、DISTINCT ON、to_char、'a' < 'B')。text 列 = 整数两边都失败但错误不同(H2 运行时转换失败 22018,PostgreSQL 找不到运算符 42883)。", "s": {"t": {"lines": ["  [ON CONFLICT DO UPDATE]", "      H2 2.3 默认模式:失败 [42000] Syntax error in SQL statement \"INSERT INTO t(id, name) VALUES (1, 'x') [*]ON CONFLICT (id) DO UPDATE SET name = 'y'\"", "      H2 2.3 MODE=PostgreSQL:失败 [42000] Syntax error in SQL statement \"INSERT INTO t(id, name) VALUES (1, 'x') [*]ON CONFLICT (id) DO UPDATE SET name = 'y'\"", "      PostgreSQL 16 真实:成功(更新 1)", "  [RETURNING]", "      H2 2.3 默认模式:失败 [42000] Syntax error in SQL statement \"INSERT INTO t(id, name) VALUES (9, 'r') [*]RETURNING id\"", "      H2 2.3 MODE=PostgreSQL:失败 [42000] Syntax error in SQL statement \"INSERT INTO t(id, name) VALUES (9, 'r') [*]RETURNING id\"", "      PostgreSQL 16 真实:成功 9", "  [jsonb 运算符]", "      H2 2.3 默认模式:失败 [HY004] Unknown data type: \"JSONB\"", "      H2 2.3 MODE=PostgreSQL:失败 [42000] Syntax error in SQL statement \"SELECT '{\"\"a\"\":1}'::jsonb -[*]>> 'a'\"", "      PostgreSQL 16 真实:成功 1", "  [generate_series]", "      H2 2.3 默认模式:成功 1,2,3", "      H2 2.3 MODE=PostgreSQL:成功 1,2,3", "      PostgreSQL 16 真实:成功 1,2,3", "  [数组包含 @>]", "      H2 2.3 默认模式:失败 [42000] Syntax error in SQL statement \"SELECT ARRAY[1,2,3] [*]@> ARRAY[2]\"", "      H2 2.3 MODE=PostgreSQL:失败 [42000] Syntax error in SQL statement \"SELECT ARRAY[1,2,3] [*]@> ARRAY[2]\"", "      PostgreSQL 16 真实:成功 true", "  [text 列 = 整数]", "      H2 2.3 默认模式:失败 [22018] Data conversion error converting \"CHARACTER VARYING to DECFLOAT\"", "      H2 2.3 MODE=PostgreSQL:失败 [22018] Data conversion error converting \"CHARACTER VARYING to DECFLOAT\"", "      PostgreSQL 16 真实:失败 [42883] ERROR: operator does not exist: character varying = integer", "  [FOR UPDATE SKIP LOCKED]", "      H2 2.3 默认模式:成功 1,2,3", "      H2 2.3 MODE=PostgreSQL:成功 1,2,3", "      PostgreSQL 16 真实:成功 1,2,3", "  [DISTINCT ON]", "      H2 2.3 默认模式:成功 4,1,3", "      H2 2.3 MODE=PostgreSQL:成功 4,1,3", "      PostgreSQL 16 真实:成功 4,1,3", "  [to_char(date)]", "      H2 2.3 默认模式:成功 2026-03-08", "      H2 2.3 MODE=PostgreSQL:成功 2026-03-08", "      PostgreSQL 16 真实:成功 2026-03-08", "  [字符串比较 'a' < 'B']", "      H2 2.3 默认模式:成功 false", "      H2 2.3 MODE=PostgreSQL:成功 false", "      PostgreSQL 16 真实:成功 false", "  [除零]", "      H2 2.3 默认模式:失败 [22012] Division by zero: \"1\"", "      H2 2.3 MODE=PostgreSQL:失败 [22012] Division by zero: \"1\"", "      PostgreSQL 16 真实:失败 [22012] ERROR: division by zero", "  [整数溢出 2147483647 + 1]", "      H2 2.3 默认模式:失败 [22003] Numeric value out of range: \"2147483648\"", "      H2 2.3 MODE=PostgreSQL:失败 [22003] Numeric value out of range: \"2147483648\"", "      PostgreSQL 16 真实:失败 [22003] ERROR: integer out of range"], "cur": [], "mark": [], "done": []}, "done": [0, 4, 8, 16], "mark": [12, 20, 28], "b": {"items": [["H2 失败", 7, "7"], ["PostgreSQL 失败", 3, "3"], ["合法 PG 语句被 H2 拒绝", 4, "4"]], "max": 12, "cur": [], "mark": [], "done": [0, 1, 2]}, "kv": {"items": [["12 条 SQL", "H2 失败 7 / PostgreSQL 失败 3"], ["H2 拒绝的合法 PG 语句", "ON CONFLICT DO UPDATE、RETURNING、jsonb、@>"]], "hl": ["H2 拒绝的合法 PG 语句"]}}}, {"note": "行为差异不只是语法:autocommit=false 下 CREATE TABLE 之后 ROLLBACK。H2(默认与 PostgreSQL 模式)回滚之后表还在——DDL 没有被回滚;真实 PostgreSQL 回滚之后表不存在。依赖“事务里建表、回滚清理”做隔离的测试在 PostgreSQL 上成立,在 H2 上会把表留给下一个测试。", "s": {"t": {"lines": ["  H2 2.3 默认模式:CREATE TABLE 之后 ROLLBACK → 回滚之后表还在(DDL 没有被回滚)", "  H2 2.3 MODE=PostgreSQL:CREATE TABLE 之后 ROLLBACK → 回滚之后表还在(DDL 没有被回滚)", "  PostgreSQL 16 真实:CREATE TABLE 之后 ROLLBACK → 回滚之后表不存在(DDL 被回滚)"], "cur": [], "mark": [], "done": []}, "done": [0, 1], "mark": [2], "kv": {"items": [["H2(两种模式)", "ROLLBACK 之后表还在"], ["PostgreSQL 16", "ROLLBACK 之后表不存在"]], "hl": ["H2(两种模式)"]}}}, {"note": "没有容器时本机真实 PostgreSQL 也能做隔离:模板库 tpl(orders 表,1000 行)连续 20 次 CREATE DATABASE ... TEMPLATE tpl,中位数 57 ms(最小 56、最大 61,含 psql 进程启动;单独一次 psql SELECT 1 约 21 ms),DROP DATABASE 中位数 32 ms。共享一个库时测试类 A 没清理的 1 行被测试类 B 看到(1 行);各用克隆库时 B 看到 0 行(A 自己看到 1 行)。这是本机 PostgreSQL 的数字;同一个 Testcontainers 容器里用 JDBC 克隆是 6 ms(见前面),容器本身启动要 719 ms。", "s": {"t": {"lines": ["  模板库里有 orders 表,1000 行;连续 20 次 CREATE DATABASE ... TEMPLATE tpl 的中位数 57 ms(最小 55,最大 59);DROP DATABASE 中位数 30 ms(含 psql 进程启动)", "  对照:一次 psql -c \"SELECT 1\"(只有进程启动与连接)约 18 ms", "  共享一个库:测试类 A 插入 1 行后没清理,测试类 B 执行 SELECT count(*) FROM orders WHERE status = 'A-left' 看到 1 行;各自一个克隆库:A 在 cla 里插入同样的行,B 在 clb 里看到 0 行(A 自己看到 1 行)"], "cur": [], "mark": [], "done": []}, "done": [0, 1], "mark": [2], "b": {"items": [["CREATE DATABASE ... TEMPLATE", 57, "57 ms"], ["DROP DATABASE", 32, "32 ms"], ["psql SELECT 1", 21, "21 ms"]], "max": 60, "cur": [], "mark": [], "done": [0, 1, 2]}, "kv": {"items": [["共享一个库", "B 看到 A 留下的 1 行"], ["克隆库", "B 看到 0 行"], ["对照:容器里 JDBC 克隆", "6 ms(中位数)"]], "hl": ["对照:容器里 JDBC 克隆"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / OpenJDK(Temurin 17.0.20、Homebrew 21.0.12 与 27,每篇注明实际用的版本);用 javac 编译、java 直接运行,需要第三方库时用 Maven 解析依赖;计时用 System.nanoTime,数字每次运行会有小幅抖动。JDK 21.0.12;Testcontainers 1.20.4(另测 1.21.3 / 1.21.4)、JUnit console-standalone 1.11.3、H2 2.3.232、PostgreSQL JDBC 42.7.4;Docker Desktop 29.8.2(arm64,容器镜像 postgres:16-alpine 与 testcontainers/ryuk 因为 Docker 守护进程没有配置代理、拉不到 Docker Hub,是在宿主机经本地代理下载后用 docker load 装入的);六至八的真实数据库是本机 Homebrew 的 PostgreSQL 16.15(独立数据目录、端口 9501);第五节的“没有 Docker”是把 user.home 指向空目录模拟的,不是停掉 Docker</li><li>没有验证:Linux CI 与 Docker-in-Docker 上的行为、容器复用(reuse)、Docker Compose 模块、镜像拉取成本(镜像是预先装好的)、其它容器(Kafka / Redis 等)、Testcontainers 2.x;PerMethod 多出的第 11 个 postgres 容器没有查明原因;H2 与 PostgreSQL 的比较只覆盖了 12 条 SQL 与 1 个事务场景,不代表兼容性的全貌</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="java-junit-timeout.html">
+    <div>
+      <div class="t1">下一篇 · JAVA 380</div>
+      <div class="t2">JUnit 超时测试:防止阻塞悄悄拖慢构建</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Java · Testcontainers:用真实依赖做集成测试 · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

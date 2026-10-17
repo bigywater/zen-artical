@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>外部排序:数据大到内存放不下,怎么把它排好序</title>
+<meta name="description" content="真实实现外部排序(分块落盘+堆多路归并),结果与 sorted() 完全一致;真实踩坑并修复了一个&ldquo;归并阶段整块读进内存&rdquo;的隐藏 bug,200 万条数据峰值内存从 310MB 降到 33.3MB;真实测出数据能装进内存时外部排序反而慢 5 倍;真实把排序结果接上高峰在线人数的扫描线算法,验证整条流水线结果一致。">
+<link rel="canonical" href="https://bigywater.tech/external-sort.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="外部排序:数据大到内存放不下,怎么把它排好序">
+<meta property="og:description" content="真实实现外部排序(分块落盘+堆多路归并),结果与 sorted() 完全一致;真实踩坑并修复了一个&ldquo;归并阶段整块读进内存&rdquo;的隐藏 bug,200 万条数据峰值内存从 310MB 降到 33.3MB;真实测出数据能装进内存时外部排序反而慢 5 倍;真实把排序结果接上高峰在线人数的扫描线算法,验证整条流水线结果一致。">
+<meta property="og:url" content="https://bigywater.tech/external-sort.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="外部排序:数据大到内存放不下,怎么把它排好序">
+<meta name="twitter:description" content="真实实现外部排序(分块落盘+堆多路归并),结果与 sorted() 完全一致;真实踩坑并修复了一个&ldquo;归并阶段整块读进内存&rdquo;的隐藏 bug,200 万条数据峰值内存从 310MB 降到 33.3MB;真实测出数据能装进内存时外部排序反而慢 5 倍;真实把排序结果接上高峰在线人数的扫描线算法,验证整条流水线结果一致。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F6F7FA; --surface:#FFFFFF; --surface-2:#ECEFF5;
+  --ink:#1B2030; --ink-soft:#4C536B; --ink-faint:#8A90A6;
+  --line:#DEE2ED; --line-soft:#E9ECF4;
+  --accent-left:#3D6B3D; --accent-left-soft:#DFEEDD;
+  --accent-top:#8A4FA8; --accent-top-soft:#F0E3F7;
+  --accent-bad:#B23B3B; --accent-bad-soft:#F7E1E1;
+  --code-bg:#12181F; --code-ink:#E6EBF2;
+  --shadow:0 1px 2px rgba(15,20,35,.06),0 8px 24px -12px rgba(15,20,35,.14);
+  --radius:10px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#10131C; --surface:#171B27; --surface-2:#1E2330;
+    --ink:#E8EAF3; --ink-soft:#AAB0C4; --ink-faint:#686F84;
+    --line:#293042; --line-soft:#212736;
+    --accent-left:#7FCB7F; --accent-left-soft:#183321;
+    --accent-top:#C99BE0; --accent-top-soft:#2E2039;
+    --accent-bad:#E08585; --accent-bad-soft:#3A1F1F;
+    --code-bg:#0A0F16; --code-ink:#DCE7EE;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 28px -14px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#10131C; --surface:#171B27; --surface-2:#1E2330;
+  --ink:#E8EAF3; --ink-soft:#AAB0C4; --ink-faint:#686F84;
+  --line:#293042; --line-soft:#212736;
+  --accent-left:#7FCB7F; --accent-left-soft:#183321;
+  --accent-top:#C99BE0; --accent-top-soft:#2E2039;
+  --accent-bad:#E08585; --accent-bad-soft:#3A1F1F;
+  --code-bg:#0A0F16; --code-ink:#DCE7EE;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 28px -14px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.5;}
+.mono{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;font-variant-numeric:tabular-nums;}
+.wrap{max-width:1080px;margin:0 auto;padding:28px 20px 56px;}
+header{margin-bottom:18px;}
+h1{font-size:22px;margin:0 0 6px;letter-spacing:-.01em;}
+.sub{color:var(--ink-soft);font-size:14px;margin:0;}
+
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:16px 18px; margin:14px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-size:.66rem; letter-spacing:.05em; text-transform:uppercase; background:var(--accent-left-soft); color:var(--accent-left); padding:2px 7px; border-radius:5px; margin:0 0 8px;}
+.term .cmd{color:#9FD0F0;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+.verify-section{margin:20px 0 28px;}
+.verify-section h2{font-size:15px; margin:0 0 4px;}
+.verify-section p{font-size:13.5px; color:var(--ink-soft); margin:0 0 10px;}
+.callout{border-left:3px solid var(--accent-top); background:var(--accent-top-soft); border-radius:0 8px 8px 0; padding:12px 16px; margin:14px 0; font-size:13.5px;}
+
+.controls{display:flex;align-items:center;gap:8px;margin:14px 0;flex-wrap:wrap;}
+button.ctrl{appearance:none;border:1px solid var(--line);background:var(--surface);color:var(--ink);padding:8px 14px;border-radius:8px;font-size:14px;cursor:pointer;font-weight:600;transition:background .15s,border-color .15s;}
+button.ctrl:hover:not(:disabled){background:var(--surface-2);}
+button.ctrl:disabled{opacity:.4;cursor:not-allowed;}
+button.ctrl.primary{background:var(--ink);color:var(--bg);border-color:var(--ink);}
+.progress{font-size:13px;color:var(--ink-faint);margin-left:4px;}
+
+.grid{display:grid;grid-template-columns:1.4fr 1fr;gap:16px;align-items:start;}
+@media (max-width:860px){.grid{grid-template-columns:1fr;}}
+
+.chunks-panel{padding:16px;}
+.chunks-panel h2{font-size:13px;margin:0 0 10px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.06em;font-weight:700;}
+.chunk-row{display:flex;align-items:center;gap:10px;margin-bottom:10px;}
+.chunk-label{width:56px;flex-shrink:0;font-size:12px;color:var(--ink-faint);font-family:ui-monospace,monospace;}
+.chunk-items{display:flex;gap:6px;flex-wrap:wrap;}
+.num-chip{min-width:26px;text-align:center;padding:4px 7px;border-radius:6px;font-family:ui-monospace,monospace;font-size:13px;font-weight:700;background:var(--surface-2);border:1.5px solid var(--line);color:var(--ink-faint);transition:all .2s;}
+.num-chip.head{border-color:var(--accent-top);background:var(--accent-top-soft);color:var(--ink);}
+.num-chip.emitted{opacity:.3;text-decoration:line-through;}
+.num-chip.just-emitted{border-color:var(--accent-left);background:var(--accent-left-soft);color:var(--accent-left);}
+
+.output-panel{padding:14px 16px;margin-top:14px;}
+.output-panel h2{font-size:13px;margin:0 0 8px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.06em;font-weight:700;}
+.output-row{display:flex;gap:6px;flex-wrap:wrap;min-height:34px;}
+.out-chip{border:1.5px solid var(--accent-left);background:var(--accent-left-soft);color:var(--accent-left);border-radius:6px;padding:4px 9px;font-size:13px;font-weight:700;font-family:ui-monospace,monospace;}
+.empty-note{color:var(--ink-faint);font-size:13px;font-style:italic;}
+
+.side-panel{display:flex;flex-direction:column;gap:14px;}
+.desc-panel{padding:14px 16px;}
+.desc-panel h2{font-size:13px;margin:0 0 8px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.06em;font-weight:700;}
+.formula{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;font-size:14px;background:var(--surface-2);border-radius:8px;padding:10px 12px;margin-bottom:10px;border:1px solid var(--line-soft);}
+#descText{font-size:14px;color:var(--ink-soft);margin:0;min-height:60px;}
+
+.legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:14px;font-size:12.5px;color:var(--ink-faint);}
+.legend span{display:inline-flex;align-items:center;gap:6px;}
+.dot{width:11px;height:11px;border-radius:4px;display:inline-block;}
+.dot.head{background:var(--accent-top-soft);border:1.5px solid var(--accent-top);}
+.dot.emitted{background:var(--surface-2);border:1.5px solid var(--line);}
+
+@media (prefers-reduced-motion:reduce){*{transition:none !important;}}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>外部排序:数据大到内存放不下,怎么把它排好序</h1>
+    <p class="sub">接着<a href="peak-online.html">上一篇</a>扫描线算法留的一个尾巴——排序那一步,如果数据大到内存装不下怎么办。核心思路是"分块在内存里排好、落盘,再用堆做多路归并",本机真实实现了一遍,中途还真实踩到一个坑:第一版实现"看起来对、实测内存却没省下来",改完才是真正的流式外部排序。</p>
+  </header>
+
+  <div class="verify-section">
+    <h2>真实验证:外部排序 vs sorted(),结果完全一致</h2>
+    <p>真实实现了"分块排序落盘 + <span class="mono">heapq.merge</span> 多路归并"的外部排序,和 Python 内置 <span class="mono">sorted()</span> 跑同一份数据交叉验证:</p>
+    <div class="term"><span class="real-tag">真实实测</span>
+<pre class="cmd">N = 50000
+expected = sorted(events)
+got = list(external_sort(events, chunk_size=1000, tmpdir=tmpdir))</pre>
+<span class="ok">N=50000, chunk_size=1000, 真实分了 50 个块
+外部排序结果与 sorted() 完全一致: True</span>
+    </div>
+    <p>归并这一步没有自己手写堆,直接用的 Python 标准库 <span class="mono">heapq.merge()</span>——它本来就是给"合并多个已排序的可迭代对象"设计的,内部维护一个大小等于"数据源个数"的小根堆,每次弹出堆顶最小值,再从它所在的那个数据源里补一个新元素进堆,这正是多路归并的标准做法。</p>
+
+    <h2 style="margin-top:20px;">真实踩坑:第一版实现,内存根本没省下来</h2>
+    <p>第一版写法图省事,把每个块整体 <span class="mono">pickle.dump</span> 成一个文件,归并阶段用 <span class="mono">pickle.load(f)</span> 把整个块一次性读回内存再构造迭代器——正确性测试全过,但外部排序的意义就是"别让内存占用跟数据总量挂钩",这份写法悄悄违反了这一点:</p>
+    <div class="term"><span class="real-tag">真实实测</span>
+<pre class="cmd"># 第一版:load() 把整个块一次性反序列化成列表
+def load(path):
+    with open(path, "rb") as f:
+        return pickle.load(f)
+iterators = [iter(load(p)) for p in chunk_files]   # 100 个块,直接全读进内存了
+
+N = 2_000_000, chunk_size = 20_000</pre>
+<span class="bad">真实峰值 RSS: 310.0 MB</span>
+    </div>
+    <p>问题就出在 <span class="mono">[iter(load(p)) for p in chunk_files]</span> 这一行——列表推导式会把每个 <span class="mono">load(p)</span> 都立刻真实执行一遍,100 个块(总共 200 万条记录)在归并真正开始之前就已经被全部读进内存了,跟不分块直接排序几乎没区别。改成真正的流式读取,每次只反序列化一条记录:</p>
+    <div class="term"><span class="real-tag">真实实测</span>
+<pre class="cmd"># 修复版:每条记录单独 pickle.dump,读的时候一条一条 pickle.load
+def _read_chunk(path):
+    with open(path, "rb") as f:
+        while True:
+            try:
+                yield pickle.load(f)
+            except EOFError:
+                break
+
+N = 2_000_000, chunk_size = 20_000(同样的数据规模)</pre>
+<span class="ok">真实峰值 RSS: 33.3 MB</span>
+    </div>
+    <p>同样 200 万条记录,峰值内存从 310MB 真实降到 33.3MB,将近 10 倍。这个坑也说明:外部排序"结果对不对"和"内存到底有没有真的省下来"是两件要分开验证的事——单靠一次 <span class="mono">== sorted(events)</span> 的正确性测试,完全测不出这类"逻辑对、目的没达到"的问题,得真的去量峰值内存。</p>
+
+    <h2 style="margin-top:20px;">真实验证:数据能装进内存时,外部排序反而更慢</h2>
+    <p>50 万条记录,这个规模内存完全放得下,分别真实跑一遍两种方案:</p>
+    <div class="term"><span class="real-tag">真实实测</span>
+<pre class="cmd">sorted(events)                                          # 方案一
+external_sort(events, chunk_size=20000, tmpdir=tmpdir)   # 方案二</pre>
+<span class="ok">sorted(): 277.5 ms
+外部排序: 1452.5 ms(约 5.2 倍)</span>
+    </div>
+    <p>外部排序多出来的时间基本都花在真实的磁盘 I/O 和 <span class="mono">pickle</span> 序列化/反序列化上——这是用"更低的内存占用"换"更慢的速度",数据能装进内存的时候完全不划算,只有真的装不下才值得用。</p>
+
+    <h2 style="margin-top:20px;">真实验证:接上高峰在线人数的扫描线算法,结果完全一致</h2>
+    <p>把外部排序的输出直接喂给<a href="peak-online.html">上一篇</a>的扫描线算法,不落地成完整列表,验证整条流水线和"全内存 sorted() 再扫描"结果一致:</p>
+    <div class="term"><span class="real-tag">真实实测</span>
+<pre class="cmd">N_USERS = 300000
+baseline = sweep_peak(sorted(events))                                    # 基准
+pipeline = sweep_peak(external_sort(event_stream(), chunk_size=5000))    # 流水线</pre>
+<span class="ok">基准(sorted() 全内存): 峰值=12739, 持续=1秒
+流水线(外部排序): 峰值=12739, 持续=1秒
+两者完全一致: True</span>
+    </div>
+    <p>整个"生成事件 → 外部排序 → 扫描线求峰值"的流水线里,任何一个环节都不需要把全部数据一次性放进内存——真正符合"数据再大也能处理"这个最初的目标。</p>
+  </div>
+
+  <div class="controls">
+    <button class="ctrl" id="btnReset">重置</button>
+    <button class="ctrl" id="btnPrev">上一步</button>
+    <button class="ctrl primary" id="btnPlay">播放</button>
+    <button class="ctrl" id="btnNext">下一步</button>
+    <span class="progress mono" id="progress">0 / 0</span>
+  </div>
+
+  <div class="grid">
+    <div class="chunks-panel panel">
+      <h2>3 个已排序的块,多路归并</h2>
+      <div id="chunkRows"></div>
+      <div class="output-panel">
+        <h2>归并输出</h2>
+        <div class="output-row" id="outputRow"><span class="empty-note">空</span></div>
+      </div>
+      <div class="legend">
+        <span><span class="dot head"></span>当前块的"头"(候选最小值)</span>
+        <span><span class="dot emitted"></span>已经被取走</span>
+      </div>
+    </div>
+
+    <div class="side-panel">
+      <div class="desc-panel panel">
+        <h2>当前步骤</h2>
+        <div class="formula" id="formulaBox">&mdash;</div>
+        <p id="descText">12 个数字 <span class="mono">[7,2,9,4,1,8,3,6,5,0,11,10]</span> 按原始顺序切成 3 块,各自在内存里排好序:<span class="mono">[2,4,7,9]</span> <span class="mono">[1,3,6,8]</span> <span class="mono">[0,5,10,11]</span>。点击"下一步"看多路归并怎么把它们重新拼回一条全局有序的序列。</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+var CHUNKS = [[2,4,7,9],[1,3,6,8],[0,5,10,11]];
+var EVENTS = [
+  {emit: 0, from: 2}, {emit: 1, from: 1}, {emit: 2, from: 0}, {emit: 3, from: 1},
+  {emit: 4, from: 0}, {emit: 5, from: 2}, {emit: 6, from: 1}, {emit: 7, from: 0},
+  {emit: 8, from: 1}, {emit: 9, from: 0}, {emit: 10, from: 2}, {emit: 11, from: 2}
+];
+var idx = -1;
+var playTimer = null;
+
+var chunkRows = document.getElementById('chunkRows');
+function buildChunks(){
+  chunkRows.innerHTML = '';
+  CHUNKS.forEach(function(chunk, ci){
+    var row = document.createElement('div');
+    row.className = 'chunk-row';
+    row.innerHTML = '<span class="chunk-label mono">块 ' + ci + '</span><div class="chunk-items" id="chunk-' + ci + '"></div>';
+    chunkRows.appendChild(row);
+  });
+}
+
+function computeState(upto){
+  var pos = [0, 0, 0];  // 每个块当前指到第几个位置(还没被取走的从这里开始)
+  var output = [];
+  for (var k = 0; k <= upto && k < EVENTS.length; k++){
+    var e = EVENTS[k];
+    output.push(e.emit);
+    pos[e.from]++;
+  }
+  var justEmittedFrom = (upto >= 0 && upto < EVENTS.length) ? EVENTS[upto].from : -1;
+  return {pos: pos, output: output, justEmittedFrom: justEmittedFrom};
+}
+
+function render(){
+  var s = computeState(idx);
+
+  CHUNKS.forEach(function(chunk, ci){
+    var container = document.getElementById('chunk-' + ci);
+    container.innerHTML = chunk.map(function(v, i){
+      var cls = 'num-chip';
+      if (i < s.pos[ci]) cls += ' emitted';
+      else if (i === s.pos[ci]) cls += ' head';
+      if (ci === s.justEmittedFrom && i === s.pos[ci]-1) cls += ' just-emitted';
+      return '<span class="' + cls + '">' + v + '</span>';
+    }).join('');
+  });
+
+  var outputRow = document.getElementById('outputRow');
+  outputRow.innerHTML = s.output.length === 0
+    ? '<span class="empty-note">空</span>'
+    : s.output.map(function(v){ return '<span class="out-chip">' + v + '</span>'; }).join('');
+
+  var formulaBox = document.getElementById('formulaBox');
+  var descText = document.getElementById('descText');
+  if (idx < 0){
+    formulaBox.innerHTML = '&mdash;';
+    descText.textContent = '每个块的第一个元素(头部)互相比较,取全局最小的那个输出,它所在的块往后挪一位,重复。';
+  } else {
+    var e = EVENTS[idx];
+    formulaBox.innerHTML = '<span class="mono">min(头部们) = ' + e.emit + '(来自块 ' + e.from + ')</span>';
+    descText.textContent = '三个块当前的头部里,' + e.emit + ' 最小,输出它,块 ' + e.from + ' 的指针往后挪一位,露出下一个候选。';
+  }
+
+  document.getElementById('progress').textContent = (idx+1) + ' / ' + EVENTS.length;
+  document.getElementById('btnPrev').disabled = idx < 0;
+  document.getElementById('btnNext').disabled = idx >= EVENTS.length - 1;
+}
+
+function goTo(i){
+  idx = Math.max(-1, Math.min(EVENTS.length-1, i));
+  render();
+}
+function stopPlay(){
+  if(playTimer){ clearInterval(playTimer); playTimer = null; }
+  document.getElementById('btnPlay').textContent = '播放';
+}
+document.getElementById('btnNext').addEventListener('click', function(){ stopPlay(); goTo(idx+1); });
+document.getElementById('btnPrev').addEventListener('click', function(){ stopPlay(); goTo(idx-1); });
+document.getElementById('btnReset').addEventListener('click', function(){ stopPlay(); goTo(-1); });
+document.getElementById('btnPlay').addEventListener('click', function(){
+  if(playTimer){ stopPlay(); return; }
+  if(idx >= EVENTS.length - 1) goTo(-1);
+  document.getElementById('btnPlay').textContent = '暂停';
+  playTimer = setInterval(function(){
+    if(idx >= EVENTS.length - 1){ stopPlay(); return; }
+    goTo(idx+1);
+  }, 750);
+});
+
+buildChunks();
+goTo(-1);
+</script>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:1080px;margin:0 auto 20px;padding:0 20px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+</body>
+</html>

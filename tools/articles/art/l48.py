@@ -1,0 +1,24 @@
+from lib import *
+S = SS('l48')
+steps = [
+    step("没有 rerere 时:第一次合并冲突(UU f.txt),.git 里没有 rr-cache 目录;手工解决并提交后,把这次合并 reset --hard 回去再合并一次,同样的冲突又出现了,f.txt 里还是 <<<<<<< HEAD / 第 4 行 ours / ======= / 第 4 行 theirs 的冲突标记,要重新解决一遍。", t=tl(S(1)), mark=lidx(S(1), 'UU f.txt', '<<<<<<< HEAD', 'rr-cache 目录数: 0'), done=lidx(S(1), '第 4 行 ours', '第 4 行 theirs'), kv=KV([['没有 rerere', '同样的冲突要手工解决多次'], ['常见场景', '反复 rebase、取消再重做合并']], ['没有 rerere'])),
+    step("打开 rerere.enabled=true:冲突发生时输出 Recorded preimage for 'f.txt',.git/rr-cache/ 下多出一个以 40 位指纹命名的目录,里面只有 preimage;你解决并 git commit 之后输出 Recorded resolution for 'f.txt'.,目录里多了 postimage。记录是分两步完成的:冲突时记“解决前”,提交时记“解决后”。", t=tl(S(2)), mark=lidx(S(2), 'Recorded preimage', 'Recorded resolution', 'postimage preimage'), done=lidx(S(2), '冲突指纹', 'preimage'), kv=KV([['冲突时', 'Recorded preimage'], ['提交时', 'Recorded resolution(postimage)'], ['位置', '.git/rr-cache/<指纹>/']], ['位置'])),
+    step("rr-cache/<指纹>/ 里的 preimage 是带冲突标记的文件内容(<<<<<<< / 第 4 行 ours / ======= / 第 4 行 theirs / >>>>>>>),postimage 是你解决之后的文件(第 4 行 我的解法(合并了两边))。目录名是冲突内容的指纹:把冲突块里的 ours 和 theirs 两段排序、各自加上 \\0 后做 SHA-1,算出的 c5c2066ea22b… 与目录名完全相同(True)。排序意味着指纹与谁是 ours、谁是 theirs 无关。", t=tl(S(3)), mark=lidx(S(3), '相同: True', 'postimage 的第 4 行'), done=lidx(S(3), 'preimage:', '<<<<<<<', '第 4 行 ours', '第 4 行 theirs'), kv=KV([['preimage', '带冲突标记的版本'], ['postimage', '你解决之后的版本'], ['指纹', 'SHA-1(排序后的两段冲突内容)']], ['指纹'])),
+    step("同样的冲突再出现(reset 回去再 git merge theirs):输出 CONFLICT (content): Merge conflict in f.txt 的同时还输出 Resolved 'f.txt' using previous resolution.,f.txt 第 4 行已经是上次的解法(第 4 行 我的解法(合并了两边))。git status 仍是 UU(rerere 默认只改工作区文件,不自动 git add;设置 rerere.autoUpdate 才会),git diff 显示相对暂存阶段有 1 行改动。你只需 git add 再提交。", t=tl(S(4)), mark=lidx(S(4), "Resolved 'f.txt' using previous resolution", '第 4 行 我的解法'), done=lidx(S(4), 'UU f.txt', '1 file changed'), kv=KV([['自动套用', '文件已写成上次的解法'], ['不自动暂存', '默认要自己 git add'], ['rerere.autoUpdate', '开了就自动 add']], ['不自动暂存'])),
+    step("cherry-pick 和 rebase 里同样的冲突也认:另一个分支 other 上 git cherry-pick theirs 冲突后立刻 Resolved 'f.txt' using previous resolution.;把合并 reset 掉之后,git rebase main 把 theirs 重放到 main 上,Rebasing (1/1)、CONFLICT 之后也是 Resolved … using previous resolution.。指纹只看冲突内容本身,不看是在哪个分支、用什么命令产生的。", t=tl(S(5)), mark=lidx(S(5), 'git cherry-pick theirs', 'git rebase main', 'Rebasing (1/1)'), done=lidx(S(5), "Resolved 'f.txt'", '第 4 行 我的解法'), kv=KV([['适用', 'merge、rebase、cherry-pick、revert'], ['指纹', '只看冲突内容'], ['典型用途', '反复 rebase 长期分支']], ['典型用途'])),
+    step("不满意要忘掉:先 git merge theirs 让 rerere 自动套用(rr-cache 里是 postimage、preimage、thisimage 三个文件,thisimage 是这次冲突的原样),再 git rerere forget f.txt 输出 Updated preimage for 'f.txt' 和 Forgot resolution for 'f.txt',目录里 postimage 没了,只剩 preimage 和 thisimage。过期的记录由 git rerere gc 清理——文档里解决过的记录保留 60 天、没解决的 15 天(gc.rerereResolved、gc.rerereUnresolved 本机都没有显式设置)。", t=tl(S(6)), mark=lidx(S(6), 'Forgot resolution', 'Updated preimage'), done=lidx(S(6), 'postimage preimage thisimage', 'git rerere gc 退出码 0', 'gc.rerereResolved'), kv=KV([['rerere forget', '删除这次冲突记录的解法'], ['rerere gc', '清理过期的记录'], ['默认保留', '解决过的 60 天,未解决的 15 天(文档值)']], ['rerere forget'])),
+]
+A = mkarti('l48', 48, 'Git,rerere,冲突,rr-cache,真实验证,动画演示',
+    '实测 rerere:冲突时记录 preimage,提交时记录 postimage,rr-cache/<指纹>/ 里的目录名是排序后的两段冲突内容的 SHA-1(自己算出的值与目录名完全一致);同样的冲突再出现时自动套用并提示 Resolved using previous resolution,但默认不自动 add;merge、cherry-pick、rebase 都认;rerere forget 删掉记录的解法。',
+    'rerere 让 git 记住你解决过的冲突,下次遇到同样的冲突自动套用。这篇看它在 .git/rr-cache 里记了什么、冲突指纹是怎么算出来的、哪些命令能触发它,以及如何让它忘掉一个错误的解法。',
+    [('c5c2066e…', 'rr-cache 里的目录名,等于排序后的 ours 与 theirs 两段冲突内容(各加 \\0)的 SHA-1'), ('不自动 add', '自动套用解法后文件仍是 UU 状态,要 git add;rerere.autoUpdate 可以改变'), ('merge / rebase / cherry-pick', '三种命令里同样的冲突都被识别')],
+    [('没有 rerere 时', '<p>同一个冲突出现几次就要手工解决几次:合并解决后把它撤销再重做,冲突标记原样回来,工作区里没有任何记忆。</p>'),
+     ('记录', '<p><code>rerere.enabled=true</code> 后,冲突发生时 git 把带冲突标记的文件存成 <code>preimage</code>(输出 <code>Recorded preimage</code>),你解决并提交时把解决后的文件存成 <code>postimage</code>(<code>Recorded resolution</code>),放在 <code>.git/rr-cache/&lt;指纹&gt;/</code>。</p>'),
+     ('指纹', '<p>目录名是冲突内容的 SHA-1:取冲突块里 ours 和 theirs 两段,排序后各加 <code>\\0</code> 再算。排序使指纹与谁是 ours、谁是 theirs 无关,也不含文件名与分支名。</p>'),
+     ('自动套用', '<p>同样的冲突再出现时,git 把 postimage 的解法写进工作区文件,提示 <code>Resolved … using previous resolution</code>。默认不自动 <code>git add</code>,你检查后自己 add;设置 <code>rerere.autoUpdate</code> 可自动 add。</p>'),
+     ('适用范围', '<p>merge、rebase、cherry-pick 等凡是产生同样冲突块的操作都能复用。典型场景:长期分支反复 rebase 到变动的主线。</p>'),
+     ('忘记与清理', '<p><code>git rerere forget &lt;文件&gt;</code> 删除当前冲突对应的已记录解法;<code>git rerere gc</code> 清理过期记录(文档默认:解决过的 60 天,未解决的 15 天)。</p>')],
+    steps,
+    [ENV_I_GIT + '。冲突指纹的算法是我根据行为猜测并用 SHA-1 验证的(与 rr-cache 目录名一致),不是读源码得到的;rebase 一节先把合并 reset 掉再 rebase,以便产生同样的冲突',
+     '没有验证:rerere 对多个冲突块的指纹(每块一个还是整体一个——本例只有一块);gc.rerereResolved/Unresolved 的实际过期行为;rerere.autoUpdate=true 的效果;git rerere diff、remaining 命令;跨仓库共享 rr-cache(把目录同步给同事);冲突标记样式 diff3 对指纹的影响'],
+    'rerere')

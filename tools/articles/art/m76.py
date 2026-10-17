@@ -1,0 +1,24 @@
+from lib import *
+S = SS('m76')
+steps = [
+    step("空闲的单机 mongod 上 mongostat --rowcount 3 1:每秒一行。insert/query/update/delete 显示 *0(没有操作时的写法),getmore 0,command 是 0|0 或 1|0,dirty 0.3%、used 1.4%(WiredTiger 缓存占比),vsize 467G(虚拟内存)、res 138M(常驻内存),qrw 0|0、arw 0|0,net_in 112b、net_out 170k,conn 8——空闲时每秒仍有约 170 KB 的 net_out(推测是 mongostat 自己每秒取一次 serverStatus 的响应,没有单独验证)。", t=tl(S(1)), mark=lidx(S(1), 'insert query update', '*0'), done=lidx(S(1), '$ mongostat'), kv=KV([['操作列', '*0 / 0'], ['dirty / used', '0.3% / 1.4%'], ['vsize / res', '467G / 138M'], ['net_in / net_out', '112b / 170k'], ['conn', '8']], ['net_out'])),
+    step("后台线程每秒做 300 次 insert、100 次 find、50 次 update、20 次 delete:mongostat 第一行就是 300 / 100 / 50 / 20,command 1|0,net_in 66.2k。后面几行有偏差:第 3 行 query 17、update *0、delete 16,第 4 行 query 119——mongostat 的采样窗口和我们循环的“一秒”并不对齐,单行是窗口里的计数,不是我们设想的速率。", t=tl(S(2)), mark=lidx(S(2), '     300   100     50     20', '299    17', '299   119'), done=lidx(S(2), 'load 线程累计'), b=bars([['第 1 行 insert', 300, '300'], ['第 2 行 delete', 3, '3'], ['第 3 行 query', 17, '17'], ['第 4 行 query', 119, '119']], 300, mark=[1, 2, 3], done=[0]), kv=KV([['第 1 行', '300 / 100 / 50 / 20'], ['第 3 行', 'query 17,update *0,delete 16'], ['原因', '采样窗口与循环节拍不对齐']], ['第 3 行'])),
+    step("-o 可以挑列:insert=insert,query=query,…,conn=conn,time=time 只输出这几列;--json 每秒一行 JSON(键为 host:port,里面是 arw、command、conn、delete、dirty、flushes、getmore、insert、net_in、net_out、qrw、query…,值都是字符串,如 \"insert\":\"300\")。", t=tl(S(3)), mark=lidx(S(3), 'insert query update', '"insert":"300"'), done=lidx(S(3), '$ mongostat'), kv=KV([['-o', '自选列'], ['--json', '每秒一行 JSON,值是字符串']], ['--json'])),
+    step("mongotop 每秒按命名空间列出 total / read / write 占用的毫秒数:load 在 test.a 上,一个间隔 total 9 ms(read 1 ms,write 7 ms)和 7 ms(read 1 ms,write 5 ms);config.system.sessions 与几乎不碰的 test.b 都是 0 ms。", t=tl(S(4)), mark=lidx(S(4), 'test.a'), done=lidx(S(4), 'ns    total'), b=bars([['test.a total', 9, '9 ms'], ['test.b total', 0, '0 ms']], 9, mark=[0], done=[1]), kv=KV([['test.a', 'total 9 ms,read 1 ms,write 7 ms'], ['test.b', '0 ms']], ['test.a'])),
+    step("一个线程不停地 insert_many(每批 2,000 个约 1 KB 的文档):mongostat 的 insert 是每秒约 31 万(309,376 / 312,840 / 309,775 / 310,133),net_in 约 322m(每秒 MB 级);dirty 从 1.8% 涨到 4.4%,used 在 55.0% 到 78.1% 之间波动,flushes 一直是 0。", t=tl(S(5)), mark=lidx(S(5), '309376', '312840', '309775', '310133'), done=lidx(S(5), '$ mongostat'), b=bars([['dirty', 4.4, '1.8% → 4.4%'], ['used', 78, '55% ~ 78%']], 100, mark=[0, 1], done=[]), kv=KV([['insert', '约 31 万/秒'], ['dirty', '1.8% → 4.4%'], ['used', '55.0% ~ 78.1%']], ['dirty'])),
+    step("8 个并发的 find($where 里 sleep 1 秒)在跑时:serverStatus 的 globalLock.currentQueue 全是 0,activeClients.readers = 8;queues.execution.read.normalPriority 是 out 8 / available 2 / totalTickets 10。mongostat 却显示 qrw = 8|0、arw = 0|0——这个 mongostat(100.16.1)对 9.0.2 的 qrw/arw 与 serverStatus 里的队列/活跃数字对不上;下一秒查询结束,两列都回到 0|0。", t=tl(S(6)), mark=lidx(S(6), 'globalLock.currentQueue', 'serverStatus.queues', '8|0'), done=lidx(S(6), 'query qrw arw'), b=bars([['activeClients.readers', 8, '8'], ['currentQueue.total', 0, '0'], ['mongostat qrw', 8, '8|0'], ['mongostat arw', 0, '0|0']], 8, mark=[2, 3], done=[0, 1]), kv=KV([['serverStatus activeClients.readers', '8'], ['serverStatus currentQueue', '0'], ['mongostat qrw / arw', '8|0 / 0|0']], ['mongostat qrw / arw'])),
+]
+A = mkartm('m76', 76, 'MongoDB,mongostat,mongotop,监控,qrw,arw,真实验证,动画演示',
+    '实测 mongostat 与 mongotop:默认列的含义与空闲时的数值;对着每秒 300/100/50/20 的已知负载,mongostat 首行吻合、后面几行因采样窗口不对齐而偏差;-o 与 --json;mongotop 的 total/read/write;批量写入时 insert 约 31 万/秒、dirty 1.8% → 4.4%;以及 qrw/arw 与 serverStatus 对不上的现象。',
+    'mongostat 一屏的列该怎么读?数字准不准?mongotop 看到的又是什么?这篇用已知负载逐列对照。',
+    [('300/100/50/20', '已知负载下 mongostat 首行的 insert/query/update/delete'), ('~31 万/秒', '批量写入时 mongostat 的 insert 列'), ('8|0', '8 个并发读在跑时 mongostat 的 qrw 列,serverStatus 里 currentQueue 却是 0')],
+    [('默认列', '<p>空闲时 insert/query/update/delete 写 <code>*0</code>,dirty/used 是缓存比例,vsize/res 是内存,net_out 仍有约 170 KB/秒(推测是 mongostat 自己取 serverStatus 的响应)。</p>'),
+     ('和已知负载对照', '<p>每秒 300/100/50/20 的负载,首行与之吻合;后面几行有偏差,因为 mongostat 的一秒和负载循环的一秒并不对齐。</p>'),
+     ('-o 与 --json', '<p><code>-o</code> 自选列,<code>--json</code> 每秒一行 JSON,值是字符串。</p>'),
+     ('mongotop', '<p>mongotop 按命名空间列出 total/read/write 的毫秒数:test.a 是 7~9 ms,几乎不碰的 test.b 是 0 ms。</p>'),
+     ('批量写入', '<p>批量写入时 insert 约 31 万/秒,dirty 1.8% → 4.4%,used 在 55%~78% 波动。</p>'),
+     ('qrw / arw', '<p>8 个并发读时 serverStatus 显示 activeClients.readers = 8、currentQueue = 0,mongostat 却是 qrw 8|0、arw 0|0,两边对不上。</p>')],
+    steps,
+    [ENV_M + '(mongostat/mongotop 100.16.1)。单机 mongod,负载由一个 pymongo 线程按固定节拍生成',
+     '没有验证:insert 等列的 *0 / * 前缀的确切含义(只观察到无操作时是 *0);为什么 qrw/arw 与 serverStatus 对不上(没有去查 mongostat 源码,不排除是版本不匹配);副本集/分片集群上 --discover 和 repl 列;mongostat 的 idle 项目和 locked db 列在这个版本是否存在;mongotop --locks;采样间隔为 1 秒以外的行为'],
+    'mongostat 与 mongotop')

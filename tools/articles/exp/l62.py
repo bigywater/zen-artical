@@ -1,0 +1,51 @@
+import sys, os, re; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from ll import *
+tee('l62')
+import ll as _ll
+def run(d, cmd, t='now', **k): return _ll.run(d, cmd, t, **k)
+def sh(d, cmd, t='now', **k): return _ll.sh(d, cmd, t, **k)
+def ci(d, msg, files=None, t='now', **k): return _ll.ci(d, msg, files, t, **k)
+SAN = lambda t: re.sub(r'\b[0-9a-f]{40}\b', '<sha>', t)
+def setup(name):
+    seed = lab(f'{name}seed'); ci(seed, 'M1', {'a': '1\n'}, t=0)
+    R = LT / f'{name}.git'; shutil.rmtree(R, ignore_errors=True); run(seed, f'git clone -q --bare . {R}')
+    cl = {}
+    for w in 'AB':
+        d = LT / f'{name}{w}'; shutil.rmtree(d, ignore_errors=True); run(LT, f'git clone -q {R} {name}{w}'); run(d, f'git config user.name {w}; git config user.email {w.lower()}@e'); cl[w] = d
+    return R, cl
+print('== 一:一次普通的 push,GIT_TRACE_PACKET 看到的:客户端先收到服务端的 ref 广告,然后发出“旧值 新值 ref名”的命令,再发 pack,服务端回 unpack ok 和 ok <ref>')
+R, cl = setup('l62a'); A = cl['A']; ci(A, 'A1', {'a': '2\n'})
+rc, o = run(A, 'GIT_TRACE_PACKET=1 git push origin main 2>&1 | grep "packet:" | grep -vE "ng |sideband|0000$"')
+for l in o.split('\n'):
+    l = re.sub(r'^\S+ pkt-line\.c:\d+\s+', '', l); l = re.sub(r'\s+', ' ', SAN(l))
+    if re.search(r'(push[<>]|receive-pack[<>])', l): print('  ' + l[:160])
+print('== 二:远程已经有别人推的提交 B1,A 不知道就 push:客户端在发送前就根据收到的 ref 广告判断“不是快进”并拒绝')
+R, cl = setup('l62b'); A, B = cl['A'], cl['B']
+ci(B, 'B1', {'b': '1\n'}); run(B, 'git push -q origin main'); ci(A, 'A1', {'a': '2\n'})
+sh(A, 'git push origin main 2>&1 | grep -E "rejected|error|hint: Updates" | sed -E "s#/work/[a-zA-Z0-9._]*#<路径>#g"')
+print('  强制推送 --force:成功,远程的 main 被改成 A1,B1 不再被 main 引用')
+before = out1(R, 'git rev-parse main'); sh(A, 'git push --force origin main 2>&1 | grep -E "\\+|forced" | sed -E "s/[0-9a-f]{7}/<sha>/g; s#/work/[a-zA-Z0-9._]*#<路径>#g"')
+print('  远程 main 上的提交:', out1(R, 'git log --format=%s main').replace('\n', ' → '))
+print(f'  B1 的提交还在远程的对象库里: {run(R, "git cat-file -e " + out1(B, "git rev-parse HEAD"))[0] == 0};远程 main 包含 B1 吗: {out1(R, "git branch --contains " + out1(B, "git rev-parse HEAD") + " 2>/dev/null | wc -l").strip() != "0"}')
+print('== 三:--force-with-lease:只有远程的 ref 仍然等于“我上次见到的值”才覆盖')
+R, cl = setup('l62c'); A, B = cl['A'], cl['B']; ci(B, 'B1', {'b': '1\n'}); run(B, 'git push -q origin main'); ci(A, 'A1 (改写过的)', {'a': '2\n'})
+print('  A 没有 fetch(远程跟踪分支还是旧的),--force-with-lease 被拒绝:')
+sh(A, 'git push --force-with-lease origin main 2>&1 | grep -E "rejected|stale|error" | sed -E "s#/work/[a-zA-Z0-9._]*#<路径>#g"')
+print('  A 先 git fetch 看到 B1,但没有合并;此时 --force-with-lease 认为“我已经见过远程的值”,放行并覆盖 B1(它的弱点):')
+run(A, 'git fetch -q origin'); sh(A, 'git push --force-with-lease origin main 2>&1 | grep -E "\\+|forced" | sed -E "s/[0-9a-f]{7}/<sha>/g; s#/work/[a-zA-Z0-9._]*#<路径>#g"')
+print('  更安全的写法:显式写出期望的旧值 --force-with-lease=main:<sha>(sha 来自你实际检查过的那次 fetch),或者用 --force-if-includes')
+R, cl = setup('l62d'); A, B = cl['A'], cl['B']; ci(B, 'B1', {'b': '1\n'}); run(B, 'git push -q origin main'); ci(A, 'A1', {'a': '2\n'}); run(A, 'git fetch -q origin')
+sh(A, 'git push --force-with-lease --force-if-includes origin main 2>&1 | grep -E "rejected|stale|error|forced" | sed -E "s/[0-9a-f]{7}/<sha>/g; s#/work/[a-zA-Z0-9._]*#<路径>#g"')
+print('== 四:服务端可以彻底禁止非快进:receive.denyNonFastForwards,连 --force 也推不进去')
+R, cl = setup('l62e'); A, B = cl['A'], cl['B']; run(R, 'git config receive.denyNonFastForwards true')
+ci(B, 'B1', {'b': '1\n'}); run(B, 'git push -q origin main'); ci(A, 'A1', {'a': '2\n'}); run(A, 'git fetch -q origin')
+sh(A, 'git push --force origin main 2>&1 | grep -E "rejected|remote:|error" | sed -E "s/[0-9a-f]{7}/<sha>/g; s#/work/[a-zA-Z0-9._]*#<路径>#g"')
+print('== 五:推送到非裸仓库当前检出的分支:默认拒绝(receive.denyCurrentBranch)')
+nb = lab('l62nb'); ci(nb, 'N1', {'a': '1\n'}, t=0); cA = LT / 'l62nbA'; shutil.rmtree(cA, ignore_errors=True); run(LT, f'git clone -q {nb} l62nbA'); run(cA, 'git config user.name A; git config user.email a@e'); ci(cA, 'N2', {'a': '2\n'})
+sh(cA, 'git push origin main 2>&1 | grep -E "remote:|rejected|error" | cut -c1-110 | sed -E "s#/work/[a-zA-Z0-9._]*#<路径>#g"')
+print('== 六:--atomic:一次推送多个 ref,要么全成功要么全失败')
+R, cl = setup('l62f'); A, B = cl['A'], cl['B']; run(A, 'git branch other'); ci(B, 'B1', {'b': '1\n'}); run(B, 'git push -q origin main'); ci(A, 'A1', {'a': '2\n'})
+run(A, 'git checkout -q other'); ci(A, 'other 上的提交', {'o': '1\n'}); run(A, 'git checkout -q main')
+sh(A, 'git push origin main other 2>&1 | grep -E "^ [!*+ ]|rejected|\\[new|->" | sed -E "s/[0-9a-f]{7}/<sha>/g; s#/work/[a-zA-Z0-9._]*#<路径>#g"; git ls-remote origin other | wc -l | sed "s/^ */远程 other 分支存在: /"')
+run(A, f'git push -q --delete origin other 2>/dev/null')
+sh(A, 'git push --atomic origin main other 2>&1 | grep -E "rejected|atomic|\\[new|error" | sed -E "s/[0-9a-f]{7}/<sha>/g; s#/work/[a-zA-Z0-9._]*#<路径>#g"; git ls-remote origin other | wc -l | sed "s/^ */远程 other 分支存在: /"')

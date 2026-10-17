@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>Consumer Rebalance：为什么加一个实例会暂停消费</title>
+<meta name="description" content="常见说法是&quot;消费组里加一个实例会触发 rebalance，所有人暂停消费&quot;。这次用数据检验这句话：一个 6 分区的 topic，Producer 以约每 5 毫秒一条的速度持续写入；消费者 A 先独占全部分区，9 秒后再启动消费者 B；对每个分区统计&quot;消息从产生到被消费&quot;的最大延迟，看谁被暂停了">
+<link rel="canonical" href="https://bigywater.tech/kafka-rebalance.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Consumer Rebalance：为什么加一个实例会暂停消费">
+<meta property="og:description" content="常见说法是&quot;消费组里加一个实例会触发 rebalance，所有人暂停消费&quot;。这次用数据检验这句话：一个 6 分区的 topic，Producer 以约每 5 毫秒一条的速度持续写入；消费者 A 先独占全部分区，9 秒后再启动消费者 B；对每个分区统计&quot;消息从产生到被消费&quot;的最大延迟，看谁被暂停了">
+<meta property="og:url" content="https://bigywater.tech/kafka-rebalance.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Consumer Rebalance：为什么加一个实例会暂停消费">
+<meta name="twitter:description" content="常见说法是&quot;消费组里加一个实例会触发 rebalance，所有人暂停消费&quot;。这次用数据检验这句话：一个 6 分区的 topic，Producer 以约每 5 毫秒一条的速度持续写入；消费者 A 先独占全部分区，9 秒后再启动消费者 B；对每个分区统计&quot;消息从产生到被消费&quot;的最大延迟，看谁被暂停了">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#2F6F8F; --series-c-soft:#E5F1F7;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#72B7D6; --series-c-soft:#173444;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#72B7D6; --series-c-soft:#173444;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Kafka 内部原理 · 25</div>
+  <h1>Consumer Rebalance：为什么加一个实例会暂停消费</h1>
+  <p>常见说法是&quot;消费组里加一个实例会触发 rebalance，所有人暂停消费&quot;。这次用数据检验这句话：一个 6 分区的 topic，Producer 以约每 5 毫秒一条的速度持续写入；消费者 A 先独占全部分区，9 秒后再启动消费者 B；对每个分区统计&quot;消息从产生到被消费&quot;的最大延迟，看谁被暂停了、暂停了多久，并对比传统的 <span class="mono">RangeAssignor</span> 和 <span class="mono">CooperativeStickyAssignor</span>。</p>
+  <div class="hero-fact">
+    <div><div class="num">验证：默认的 Range 策略下，rebalance 期间的停顿在本机只有几毫秒</div><div class="lbl">三次 Range 运行里，所有分区的最大延迟都在 74ms 以内（另两次分别是 50ms 和 47ms）。</div></div>
+    <div><div class="num">验证：Cooperative 策略下，没被移动的分区完全不受影响，被移动的分区停顿了整整 3 秒</div><div class="lbl">（另一次运行：p3、p4、p5 = 3011ms、3042ms、3036ms，p0 到 p2 都在 50ms 以内。</div></div>
+  </div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="kafka-partition-consumer-match.html">Partition 数量和 Consumer 数量怎么匹配</a></div>
+<section style="padding-top:8px;">
+  <h2>验证：默认的 Range 策略下，rebalance 期间的停顿在本机只有几毫秒</h2>
+  <blockquote class="src">
+    <span class="path">命令 · java</span>
+// topic rebalance-demo: 6 分区 x 3 副本，Producer 每 5ms 发一条（轮流写 6 个分区，消息带发送时间戳）
+// A 先启动（assigned [0..5]），9s 后启动 B；enable.auto.commit=false，撤销分区前 commitSync，poll 后 commitAsync
+// 统计每个分区 (消费时刻 - 消息时间戳) 的最大值；partition.assignment.strategy=RangeAssignor
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测 · 本机执行输出</span>
+<pre class="code">策略=Range  各分区最大端到端延迟: p0=36ms p1=29ms p2=26ms p3=50ms p4=45ms p5=39ms
+  [8497ms] A assigned [0, 1, 2, 3, 4, 5]
+  [9005ms] &gt;&gt;&gt; 启动 B
+  [11479ms] A revoked  [0, 1, 2, 3, 4, 5]     &lt;- 全部收回
+  [11484ms] A assigned [0, 1, 2]              &lt;- 5ms 之后就重新分配完成
+  [11484ms] B assigned [3, 4, 5]</pre></div>
+  <p>三次 Range 运行里，所有分区的最大延迟都在 74ms 以内（另两次分别是 50ms 和 47ms）。A 把全部 6 个分区收回，到 A 拿到 <span class="mono">[0,1,2]</span>、B 拿到 <span class="mono">[3,4,5]</span>，中间只隔了 4 到 8 毫秒。所以&quot;所有人暂停消费&quot;在机制上是对的（A 确实先收回了全部分区），但在这个本机环境里，这个暂停几乎测不出来。B 从被创建到拿到分区大约花了 2.5 秒，A 在此期间一直在正常消费。这 2.5 秒是什么，我起初以为是 B 自己创建和连接的耗时，但后面把心跳间隔调小的几组运行里，B 只花了 0.03 到 0.5 秒就拿到了第一次分配，所以更可能是 A 要等下一次心跳才得知&quot;有新成员加入、需要重新入组&quot;，这个推断只有这些间接证据。</p>
+</section>
+<section>
+  <h2>验证：Cooperative 策略下，没被移动的分区完全不受影响，被移动的分区停顿了整整 3 秒</h2>
+  <div class="term"><span class="real-tag">真实实测 · 本机执行输出</span>
+<pre class="code">策略=CooperativeSticky  各分区最大端到端延迟: p0=34ms p1=33ms p2=22ms p3=3013ms p4=3009ms p5=3003ms
+  [11485ms] B assigned []
+  [11487ms] A revoked  [3, 4, 5]              &lt;- 只收回要移动的分区
+  [11487ms] A assigned []
+  [14484ms] B assigned [3, 4, 5]              &lt;- 3 秒后才真正分给 B
+  [14484ms] A assigned []</pre></div>
+  <p>（另一次运行：p3、p4、p5 = 3011ms、3042ms、3036ms，p0 到 p2 都在 50ms 以内。）</p>
+  <p><span class="mono">CooperativeStickyAssignor</span> 的行为和 Range 完全不同：A 只收回了要移动的 <span class="mono">[3,4,5]</span>，保留了 <span class="mono">[0,1,2]</span>，这三个分区的最大延迟只有 22 到 34ms，没有被打断。但被移动的 <span class="mono">[3,4,5]</span> 从 A 手里收回到分给 B，中间隔了大约 3.0 秒，这三个分区在这 3 秒里没有任何消费者，延迟都是 3 秒出头。B 第一次拿到的分配是空的（<span class="mono">B assigned []</span>），要等第二轮 rebalance 才拿到分区。也就是说，Cooperative 让&quot;没动的分区&quot;零停顿，代价是&quot;要动的分区&quot;停顿得比 Range 更久（Range 只有几毫秒）。</p>
+</section>
+<section>
+  <h2>验证：这个 3 秒等于 heartbeat.interval.ms，改成 500ms 和 1000ms 它就跟着变</h2>
+  <blockquote class="src">
+    <span class="path">命令 · shell</span>
+# 只改消费者的 heartbeat.interval.ms（默认 3000），其他不变，CooperativeStickyAssignor
+  </blockquote>
+  <div class="term"><span class="real-tag">真实实测 · 本机执行输出</span>
+<pre class="code">heartbeat.interval.ms=500   p3=503ms p4=497ms p5=490ms    (p0~p2 &lt;= 44ms)
+heartbeat.interval.ms=500   p3=501ms p4=495ms p5=490ms    (p0~p2 &lt;= 37ms)
+heartbeat.interval.ms=1000  p3=1002ms p4=1002ms p5=999ms   (p0~p2 &lt;= 79ms)
+heartbeat.interval.ms=3000  p3=3013ms p4=3009ms p5=3003ms   (前面的运行)</pre></div>
+  <p>被移动分区的停顿时长几乎精确等于 <span class="mono">heartbeat.interval.ms</span>：500 对应约 500ms，1000 对应约 1000ms，默认 3000 对应约 3000ms。这个对应关系是实测出来的；至于为什么，我的解释是第二轮 rebalance 需要 A 通过心跳响应得知&quot;需要重新入组&quot;，而心跳每隔这么久才发一次，但我没有去抓协议包或读源码来确认，只能说&quot;停顿长度跟这个参数一致&quot;。</p>
+</section>
+<section>
+  <h2>结论</h2>
+  <p>&quot;加一个实例会暂停消费&quot;在这个实验里的情况是：传统的 Range 会先让 A 收回全部分区，但在本机上只停顿几毫秒；<span class="mono">CooperativeStickyAssignor</span> 让不受影响的分区完全不停，但被移动的分区要等心跳驱动的第二轮 rebalance，停顿约等于 <span class="mono">heartbeat.interval.ms</span>（默认 3 秒）。所以&quot;合作式 rebalance 停顿更少&quot;只对没被移动的分区成立，对被移动的分区，本机实测反而更慢。</p>
+</section>
+<section>
+  <h2>分步演示：两种分配策略，的停顿差在哪</h2>
+  <p>每一步都是本文上面几节运行Java Consumer、测量端到端延迟得到的原始结果。</p>
+<div class="demo" id="demo"><div class="demo-head">Cooperative策略让"没动的分区"零停顿，代价是"要动的分区"停顿更久</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>这一步新验证的策略/参数</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>
+(function(){
+const D = {"panels":[{"id":"kv","kind":"kv","label":"实验结果（逐步累加）"},{"id":"info","kind":"text","label":"这一步发生了什么"}],"steps":[{"note":"Range策略：A独占全部6个分区，B加入。结果：A先revoke全部6个分区，4~8毫秒后重新分配——A拿[0,1,2]，B拿[3,4,5]。","s":{"kv":{"items":[["Range策略: revoke到重新分配的间隔","只有4~8毫秒"]],"hl":["Range策略: revoke到重新分配的间隔"]},"info":{"text":"Range策略：A独占全部6个分区，B加入。结果：A先revoke全部6个分区，4~8毫秒后重新分配——A拿[0,1,2]，B拿[3,4,5]。"}}},{"note":"Range策略下各分区的最大端到端延迟：p0=36ms p1=29ms p2=26ms p3=50ms p4=45ms p5=39ms——全部在74ms以内，\"暂停\"在本机几乎测不出来。","s":{"kv":{"items":[["Range策略: revoke到重新分配的间隔","只有4~8毫秒"],["Range策略: 各分区最大延迟","全部≤50ms"]],"hl":["Range策略: 各分区最大延迟"]},"info":{"text":"Range策略下各分区的最大端到端延迟：p0=36ms p1=29ms p2=26ms p3=50ms p4=45ms p5=39ms——全部在74ms以内，\"暂停\"在本机几乎测不出来。"}}},{"note":"换成CooperativeStickyAssignor：B加入时，A这次只revoke了要移动的[3,4,5]，保留了[0,1,2]不受影响。","s":{"kv":{"items":[["Range策略: revoke到重新分配的间隔","只有4~8毫秒"],["Range策略: 各分区最大延迟","全部≤50ms"],["Cooperative策略: Arevoke的分区","只有[3,4,5]（不是全部6个）"]],"hl":["Cooperative策略: Arevoke的分区"]},"info":{"text":"换成CooperativeStickyAssignor：B加入时，A这次只revoke了要移动的[3,4,5]，保留了[0,1,2]不受影响。"}}},{"note":"结果：p0~p2（没被移动）最大延迟只有22~34ms，完全没被打断；但p3~p5（被移动的）停顿了整整3秒（3013ms/3042ms/3036ms）——比Range的几十毫秒慢了近百倍。","s":{"kv":{"items":[["Range策略: revoke到重新分配的间隔","只有4~8毫秒"],["Range策略: 各分区最大延迟","全部≤50ms"],["Cooperative策略: Arevoke的分区","只有[3,4,5]（不是全部6个）"],["Cooperative策略: 各分区最大延迟","p0~p2: 22~34ms（零停顿）　p3~p5: 约3000ms（停顿更久）"]],"hl":["Cooperative策略: 各分区最大延迟"]},"info":{"text":"结果：p0~p2（没被移动）最大延迟只有22~34ms，完全没被打断；但p3~p5（被移动的）停顿了整整3秒（3013ms/3042ms/3036ms）——比Range的几十毫秒慢了近百倍。"}}},{"note":"把heartbeat.interval.ms从默认3000改成500：被移动分区的停顿精确跟着变成约500ms。改成1000：停顿约1000ms。停顿长度几乎精确等于这个配置值。","s":{"kv":{"items":[["Range策略: revoke到重新分配的间隔","只有4~8毫秒"],["Range策略: 各分区最大延迟","全部≤50ms"],["Cooperative策略: Arevoke的分区","只有[3,4,5]（不是全部6个）"],["Cooperative策略: 各分区最大延迟","p0~p2: 22~34ms（零停顿）　p3~p5: 约3000ms（停顿更久）"],["heartbeat.interval.ms=500 / 1000 / 3000(默认)","停顿分别约500ms / 1000ms / 3000ms（精确跟随配置）"]],"hl":["heartbeat.interval.ms=500 / 1000 / 3000(默认)"]},"info":{"text":"把heartbeat.interval.ms从默认3000改成500：被移动分区的停顿精确跟着变成约500ms。改成1000：停顿约1000ms。停顿长度几乎精确等于这个配置值。"}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1000); };
+go(0);
+})();
+</script>
+</section>
+<section>
+  <div class="refs"><h3>参考与说明</h3><ul>
+    <li>数据来自本机 3 节点 Kafka 4.3.1 集群，<span class="mono">group.protocol=classic</span>，A 和 B 是同一 JVM 里的两个线程，Producer 也在同一 JVM 里。延迟用消息自带的创建时间戳计算，所以包含 Producer 到 Broker 的时间。</li>
+    <li>我最先用的指标是&quot;A 收到消息的最大间隔&quot;，结果几种策略都只有 70 多毫秒，看不出区别，因为它没有统计被移到 B 的那些分区；后来换成&quot;按分区统计端到端延迟&quot;才看出 Cooperative 的 3 秒停顿。前一个指标的输出没有采用。</li>
+    <li>我还试了让 A 每批处理 3 秒（Range），想看慢消费者会不会拖慢 rebalance：B 拿到分区的时间和不慢时基本一样（都在 11.5 到 11.6 秒），而这组的分区延迟本来就被 A 自己的 3 秒睡眠抬高（3 到 9 秒），没法作为对照，这个尝试的结果不采用，也没有得出&quot;慢消费者是否拖慢 rebalance&quot;的结论。</li>
+    <li>和《Consumer Group：多个消费者如何分摊 Partition》一起看：那篇看到每次成员变化先收回全部分区，这篇量化了这个&quot;收回再分配&quot;的耗时。</li>
+    <li>没有验证：<span class="mono">group.protocol=consumer</span>（KIP-848）下的行为；静态成员（<span class="mono">group.instance.id</span>）；多台机器、更大消费者规模下 Range 的停顿；消费者数量很多时 Cooperative 需要的轮数。</li>
+  </ul></div>
+</section>
+<section>
+  <a class="next-post" href="kafka-assignment-strategies.html">
+    <div>
+      <div class="t1">下一篇 · KAFKA 内部原理 26</div>
+      <div class="t2">Range、RoundRobin、Sticky 和 Cooperative 分配策略</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Kafka 内部原理 · Consumer Rebalance：为什么加一个实例会暂停消费 · 数据来自本机 3 节点 Kafka 4.3.1 集群，持续写入下 Java Consumer 对比 Range 与 CooperativeSticky 加入新成员时的分区停顿</footer>
+</body>
+</html>

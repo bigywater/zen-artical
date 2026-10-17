@@ -1,0 +1,497 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>Option 与 Result</title>
+<meta name="description" content="用真实运行验证 Option 与 Result:两个普通枚举(可自己实现);没有 null,Option&lt;i32&gt; + 1 报 E0369;unwrap_or、map、and_then、ok_or、? 的行为;expect 的 panic 信息;Option&lt;&amp;T&gt;、Option&lt;Box&lt;T&gt;&gt;、Option&lt;String&gt; 没有额外内存开销而 Option&lt;u64&gt; 是 16 字节。">
+<link rel="canonical" href="https://bigywater.tech/rust-option-result.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Option 与 Result">
+<meta property="og:description" content="用真实运行验证 Option 与 Result:两个普通枚举(可自己实现);没有 null,Option&lt;i32&gt; + 1 报 E0369;unwrap_or、map、and_then、ok_or、? 的行为;expect 的 panic 信息;Option&lt;&amp;T&gt;、Option&lt;Box&lt;T&gt;&gt;、Option&lt;String&gt; 没有额外内存开销而 Option&lt;u64&gt; 是 16 字节。">
+<meta property="og:url" content="https://bigywater.tech/rust-option-result.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Option 与 Result">
+<meta name="twitter:description" content="用真实运行验证 Option 与 Result:两个普通枚举(可自己实现);没有 null,Option&lt;i32&gt; + 1 报 E0369;unwrap_or、map、and_then、ok_or、? 的行为;expect 的 panic 信息;Option&lt;&amp;T&gt;、Option&lt;Box&lt;T&gt;&gt;、Option&lt;String&gt; 没有额外内存开销而 Option&lt;u64&gt; 是 16 字节。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">1937</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#B7410E; --series-c-soft:#F7E0D3;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#E8805A; --series-c-soft:#3A1D12;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#E8805A; --series-c-soft:#3A1D12;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Rust · 10</div>
+  <h1>Option 与 Result</h1>
+  <p>Option 与 Result 是 Rust 处理「可能没有」和「可能失败」的方式。这篇从最底层讲起:它们只是普通枚举,没有魔法;编译器怎样拒绝把 Option 当值用;一组常用方法实际怎么工作;panic 时信息长什么样;以及它们占多少内存 —— 为什么 Option<&T> 是免费的。</p>
+  <div class="hero-fact">
+<div><div class="num">E0369</div><div class="lbl">Option<i32> + 1 的错误(没有 null,必须显式处理)</div></div><div><div class="num">8 = 8</div><div class="lbl">Option<&u64> 与 &u64 同为 8 字节(niche 优化)</div></div><div><div class="num">16 字节</div><div class="lbl">Option<u64>:所有位模式都合法,需要标签</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="rust-if-let-let-else.html">if let 与 let else</a></div>
+<section>
+  <h2>两个普通的枚举</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  源码:
+      1 | #[allow(dead_code)]
+      2 | enum MyOption&lt;T&gt; { None, Some(T) }
+      3 | #[allow(dead_code)]
+      4 | enum MyResult&lt;T, E&gt; { Ok(T), Err(E) }
+      5 | fn first_even(v: &amp;[i32]) -&gt; MyOption&lt;i32&gt; { for &amp;x in v { if x % 2 == 0 { return MyOption::Some(x); } } MyOption::None }
+      6 | fn main() {
+      7 |     match first_even(&amp;[1, 3, 4, 5]) { MyOption::Some(x) =&gt; println!("找到偶数 {x}"), MyOption::None =&gt; println!("没有偶数") }
+      8 |     // 标准库的版本
+      9 |     let o: Option&lt;i32&gt; = [1, 3, 4, 5].iter().copied().find(|x| x % 2 == 0);
+     10 |     let e: Result&lt;i32, std::num::ParseIntError&gt; = "12x".parse::&lt;i32&gt;();
+     11 |     println!("{:?}  {:?}", o, e);
+     12 | }
+  编译:成功
+  运行(退出码 0):
+    找到偶数 4
+    Some(4)  Err(ParseIntError { kind: InvalidDigit })</pre></div>
+</section>
+<section>
+  <h2>没有 null</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  源码:
+      1 | fn main() {
+      2 |     let a: Option&lt;i32&gt; = Some(5);
+      3 |     let b = a + 1;
+      4 |     println!("{b}");
+      5 | }
+  编译:失败
+    error[E0369]: cannot add `{integer}` to `Option&lt;i32&gt;`
+       --&gt; &lt;实验目录&gt;/src/u10b.rs:3:15
+        |
+      3 |     let b = a + 1;
+        |             - ^ - {integer}
+        |             |
+        |             Option&lt;i32&gt;
+        |
+    note: `Option&lt;i32&gt;` does not implement `Add&lt;{integer}&gt;`
+       --&gt; &lt;rust 标准库源码&gt;/library/core/src/option.rs:598:1
+        |
+    598 | pub enum Option&lt;T&gt; {
+        | ^^^^^^^^^^^^^^^^^^ `Option&lt;i32&gt;` is defined in another crate
+    
+    error: aborting due to 1 previous error
+    
+    For more information about this error, try `rustc --explain E0369`.</pre></div>
+</section>
+<section>
+  <h2>常用方法</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  源码:
+      1 | fn parse_and_double(s: &amp;str) -&gt; Result&lt;i32, std::num::ParseIntError&gt; { let n: i32 = s.parse()?; Ok(n * 2) }
+      2 | fn main() {
+      3 |     let a = Some(3); let n: Option&lt;i32&gt; = None;
+      4 |     println!("unwrap_or:{} {}", a.unwrap_or(0), n.unwrap_or(0));
+      5 |     println!("map:{:?} {:?}", a.map(|x| x * 10), n.map(|x| x * 10));
+      6 |     println!("and_then:{:?}", a.and_then(|x| if x &gt; 2 { Some(x + 100) } else { None }));
+      7 |     println!("ok_or:{:?} {:?}", a.ok_or("没有值"), n.ok_or("没有值"));
+      8 |     println!("Result 转 Option:{:?} {:?}", "7".parse::&lt;i32&gt;().ok(), "x".parse::&lt;i32&gt;().ok());
+      9 |     println!("?:{:?}  {:?}", parse_and_double("21"), parse_and_double("abc"));
+     10 |     println!("filter:{:?} {:?}", a.filter(|x| x % 2 == 1), a.filter(|x| x % 2 == 0));
+     11 |     println!("take:{:?}", { let mut t = Some(9); let old = t.take(); (old, t) });
+     12 | }
+  编译:成功
+  运行(退出码 0):
+    unwrap_or:3 0
+    map:Some(30) None
+    and_then:Some(103)
+    ok_or:Ok(3) Err("没有值")
+    Result 转 Option:Some(7) None
+    ?:Ok(42)  Err(ParseIntError { kind: InvalidDigit })
+    filter:Some(3) None
+    take:(Some(9), None)</pre></div>
+  <p>? 的展开方式见<a href="rust-question-mark-desugar.html">? 运算符展开过程</a>;错误传播见<a href="rust-result-propagation.html">Result 错误传播</a>。</p>
+</section>
+<section>
+  <h2>unwrap 与 expect</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  编译:成功
+  运行(退出码 101):
+    先尝试 expect:
+    
+    thread 'main' (6938666) panicked at &lt;实验目录&gt;/src/u10d.rs:4:15:
+    配置里的端口必须是整数: ParseIntError { kind: InvalidDigit }
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</pre></div>
+  <p>什么时候该 panic、什么时候该返回 Result,见<a href="rust-panic-unwrap-expect.html">panic!、unwrap 与 expect</a>。</p>
+</section>
+<section>
+  <h2>内存占用</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  编译:成功
+  运行(退出码 0):
+    &amp;u64 = 8,Option&lt;&amp;u64&gt; = 8
+    Box&lt;u64&gt; = 8,Option&lt;Box&lt;u64&gt;&gt; = 8
+    i32 = 4,Option&lt;i32&gt; = 8
+    u64 = 8,Option&lt;u64&gt; = 16
+    Result&lt;u8, u8&gt; = 2,Result&lt;u32, String&gt; = 24
+    String = 24,Option&lt;String&gt; = 24</pre></div>
+  <p>niche 优化的原理见<a href="rust-option-ref-niche.html">Option&lt;&amp;T&gt; 的空指针优化</a>。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">Option 与 Result</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "Option<T> 与 Result<T, E> 只是两个普通的枚举:自己写 enum MyOption<T> { None, Some(T) } 就能用 match 处理。标准库的版本一样:找第一个偶数得到 Some(4),解析 \"12x\" 得到 Err(ParseIntError { kind: InvalidDigit })。它们不是语言内置的特殊类型。", "s": {"t": {"lines": ["  源码:", "      1 | #[allow(dead_code)]", "      2 | enum MyOption<T> { None, Some(T) }", "      3 | #[allow(dead_code)]", "      4 | enum MyResult<T, E> { Ok(T), Err(E) }", "      5 | fn first_even(v: &[i32]) -> MyOption<i32> { for &x in v { if x % 2 == 0 { return MyOption::Some(x); } } MyOption::None }", "      6 | fn main() {", "      7 |     match first_even(&[1, 3, 4, 5]) { MyOption::Some(x) => println!(\"找到偶数 {x}\"), MyOption::None => println!(\"没有偶数\") }", "      8 |     // 标准库的版本", "      9 |     let o: Option<i32> = [1, 3, 4, 5].iter().copied().find(|x| x % 2 == 0);", "     10 |     let e: Result<i32, std::num::ParseIntError> = \"12x\".parse::<i32>();", "     11 |     println!(\"{:?}  {:?}\", o, e);", "     12 | }", "  编译:成功", "  运行(退出码 0):", "    找到偶数 4", "    Some(4)  Err(ParseIntError { kind: InvalidDigit })"], "cur": [], "mark": [], "done": []}, "done": [7, 15, 16], "kv": {"items": [["Option", "None | Some(T)"], ["Result", "Ok(T) | Err(E)"]], "hl": ["Option"]}}}, {"note": "Rust 没有 null:Option<i32> 与整数相加报 error[E0369]: cannot add `{integer}` to `Option<i32>`(Option<i32> 没有实现 Add)。「可能没有值」必须显式处理(match、if let、unwrap_or、?),不能当作普通值直接用。", "s": {"t": {"lines": ["  源码:", "      1 | fn main() {", "      2 |     let a: Option<i32> = Some(5);", "      3 |     let b = a + 1;", "      4 |     println!(\"{b}\");", "      5 | }", "  编译:失败", "    error[E0369]: cannot add `{integer}` to `Option<i32>`", "       --> <实验目录>/src/u10b.rs:3:15", "        |", "      3 |     let b = a + 1;", "        |             - ^ - {integer}", "        |             |", "        |             Option<i32>", "        |", "    note: `Option<i32>` does not implement `Add<{integer}>`", "       --> <rust 标准库源码>/library/core/src/option.rs:598:1", "        |", "    598 | pub enum Option<T> {", "        | ^^^^^^^^^^^^^^^^^^ `Option<i32>` is defined in another crate", "    error: aborting due to 1 previous error", "    For more information about this error, try `rustc --explain E0369`."], "cur": [], "mark": [], "done": []}, "mark": [7], "kv": {"items": [["Option<i32> + 1", "E0369"]], "hl": ["Option<i32> + 1"]}}}, {"note": "常用方法:unwrap_or 给默认值(3 与 0);map 只在有值时变换(Some(30)、None);and_then 链接会失败的步骤(Some(103));ok_or 把 Option 变成 Result(Ok(3)、Err(\"没有值\"));Result.ok() 变回 Option;? 在函数里提前返回 Err(parse_and_double(\"21\") 是 Ok(42),\"abc\" 是 Err);filter、take 也在这一族。", "s": {"t": {"lines": ["  源码:", "      1 | fn parse_and_double(s: &str) -> Result<i32, std::num::ParseIntError> { let n: i32 = s.parse()?; Ok(n * 2) }", "      2 | fn main() {", "      3 |     let a = Some(3); let n: Option<i32> = None;", "      4 |     println!(\"unwrap_or:{} {}\", a.unwrap_or(0), n.unwrap_or(0));", "      5 |     println!(\"map:{:?} {:?}\", a.map(|x| x * 10), n.map(|x| x * 10));", "      6 |     println!(\"and_then:{:?}\", a.and_then(|x| if x > 2 { Some(x + 100) } else { None }));", "      7 |     println!(\"ok_or:{:?} {:?}\", a.ok_or(\"没有值\"), n.ok_or(\"没有值\"));", "      8 |     println!(\"Result 转 Option:{:?} {:?}\", \"7\".parse::<i32>().ok(), \"x\".parse::<i32>().ok());", "      9 |     println!(\"?:{:?}  {:?}\", parse_and_double(\"21\"), parse_and_double(\"abc\"));", "     10 |     println!(\"filter:{:?} {:?}\", a.filter(|x| x % 2 == 1), a.filter(|x| x % 2 == 0));", "     11 |     println!(\"take:{:?}\", { let mut t = Some(9); let old = t.take(); (old, t) });", "     12 | }", "  编译:成功", "  运行(退出码 0):", "    unwrap_or:3 0", "    map:Some(30) None", "    and_then:Some(103)", "    ok_or:Ok(3) Err(\"没有值\")", "    Result 转 Option:Some(7) None", "    ?:Ok(42)  Err(ParseIntError { kind: InvalidDigit })", "    filter:Some(3) None", "    take:(Some(9), None)"], "cur": [], "mark": [], "done": []}, "done": [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22], "kv": {"items": [["map / and_then", "链式处理有值的情况"], ["ok_or / ok()", "Option ↔ Result"]], "hl": ["map / and_then"]}}}, {"note": "unwrap / expect 在 Err 或 None 时 panic:expect(\"配置里的端口必须是整数\") 失败时 panic 信息是「配置里的端口必须是整数: ParseIntError { kind: InvalidDigit }」,退出码 101。expect 比 unwrap 多一句你写的上下文,出问题时更好定位。", "s": {"t": {"lines": ["  编译:成功", "  运行(退出码 101):", "    先尝试 expect:", "    thread 'main' (6938666) panicked at <实验目录>/src/u10d.rs:4:15:", "    配置里的端口必须是整数: ParseIntError { kind: InvalidDigit }", "    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace"], "cur": [], "mark": [], "done": []}, "mark": [3, 4], "kv": {"items": [["panic 退出码", 101], ["expect", "带上下文"]], "hl": ["panic 退出码"]}}}, {"note": "Option 的开销:Option<&u64> 与 &u64 都是 8 字节,Option<Box<u64>> 与 Box<u64> 也都是 8 字节,Option<String> 与 String 都是 24 字节 —— 编译器利用「引用 / Box / String 内部指针永远不为 0」,拿 0 当作 None(niche 优化,没有额外标签)。而 Option<i32> 是 8 字节(i32 的所有位模式都合法,需要额外的标签)、Option<u64> 是 16 字节。", "s": {"t": {"lines": ["  编译:成功", "  运行(退出码 0):", "    &u64 = 8,Option<&u64> = 8", "    Box<u64> = 8,Option<Box<u64>> = 8", "    i32 = 4,Option<i32> = 8", "    u64 = 8,Option<u64> = 16", "    Result<u8, u8> = 2,Result<u32, String> = 24", "    String = 24,Option<String> = 24"], "cur": [], "mark": [], "done": []}, "done": [2, 3, 7], "mark": [5], "kv": {"items": [["Option<&T>", "无额外开销"], ["Option<u64>", "16 字节(需要标签)"]], "hl": ["Option<&T>"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / rustc 1.98.1(brew)/ cargo 1.98.1;单个文件用 rustc 直接编译,需要依赖时用 cargo(经代理从 crates.io 下载);计时用 std::time::Instant,数字每次运行会有小幅抖动。大小为 64 位目标、rustc 1.98.1 的结果(niche 优化是编译器的优化,不是语言规范保证的)</li><li>没有验证:Option<NonZeroU32> 等的大小、Result<(), Box<dyn Error>> 的布局、unwrap_or_else 与 unwrap_or 的求值差别、Option 的 Ord 与排序规则</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="rust-derive-traits.html">
+    <div>
+      <div class="t1">下一篇 · RUST 11</div>
+      <div class="t2">derive 自动生成 Trait 实现</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Rust · Option 与 Result · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

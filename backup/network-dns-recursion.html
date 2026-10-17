@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>递归与迭代:一次域名解析要问几个服务器</title>
+<meta name="description" content="自己从根开始迭代解析:example.com 3 问 757 ms(根 → com. → 权威),交给 1.1.1.1 递归只要 1 个查询;转介报文含 13 条 NS 和 11 条胶水并因 512 字节上限被截断;13 个根服务器往返从 7 到 280 ms(任播);www.bbc.co.uk 被抢先伪造应答(7.6 ms、两个矛盾答案、带 RA)。">
+<link rel="canonical" href="https://bigywater.tech/network-dns-recursion.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="递归与迭代:一次域名解析要问几个服务器">
+<meta property="og:description" content="自己从根开始迭代解析:example.com 3 问 757 ms(根 → com. → 权威),交给 1.1.1.1 递归只要 1 个查询;转介报文含 13 条 NS 和 11 条胶水并因 512 字节上限被截断;13 个根服务器往返从 7 到 280 ms(任播);www.bbc.co.uk 被抢先伪造应答(7.6 ms、两个矛盾答案、带 RA)。">
+<meta property="og:url" content="https://bigywater.tech/network-dns-recursion.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="递归与迭代:一次域名解析要问几个服务器">
+<meta name="twitter:description" content="自己从根开始迭代解析:example.com 3 问 757 ms(根 → com. → 权威),交给 1.1.1.1 递归只要 1 个查询;转介报文含 13 条 NS 和 11 条胶水并因 512 字节上限被截断;13 个根服务器往返从 7 到 280 ms(任播);www.bbc.co.uk 被抢先伪造应答(7.6 ms、两个矛盾答案、带 RA)。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">2729</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">70</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">97</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">56</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">78</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">114</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">111</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">88</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#40678F; --series-c-soft:#DDE7F2;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#86B1DC; --series-c-soft:#16263A;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#86B1DC; --series-c-soft:#16263A;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>网络协议 · 67</div>
+  <h1>递归与迭代:一次域名解析要问几个服务器</h1>
+  <p>解析一个域名,其实是沿着 根 → 顶级域 → 权威服务器 这条链一路问下去。这篇自己扮演递归解析器,不借助任何缓存,从根服务器开始一问一问地迭代,看每一层给的是什么,再和直接问 1.1.1.1 对比。过程中我意外发现,这台机器所在网络里有些域名的应答被抢先伪造了。</p>
+  <div class="hero-fact">
+<div><div class="num">3 问 / 783 ms</div><div class="lbl">迭代解析 example.com:根、com.、权威各一问</div></div><div><div class="num">7 ms ~ 280 ms</div><div class="lbl">13 个根服务器(任播)里 j 与 e 的往返时间</div></div><div><div class="num">+6 ms</div><div class="lbl">问 a 根 www.bbc.co.uk 时伪造应答到达的时刻(正常往返约 242 ms)</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="network-dns-message.html">DNS 报文格式:头部、问题与资源记录,逐字节解析</a></div>
+<section>
+  <h2>迭代解析</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">    第 1 问:a.root-servers.net          242.6 ms  转介到 com.:授权区 13 个 NS,附加区带 6 个 IPv4 胶水地址
+    第 2 问:l.gtld-servers.net.         251.6 ms  转介到 example.com.:授权区 2 个 NS,附加区带 6 个 IPv4 胶水地址
+    第 3 问:hera.ns.cloudflare.com.     287.5 ms  回答:1 条 A(AA)
+    共 3 问,总耗时 783 ms;最终 ['172.66.147.243', '104.20.23.154']
+  每一问只回答“我知道的最近一层”:根服务器不知道 example.com,但知道谁管 com.;com. 的服务器不知道地址,但知道谁管 example.com;最后一问才是权威服务器的 AA 回答</pre></div>
+  <p>根给 com. 的转介,com. 的服务器给 example.com 的转介,权威服务器给答案。每一问都是 RD=0。</p>
+</section>
+<section>
+  <h2>转介与胶水</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  RCODE NOERROR;标志 QR TC;问题 1,回答 0,授权 13,附加 11 条;489 字节
+  授权区(前 3 条):com. NS l.gtld-servers.net.;com. NS j.gtld-servers.net.;com. NS h.gtld-servers.net. …共 13 条
+  附加区(胶水记录):A 6 条、AAAA 5 条——有了它们才能不绕回头去查这些 NS 名字自己的地址
+  标志里没有 AA(根服务器对 example.com 不权威),也没有 RA(根服务器不做递归);回答区是空的</pre></div>
+  <p>转介报文的授权区放 NS,附加区放这些 NS 的地址(胶水)。不用 EDNS0 时 UDP 响应上限 512 字节,会被截断(TC)。</p>
+</section>
+<section>
+  <h2>问几次</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  example.com:
+    第 1 问:a.root-servers.net          234.3 ms  转介到 com.:授权区 13 个 NS,附加区带 6 个 IPv4 胶水地址
+    第 2 问:l.gtld-servers.net.         232.7 ms  转介到 example.com.:授权区 2 个 NS,附加区带 6 个 IPv4 胶水地址
+    第 3 问:hera.ns.cloudflare.com.     289.4 ms  回答:1 条 A(AA)
+    共 3 问,总耗时 757 ms;最终 ['172.66.147.243', '104.20.23.154']
+  iana.org:
+    第 1 问:a.root-servers.net          303.0 ms  转介到 org.:授权区 6 个 NS,附加区带 6 个 IPv4 胶水地址
+    第 2 问:a2.org.afilias-nst.info.    210.6 ms  转介到 iana.org.:授权区 4 个 NS,附加区带 1 个 IPv4 胶水地址
+    第 3 问:a.iana-servers.net.         193.9 ms  回答:1 条 A(AA)
+    共 3 问,总耗时 708 ms;最终 ['192.0.43.8']
+  www.bbc.co.uk:
+    第 1 问:a.root-servers.net            7.6 ms  回答:1 条 A(AA)
+    共 1 问,总耗时 8 ms;最终 ['199.59.148.206']
+  www.github.com:
+    第 1 问:a.root-servers.net          220.9 ms  转介到 com.:授权区 13 个 NS,附加区带 6 个 IPv4 胶水地址
+    第 2 问:l.gtld-servers.net.         268.4 ms  转介到 github.com.:授权区 8 个 NS,附加区带 1 个 IPv4 胶水地址
+    第 3 问:ns-520.awsdns-01.net.       178.2 ms  回答:1 条 A,1 条 CNAME(AA)
+    共 3 问,总耗时 668 ms;最终 ['20.205.243.166']
+  python.org:
+    第 1 问:a.root-servers.net          220.2 ms  转介到 org.:授权区 6 个 NS,附加区带 6 个 IPv4 胶水地址
+    第 2 问:a2.org.afilias-nst.info.    208.7 ms  转介到 python.org.:授权区 4 个 NS,附加区带 1 个 IPv4 胶水地址
+    第 3 问:ns-484.awsdns-60.com.       191.0 ms  回答:1 条 A(AA)
+    共 3 问,总耗时 620 ms;最终 ['151.101.192.223', '151.101.64.223', '151.101.0.223', '151.101.128.223']
+  汇总:example.com 3 问 757 ms;iana.org 3 问 708 ms;www.bbc.co.uk 1 问 8 ms;www.github.com 3 问 668 ms;python.org 3 问 620 ms</pre></div>
+  <p>常见名字 3 问;最后一问的权威服务器可能顺带把 CNAME 指向的 A 一起带回。</p>
+</section>
+<section>
+  <h2>递归的好处</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  example.com:5 次往返(ms):[286, 284, 235, 294, 284];中位 284 ms
+  www.bbc.co.uk:5 次往返(ms):[36, 42, 38, 48, 44];中位 42 ms
+  www.github.com:5 次往返(ms):[286, 292, 301, 306, 230];中位 292 ms
+  对比自己迭代:example.com 757 ms,www.bbc.co.uk 8 ms,www.github.com 668 ms(本机到各服务器的往返都是公网,没有缓存)</pre></div>
+  <p>交给 1.1.1.1 只发一个查询,耗时就是到它的往返。</p>
+</section>
+<section>
+  <h2>任播根服务器</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  a 252;b 227;c 171;d 240;e 280;f 7;g 248;h 111;i 122;j 7;l 8;m 126(单位 ms,各问 3 次取中位)
+  根服务器名字共 13 个;最快 j 7 ms,最慢 e 280 ms</pre></div>
+  <p>13 个名字背后是很多台机器,本机到各个根的往返差了近 40 倍。</p>
+</section>
+<section>
+  <h2>被伪造的应答</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  向 192.0.2.1 问 example.com:0 个响应
+  向 192.0.2.1 问 www.bbc.co.uk:0 个响应
+  向 192.0.2.1 问 www.facebook.com:0 个响应
+  向 198.41.0.4 问 www.bbc.co.uk:2 个响应;+6 ms 来自 198.41.0.4,47 字节,答案 ['157.240.11.40'],TTL [122],标志 QR RD RA;+6 ms 来自 198.41.0.4,47 字节,答案 ['199.59.148.209'],TTL [75],标志 QR RD RA
+  192.0.2.1 是预留给文档的地址,不会有任何真实的 DNS 服务;如果它“回答”了,说明响应是路径上的某个设备伪造的。结论只限于“这台机器所在的网络路径”,不涉及别的网络</pre></div>
+  <p>向根服务器问 www.bbc.co.uk,6 ms 内收到两个互相矛盾、带 RA 的答案——不是根能给出的。明文 DNS 无法分辨真假。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">递归与迭代</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "b", "kind": "bars", "label": "数字对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "迭代解析 example.com 的 A 记录:自己从根服务器开始,每一问 RD = 0(不要求对方替我递归)。第 1 问问根服务器 a.root-servers.net:转介到 com.,授权区 13 个 NS,附加区带 6 个 IPv4 胶水地址,耗时 242.6 ms;第 2 问问 com. 的一个服务器 l.gtld-servers.net:转介到 example.com.,授权区 2 个 NS,附加区带 6 个胶水地址,251.6 ms;第 3 问问 hera.ns.cloudflare.com:回答 1 条 A(AA),287.5 ms。一共 3 问、总耗时 783 ms,拿到 172.66.147.243 和 104.20.23.154。每一问只回答“我知道的最近一层”:根不知道 example.com 但知道谁管 com.;com. 的服务器不知道地址但知道谁管 example.com;最后才是权威回答。", "s": {"t": {"lines": ["    第 1 问:a.root-servers.net          242.6 ms  转介到 com.:授权区 13 个 NS,附加区带 6 个 IPv4 胶水地址", "    第 2 问:l.gtld-servers.net.         251.6 ms  转介到 example.com.:授权区 2 个 NS,附加区带 6 个 IPv4 胶水地址", "    第 3 问:hera.ns.cloudflare.com.     287.5 ms  回答:1 条 A(AA)", "    共 3 问,总耗时 783 ms;最终 ['172.66.147.243', '104.20.23.154']", "  每一问只回答“我知道的最近一层”:根服务器不知道 example.com,但知道谁管 com.;com. 的服务器不知道地址,但知道谁管 example.com;最后一问才是权威服务器的 AA 回答"], "cur": [], "mark": [], "done": []}, "mark": [0, 1], "done": [2, 3, 4], "b": {"items": [["第 1 问 根", 242.6, "242.6 ms"], ["第 2 问 com.", 251.6, "251.6 ms"], ["第 3 问 权威", 287.5, "287.5 ms"]], "max": 290, "cur": [], "mark": [], "done": [0, 1, 2]}, "kv": {"items": [["第 1 问(根)", "转介到 com."], ["第 2 问(com.)", "转介到 example.com."], ["第 3 问(权威)", "回答 A,AA"], ["总计", "3 问 783 ms"]], "hl": ["总计"]}}}, {"note": "转介报文的样子(再问一次根服务器):RCODE = NOERROR,标志 QR TC(没有 AA——根对 example.com 不权威,也没有 RA——根不做递归),回答区是空的;授权区 13 条 NS(com. 的 13 个服务器 l.gtld-servers.net、j.gtld-servers.net、h.gtld-servers.net …),附加区 11 条胶水(A 6 条、AAAA 5 条),整个报文 489 字节。TC 位置位了:没有用 EDNS0 时 UDP 响应的上限是 512 字节,附加区放不下全部胶水,于是被截断。胶水记录的作用是让你不必为了找到 NS 的地址而再回头去解析 NS 的名字。", "s": {"t": {"lines": ["  RCODE NOERROR;标志 QR TC;问题 1,回答 0,授权 13,附加 11 条;489 字节", "  授权区(前 3 条):com. NS l.gtld-servers.net.;com. NS j.gtld-servers.net.;com. NS h.gtld-servers.net. …共 13 条", "  附加区(胶水记录):A 6 条、AAAA 5 条——有了它们才能不绕回头去查这些 NS 名字自己的地址", "  标志里没有 AA(根服务器对 example.com 不权威),也没有 RA(根服务器不做递归);回答区是空的"], "cur": [], "mark": [], "done": []}, "mark": [0, 2], "done": [1, 3], "kv": {"items": [["RCODE", "NOERROR"], ["标志", "QR TC(无 AA、无 RA)"], ["授权 / 附加", "13 条 NS / 11 条胶水"], ["大小", "489 字节(被截断)"]], "hl": ["标志"]}}}, {"note": "几个名字各要几问(从根开始迭代):example.com 3 问 757 ms;iana.org 3 问 708 ms(根 → org. → 权威);www.github.com 3 问 668 ms,最后一问同时回答了 1 条 A 和 1 条 CNAME(权威服务器顺手把 CNAME 指向的地址也带上了,省了一问);python.org 3 问 620 ms,最后回答 4 条 A。每一问 178~303 ms,基本就是到各服务器的往返时间,三问加起来 620~757 ms。异常的是 www.bbc.co.uk:只用 1 问、7.6 ms,根服务器 a 就“回答”了一个 A 记录(199.59.148.206)——根服务器不可能直接回答这个名字,到 a 根的正常往返也要 220 ms 以上。下面第六节专门查这件事。", "s": {"t": {"lines": ["  example.com:", "    第 1 问:a.root-servers.net          234.3 ms  转介到 com.:授权区 13 个 NS,附加区带 6 个 IPv4 胶水地址", "    第 2 问:l.gtld-servers.net.         232.7 ms  转介到 example.com.:授权区 2 个 NS,附加区带 6 个 IPv4 胶水地址", "    第 3 问:hera.ns.cloudflare.com.     289.4 ms  回答:1 条 A(AA)", "    共 3 问,总耗时 757 ms;最终 ['172.66.147.243', '104.20.23.154']", "  iana.org:", "    第 1 问:a.root-servers.net          303.0 ms  转介到 org.:授权区 6 个 NS,附加区带 6 个 IPv4 胶水地址", "    第 2 问:a2.org.afilias-nst.info.    210.6 ms  转介到 iana.org.:授权区 4 个 NS,附加区带 1 个 IPv4 胶水地址", "    第 3 问:a.iana-servers.net.         193.9 ms  回答:1 条 A(AA)", "    共 3 问,总耗时 708 ms;最终 ['192.0.43.8']", "  www.bbc.co.uk:", "    第 1 问:a.root-servers.net            7.6 ms  回答:1 条 A(AA)", "    共 1 问,总耗时 8 ms;最终 ['199.59.148.206']", "  www.github.com:", "    第 1 问:a.root-servers.net          220.9 ms  转介到 com.:授权区 13 个 NS,附加区带 6 个 IPv4 胶水地址", "    第 2 问:l.gtld-servers.net.         268.4 ms  转介到 github.com.:授权区 8 个 NS,附加区带 1 个 IPv4 胶水地址", "    第 3 问:ns-520.awsdns-01.net.       178.2 ms  回答:1 条 A,1 条 CNAME(AA)", "    共 3 问,总耗时 668 ms;最终 ['20.205.243.166']", "  python.org:", "    第 1 问:a.root-servers.net          220.2 ms  转介到 org.:授权区 6 个 NS,附加区带 6 个 IPv4 胶水地址", "    第 2 问:a2.org.afilias-nst.info.    208.7 ms  转介到 python.org.:授权区 4 个 NS,附加区带 1 个 IPv4 胶水地址", "    第 3 问:ns-484.awsdns-60.com.       191.0 ms  回答:1 条 A(AA)", "    共 3 问,总耗时 620 ms;最终 ['151.101.192.223', '151.101.64.223', '151.101.0.223', '151.101.128.223']", "  汇总:example.com 3 问 757 ms;iana.org 3 问 708 ms;www.bbc.co.uk 1 问 8 ms;www.github.com 3 问 668 ms;python.org 3 问 620 ms"], "cur": [], "mark": [], "done": []}, "mark": [10, 23], "done": [0, 5, 13, 18], "b": {"items": [["example.com", 757, "757 ms / 3 问"], ["iana.org", 708, "708 ms / 3 问"], ["www.github.com", 668, "668 ms / 3 问"], ["python.org", 620, "620 ms / 3 问"], ["www.bbc.co.uk(异常)", 8, "8 ms / 1 问"]], "max": 757, "cur": [], "mark": [4], "done": [0, 1, 2, 3]}, "kv": {"items": [["正常名字", "3 问,约 620~757 ms"], ["www.github.com", "最后一问同时带回 CNAME 和 A"], ["www.bbc.co.uk", "1 问 8 ms(异常)"]], "hl": ["www.bbc.co.uk"]}}}, {"note": "同样的名字交给递归解析器 1.1.1.1:本机只发 1 个查询(RD = 1),其余 1.1.1.1 替我们做。各问 5 次:example.com 的往返 [286, 284, 235, 294, 284] ms,中位 284 ms;www.github.com [286, 292, 301, 306, 230] ms,中位 292 ms——这两个都落在“到 1.1.1.1 的网络往返”(约 230~300 ms)上,缓存命中的话 1.1.1.1 马上回答,所以这个数字基本只是网络往返。对照自己迭代:example.com 757 ms、www.github.com 668 ms。www.bbc.co.uk 却是 [36, 42, 38, 48, 44] ms,中位 42 ms,比到 1.1.1.1 的往返快得多,同样异常。", "s": {"t": {"lines": ["  example.com:5 次往返(ms):[286, 284, 235, 294, 284];中位 284 ms", "  www.bbc.co.uk:5 次往返(ms):[36, 42, 38, 48, 44];中位 42 ms", "  www.github.com:5 次往返(ms):[286, 292, 301, 306, 230];中位 292 ms", "  对比自己迭代:example.com 757 ms,www.bbc.co.uk 8 ms,www.github.com 668 ms(本机到各服务器的往返都是公网,没有缓存)"], "cur": [], "mark": [], "done": []}, "mark": [1, 3], "done": [0, 2], "b": {"items": [["递归 1.1.1.1 example.com", 284, "284 ms"], ["自己迭代 example.com", 757, "757 ms"], ["递归 1.1.1.1 www.github.com", 292, "292 ms"], ["自己迭代 www.github.com", 668, "668 ms"]], "max": 757, "cur": [], "mark": [], "done": [0, 1, 2, 3]}, "kv": {"items": [["递归 1 个查询", "约 284~292 ms(基本是网络往返)"], ["自己迭代 3 问", "668~757 ms"], ["www.bbc.co.uk", "42 ms(异常)"]], "hl": ["递归 1 个查询"]}}}, {"note": "根服务器有 13 个名字(a ~ m.root-servers.net),都是任播:同一个名字背后有很多台机器,你连上的是网络上离你最近的那一台。用 EDNS0 取回全部 13 个的地址后,对每个问一次 example.com 的转介(各 3 次取中位):a 252、b 227、c 171、d 240、e 280、f 7、g 248、h 111、i 122、j 7、l 8、m 126 ms,k 没有响应。最快的 j 是 7 ms,最慢的 e 是 280 ms,相差近 40 倍——f、j、l 三个根的往返只有 7~8 ms,说明它们有离本机很近的节点。同一个“a 根”在第一节里的往返是 242 ms,但 j 根只要 7 ms,任播让“离得近的根”近得多。", "s": {"t": {"lines": ["  a 252;b 227;c 171;d 240;e 280;f 7;g 248;h 111;i 122;j 7;l 8;m 126(单位 ms,各问 3 次取中位)", "  根服务器名字共 13 个;最快 j 7 ms,最慢 e 280 ms"], "cur": [], "mark": [], "done": []}, "mark": [0], "done": [1], "b": {"items": [["j 根", 7, "7 ms"], ["f 根", 7, "7 ms"], ["l 根", 8, "8 ms"], ["h 根", 111, "111 ms"], ["i 根", 122, "122 ms"], ["m 根", 126, "126 ms"], ["c 根", 171, "171 ms"], ["b 根", 227, "227 ms"], ["d 根", 240, "240 ms"], ["g 根", 248, "248 ms"], ["a 根", 252, "252 ms"], ["e 根", 280, "280 ms"]], "max": 280, "cur": [], "mark": [0, 11], "done": []}, "kv": {"items": [["根服务器名字", "13 个(a~m)"], ["有响应", "12 个(k 没有)"], ["最快 / 最慢", "j 7 ms / e 280 ms"]], "hl": ["最快 / 最慢"]}}}, {"note": "www.bbc.co.uk 的异常。向一个根本没有 DNS 服务的地址 192.0.2.1(文档专用地址)发 example.com、www.bbc.co.uk、www.facebook.com 三个查询,3 秒内各 0 个响应——所以这条路径上并不是“任何发往 53 端口的包都被应答”。但向根服务器 198.41.0.4 问 www.bbc.co.uk,3 秒内收到 2 个响应,都在 +6 ms,都“来自 198.41.0.4”:一个答案是 157.240.11.40(TTL 122),另一个是 199.59.148.209(TTL 75),标志都是 QR RD RA。这不可能是根服务器:根不做递归(不会有 RA),不会直接回答 www.bbc.co.uk 的地址,同一个查询也不会给出两个互相矛盾的答案,而且 6 ms 比到该根的正常往返(约 220~300 ms)快得多。我的结论是:在这台机器所在网络的路径上,有设备对部分域名的查询抢先伪造了应答(第三节里的 8 ms 回答也是同一件事)。这个结论只限于这个网络环境,而且我没有查是谁、为什么。它对后面的 DNSSEC、DoT / DoH 两篇很重要:明文 UDP 的 DNS 无法分辨真假。", "s": {"t": {"lines": ["  向 192.0.2.1 问 example.com:0 个响应", "  向 192.0.2.1 问 www.bbc.co.uk:0 个响应", "  向 192.0.2.1 问 www.facebook.com:0 个响应", "  向 198.41.0.4 问 www.bbc.co.uk:2 个响应;+6 ms 来自 198.41.0.4,47 字节,答案 ['157.240.11.40'],TTL [122],标志 QR RD RA;+6 ms 来自 198.41.0.4,47 字节,答案 ['199.59.148.209'],TTL [75],标志 QR RD RA", "  192.0.2.1 是预留给文档的地址,不会有任何真实的 DNS 服务;如果它“回答”了,说明响应是路径上的某个设备伪造的。结论只限于“这台机器所在的网络路径”,不涉及别的网络"], "cur": [], "mark": [], "done": []}, "mark": [2, 3], "done": [0, 1], "b": {"items": [["伪造响应到达", 6, "+6 ms"], ["到 a 根的正常往返", 242.6, "242.6 ms"]], "max": 250, "cur": [], "mark": [0], "done": [1]}, "kv": {"items": [["向无服务的 192.0.2.1 问", "0 个响应"], ["向 a 根问 www.bbc.co.uk", "2 个互相矛盾的响应,+6 ms,带 RA"], ["结论", "路径上有设备伪造应答(仅限本网络)"]], "hl": ["结论"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64(Apple 芯片)/ Python 3.14.8 / tcpdump(libpcap)/ scapy 2.8 / dpkt / dnspython / h2 / aioquic / OpenSSL / curl 8.7.1;抓包在 lo0(环回)上做,少数实验用真实网卡 en0(这台机器上 en0 是 Wi-Fi,tcpdump 看到的是系统转成以太网格式的帧,所以文中的“以太网头”都指这个 14 字节的头)或访问公网(会在文章里注明);需要丢包 / 延迟 / 限速时,用一个只作用于 lo0 端口 9400-9499 的 dummynet 辅助脚本(netlab);所有服务端都是本机自己起的进程;时间戳取自 tcpdump 的 -tt,数字每次运行会有小幅抖动。向根服务器、com. / org. 的服务器和若干权威服务器发了几十个普通 DNS 查询(RD=0);DNS 伪造的结论只限于这台机器所在的网络路径,没有查来源和原因;往返时间随网络状况每次不同</li><li>没有验证:IPv6 传输的迭代;DNSSEC 验证(下面有专门一篇);根服务器 k 为什么没有响应;其它域名是否也被伪造;1.1.1.1 的缓存策略(只是看到往返接近网络往返);循环 CNAME、深层委派、无胶水委派(NS 在自己的区内外)的处理;迭代时的 NS 选择与重试策略(我只取了第一个 NS)</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="network-dns-caching.html">
+    <div>
+      <div class="t1">下一篇 · 网络协议 68</div>
+      <div class="t2">DNS 缓存与 TTL:负缓存与过期时的行为</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>网络协议 · 递归与迭代:一次域名解析要问几个服务器 · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

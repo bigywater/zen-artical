@@ -1,0 +1,20 @@
+from lib import *
+S = SS('n9')
+steps = [
+    step("没有 NoRoute 的默认 404 来自 serveError:先把状态设成 404,再 c.Next() 跑完 handler 链(此时链上只有全局中间件);如果 handler 已经写了响应(Written)就直接返回;没写、并且状态仍然是 404,才把 Content-Type 设成 text/plain 写入默认正文 \"404 page not found\";状态被改过(不再是 404)就只发出状态行。实测默认响应:404、正文 404 page not found、Content-Type=text/plain。", t=tl(S(1)), mark=lidx(S(1), 'c.writermem.status = code', 'c.Next()', 'c.writermem.Written()'), done=lidx(S(1), 'c.writermem.Status() == code', 'mimePlain', '→ 404 "404 page not found"'), kv=KV([['先设状态', 'status = 404,再 Next()'], ['已写响应', '直接返回,不再写默认正文'], ['没写且仍是 404', '写 "404 page not found"']], ['没写且仍是 404'])),
+    step("6 种 NoRoute 的写法:只设置头不写正文(1)→ 404 且默认正文仍在;c.String(404, …)(2)→ 自定义正文;c.String(200, …)(3)→ 状态变成 200;只 c.Status(200)(4)→ 200 空正文;c.JSON(404, …)(5)→ JSON,里面 c.Writer.Status()=404、c.FullPath()=\"\";c.Redirect(302, \"/home\")(6)→ 302。六种里只有第 1 种还保留默认正文。", t=tl(S(2)), mark=lidx(S(2), '→ 404 "404 page not found"', '→ 200 ""'), done=lidx(S(2), '自定义', '"这里也有"', 'fullPath', '→ 302'), b=bars([['保留默认正文', 1, '1 种'], ['其余写法', 5, '5 种']], 6, mark=[0], done=[1]), kv=KV([['只设头', '默认正文保留'], ['写了正文', '用你的正文'], ['改了状态', '状态以你为准,不再写默认正文']], ['改了状态'])),
+    step("NoRoute 的 handler 链 = 全局中间件 + NoRoute 的 handler:先 NoRoute 再 Use 两个中间件,执行顺序是 M1(进) M2(进) NoRoute M2(出) M1(出),NoRoute 里 FullPath=\"\"、Params 是空、状态已经是 404;Use 与 NoRoute 交错注册结果相同,两个 NoRoute handler 依次执行;NoRoute 里 AbortWithStatusJSON 之后,第二个 handler 没有执行,M1 的“出”半段仍然执行。", t=tl(S(3)), mark=lidx(S(3), 'FullPath=""', '[NoRoute-abort]'), done=lidx(S(3), 'M1(进) M2(进) [NoRoute: ', 'M1(进) M2(进) [NoRoute] [NoRoute2]', 'M1(进) [NoRoute-abort] M1(出'), kv=KV([['链', '全局中间件 + NoRoute handler'], ['注册先后', '不影响,Use / NoRoute 都会重建'], ['Abort', '跳过后面的 NoRoute handler,中间件的后半段照常']], ['链'])),
+    step("NoMethod 同理,但要先把 HandleMethodNotAllowed 设为 true:关着时 POST /x 走的是 NoRoute(404、\"NR\");打开后 POST /x 走 NoMethod(405、正文 \"NM Allow=GET\",Allow 头已设好)。Static 目录里不存在的文件(/assets/不存在.css)和完全没注册的 /zzz 一样,走 NoRoute。", t=tl(S(4)), mark=lidx(S(4), 'POST   /x         → 404', 'POST   /x         → 405'), done=lidx(S(4), '/assets/不存在.css', '/zzz'), kv=KV([['HandleMethodNotAllowed=false', 'POST /x → NoRoute'], ['true', 'POST /x → NoMethod,带 Allow'], ['Static 的 404', '走 NoRoute']], ['Static 的 404'])),
+]
+A = mkartn('n9', 9, 'Gin,NoRoute,NoMethod,404,serveError,Go,真实验证,动画演示',
+    '在 Gin v1.12.0 里实测 NoRoute 与 NoMethod:serveError 的流程;6 种 NoRoute 写法里只有只设头不写正文时才保留默认正文 404 page not found;NoRoute 的链是全局中间件加 NoRoute handler,404 时 FullPath 为空;NoMethod 需要打开 HandleMethodNotAllowed;Static 的 404 也走 NoRoute。',
+    '自定义 404 页面听起来只要 r.NoRoute(handler),但 handler 链是怎么拼的、什么时候默认的 “404 page not found” 还会出现、中间件会不会也跑一遍?这篇从 serveError 的源码出发,把 NoRoute 的六种写法和执行顺序都试一遍。',
+    [('1 / 6', '六种 NoRoute 写法中仍输出默认正文的个数'), ('""', 'NoRoute handler 里 c.FullPath() 的值'), ('M1 → NoRoute → M1', '全局中间件在 404 时的进出顺序(NoRoute 夹在中间)')],
+    [('默认 404 怎么来的', '<p><code>serveError</code> 先把状态设成 404,再运行 <code>allNoRoute</code> 这条链(没配 NoRoute 时就只有全局中间件)。链跑完以后:如果已经写了响应就什么都不做;如果还没写、状态也还是 404,才由 Gin 写上 <code>404 page not found</code>(<code>text/plain</code>);状态被改过,则只提交状态行。</p>'),
+     ('NoRoute 里怎么写', '<p>只设置响应头不写正文,默认正文仍会出现;写了正文就以你的为准;把状态改成 200 又不写正文,得到的是 200 的空响应(这是个容易踩的坑);<code>c.JSON(404, …)</code> 与 <code>c.Redirect</code> 都按平常方式工作。NoRoute 里 <code>c.Writer.Status()</code> 已经是 404,<code>c.FullPath()</code> 是空串——监控里要把它归到“未匹配”。</p>'),
+     ('链与顺序', '<p><code>Engine.Use</code> 与 <code>Engine.NoRoute</code> 都会重建 404 的 handler 链,所以谁先注册没有区别:全局中间件在前,NoRoute handler 在后。中间件的“出”半段照常执行,并且能读到 404 状态,日志中间件因此能记录 404。在 NoRoute 里 <code>Abort</code> 只会跳过后面的 NoRoute handler。</p>'),
+     ('NoMethod 与 Static', '<p><code>NoMethod</code> 只有在 <code>HandleMethodNotAllowed=true</code> 时才会被用到。<code>Static</code> 目录里找不到的文件最终也是 404,走的就是同一个 NoRoute 链,所以自定义的 404 页面也会出现在静态资源缺失时。</p>')],
+    steps,
+    [ENV_N_GIN + '。请求用 httptest 直接调用 ServeHTTP;Static 用当前目录做根,请求的文件不存在;每种情形各一次',
+     '没有验证:NoRoute 与 RedirectTrailingSlash 同时命中时哪个优先(重定向发生在 serveError 之前,本文没有单独验证);NoRoute 中 panic 时 Recovery 的行为;gin.Default() 默认带的 Logger 在 404 时的输出格式(见后面 Logger 的文章)'],
+    'NoRoute 与 NoMethod')

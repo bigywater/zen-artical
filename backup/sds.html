@@ -1,0 +1,487 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>SDS:Redis 自己的字符串</title>
+<meta name="description" content="embstr/raw 编码分界与预分配增长策略的源码验证。">
+<link rel="canonical" href="https://bigywater.tech/sds.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="SDS:Redis 自己的字符串">
+<meta property="og:description" content="embstr/raw 编码分界与预分配增长策略的源码验证。">
+<meta property="og:url" content="https://bigywater.tech/sds.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="SDS:Redis 自己的字符串">
+<meta name="twitter:description" content="embstr/raw 编码分界与预分配增长策略的源码验证。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F7F5F3; --paper:#FFFFFF; --ink:#211A19; --ink-dim:#6B5D5A; --line:#E3DAD6;
+  --redis-c:#C6302B; --redis-c-soft:#FBE7E5;
+  --mem-c:#B8791E; --mem-c-soft:#F6ECD9;
+  --type-c:#2C6E49; --type-c-soft:#E1EFE6;
+  --code-bg:#241C1B; --code-ink:#F0E7E4;
+  --shadow: 0 1px 2px rgba(40,20,18,.06), 0 8px 24px -12px rgba(40,20,18,.16);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#17100F; --paper:#231A19; --ink:#F0E7E4; --ink-dim:#B3A19D; --line:#3A2C29;
+    --redis-c:#F0736A; --redis-c-soft:#3A211F;
+    --mem-c:#E0AC5C; --mem-c-soft:#382C18;
+    --type-c:#6FC492; --type-c-soft:#1B3327;
+    --code-bg:#120D0C; --code-ink:#EFE4E1;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#17100F; --paper:#231A19; --ink:#F0E7E4; --ink-dim:#B3A19D; --line:#3A2C29;
+  --redis-c:#F0736A; --redis-c-soft:#3A211F;
+  --mem-c:#E0AC5C; --mem-c-soft:#382C18;
+  --type-c:#6FC492; --type-c-soft:#1B3327;
+  --code-bg:#120D0C; --code-ink:#EFE4E1;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--redis-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--redis-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--redis-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--redis-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.a .tag{background:var(--redis-c-soft); color:var(--redis-c);}
+.card.b .tag{background:var(--mem-c-soft); color:var(--mem-c);}
+.card.c .tag{background:var(--type-c-soft); color:var(--type-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#B3A19D; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#F0A6A0;}
+
+.callout{border-left:3px solid var(--redis-c); background:var(--redis-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+.callout.c{border-color:var(--type-c); background:var(--type-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--redis-c-soft); color:var(--redis-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#F0A6A0;}
+.term .ok{color:#7DD0A0;}
+.term .cm{color:#8B7F7C;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--mem-c-soft); color:var(--mem-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:22px 20px;}
+.buf{display:flex; align-items:center; gap:2px; margin:10px 0; flex-wrap:wrap;}
+.cell{width:20px; height:28px; border:1px solid var(--line); display:flex; align-items:center; justify-content:center; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; background:var(--paper);}
+.cell.used{background:var(--redis-c-soft); border-color:var(--redis-c); color:var(--redis-c);}
+.cell.free{background:var(--type-c-soft); border-color:var(--type-c); color:var(--type-c); opacity:.6;}
+.stat-row{display:flex; gap:16px; flex-wrap:wrap; margin:14px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem;}
+.stat{border:1px solid var(--line); border-radius:8px; padding:8px 12px; background:var(--bg);}
+.stat b{color:var(--redis-c); display:block; font-size:1rem; font-variant-numeric:tabular-nums;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--redis-c); color:var(--redis-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--redis-c); border-color:var(--redis-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--redis-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Redis 系列 · 第一篇</div>
+    <h1>Redis 存字符串,为什么不直接用 C 语言自带的字符串?</h1>
+    <p>Redis 是用 C 写的,但它从来不用 C 标准库里那种"以 <span class="mono">\0</span> 结尾"的字符串。它自己实现了一套叫 <b>SDS</b>(Simple Dynamic String)的字符串结构——这篇讲清楚为什么要自己造轮子,以及它具体是怎么做到"取长度是 O(1)"、"能存任意二进制数据"、"不用每次 append 都重新分配内存"这几件事的。</p>
+    <p>本机装了 Redis 8.10.1,所有编码判断、内存增长数字都是用 <span class="mono">redis-cli</span> 跑出来的,源码引用精确对应这个版本。</p>
+    <div class="hero-fact">
+      <div><div class="num">44 字节</div><div class="lbl">测出的 embstr / raw 编码分界线</div></div>
+      <div><div class="num">58 → 106 → 218</div><div class="lbl">连续 8 次 APPEND,测出的内存占用变化(字节)</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <h2>C 字符串的三个老问题</h2>
+  <p class="h2-sub">C 语言里一个字符串就是一个 <span class="mono">char*</span>,靠结尾的 <span class="mono">\0</span> 标记"到这里为止"。这个设计换来了简单,但代价不小。</p>
+  <div class="cards">
+    <div class="card a">
+      <span class="tag">取长度是 O(n)</span>
+      <h3>不知道自己有多长</h3>
+      <p><span class="mono">strlen()</span> 得从头扫到 <span class="mono">\0</span> 才知道长度。Redis 里 <span class="mono">STRLEN</span> 是高频命令,不能接受每次都扫一遍。</p>
+    </div>
+    <div class="card b">
+      <span class="tag">不安全</span>
+      <h3>存不了二进制数据</h3>
+      <p>C 字符串把第一个 <span class="mono">\0</span> 当作结尾——但图片、序列化数据这些二进制内容里,<span class="mono">\0</span> 就是正常的一个字节,不是终止符。</p>
+    </div>
+    <div class="card c">
+      <span class="tag">每次拼接都要重新分配</span>
+      <h3>没有"富余空间"的概念</h3>
+      <p>原生 C 字符串不记录自己实际分配了多大空间,每次 <span class="mono">strcat</span> 都得先 <span class="mono">realloc</span>,频繁拼接的场景代价很高。</p>
+    </div>
+  </div>
+  <p>SDS 就是针对这三条,专门设计的替代品——一个 header 记着长度和已分配容量,后面跟着真正的字符数据。</p>
+</section>
+
+<section>
+  <h2>五种 header,只为省那几个字节</h2>
+  <p class="h2-sub">SDS 不是一种固定大小的结构,而是根据字符串长度,从 5 种 header 类型里选一个最小够用的。</p>
+  <blockquote class="src">
+    <span class="path">src/sds.h · <a href="https://github.com/redis/redis/blob/8.10.1/src/sds.h#L28" target="_blank" rel="noopener">redis @ 8.10.1, L28</a></span>
+struct __attribute__ ((__packed__)) sdshdr8 {
+    uint8_t len;    /* used */
+    uint8_t alloc;  /* excluding the header and null terminator */
+    unsigned char flags;
+    char buf[];
+};
+struct __attribute__ ((__packed__)) sdshdr16 { uint16_t len; uint16_t alloc; ... };
+struct __attribute__ ((__packed__)) sdshdr32 { uint32_t len; uint32_t alloc; ... };
+struct __attribute__ ((__packed__)) sdshdr64 { uint64_t len; uint64_t alloc; ... };
+  </blockquote>
+  <p>一个只有 5 个字符的短字符串,如果 <span class="mono">len</span>/<span class="mono">alloc</span> 都用 64 位整数存,光 header 就要 17 字节,比字符串本身还大好几倍。所以 SDS 按需选类型:短字符串用 <span class="mono">sdshdr8</span>(header 只要 3 字节),长字符串才用得上 <span class="mono">sdshdr64</span>。<span class="mono">len</span> 字段的存在直接解决了"取长度 O(1)"——不用扫,读一个字段就行。</p>
+</section>
+
+<section>
+  <h2>真实实测:多长的字符串,用哪种编码</h2>
+  <p class="h2-sub">Redis 存字符串时还有一层"外层编码"——不是所有字符串都会走完整的 SDS 结构。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cmd">SET intkey 12345</span>
+<span class="cmd">OBJECT ENCODING intkey</span>          <span class="ok">→ "int"</span>       <span class="cm"># 长得像数字,直接当整数存,连 SDS 都不用</span>
+
+<span class="cmd">SET embkey "hello world..."</span>   <span class="cm"># 36 字节</span>
+<span class="cmd">OBJECT ENCODING embkey</span>          <span class="ok">→ "embstr"</span>   <span class="cm"># header 和字符数据挨着分配在一起</span>
+
+<span class="cmd">SET boundary44 (44 个 'a')</span>
+<span class="cmd">OBJECT ENCODING boundary44</span>      <span class="ok">→ "embstr"</span>
+
+<span class="cmd">SET boundary45 (45 个 'a')</span>
+<span class="cmd">OBJECT ENCODING boundary45</span>      <span class="ok">→ "raw"</span>       <span class="cm"># 只多 1 个字节,编码就变了</span>
+  </div>
+  <p>44 字节是分界线,不是凑整——源码里写得很直接:</p>
+  <blockquote class="src">
+    <span class="path">src/object.c · <a href="https://github.com/redis/redis/blob/8.10.1/src/object.c#L330" target="_blank" rel="noopener">redis @ 8.10.1, L330</a></span>
+/* Create a string object with EMBSTR encoding if it is smaller than
+ * OBJ_ENCODING_EMBSTR_SIZE_LIMIT, otherwise the RAW encoding is used.
+ *
+ * The current limit of 44 is chosen so that the biggest string object
+ * we allocate as EMBSTR will still fit into the 64 byte arena of jemalloc. */
+#define OBJ_ENCODING_EMBSTR_SIZE_LIMIT 44
+  </blockquote>
+  <p>embstr 把"对象头 + SDS header + 字符数据"一次性分配在一块连续内存里(所以是"embedded"),省掉一次单独的内存分配;raw 编码里,对象头和 SDS 的字符数据是两块分开分配的内存,通过指针相连。44 这个数字,是精确算出来的——刚好让最大的 embstr 对象仍然落在 jemalloc 64 字节这一档分配粒度里,再大一点就得跳到下一档,不如干脆分开存。</p>
+</section>
+
+<section>
+  <h2>不会每次 append 都重新分配</h2>
+  <p class="h2-sub">SDS 的 <span class="mono">alloc</span> 字段记录的是"已经申请到的总容量",不是"当前用了多少"——两者之间的差,就是不用重新分配也能直接写的富余空间。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cmd">SET growkey "x"
+APPEND growkey "yyyyyyyyyy"   # 重复 8 次,每次加 10 字节</span>
+<span class="ok">strlen  11  →  memory  58</span>
+<span class="ok">strlen  21  →  memory  58</span>   <span class="cm"># 没有变化——用的是上次多分配的富余空间</span>
+<span class="ok">strlen  31  →  memory 106</span>   <span class="cm"># 富余空间用完,触发一次重新分配</span>
+<span class="ok">strlen  41  →  memory 106</span>
+<span class="ok">strlen  51  →  memory 106</span>
+<span class="ok">strlen  61  →  memory 106</span>
+<span class="ok">strlen  71  →  memory 106</span>   <span class="cm"># 这次多分配的富余空间撑了 4 次 append</span>
+<span class="ok">strlen  81  →  memory 218</span>   <span class="cm"># 又用完了,再分配一次</span>
+  </div>
+  <p>8 次 append,只触发了 3 次真正的内存重新分配——这条"平的时候不动、用完才跳"的曲线,就是 SDS 预分配策略在起作用。的分配规则:</p>
+  <blockquote class="src">
+    <span class="path">src/sds.c · <a href="https://github.com/redis/redis/blob/8.10.1/src/sds.c#L293" target="_blank" rel="noopener">redis @ 8.10.1, L293</a></span>
+#define SDS_MAX_PREALLOC (1024*1024)   /* 1MB */
+...
+if (greedy == 1) {
+    if (newlen &lt; SDS_MAX_PREALLOC)
+        newlen *= 2;          // 需求量小于 1MB:直接翻倍
+    else
+        newlen += SDS_MAX_PREALLOC;  // 已经很大了:每次只多加 1MB,不再翻倍
+}
+  </blockquote>
+  <p>规则很直白:字符串还小的时候,翻倍换未来好几次 append 都不用再分配;字符串已经很大了(比如几十 MB),翻倍会一次性浪费太多内存,改成每次固定只多要 1MB。这是一个"用空间换时间"和"别浪费太多空间"之间的具体取舍点,不是拍脑袋定的。</p>
+</section>
+
+<section>
+  <h2>演示:一次一次 append,富余空间怎么被吃掉</h2>
+  <p class="h2-sub">用上面实验同样的操作序列(初始 1 字节,每次 append 10 字节,共 8 次),复现容量增长过程。</p>
+  <div class="demo" id="sdsDemo">
+    <div class="demo-head">SDS 缓冲区(红色=已用,绿色=富余空间)</div>
+    <div class="demo-narration" id="sdsNarration"></div>
+    <div class="demo-body">
+      <div class="buf" id="sdsBuf"></div>
+      <div class="stat-row" id="sdsStats"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="sdsReset">⏮ 重来</button>
+      <button class="btn" id="sdsPrev">‹ 上一步</button>
+      <button class="btn primary" id="sdsNext">下一步 ›</button>
+      <button class="btn" id="sdsPlay">▶ 自动播放</button>
+      <span class="step-counter" id="sdsCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">演示里的分配数字(alloc 从 1 → 22 → 62 → 142)是对增长公式(翻倍,阈值 1MB)的精确计算结果,不是凑出来的形状;和上面测出的内存曲线(58→106→218)节奏一致——都是"平几步、跳一次"——只是绝对数值不同,因为 <span class="mono">MEMORY USAGE</span> 还包含对象头开销和内存分配器自己的取整规则,这两部分本文没有逐字节还原。</p>
+</section>
+
+<section>
+  <h2>顺带解决的:二进制安全</h2>
+  <p class="h2-sub">因为 SDS 靠 <span class="mono">len</span> 字段知道自己多长,不靠扫描找 <span class="mono">\0</span>,存储任意字节(包括 <span class="mono">\0</span> 本身)就是免费获得的能力。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cmd">$ printf 'hello\x00world' | redis-cli -x set binkey</span>
+<span class="cmd">STRLEN binkey</span>   <span class="ok">→ 11</span>          <span class="cm"># 正确数出了 11 个字节,包括中间那个 \0</span>
+<span class="cmd">GET binkey</span>      <span class="ok">→ "hello\x00world"</span>   <span class="cm"># 完整取回,\0 没有被当成结尾</span>
+  </div>
+  <p>换成 C 标准库的字符串处理,这条数据在第一个 <span class="mono">\0</span> 处就被当成结尾了,后面的 "world" 会直接丢失。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文所有 <span class="mono">OBJECT ENCODING</span>/<span class="mono">STRLEN</span>/<span class="mono">MEMORY USAGE</span> 结果均在本机运行的 Redis 8.10.1(<span class="mono">redis-server --port 6390</span>)上通过 <span class="mono">redis-cli</span> 执行得到,未做任何删改。</li>
+      <li>源码引用(<span class="mono">sds.h</span> 的 header 结构体、<span class="mono">object.c</span> 的 <span class="mono">OBJ_ENCODING_EMBSTR_SIZE_LIMIT</span>、<span class="mono">sds.c</span> 的 <span class="mono">_sdsMakeRoomFor</span> 增长逻辑)取自 <span class="mono">redis/redis</span> 仓库 <span class="mono">8.10.1</span> 标签,与本机安装的 Redis 8.10.1 完全一致。</li>
+      <li>演示动画的容量数字是对增长公式的直接计算(不是凭空设计的形状),但没有还原 <span class="mono">MEMORY USAGE</span> 命令包含的对象头开销和底层内存分配器(本机编译为 <span class="mono">malloc=libc</span>,不是默认的 jemalloc)自身的取整规则——这也是为什么正文特意展示了测出的原始数字,而不是只给一个理论推导的形状。</li>
+      <li>没有涉及:<span class="mono">sdshdr5</span> 具体在什么场景下真的会被用到(源码注释里提到它"从不被使用",本文没有深入这个历史细节)、SDS 字符串收缩(<span class="mono">sdsRemoveFreeSpace</span>)的触发时机、字符串以外的数据结构(列表、哈希、跳表等)如何复用或不复用 SDS。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="hashzset.html" target="_blank" rel="noopener" style="text-decoration:none; color:inherit;">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">Hash 和 ZSet 什么时候换编码</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Redis 系列 · 第一篇 · SDS 简单动态字符串 · 数据来自本机运行的 Redis 8.10.1</footer>
+
+<script>
+const DATA = {"events": [{"value": "x", "len": 1, "alloc": 1, "hdrType": 5, "type": "create"}, {"reqlen": 11, "greedyLen": 22, "oldHdrType": 5, "newHdrType": 8, "newAlloc": 22, "type": "realloc"}, {"added": "yyyyyyyyyy", "len": 11, "alloc": 22, "hdrType": 8, "freeSpace": 11, "type": "append"}, {"avail": 11, "addlen": 10, "type": "room-sufficient"}, {"added": "yyyyyyyyyy", "len": 21, "alloc": 22, "hdrType": 8, "freeSpace": 1, "type": "append"}, {"reqlen": 31, "greedyLen": 62, "oldHdrType": 8, "newHdrType": 8, "newAlloc": 62, "type": "realloc"}, {"added": "yyyyyyyyyy", "len": 31, "alloc": 62, "hdrType": 8, "freeSpace": 31, "type": "append"}, {"avail": 31, "addlen": 10, "type": "room-sufficient"}, {"added": "yyyyyyyyyy", "len": 41, "alloc": 62, "hdrType": 8, "freeSpace": 21, "type": "append"}, {"avail": 21, "addlen": 10, "type": "room-sufficient"}, {"added": "yyyyyyyyyy", "len": 51, "alloc": 62, "hdrType": 8, "freeSpace": 11, "type": "append"}, {"avail": 11, "addlen": 10, "type": "room-sufficient"}, {"added": "yyyyyyyyyy", "len": 61, "alloc": 62, "hdrType": 8, "freeSpace": 1, "type": "append"}, {"reqlen": 71, "greedyLen": 142, "oldHdrType": 8, "newHdrType": 8, "newAlloc": 142, "type": "realloc"}, {"added": "yyyyyyyyyy", "len": 71, "alloc": 142, "hdrType": 8, "freeSpace": 71, "type": "append"}, {"avail": 71, "addlen": 10, "type": "room-sufficient"}, {"added": "yyyyyyyyyy", "len": 81, "alloc": 142, "hdrType": 8, "freeSpace": 61, "type": "append"}]};
+
+(function(){
+  const events = DATA.events;
+  const bufBox = document.getElementById('sdsBuf');
+  const statsBox = document.getElementById('sdsStats');
+  const narration = document.getElementById('sdsNarration');
+  const counter = document.getElementById('sdsCounter');
+  let idx = 0, playing=false, playTimer=null;
+
+  function describe(e){
+    switch(e.type){
+      case 'create': return `创建字符串 <span class="k">"${e.value}"</span>,len=${e.len}, alloc=${e.alloc}(sdshdr${e.hdrType})。`;
+      case 'room-sufficient': return `富余空间还有 ${e.avail} 字节,够写下这次要加的 ${e.addlen} 字节——<b>不需要重新分配</b>。`;
+      case 'realloc': return `富余空间不够了。需要至少 ${e.reqlen} 字节,翻倍后申请 ${e.greedyLen} 字节——header 从 sdshdr${e.oldHdrType} ${e.oldHdrType===e.newHdrType?'保持不变':`升级到 sdshdr${e.newHdrType}`}。`;
+      case 'append': return `写入 "${e.added}",当前 len=${e.len}, alloc=${e.alloc},富余空间还剩 ${e.freeSpace} 字节。`;
+      default: return e.type;
+    }
+  }
+
+  function render(){
+    idx = Math.max(0, Math.min(events.length-1, idx));
+    const e = events[idx];
+    narration.innerHTML = describe(e);
+
+    let len=0, alloc=0, hdrType=5;
+    for (let i=0;i<=idx;i++){
+      const ev = events[i];
+      if (ev.type==='create'){ len=ev.len; alloc=ev.alloc; hdrType=ev.hdrType; }
+      if (ev.type==='realloc'){ alloc=ev.newAlloc; hdrType=ev.newHdrType; }
+      if (ev.type==='append'){ len=ev.len; alloc=ev.alloc; hdrType=ev.hdrType; }
+    }
+    const maxCells = 160;
+    const scale = alloc > maxCells ? maxCells/alloc : 1;
+    let html = '';
+    const usedCells = Math.round(len*scale) || (len>0?1:0);
+    const totalCells = Math.max(1, Math.round(alloc*scale));
+    for (let i=0;i<totalCells;i++){
+      html += `<div class="cell ${i<usedCells?'used':'free'}"></div>`;
+    }
+    bufBox.innerHTML = html;
+    statsBox.innerHTML = `
+      <div class="stat">len<b>${len}</b></div>
+      <div class="stat">alloc<b>${alloc}</b></div>
+      <div class="stat">富余空间<b>${alloc-len}</b></div>
+      <div class="stat">header 类型<b>sdshdr${hdrType}</b></div>`;
+
+    counter.textContent = `${idx+1} / ${events.length}`;
+    document.getElementById('sdsPrev').disabled = idx===0;
+    document.getElementById('sdsNext').disabled = idx===events.length-1;
+  }
+  document.getElementById('sdsPrev').onclick=()=>{idx--;render();stopPlay();};
+  document.getElementById('sdsNext').onclick=()=>{idx++;render();stopPlay();};
+  document.getElementById('sdsReset').onclick=()=>{idx=0;render();stopPlay();};
+  function stopPlay(){ playing=false; clearInterval(playTimer); document.getElementById('sdsPlay').textContent='▶ 自动播放'; }
+  document.getElementById('sdsPlay').onclick=()=>{
+    if(playing){ stopPlay(); return; }
+    playing=true; document.getElementById('sdsPlay').textContent='⏸ 暂停';
+    playTimer = setInterval(()=>{
+      if(idx>=events.length-1){ stopPlay(); return; }
+      idx++; render();
+    }, 900);
+  };
+  render();
+})();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,444 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>sitemap.xml:索引文件、gzip 与 lastmod</title>
+<meta name="description" content="实测 sitemap.xml 解析:不写 XML 命名空间会解析出 0 条;.xml.gz 文件要自己解压而 Content-Encoding: gzip 由 requests 解开;lastmod 有多种写法,没有 lastmod 的条目不能用来增量;5 万条 URL 用 iterparse 内存 4.0 MiB 对 fromstring 38.5 MiB;lxml 恢复模式会悄悄破坏含 &amp; 的 URL。">
+<link rel="canonical" href="https://bigywater.tech/crawler-sitemap-parsing.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="sitemap.xml:索引文件、gzip 与 lastmod">
+<meta property="og:description" content="实测 sitemap.xml 解析:不写 XML 命名空间会解析出 0 条;.xml.gz 文件要自己解压而 Content-Encoding: gzip 由 requests 解开;lastmod 有多种写法,没有 lastmod 的条目不能用来增量;5 万条 URL 用 iterparse 内存 4.0 MiB 对 fromstring 38.5 MiB;lxml 恢复模式会悄悄破坏含 &amp; 的 URL。">
+<meta property="og:url" content="https://bigywater.tech/crawler-sitemap-parsing.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="sitemap.xml:索引文件、gzip 与 lastmod">
+<meta name="twitter:description" content="实测 sitemap.xml 解析:不写 XML 命名空间会解析出 0 条;.xml.gz 文件要自己解压而 Content-Encoding: gzip 由 requests 解开;lastmod 有多种写法,没有 lastmod 的条目不能用来增量;5 万条 URL 用 iterparse 内存 4.0 MiB 对 fromstring 38.5 MiB;lxml 恢复模式会悄悄破坏含 &amp; 的 URL。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">2455</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">44</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">97</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">56</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">78</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">114</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">111</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">57</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#5F7F1E; --series-c-soft:#E6EFD2;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#A3C45A; --series-c-soft:#222C0E;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#A3C45A; --series-c-soft:#222C0E;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>爬虫工程 · 44</div>
+  <h1>sitemap.xml:索引文件、gzip 与 lastmod</h1>
+  <p>sitemap.xml 是爬虫最省力的 URL 来源,但解析它的坑不少:命名空间、两种 gzip、五花八门的 lastmod、几万条 URL 的内存、以及不规范的 XML。这篇用一个本机服务器把这些情形逐一复现。</p>
+  <div class="hero-fact">
+<div><div class="num">0 个</div><div class="lbl">不写 XML 命名空间时,findall("sitemap/loc") 找到的 URL 数(写对是 3 个)</div></div><div><div class="num">38.5 对 4.0 MiB</div><div class="lbl">5 万条 URL 的 sitemap,fromstring 与 iterparse 的内存峰值</div></div><div><div class="num">x=1y=2</div><div class="lbl">lxml recover=True 把正确转义的 x=1&amp;y=2 读成的样子</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="crawler-conditional-get.html">增量抓取:ETag、Last-Modified 与 304</a></div>
+<section>
+  <h2>命名空间</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  根元素标签:{http://www.sitemaps.org/schemas/sitemap/0.9}sitemapindex
+  不写命名空间 root.findall("sitemap/loc") → 0 个;写上命名空间 root.findall("{ns}sitemap/{ns}loc") → 3 个
+  用 lxml 的 xpath("//*[local-name()='loc']/text()")(不依赖命名空间)→ 3 个</pre></div>
+  <p>sitemap 的所有元素都在 <code>http://www.sitemaps.org/schemas/sitemap/0.9</code> 命名空间里。<code>findall("sitemap/loc")</code> 找不到任何东西,必须写 <code>{ns}sitemap/{ns}loc</code>,或者用 xpath 的 <code>local-name()</code> 绕过。</p>
+</section>
+<section>
+  <h2>两种 gzip</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  /sitemap2.xml.gz:Content-Type=application/gzip,Content-Encoding=None;requests 给出的 r.content 开头字节 1f8b(仍是 gzip,需要自己解压)
+  /sitemap3.xml:Content-Type=application/xml,Content-Encoding=gzip;requests 给出的 r.content 开头字节 3c3f(已经是明文 XML,requests 解开了 HTTP 层的 gzip)
+  对 .xml.gz 自己 gzip.decompress 之后能解析:5 个 URL
+  不解压直接 ET.fromstring(r.content):ParseError: not well-formed (invalid token): line 1, column 0</pre></div>
+  <p><code>.xml.gz</code> 是文件本身压缩,requests 不会替你解压;<code>Content-Encoding: gzip</code> 是 HTTP 层压缩,requests 自动解开。判断依据是内容的开头字节(<code>1f 8b</code> 表示仍是 gzip),不是文件扩展名。</p>
+</section>
+<section>
+  <h2>lastmod</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  lastmod '2026-10-11'                      → 2026-10-11 00:00:00+00:00
+  lastmod '2026-10-11T08:30:00+08:00'       → 2026-10-11 08:30:00+08:00
+  lastmod '2026-10-11T00:30:00Z'            → 2026-10-11 00:30:00+00:00
+  lastmod '2026-10-11 08:30'                → 2026-10-11 08:30:00+00:00
+  lastmod '11/10/2026'                      → None
+  lastmod 'Sun, 11 Oct 2026 00:30:00 GMT'   → None
+  lastmod ''                                → None
+  3 个子 sitemap 共 15 条 URL;上次抓取时间 2026-10-05:lastmod 更新的 5 条,没有 lastmod 的 5 条(这种条目不能用来判断是否更新,只能当作"需要抓")</pre></div>
+  <p><code>datetime.fromisoformat</code> 能解析日期、带时区的时间和 <code>Z</code> 结尾的时间;<code>11/10/2026</code> 或 RFC 2822 日期解析不了。没有 <code>lastmod</code> 的条目(例子里 5/15)不能用来判断是否更新,增量抓取要把它们当作“需要抓”。</p>
+</section>
+<section>
+  <h2>大 sitemap</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  文件大小 6.8 MiB(未压缩),gzip 后 0.26 MiB
+  ElementTree.fromstring:50000 条,312 ms,内存峰值 38.5 MiB
+  ElementTree.iterparse(边读边 clear):50000 条,389 ms,内存峰值 4.0 MiB</pre></div>
+  <p>5 万条 URL 的 6.8 MiB sitemap,<code>fromstring</code> 内存峰值 38.5 MiB,<code>iterparse</code> 边读边 <code>clear</code> 只要 4.0 MiB(多花 77 ms)。协议允许的上限我没有在这里核对(我印象里是 5 万条或 50 MB,以官方文档为准)。</p>
+</section>
+<section>
+  <h2>脏数据</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  未转义的 &amp; :标准库 ElementTree 报错 ParseError: not well-formed (invalid token): line 1, column 115
+  lxml 的 recover=True 能读出 4 条:['http://shop.test/a?x=1=2', 'http://other.test/zzz', '/relative/path', 'http://shop.test/a?x=1y=2']
+      http://shop.test/a?x=1=2                → 同主机
+      http://other.test/zzz                   → 跨主机(与 sitemap 所在主机不同)
+      /relative/path                          → 相对路径,没有主机
+      http://shop.test/a?x=1y=2               → 同主机</pre></div>
+  <p>XML 里 <code>&</code> 没转义是常见错误。标准库直接报错;lxml 的 <code>recover=True</code> 能读,但把 <code>x=1&y=2</code> 读成 <code>x=1=2</code>,甚至把旁边写对了的 <code>x=1&amp;y=2</code> 读成 <code>x=1y=2</code>。另外 sitemap 里可能有跨主机的 URL 和相对路径,要按所在站点校验后再抓。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">sitemap.xml 解析</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "b", "kind": "bars", "label": "数字对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "sitemap 索引的根元素是 {http://www.sitemaps.org/schemas/sitemap/0.9}sitemapindex——带命名空间。用 findall(\"sitemap/loc\") 不写命名空间找到 0 个;写上命名空间 {ns}sitemap/{ns}loc 才找到 3 个;用 lxml 的 xpath(\"//*[local-name()='loc']/text()\") 不依赖命名空间也找到 3 个。这是解析 sitemap 最常见的“明明有数据却解析出 0 条”。", "s": {"t": {"lines": ["  根元素标签:{http://www.sitemaps.org/schemas/sitemap/0.9}sitemapindex", "  不写命名空间 root.findall(\"sitemap/loc\") → 0 个;写上命名空间 root.findall(\"{ns}sitemap/{ns}loc\") → 3 个", "  用 lxml 的 xpath(\"//*[local-name()='loc']/text()\")(不依赖命名空间)→ 3 个"], "cur": [], "mark": [], "done": []}, "done": [1, 2], "mark": [1], "b": {"items": [["不写命名空间:找到", 0, "0"], ["写上命名空间:找到", 3, "3"], ["local-name():找到", 3, "3"]], "max": 3, "cur": [], "mark": [0], "done": [1, 2]}, "kv": {"items": [["不写命名空间", "0 个"], ["写命名空间", "3 个"], ["xpath local-name()", "3 个,与命名空间无关"]], "hl": ["不写命名空间"]}}}, {"note": "gzip 有两种形式。/sitemap2.xml.gz 是文件本身压缩(Content-Type: application/gzip,没有 Content-Encoding):requests 给出的 r.content 开头字节是 1f8b,仍是 gzip,要自己 gzip.decompress,解压后能解析 5 个 URL;不解压直接 ET.fromstring 报 ParseError(not well-formed)。/sitemap3.xml 是 HTTP 层 Content-Encoding: gzip:r.content 开头是 3c3f(\"<?\"),requests 已经替你解开了,明文 XML。两者都要处理。", "s": {"t": {"lines": ["  /sitemap2.xml.gz:Content-Type=application/gzip,Content-Encoding=None;requests 给出的 r.content 开头字节 1f8b(仍是 gzip,需要自己解压)", "  /sitemap3.xml:Content-Type=application/xml,Content-Encoding=gzip;requests 给出的 r.content 开头字节 3c3f(已经是明文 XML,requests 解开了 HTTP 层的 gzip)", "  对 .xml.gz 自己 gzip.decompress 之后能解析:5 个 URL", "  不解压直接 ET.fromstring(r.content):ParseError: not well-formed (invalid token): line 1, column 0"], "cur": [], "mark": [], "done": []}, "done": [1, 2], "mark": [0, 3], "kv": {"items": [[".xml.gz 文件", "r.content 仍是 gzip(1f8b)"], ["Content-Encoding: gzip", "requests 已解开(3c3f)"], ["不解压就解析", "ParseError"]], "hl": [".xml.gz 文件"]}}}, {"note": "lastmod 有多种写法:2026-10-11 → 2026-10-11 00:00:00+00:00;带时区的 2026-10-11T08:30:00+08:00 和 …Z 都能被 datetime.fromisoformat 解析;带空格的 2026-10-11 08:30 也能解析(没有时区,我补了 UTC);11/10/2026、RFC 2822 的 Sun, 11 Oct 2026 00:30:00 GMT、空串都解析不了(None)。3 个子 sitemap 共 15 条 URL,上次抓取时间 2026-10-05:lastmod 更新的 5 条,没有 lastmod 的 5 条(无法判断是否更新,只能当作需要抓)。", "s": {"t": {"lines": ["  lastmod '2026-10-11'                      → 2026-10-11 00:00:00+00:00", "  lastmod '2026-10-11T08:30:00+08:00'       → 2026-10-11 08:30:00+08:00", "  lastmod '2026-10-11T00:30:00Z'            → 2026-10-11 00:30:00+00:00", "  lastmod '2026-10-11 08:30'                → 2026-10-11 08:30:00+00:00", "  lastmod '11/10/2026'                      → None", "  lastmod 'Sun, 11 Oct 2026 00:30:00 GMT'   → None", "  lastmod ''                                → None", "  3 个子 sitemap 共 15 条 URL;上次抓取时间 2026-10-05:lastmod 更新的 5 条,没有 lastmod 的 5 条(这种条目不能用来判断是否更新,只能当作\"需要抓\")"], "cur": [], "mark": [], "done": []}, "done": [1, 2, 7], "mark": [4, 5, 6], "kv": {"items": [["能解析", "日期、带时区的日期时间、…Z"], ["解析不了", "11/10/2026、RFC 2822 日期、空"], ["没有 lastmod", "5 条,只能当作需要抓"]], "hl": ["没有 lastmod"]}}}, {"note": "5 万条 URL 的 sitemap(6.8 MiB 未压缩,gzip 后 0.26 MiB):ElementTree.fromstring 一次性解析 312 ms,内存峰值 38.5 MiB;iterparse 边读边 clear 389 ms,内存峰值 4.0 MiB。流式解析慢一点,但内存只要九分之一左右。", "s": {"t": {"lines": ["  文件大小 6.8 MiB(未压缩),gzip 后 0.26 MiB", "  ElementTree.fromstring:50000 条,312 ms,内存峰值 38.5 MiB", "  ElementTree.iterparse(边读边 clear):50000 条,389 ms,内存峰值 4.0 MiB"], "cur": [], "mark": [], "done": []}, "done": [2], "mark": [1], "b": {"items": [["fromstring 内存峰值 MiB", 38.5, "38.5"], ["iterparse 内存峰值 MiB", 4.0, "4.0"], ["fromstring 耗时 ms", 312, "312"], ["iterparse 耗时 ms", 389, "389"]], "max": 400, "cur": [], "mark": [0], "done": [1]}, "kv": {"items": [["fromstring", "312 ms,内存 38.5 MiB"], ["iterparse + clear", "389 ms,内存 4.0 MiB"], ["文件", "6.8 MiB(gzip 后 0.26 MiB)"]], "hl": ["iterparse + clear"]}}}, {"note": "脏数据:URL 里 & 没有转义成 &amp;,标准库 ElementTree 直接报 ParseError。lxml 的 recover=True 能读出 4 条,但内容被悄悄破坏了:未转义的 http://shop.test/a?x=1&y=2 读成了 http://shop.test/a?x=1=2(丢了 \"&y\"),连旁边写得正确的 …?x=1&amp;y=2 也变成了 …?x=1y=2(丢了 &)。读出来还有跨主机的 http://other.test/zzz 和相对路径 /relative/path,各自需要单独处理。恢复模式拿到的 URL 要验证,不能直接抓。", "s": {"t": {"lines": ["  未转义的 & :标准库 ElementTree 报错 ParseError: not well-formed (invalid token): line 1, column 115", "  lxml 的 recover=True 能读出 4 条:['http://shop.test/a?x=1=2', 'http://other.test/zzz', '/relative/path', 'http://shop.test/a?x=1y=2']", "      http://shop.test/a?x=1=2                → 同主机", "      http://other.test/zzz                   → 跨主机(与 sitemap 所在主机不同)", "      /relative/path                          → 相对路径,没有主机", "      http://shop.test/a?x=1y=2               → 同主机"], "cur": [], "mark": [], "done": []}, "done": [1], "mark": [0, 3, 4], "kv": {"items": [["标准库 ElementTree", "遇到未转义的 & 报错"], ["lxml recover=True", "读出 4 条,但 x=1&y=2 被破坏"], ["其它脏数据", "跨主机 URL、相对路径"]], "hl": ["lxml recover=True"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / Python 3.14.8 / requests 2.34.2 / aiohttp 3.14.3 / lxml 6.1.1(系统 Python);所有请求只发给本机自己起的测试服务器(127.0.0.1,端口 9960 以上,不访问任何真实网站);服务器可以按实验需要制造延迟、断连、压缩、重定向等行为,并记录收到的原始请求;计时用 time.perf_counter,数字每次运行会有小幅抖动。服务器提供 sitemap 索引、普通 sitemap、.xml.gz、以及带 Content-Encoding: gzip 的 sitemap;解析用标准库 xml.etree.ElementTree 与 lxml 6.1.1;大 sitemap 是合成的 50000 条 URL(6.8 MiB);内存用 tracemalloc 峰值;脏数据是手写的一小段 XML</li><li>没有验证:sitemap 协议规定的数量与大小上限(只凭印象);sitemap 里的 image、video、news 扩展命名空间;robots.txt 里的 Sitemap 行与 sitemap 的主机一致性检查;很大的 sitemap 索引(几千个子文件)的并发下载;lxml 恢复模式在其它 libxml2 版本里的表现;defusedxml 等防御 XML 实体炸弹的库(没有安装,也没有测 billion laughs 攻击)</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="crawler-canonical-link.html">
+    <div>
+      <div class="t1">下一篇 · 爬虫工程 45</div>
+      <div class="t2">canonical 与重复 URL:同一内容多个地址怎么合并</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>爬虫工程 · sitemap.xml:索引文件、gzip 与 lastmod · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

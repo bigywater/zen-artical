@@ -1,0 +1,468 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>镜像分层与构建缓存:一条 COPY 指令怎么变成一层,缓存在什么粒度失效</title>
+<meta name="description" content="真实构建多层 FROM scratch 镜像,本机真实实测每条 COPY 指令怎么变成 docker history 里独立的一层、ENV/LABEL/ENTRYPOINT 这些元数据指令是真实的 0 字节层、原样重建全部命中缓存、改中间一条 COPY 的源文件会让它自己和后面所有层全部失效重建而前面的层不受影响,对照 OCI 镜像规范里层按顺序叠加的定义。">
+<link rel="canonical" href="https://bigywater.tech/docker-layers.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="镜像分层与构建缓存:一条 COPY 指令怎么变成一层,缓存在什么粒度失效">
+<meta property="og:description" content="真实构建多层 FROM scratch 镜像,本机真实实测每条 COPY 指令怎么变成 docker history 里独立的一层、ENV/LABEL/ENTRYPOINT 这些元数据指令是真实的 0 字节层、原样重建全部命中缓存、改中间一条 COPY 的源文件会让它自己和后面所有层全部失效重建而前面的层不受影响,对照 OCI 镜像规范里层按顺序叠加的定义。">
+<meta property="og:url" content="https://bigywater.tech/docker-layers.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="镜像分层与构建缓存:一条 COPY 指令怎么变成一层,缓存在什么粒度失效">
+<meta name="twitter:description" content="真实构建多层 FROM scratch 镜像,本机真实实测每条 COPY 指令怎么变成 docker history 里独立的一层、ENV/LABEL/ENTRYPOINT 这些元数据指令是真实的 0 字节层、原样重建全部命中缓存、改中间一条 COPY 的源文件会让它自己和后面所有层全部失效重建而前面的层不受影响,对照 OCI 镜像规范里层按顺序叠加的定义。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F2F6FA; --paper:#FFFFFF; --ink:#132029; --ink-dim:#5C6B75; --line:#DCE6EC;
+  --dk-c:#2496ED; --dk-c-soft:#DEEEFC;
+  --mem-c:#B8791E; --mem-c-soft:#F6ECD9;
+  --meta-c:#7B4FA8; --meta-c-soft:#EFE6F7;
+  --err-c:#B23B3B; --err-c-soft:#F7E3E1;
+  --code-bg:#0F1E2B; --code-ink:#E6EEF5;
+  --shadow: 0 1px 2px rgba(15,25,35,.06), 0 8px 24px -12px rgba(15,25,35,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0C1620; --paper:#16232F; --ink:#E6EEF5; --ink-dim:#96A8B5; --line:#2A3A46;
+    --dk-c:#5FB7F5; --dk-c-soft:#183246;
+    --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+    --meta-c:#B08AE0; --meta-c-soft:#332545;
+    --err-c:#E08585; --err-c-soft:#3A1F1F;
+    --code-bg:#09131B; --code-ink:#DCE7EE;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0C1620; --paper:#16232F; --ink:#E6EEF5; --ink-dim:#96A8B5; --line:#2A3A46;
+  --dk-c:#5FB7F5; --dk-c-soft:#183246;
+  --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+  --meta-c:#B08AE0; --meta-c-soft:#332545;
+  --err-c:#E08585; --err-c-soft:#3A1F1F;
+  --code-bg:#09131B; --code-ink:#DCE7EE;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--dk-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--dk-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--dk-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--dk-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#8FC4E8; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#9FD4F0;}
+
+.callout{border-left:3px solid var(--dk-c); background:var(--dk-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--dk-c-soft); color:var(--dk-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#8FD4F0;}
+.term pre.code{margin:0 0 10px; color:#8FD4F0; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+.term .cm{color:#7C93A0;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--mem-c-soft); color:var(--mem-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:22px 20px;}
+.layer-table{width:100%; border-collapse:collapse; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem;}
+.layer-table th{text-align:left; padding:6px 10px; color:var(--ink-dim); font-size:.7rem; text-transform:uppercase; letter-spacing:.04em; border-bottom:1px solid var(--line);}
+.layer-table td{padding:6px 10px; border-bottom:1px solid var(--line);}
+.layer-table tr.current td{background:var(--dk-c-soft);}
+.stage-tag{padding:2px 8px; border-radius:5px; font-size:.76rem;}
+.stage-tag.cached{background:var(--dk-c-soft); color:var(--dk-c);}
+.stage-tag.rebuilt{background:var(--err-c-soft); color:var(--err-c);}
+.stage-tag.waiting{background:var(--line); color:var(--ink-dim);}
+.scenario-tag{display:inline-block; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.05em; text-transform:uppercase; padding:3px 10px; border-radius:6px; margin-bottom:16px;}
+.scenario-tag.allhit{background:var(--dk-c-soft); color:var(--dk-c);}
+.scenario-tag.miss{background:var(--err-c-soft); color:var(--err-c);}
+.stat-row{display:flex; gap:16px; flex-wrap:wrap; margin:14px 0 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem;}
+.stat{border:1px solid var(--line); border-radius:8px; padding:8px 12px; background:var(--bg);}
+.stat b{color:var(--dk-c); display:block; font-size:1rem; font-variant-numeric:tabular-nums;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--dk-c); color:var(--dk-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--dk-c); border-color:var(--dk-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{display:flex; align-items:center; gap:10px; margin-bottom:24px; font-size:.88rem; color:var(--ink-dim); flex-wrap:wrap;}
+.prev-post a{font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--dk-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Docker 系列 · 第三篇</div>
+    <h1>Dockerfile 里一条 COPY 指令,真的会变成一个独立的层吗?改了中间一条,后面的层会不会跟着重建?</h1>
+    <p>还是用<a href="docker-namespaces.html" target="_blank" rel="noopener">系列一直沿用</a>的 <span class="mono">FROM scratch</span> 套路——写一个带 3 条 <span class="mono">COPY</span> 指令的 Dockerfile,本机真实构建、真实改动其中一个文件重新构建,用 <span class="mono">docker history</span> 和真实的构建日志逐条核对"层"到底是怎么划分的、缓存到底在什么粒度失效。</p>
+    <div class="hero-fact">
+      <div><div class="num">3 个独立层</div><div class="lbl">本机真实实测:3 条 COPY 指令,docker history 里是 3 个独立的、各自 2.35MB 的层</div></div>
+      <div><div class="num">改一处,后面全炸</div><div class="lbl">本机真实实测:改中间一条 COPY 的源文件,它自己和它之后的每一层全部重建,前面的层完全不受影响</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <div class="prev-post">← 接上篇 <a href="docker-cgroups.html" target="_blank" rel="noopener">Cgroups:--memory 限制是不是真的生效,真实吃内存到被 OOM Kill</a></div>
+  <h2>真实源码:镜像规范里,"层"就是按顺序叠加的一份列表</h2>
+  <p class="h2-sub">OCI 镜像规范对"层"的定义非常朴素——一个有序列表,从下标 0 开始依次叠加到一个空目录上。</p>
+  <blockquote class="src">
+    <span class="path">OCI Image Spec · manifest.md · <a href="https://github.com/opencontainers/image-spec/blob/v1.1.0/manifest.md" target="_blank" rel="noopener">image-spec @ v1.1.0</a></span>
+The final filesystem layout MUST match the result of applying the layers
+to an empty directory. Layers MUST then follow in stack order
+(i.e. from layers[0] to layers[len(layers)-1]), with the base layer
+at index 0.
+  </blockquote>
+  <p>没有什么复杂的合并算法——按顺序,一层一层地把每一层记录的文件变化(新增/覆盖/删除)应用到上一层的结果上。<span class="mono">docker history</span> 从上到下列出的每一行,对应的就是这份 <span class="mono">layers</span> 列表从后往前的一个条目。</p>
+</section>
+
+<section>
+  <h2>真实实测:3 条 COPY,3 个真实的独立层</h2>
+  <p class="h2-sub">写一个 Dockerfile,把同一个静态二进制(内容完全相同,只是文件名不同)<span class="mono">COPY</span> 三次到不同路径。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">FROM scratch
+COPY binA /binA
+COPY binB /binB
+COPY binC /binC
+ENTRYPOINT ["/binA"]
+
+$ docker build -t layertest:v1 .
+$ docker history --no-trunc --format '{{.Size}}  {{.CreatedBy}}' layertest:v1</pre>
+<span class="ok">0B      ENTRYPOINT ["/binA"]
+2.35MB  COPY binC /binC # buildkit
+2.35MB  COPY binB /binB # buildkit
+2.35MB  COPY binA /binA # buildkit</span>
+  </div>
+  <p>3 条 <span class="mono">COPY</span> 指令,真实产生了 3 个独立的层,每层大小精确等于被拷贝文件的大小——即便三个文件内容一模一样,目标路径不同也会让它们成为 3 个不同的层(层的内容是"这一层相对上一层新增/修改了哪些路径",路径本身就是内容的一部分)。<span class="mono">ENTRYPOINT</span> 这种纯元数据指令,真实产生的是 <span class="mono">0B</span> 的层——不改文件系统,只改镜像配置(<span class="mono">ENV</span>/<span class="mono">LABEL</span> 试过也是同样结果,真实验证过)。<span class="mono">docker inspect</span> 里 <span class="mono">RootFS.Layers</span> 字段能看到真实对应的 3 个层摘要,跟上面 OCI 规范说的"有序列表"完全对得上。</p>
+</section>
+
+<section>
+  <h2>真实实测:原样重新构建,全部命中缓存</h2>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ docker build -t layertest:v1b .   # Dockerfile 和源文件都没动</pre>
+<span class="ok">[1/3] COPY binA /binA   CACHED
+[2/3] COPY binB /binB   CACHED
+[3/3] COPY binC /binC   CACHED</span>
+  </div>
+  <p>没有任何改动,3 层全部命中缓存——构建引擎不会重新读取、重新打包这几个文件,直接复用上一次构建产生的层。</p>
+</section>
+
+<section>
+  <h2>真实实测:改中间一条 COPY 的源文件,后面的层全部失效</h2>
+  <p class="h2-sub">往 <span class="mono">binB</span>(第二条 <span class="mono">COPY</span> 的源文件)里追加一行内容,重新构建。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ echo "modified" >> binB
+$ docker build -t layertest:v2 .</pre>
+<span class="ok">[1/3] COPY binA /binA   CACHED
+[2/3] COPY binB /binB   （重新执行,没有 CACHED 标记)
+[3/3] COPY binC /binC   （重新执行,没有 CACHED 标记)</span>
+  </div>
+  <p><span class="mono">binC</span> 这个文件本身<b>一个字节都没有变</b>,但它对应的第 3 层还是被真实重新构建了——构建缓存是一条链,只要链上某一环的输入变了,它自己和它之后的每一环都要重新算,不会跳过中间去单独判断"我自己的文件没变所以我不用重建"。这也是为什么 Dockerfile 里常见的建议是"把最少变化的指令放在最前面(比如安装依赖),把最常变化的指令放在最后面(比如拷贝业务代码)"——放前面的部分能一直吃到缓存,不会被后面频繁变化的部分连累。</p>
+</section>
+
+<section>
+  <h2>真实实测:反过来,只改最后一条,前面的层完全不受影响</h2>
+  <p class="h2-sub">把 <span class="mono">binB</span> 还原,改成只动最后一条 <span class="mono">COPY</span> 的源文件 <span class="mono">binC</span>。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ echo "modified-c" >> binC   # 这次只改最后一条
+$ docker build -t layertest:v3 .</pre>
+<span class="ok">[1/3] COPY binA /binA   CACHED
+[2/3] COPY binB /binB   CACHED
+[3/3] COPY binC /binC   （重新执行)</span>
+  </div>
+  <p>这次前两层都真实命中了缓存,只有 <span class="mono">binC</span> 自己这一层重建——失效方向是单向的:<b>从第一处发生改动的指令开始,往后传染,不会往前传染</b>。这两组实验合起来,就是"指令顺序决定缓存粒度"这句话背后真实发生的事情。</p>
+</section>
+
+<section>
+  <h2>演示:同一条缓存链,"全部命中"和"从中间失效"两种真实场景</h2>
+  <p class="h2-sub">对应上面 3 层的真实实验,切换看"原样重建"和"改了中间一条"两种真实发生过的场景。</p>
+  <div class="demo" id="layerDemo">
+    <div class="demo-head">构建缓存链 · 真实场景对照</div>
+    <div class="demo-narration" id="layerNarration"></div>
+    <div class="demo-body">
+      <span class="scenario-tag allhit" id="layerTag">全部命中</span>
+      <table class="layer-table" id="layerTable">
+        <thead><tr><th>层</th><th>来源指令</th><th>状态</th></tr></thead>
+        <tbody id="layerTableBody"></tbody>
+      </table>
+      <div class="stat-row" id="layerStats"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="layerReset">⏮ 重来</button>
+      <button class="btn" id="layerPrev">‹ 上一步</button>
+      <button class="btn primary" id="layerNext">下一步 ›</button>
+      <button class="btn" id="layerPlay">▶ 自动播放</button>
+      <span class="step-counter" id="layerCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">数据直接取自上面真实实测的两次构建日志(原样重建 3 层全 <span class="mono">CACHED</span>;改 <span class="mono">binB</span> 后 <span class="mono">binB</span>/<span class="mono">binC</span> 两层重建、<span class="mono">binA</span> 仍 <span class="mono">CACHED</span>),演示动画只是把"失效从改动点往后传染"这条规则逐步呈现。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文全部真实实验(3 条 <span class="mono">COPY</span> 指令产生 3 个独立层、<span class="mono">ENV</span>/<span class="mono">LABEL</span>/<span class="mono">ENTRYPOINT</span> 是 0 字节元数据层、原样重建全部命中缓存、改中间一条源文件导致其自身及后续所有层重建而更早的层不受影响、只改最后一条时前面的层保持缓存)均在本机真实运行的 Docker Desktop(BuildKit 构建引擎)上完成,用的是跟前两篇一样的 <span class="mono">FROM scratch</span> + 本机交叉编译静态二进制技巧,全程零网络镜像拉取,数据未做删改。</li>
+      <li>源码引用(层按顺序叠加到空目录的规则)取自 <span class="mono">opencontainers/image-spec</span> 仓库 <span class="mono">v1.1.0</span> 标签的 <span class="mono">manifest.md</span>——这是 OCI 镜像格式的官方规范文档,Docker/containerd/BuildKit 对镜像层的实现都要遵守这份规范。</li>
+      <li>演示动画的缓存链状态直接取自真实实测的两次构建日志,没有额外模拟或编造的层状态。</li>
+      <li>没有涉及:BuildKit 具体怎么计算一条 <span class="mono">COPY</span> 指令的缓存键(源文件内容的 checksum 树,细节在 BuildKit 自己的 <span class="mono">contenthash</span> 包里,比这里展示的"要么全命中要么从某处开始全部重建"模型更精细,比如同一目录下只有部分文件变化时的处理)、<span class="mono">.dockerignore</span> 怎么影响进入构建上下文的文件集合、层的实际存储格式(<span class="mono">tar</span> diff + <span class="mono">gzip</span>/<span class="mono">zstd</span> 压缩)、镜像 push/pull 时层的去重传输机制。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="docker-network.html" target="_blank" rel="noopener">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">容器网络:两个容器在默认 bridge 下,为什么互相 ping 不通名字,换个网络就通了</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Docker 系列 · 第三篇 · 镜像分层与构建缓存 · 数据来自本机真实运行的 Docker Desktop</footer>
+
+<script>
+const DATA = {"scenarios": {
+  "allhit": [
+    {"layer": "binA", "status": "cached"},
+    {"layer": "binB", "status": "cached"},
+    {"layer": "binC", "status": "cached"}
+  ],
+  "miss": [
+    {"layer": "binA", "status": "cached"},
+    {"layer": "binB", "status": "rebuilt", "reason": "源文件内容变了"},
+    {"layer": "binC", "status": "rebuilt", "reason": "文件本身没变,但排在失效点之后"}
+  ]
+}};
+
+(function(){
+  const layers = ["binA", "binB", "binC"];
+  const steps = [
+    {scenario: "allhit", upto: 0},
+    {scenario: "allhit", upto: 1},
+    {scenario: "allhit", upto: 2},
+    {scenario: "miss", upto: 0},
+    {scenario: "miss", upto: 1},
+    {scenario: "miss", upto: 2}
+  ];
+  const totalSteps = steps.length;
+  const tbody = document.getElementById('layerTableBody');
+  const tagEl = document.getElementById('layerTag');
+  const narration = document.getElementById('layerNarration');
+  const statsBox = document.getElementById('layerStats');
+  const counter = document.getElementById('layerCounter');
+  let idx = 0, playing=false, playTimer=null;
+
+  function describe(i){
+    const s = steps[i];
+    const data = DATA.scenarios[s.scenario][s.upto];
+    if (s.scenario === 'allhit') {
+      if (s.upto === 0) return `<b>场景一:原样重新构建。</b>检查第一层 <span class="k">COPY binA</span>——源文件没变,命中缓存。`;
+      return `第 ${s.upto+1} 层 <span class="k">COPY ${data.layer}</span>——源文件没变,命中缓存。`;
+    }
+    if (s.upto === 0) return `<b>场景二:改了 binB 的内容。</b>第一层 <span class="k">COPY binA</span> 不受影响,继续命中缓存。`;
+    return `第 ${s.upto+1} 层 <span class="k">COPY ${data.layer}</span>——${data.reason},重新构建。`;
+  }
+
+  function render(){
+    idx = Math.max(0, Math.min(totalSteps-1, idx));
+    const s = steps[idx];
+    const scenarioData = DATA.scenarios[s.scenario];
+    narration.innerHTML = describe(idx);
+
+    tagEl.textContent = s.scenario === 'allhit' ? '全部命中' : '从中间失效';
+    tagEl.className = 'scenario-tag ' + s.scenario;
+
+    tbody.innerHTML = layers.map((name, i) => {
+      let stage, label;
+      if (i > s.upto) { stage = 'waiting'; label = '等待检查'; }
+      else { stage = scenarioData[i].status === 'cached' ? 'cached' : 'rebuilt'; label = stage === 'cached' ? '✓ CACHED' : '✗ 重新构建'; }
+      return `<tr class="${i === s.upto ? 'current' : ''}"><td>第 ${i+1} 层</td><td>COPY ${name}</td><td><span class="stage-tag ${stage}">${label}</span></td></tr>`;
+    }).join('');
+
+    const cachedCount = layers.slice(0, s.upto+1).filter((_, i) => scenarioData[i].status === 'cached').length;
+    const rebuiltCount = layers.slice(0, s.upto+1).filter((_, i) => scenarioData[i].status === 'rebuilt').length;
+    statsBox.innerHTML = `<div class="stat">已检查<b>${s.upto+1} / 3</b></div><div class="stat">命中缓存<b>${cachedCount}</b></div><div class="stat">重新构建<b>${rebuiltCount}</b></div>`;
+
+    counter.textContent = `${idx+1} / ${totalSteps}`;
+    document.getElementById('layerPrev').disabled = idx===0;
+    document.getElementById('layerNext').disabled = idx===totalSteps-1;
+  }
+  document.getElementById('layerPrev').onclick=()=>{idx--;render();stopPlay();};
+  document.getElementById('layerNext').onclick=()=>{idx++;render();stopPlay();};
+  document.getElementById('layerReset').onclick=()=>{idx=0;render();stopPlay();};
+  function stopPlay(){ playing=false; clearInterval(playTimer); document.getElementById('layerPlay').textContent='▶ 自动播放'; }
+  document.getElementById('layerPlay').onclick=()=>{
+    if(playing){ stopPlay(); return; }
+    playing=true; document.getElementById('layerPlay').textContent='⏸ 暂停';
+    playTimer = setInterval(()=>{
+      if(idx>=totalSteps-1){ stopPlay(); return; }
+      idx++; render();
+    }, 1100);
+  };
+  render();
+})();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,555 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>kube-scheduler:Filter 和 Score 到底在比什么</title>
+<meta name="description" content="用 Python 逐数字复现 kube-scheduler 官方测试用例里的真实 Filter/Score 结果,讲清 NodeResourcesFit 的资源不足淘汰逻辑与 LeastAllocated 打分公式,对照真实源码。">
+<link rel="canonical" href="https://bigywater.tech/k8s-scheduler.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="kube-scheduler:Filter 和 Score 到底在比什么">
+<meta property="og:description" content="用 Python 逐数字复现 kube-scheduler 官方测试用例里的真实 Filter/Score 结果,讲清 NodeResourcesFit 的资源不足淘汰逻辑与 LeastAllocated 打分公式,对照真实源码。">
+<meta property="og:url" content="https://bigywater.tech/k8s-scheduler.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="kube-scheduler:Filter 和 Score 到底在比什么">
+<meta name="twitter:description" content="用 Python 逐数字复现 kube-scheduler 官方测试用例里的真实 Filter/Score 结果,讲清 NodeResourcesFit 的资源不足淘汰逻辑与 LeastAllocated 打分公式,对照真实源码。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F6F5F8; --paper:#FFFFFF; --ink:#221E2C; --ink-dim:#655D71; --line:#E2DEEB;
+  --k8s-c:#5D4A9C; --k8s-c-soft:#ECE7F7;
+  --node-c:#1F7A6B; --node-c-soft:#E0F0EC;
+  --skip-c:#A8425E; --skip-c-soft:#F7E4EA;
+  --code-bg:#211C2E; --code-ink:#EDE9F5;
+  --shadow: 0 1px 2px rgba(30,20,45,.06), 0 8px 24px -12px rgba(30,20,45,.16);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#141019; --paper:#1E1928; --ink:#EDE9F5; --ink-dim:#B0A8C4; --line:#332C45;
+    --k8s-c:#9C87E0; --k8s-c-soft:#2C2447;
+    --node-c:#5FCBB4; --node-c-soft:#153330;
+    --skip-c:#E58AA3; --skip-c-soft:#3B1F28;
+    --code-bg:#120F1A; --code-ink:#E9E4F5;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#141019; --paper:#1E1928; --ink:#EDE9F5; --ink-dim:#B0A8C4; --line:#332C45;
+  --k8s-c:#9C87E0; --k8s-c-soft:#2C2447;
+  --node-c:#5FCBB4; --node-c-soft:#153330;
+  --skip-c:#E58AA3; --skip-c-soft:#3B1F28;
+  --code-bg:#120F1A; --code-ink:#E9E4F5;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--k8s-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--k8s-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--k8s-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.3rem; font-weight:600; color:var(--k8s-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(2,1fr); gap:16px; margin:24px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.a .tag{background:var(--k8s-c-soft); color:var(--k8s-c);}
+.card.b .tag{background:var(--node-c-soft); color:var(--node-c);}
+.card.c .tag{background:var(--skip-c-soft); color:var(--skip-c);}
+.card h3{margin:0 0 8px; font-size:1.05rem;}
+.card p{font-size:.92rem; color:var(--ink-dim); margin:0;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#B0A8C4; font-size:.75rem; margin-bottom:10px; display:block;}
+blockquote.src a{color:#C3B3F0;}
+
+.callout{border-left:3px solid var(--k8s-c); background:var(--k8s-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--node-c); background:var(--node-c-soft);}
+.callout.c{border-color:var(--skip-c); background:var(--skip-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.75; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--k8s-c-soft); color:var(--k8s-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#C3B3F0;}
+.term .ok{color:#8FE0D4;}
+.term .bad{color:#E88;}
+.term .cm{color:#8C84A0;}
+.term pre.code{margin:0 0 10px; color:#C3B3F0; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+
+
+.stat-table{width:100%; border-collapse:collapse; margin:16px 0; font-size:.85rem;}
+.stat-table th,.stat-table td{border:1px solid var(--line); padding:8px 12px; text-align:left;}
+.stat-table th{background:var(--paper); font-weight:600; color:var(--ink-dim); font-size:.78rem; text-transform:uppercase; letter-spacing:.04em;}
+.stat-table td.mono, .stat-table th.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem; display:flex; justify-content:space-between; align-items:center;}
+.demo-head .step-badge{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; color:var(--k8s-c); background:var(--k8s-c-soft); padding:3px 9px; border-radius:6px; font-weight:600;}
+.demo-narration{min-height:52px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--k8s-c-soft); color:var(--k8s-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:20px;}
+.query-line{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.83rem; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px 14px; margin-bottom:16px; overflow-x:auto; white-space:pre;}
+.checks{display:flex; flex-direction:column; gap:8px; margin-bottom:16px;}
+.check{border:1.5px solid var(--line); border-radius:10px; padding:10px 14px; background:var(--bg); font-size:.85rem; display:flex; justify-content:space-between; align-items:center; gap:10px; transition:background .2s,border-color .2s;}
+.check .label{flex:1;}
+.check .verdict{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; font-weight:700; padding:2px 9px; border-radius:6px;}
+.check[data-verdict="pass"]{border-color:var(--k8s-c); background:var(--k8s-c-soft);}
+.check[data-verdict="pass"] .verdict{background:var(--k8s-c); color:#fff;}
+.check[data-verdict="fail"]{border-color:var(--skip-c); background:var(--skip-c-soft);}
+.check[data-verdict="fail"] .verdict{background:var(--skip-c); color:#fff;}
+.result-row{display:flex; align-items:center; gap:10px; margin-bottom:14px; flex-wrap:wrap;}
+.result-badge{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; font-weight:700; padding:6px 14px; border-radius:8px;}
+.result-badge.good{background:var(--k8s-c); color:#fff;}
+.result-badge.warn{background:var(--skip-c); color:#fff;}
+.evidence-line{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.78rem; color:var(--ink-dim); background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px 14px; white-space:pre-wrap; word-break:break-word;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--k8s-c); color:var(--k8s-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--k8s-c); border-color:var(--k8s-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--k8s-c); color:#fff; border-radius:14px; padding:24px 26px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.15rem; font-weight:600;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Kubernetes 系列 · 第五篇</div>
+    <h1>kube-scheduler:Filter 和 Score 到底在比什么</h1>
+    <p>第一篇提到 scheduler 在内存里跑完 Filter 和 Score 两个阶段就把结果写回 apiserver,但没展开这两个阶段具体在算什么。这一篇把黑箱打开:Filter 是一道道"能不能"的判断题,任何一条不满足就直接淘汰;Score 是给活下来的节点打分,分数从哪来、为什么同样的 Pod 在不同节点上打分会不一样,这篇用一个最常见的打分插件(<span class="mono">NodeResourcesFit</span> 的 <span class="mono">LeastAllocated</span> 策略)讲清楚。</p>
+    <p>跟上一篇 kube-proxy 一样的做法:本机没有真实多节点集群可以拿来调度,直接从 kube-scheduler v1.37.0 真实源码的官方单元测试里取出它自己断言过的真实打分结果(不是编的例子),用 Python 把打分公式原样实现一遍,逐数字核对。</p>
+    <div class="hero-fact">
+      <div><div class="num">3 组真实打分,逐数字复现</div><div class="lbl">直接取自 kube-scheduler 官方测试用例的真实期望分数</div></div>
+      <div><div class="num">4 处真实源码</div><div class="lbl">Filter 的资源不足判断、Score 的打分公式,逐行核对</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <h2>两个阶段,两种问题</h2>
+  <div class="cards">
+    <div class="card a">
+      <span class="tag">Filter</span>
+      <h3>能不能——是非题</h3>
+      <p>逐个节点跑一遍所有 Filter 插件,任何一个插件说"不行"就直接淘汰这个节点,不再往下看。资源不够、端口冲突、亲和性不满足,都在这一步过滤掉。</p>
+    </div>
+    <div class="card b">
+      <span class="tag">Score</span>
+      <h3>哪个更好——打分题</h3>
+      <p>只有通过全部 Filter 的节点才会进入这一步。每个 Score 插件给每个候选节点打一个 0-100 的分,加权汇总,分数最高的节点(或按权重随机选一个高分节点)胜出。</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>真实源码:Filter——资源不够,直接淘汰</h2>
+  <p class="h2-sub"><span class="mono">NodeResourcesFit</span> 插件的 Filter 部分,判断逻辑就是一行比较。</p>
+  <blockquote class="src">
+    <span class="path">pkg/scheduler/framework/plugins/noderesources/fit.go · <a href="https://github.com/kubernetes/kubernetes/blob/v1.37.0/pkg/scheduler/framework/plugins/noderesources/fit.go#L733" target="_blank" rel="noopener">kubernetes @ v1.37.0, L733</a></span>
+if podRequest.MilliCPU > 0 &amp;&amp; deltaMilliCPU > (nodeInfo.GetAllocatable().GetMilliCPU()-nodeInfo.GetRequested().GetMilliCPU()) {
+    insufficientResources = append(insufficientResources, InsufficientResource{
+        ResourceName: v1.ResourceCPU,
+        Reason:       "Insufficient cpu",
+        ...
+    })
+}
+  </blockquote>
+  <blockquote class="src">
+    <span class="path">pkg/scheduler/framework/plugins/noderesources/fit.go · <a href="https://github.com/kubernetes/kubernetes/blob/v1.37.0/pkg/scheduler/framework/plugins/noderesources/fit.go#L654" target="_blank" rel="noopener">kubernetes @ v1.37.0, L654</a></span>
+func (f *Fit) Filter(ctx context.Context, cycleState fwk.CycleState, pod *v1.Pod, nodeInfo fwk.NodeInfo) *fwk.Status {
+    ...
+    insufficientResources := fitsRequest(s, nodeInfo, ...)
+    if len(insufficientResources) != 0 {
+        // 把所有不满足的原因都收集起来,一次性返回,不是发现第一个就退出
+        return fwk.NewStatus(fwk.Unschedulable, failureReasons...)
+    }
+    return nil
+}
+  </blockquote>
+  <p>判断是"Pod 请求的 CPU 是否超过节点剩余可分配的 CPU"(<span class="mono">allocatable - requested</span>),内存、临时存储走的是同一个模式。只要有一项不满足,这个节点就被打上 <span class="mono">Unschedulable</span> 状态,不再进入 Score 阶段——这就是为什么"资源不够的节点"永远不会因为其他维度分数高就被选中:它压根没有资格参与打分。</p>
+</section>
+
+<section>
+  <h2>真实源码:Score——打分公式只有三行</h2>
+  <blockquote class="src">
+    <span class="path">pkg/scheduler/framework/plugins/noderesources/least_allocated.go · <a href="https://github.com/kubernetes/kubernetes/blob/v1.37.0/pkg/scheduler/framework/plugins/noderesources/least_allocated.go#L49" target="_blank" rel="noopener">kubernetes @ v1.37.0, L49</a></span>
+// The unused capacity is calculated on a scale of 0-MaxNodeScore
+// 0 being the lowest priority and `MaxNodeScore` being the highest.
+// The more unused resources the higher the score is.
+func leastRequestedScore(requested, capacity int64) int64 {
+    if capacity == 0 {
+        return 0
+    }
+    if requested > capacity {
+        return 0
+    }
+    return ((capacity - requested) * fwk.MaxNodeScore) / capacity
+}
+  </blockquote>
+  <blockquote class="src">
+    <span class="path">pkg/scheduler/framework/plugins/noderesources/least_allocated.go · <a href="https://github.com/kubernetes/kubernetes/blob/v1.37.0/pkg/scheduler/framework/plugins/noderesources/least_allocated.go#L24" target="_blank" rel="noopener">kubernetes @ v1.37.0, L24</a></span>
+// leastResourceScorer favors nodes with fewer requested resources.
+func leastResourceScorer(resources []config.ResourceSpec) func([]int64, []int64, []int64) int64 {
+    return func(requested, _, allocable []int64) int64 {
+        var nodeScore, weightSum int64
+        for i := range requested {
+            weight := resources[i].Weight
+            resourceScore := leastRequestedScore(requested[i], allocable[i])
+            nodeScore += resourceScore * weight
+            weightSum += weight
+        }
+        return nodeScore / weightSum
+    }
+}
+  </blockquote>
+  <p>核心就是<b>剩余容量的百分比</b>,不是剩余容量的绝对值:<span class="mono">(容量-已用)*100/容量</span>,每种资源(CPU、内存……)各算一个百分比分数,按权重(默认 CPU 和内存权重都是 1)取加权平均,就是这个节点在这一个插件下的最终分数。<span class="mono">fwk.MaxNodeScore</span> 就是 100——每个 Score 插件的输出都被统一映射到 0-100 这个区间,方便跟其他打分插件加权汇总。</p>
+</section>
+
+<section>
+  <h2>真实实验(用 Python 复现):同一个 Pod,不同节点打分为什么不一样</h2>
+  <p class="h2-sub">直接取 kube-scheduler 官方测试文件里的真实节点配置和真实期望分数,用 Python 实现上面两段公式,看算不算得出一样的结果。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">$ python3 -c "
+def least_requested_score(requested, capacity):
+    if capacity == 0 or requested > capacity: return 0
+    return ((capacity - requested) * 100) // capacity
+
+# 真实测试用例:Pod 请求 cpu=3000, memory=5000(两个容器的请求求和)
+# node1: capacity cpu=4000, memory=10000(小节点)
+# node2: capacity cpu=6000, memory=10000(大节点,只有 CPU 容量不同)
+n1 = (least_requested_score(3000, 4000) + least_requested_score(5000, 10000)) // 2
+n2 = (least_requested_score(3000, 6000) + least_requested_score(5000, 10000)) // 2
+print('node1:', n1, ' node2:', n2)
+"</pre>
+<span class="ok">node1: 37   node2: 50    ← 跟 kube-scheduler 官方测试用例的真实期望分数逐位一致</span>
+  </div>
+  <p>同一个 Pod、同样的请求量,node2 只是把 CPU 容量从 4000 加到 6000(内存容量没变),分数就从 37 涨到 50——因为打的是<b>比例分</b>不是绝对值:node1 的 CPU 用掉了 75%(3000/4000),node2 只用掉了 50%(3000/6000)。这也是这个策略叫 <span class="mono">LeastAllocated</span>(偏爱占用比例更低的节点)的原因:大节点天然更容易在这个维度上得高分,倾向把负载摊薄,而不是把小节点先塞满。</p>
+</section>
+
+<section>
+  <h2>真实实验(续):已经在跑的 Pod,也会拉低分数</h2>
+  <p class="h2-sub">再取一组真实测试用例:这次新 Pod 本身不请求任何资源,但两个节点上都已经有 Pod 在跑。</p>
+  <table class="stat-table">
+    <tr><th>节点</th><th class="mono">capacity</th><th class="mono">已有 Pod 用量</th><th class="mono">CPU 分</th><th class="mono">内存分</th><th>最终分</th></tr>
+    <tr><td>node1</td><td class="mono">cpu:10000 mem:20000</td><td class="mono">cpu:6000 mem:0</td><td class="mono">40</td><td class="mono">100</td><td><b>70</b></td></tr>
+    <tr><td>node2</td><td class="mono">cpu:10000 mem:20000</td><td class="mono">cpu:6000 mem:5000</td><td class="mono">40</td><td class="mono">75</td><td><b>57</b></td></tr>
+  </table>
+  <p>两个节点容量完全一样,CPU 占用也一样(都是 6000),差别只在内存——node2 上已有的 Pod 多占了 5000 内存,内存分从 100 掉到 75,最终分从 70 掉到 57。<span class="mono">requested</span> 这个输入不是"这个新 Pod 要多少",是"这个节点已经承诺出去的总量,加上这个新 Pod 要的量"——已经在跑的 Pod 一直在拉低这个节点后续的打分,这正是负载均衡效果的来源。</p>
+</section>
+
+<section>
+  <h2>交互演示:Filter 淘汰,Score 排名</h2>
+  <p class="h2-sub">把上面全部真实数据和真实公式按发生顺序串成一条演示。</p>
+  <div class="demo" id="schedDemo">
+    <div class="demo-head"><span>调度决策实录</span><span class="step-badge" id="scStep">未开始</span></div>
+    <div class="demo-narration" id="scNarration">点击"下一步"或"播放"开始。</div>
+    <div class="demo-body">
+      <div class="query-line" id="scQuery">—</div>
+      <div class="checks" id="scChecks"></div>
+      <div class="result-row">
+        <span class="result-badge" id="scResultBadge">—</span>
+      </div>
+      <div class="evidence-line" id="scEvidence"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="scReset">⏮ 重来</button>
+      <button class="btn" id="scPrev">‹ 上一步</button>
+      <button class="btn primary" id="scNext">下一步 ›</button>
+      <button class="btn" id="scPlay">▶ 自动播放</button>
+      <span class="step-counter" id="scCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">判断逻辑由 Python 脚本按真实源码逐行转写:Filter 的判断直接照抄 <span class="mono">fitsRequest</span> 的"请求超过剩余可分配量就拒绝"规则;Score 的公式跟 <span class="mono">leastRequestedScore</span>/<span class="mono">leastResourceScorer</span> 一致,3 组真实测试用例的分数全部逐位核对通过,另有一套用浮点除法而不是整数除法重新实现的独立版本交叉核对过。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文源码引用(<span class="mono">Fit.Filter</span>、<span class="mono">fitsRequest</span> 的资源不足判断、<span class="mono">leastRequestedScore</span>、<span class="mono">leastResourceScorer</span>、<span class="mono">MaxScore</span> 常量)均取自 <span class="mono">kubernetes/kubernetes</span> 仓库 <span class="mono">v1.37.0</span> 标签,直接从 GitHub 拉取源文件核对过函数签名和关键逻辑。</li>
+      <li>本文引用的 3 组真实打分数据,均逐数字取自同一份源码仓库里 <span class="mono">pkg/scheduler/framework/plugins/noderesources/least_allocated_test.go</span> 的 <span class="mono">TestLeastAllocatedScoringStrategy</span> 测试用例——这是 kube-scheduler 项目自己对"给定这样的节点和 Pod,LeastAllocated 策略必须打出这样的分数"的正式断言,不是本文编造的示例。本机没有真实的多节点集群可以拿来实际调度,因此只验证了"打分算法"这一层,没有真实跑过 <span class="mono">kube-scheduler</span> 二进制。</li>
+      <li>演示数据的自检:3 组真实分数逐位核对通过,另有一套用浮点除法(而不是源码里的整数除法)重新实现的独立打分函数交叉核对过,结果一致;Filter 阶段的"资源不足即拒绝"逻辑在"刚好够用"和"明显不够"两种场景下都验证过。</li>
+      <li>没有涉及:除 <span class="mono">LeastAllocated</span> 之外的其他 Score 插件(<span class="mono">BalancedAllocation</span>、<span class="mono">PodTopologySpread</span> 等)、多个 Score 插件之间怎么加权汇总成最终排名、抢占(preemption)机制、调度队列(SchedulingQueue)的优先级与退避策略。</li>
+    </ul>
+  </div>
+
+  <a class="next-post" href="k8s-rbac.html">
+    <div>
+      <div class="t1">下一篇</div>
+      <div class="t2">RBAC 鉴权:一条规则到底是怎么匹配上一次请求的</div>
+    </div>
+    <div style="font-size:1.6rem;">→</div>
+  </a>
+
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Kubernetes 系列 · 第五篇 · kube-scheduler · 源码引用自 kubernetes/kubernetes v1.37.0</footer>
+
+<script>
+const DATA = {"scenarios": [
+  {
+    "narration": "一个节点容量 cpu=4000、memory=10000,当前完全空闲。Pod 请求 cpu=1000、memory=1000——请求量远小于剩余可分配量,Filter 判定通过。",
+    "query_display": "fits({cpu:1000, memory:1000}, allocatable={cpu:4000, memory:10000}, used={cpu:0, memory:0})",
+    "check_label": "Pod 请求是否都不超过节点剩余可分配量?",
+    "verdict": "pass",
+    "result_badge": "Filter 通过,进入 Score 阶段",
+    "result_class": "good",
+    "evidence": "模型: 1000<=4000 且 1000<=10000 -> 全部满足 -> fits=True"
+  },
+  {
+    "narration": "同一个节点,但已经有 Pod 用掉了 3500 CPU,只剩 500 可分配。这次同一个 Pod(请求 cpu=1000)想调度上来——请求超过了剩余可分配量。",
+    "query_display": "fits({cpu:1000, memory:1000}, allocatable={cpu:4000, memory:10000}, used={cpu:3500, memory:0})",
+    "check_label": "Pod 请求是否都不超过节点剩余可分配量?",
+    "verdict": "fail",
+    "result_badge": "Filter 拒绝:Insufficient cpu",
+    "result_class": "warn",
+    "evidence": "模型: 请求 cpu=1000 > 剩余 (4000-3500)=500 -> fits=False,这个节点直接出局,不会进入 Score 阶段"
+  },
+  {
+    "narration": "两个通过 Filter 的候选节点,容量完全相同(cpu=4000, memory=10000),Pod 什么资源都不请求——两边打分应该完全一样。",
+    "query_display": "least_resource_scorer([0,0], [4000,10000])  // 两个节点都用这组输入",
+    "check_label": "两个节点的最终分数是否相等(基线场景)?",
+    "verdict": "pass",
+    "result_badge": "node1: 100 · node2: 100",
+    "result_class": "good",
+    "evidence": "真实测试断言(least_allocated_test.go): expectedScores = [{node1,100},{node2,100}]"
+  },
+  {
+    "narration": "Pod 请求 cpu=3000、memory=5000。node1 容量 cpu=4000,node2 容量 cpu=6000(内存容量相同)——同一个 Pod,在容量更大的 node2 上占用比例更低,分数应该更高。",
+    "query_display": "least_resource_scorer([3000,5000], [4000,10000])  // node1\nleast_resource_scorer([3000,5000], [6000,10000])  // node2",
+    "check_label": "容量更大的节点是否打分更高(比例分而不是绝对值)?",
+    "verdict": "pass",
+    "result_badge": "node1: 37 · node2: 50",
+    "result_class": "good",
+    "evidence": "真实测试断言: expectedScores = [{node1,37},{node2,50}] —— CPU 占用比例 75% vs 50%"
+  },
+  {
+    "narration": "新 Pod 本身不请求资源,但两个节点上已经有 Pod 在跑。node1 已用 cpu:6000 mem:0;node2 已用 cpu:6000 mem:5000——已经在跑的 Pod 也计入 requested。",
+    "query_display": "least_resource_scorer([6000,0], [10000,20000])   // node1,加上已有 Pod 的用量\nleast_resource_scorer([6000,5000], [10000,20000]) // node2",
+    "check_label": "已经在跑的 Pod 的资源占用是否会拉低节点后续的打分?",
+    "verdict": "pass",
+    "result_badge": "node1: 70 · node2: 57",
+    "result_class": "good",
+    "evidence": "真实测试断言: expectedScores = [{node1,70},{node2,57}] —— node2 上已有 Pod 多占用了内存"
+  }
+]};
+
+(function(){
+  const scenarios = DATA.scenarios;
+  const narration = document.getElementById('scNarration');
+  const stepBadge = document.getElementById('scStep');
+  const queryLine = document.getElementById('scQuery');
+  const checksEl = document.getElementById('scChecks');
+  const resultBadge = document.getElementById('scResultBadge');
+  const evidenceEl = document.getElementById('scEvidence');
+  const counter = document.getElementById('scCounter');
+  let idx = -1, playing = false, playTimer = null;
+
+  function render(){
+    idx = Math.max(-1, Math.min(scenarios.length - 1, idx));
+    if(idx < 0){
+      narration.textContent = '点击"下一步"或"播放"开始。';
+      stepBadge.textContent = '未开始';
+      queryLine.textContent = '—';
+      checksEl.innerHTML = '';
+      resultBadge.textContent = '—';
+      resultBadge.className = 'result-badge';
+      evidenceEl.textContent = '';
+      counter.textContent = `0 / ${scenarios.length}`;
+      document.getElementById('scPrev').disabled = true;
+      document.getElementById('scNext').disabled = false;
+      return;
+    }
+
+    const s = scenarios[idx];
+    narration.textContent = s.narration;
+    stepBadge.textContent = `第 ${idx+1} / ${scenarios.length} 步`;
+    queryLine.textContent = s.query_display;
+
+    checksEl.innerHTML = '';
+    const row = document.createElement('div');
+    row.className = 'check';
+    row.dataset.verdict = s.verdict;
+    const label = document.createElement('span');
+    label.className = 'label';
+    label.textContent = s.check_label;
+    const verdict = document.createElement('span');
+    verdict.className = 'verdict';
+    verdict.textContent = s.verdict === 'pass' ? '成立' : '不成立';
+    row.appendChild(label); row.appendChild(verdict);
+    checksEl.appendChild(row);
+
+    resultBadge.textContent = s.result_badge;
+    resultBadge.className = 'result-badge ' + s.result_class;
+    evidenceEl.textContent = s.evidence;
+
+    counter.textContent = `${idx+1} / ${scenarios.length}`;
+    document.getElementById('scPrev').disabled = idx <= -1;
+    document.getElementById('scNext').disabled = idx >= scenarios.length - 1;
+  }
+
+  document.getElementById('scNext').onclick = () => { idx++; render(); stopPlay(); };
+  document.getElementById('scPrev').onclick = () => { idx--; render(); stopPlay(); };
+  document.getElementById('scReset').onclick = () => { idx = -1; render(); stopPlay(); };
+  function stopPlay(){ playing = false; clearInterval(playTimer); document.getElementById('scPlay').textContent = '▶ 自动播放'; }
+  document.getElementById('scPlay').onclick = () => {
+    if(playing){ stopPlay(); return; }
+    playing = true; document.getElementById('scPlay').textContent = '⏸ 暂停';
+    playTimer = setInterval(() => {
+      if(idx >= scenarios.length - 1){ stopPlay(); return; }
+      idx++; render();
+    }, 2200);
+  };
+
+  render();
+})();
+</script>
+
+</body>
+</html>

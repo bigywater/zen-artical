@@ -1,0 +1,67 @@
+import sys, os, time, json, re, statistics; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from dj import *
+tee('d79'); R = {}
+urls = "from django.urls import path\nfrom django.http import HttpResponse, JsonResponse\ndef w(request):\n    import secrets; request.session['k'] = secrets.token_hex(int(request.GET.get('n', 10)) // 2 + 1)[:int(request.GET.get('n', 10))]; return HttpResponse('w')\ndef r(request): return JsonResponse({'k': len(request.session.get('k', ''))})\nurlpatterns = [path('w/', w), path('r/', r)]\n"
+apps = ['django.contrib.contenttypes', 'django.contrib.auth', 'django.contrib.sessions']
+CFG = {
+    'db': "\nSESSION_ENGINE = 'django.contrib.sessions.backends.db'\n",
+    'cache': "\nSESSION_ENGINE = 'django.contrib.sessions.backends.cache'\nCACHES = {'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}}\n",
+    'cached_db': "\nSESSION_ENGINE = 'django.contrib.sessions.backends.cached_db'\nCACHES = {'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}}\n",
+    'file': "\nSESSION_ENGINE = 'django.contrib.sessions.backends.file'\nSESSION_FILE_PATH = str(BASE_DIR / 'sessfiles')\n",
+    'signed_cookies': "\nSESSION_ENGINE = 'django.contrib.sessions.backends.signed_cookies'\n",
+}
+def build(name):
+    d = proj('d79', urls=urls, apps=apps, middleware=['django.contrib.sessions.middleware.SessionMiddleware'], with_lab=False, settings_extra=CFG[name]); (d / 'sessfiles').mkdir(exist_ok=True); manage(d, 'migrate'); return d
+print('== 一:五种存储:数据放在哪里')
+R['where'] = {}
+for name in CFG:
+    d = build(name)
+    rc, out = pyscript(d, """
+import logging, os, glob; logging.disable(logging.CRITICAL)
+from django.test import Client
+from django.conf import settings
+c = Client(); r = c.get('/w/?n=20'); ck = c.cookies['sessionid'].value
+from django.contrib.sessions.models import Session
+db = Session.objects.count()
+files = glob.glob(os.path.join(str(settings.BASE_DIR), 'sessfiles', '*'))
+from django.core.cache import cache
+print('cookie 值长度 =', len(ck), '| django_session 表行数 =', db, '| 文件数 =', len(files), '| cookie 内容前 40 字符:', ck[:40])
+""")
+    print(f'  [{name:<15}]', out.strip().splitlines()[-1]); R['where'][name] = out.strip().splitlines()[-1]
+print()
+print('== 二:signed_cookies:数据在 cookie 里,任何人可读(签名只防篡改);过大会超过浏览器 4 KB 限制')
+d = build('signed_cookies')
+rc, out = pyscript(d, """
+import logging, base64, json; logging.disable(logging.CRITICAL)
+from django.test import Client
+from django.core import signing
+c = Client(); c.get('/w/?n=20'); ck = c.cookies['sessionid'].value
+import zlib
+payload = ck.split(':')[0]; compressed = payload.startswith('.'); payload = payload.lstrip('.'); pad = '=' * (-len(payload) % 4)
+raw = base64.urlsafe_b64decode(payload + pad)
+if compressed: raw = zlib.decompress(raw)
+print('不需要密钥就能读出 cookie 里的数据(base64' + (' + zlib' if compressed else '') + '解码):', raw[:80])
+for n in (1000, 3000, 5000, 8000):
+    c = Client(); r = c.get('/w/?n=%d' % n); print(f'  存 {n} 字符 → cookie 长度 {len(c.cookies["sessionid"].value)}', '(超过 4096 浏览器会丢弃)' if len(c.cookies['sessionid'].value) > 4096 else '')
+c = Client(); c.get('/w/?n=20'); v = c.cookies['sessionid'].value; c.cookies['sessionid'] = v[:-3] + 'xyz'; print('篡改签名后读取:', c.get('/r/').json(), '(读到空 session)')
+""")
+print('  ' + out.strip().replace('\n', '\n  ')); R['signed'] = out.strip()
+print()
+print('== 三:每种后端一次「读」和一次「写」请求的耗时(Client,SQLite/locmem/本机文件;每种 300 次取中位)')
+R['perf'] = {}
+print(f'  {"后端":<16} {"读(ms)":>8} {"写(ms)":>8}')
+for name in CFG:
+    d = build(name)
+    rc, out = pyscript(d, """
+import logging, time, statistics; logging.disable(logging.CRITICAL)
+from django.test import Client
+c = Client(); c.get('/w/?n=100')
+def t(url, n=300):
+    xs = []
+    for _ in range(n):
+        t0 = time.perf_counter(); c.get(url); xs.append((time.perf_counter() - t0) * 1000)
+    return statistics.median(xs)
+print('%.3f %.3f' % (t('/r/'), t('/w/?n=100')))
+""")
+    rd, wr = map(float, out.strip().splitlines()[-1].split()); R['perf'][name] = dict(read=rd, write=wr); print(f'  {name:<16} {rd:>8.3f} {wr:>8.3f}')
+save('d79', R)

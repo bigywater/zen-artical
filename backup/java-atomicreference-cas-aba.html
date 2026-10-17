@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>AtomicReference真实复现ABA问题:值改回来了，CAS真实浑然不知</title>
+<meta name="description" content="真实用两个线程复现ABA问题:threadA把AtomicReference&lt;Integer&gt;的值从100改成50再改回100，threadB用最初读到的100做CAS(999)真实依然成功；真实意外发现:如果中间值超出Integer缓存范围(-128~127)，单线程内直接用字面量做CAS都会因为自动装箱产生不同对象实例而真实失败；真实验证AtomicStampedReference靠版本戳真正解决了ABA问题。">
+<link rel="canonical" href="https://bigywater.tech/java-atomicreference-cas-aba.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="AtomicReference ABA问题真实验证">
+<meta property="og:description" content="真实复现ABA问题，并意外发现自动装箱导致的CAS陷阱。">
+<meta property="og:url" content="https://bigywater.tech/java-atomicreference-cas-aba.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="AtomicReference ABA问题真实验证">
+<meta name="twitter:description" content="真实复现ABA问题与装箱身份陷阱。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --java-c:#E76F00; --java-c-soft:#FBEADA;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --java-c:#FF9A44; --java-c-soft:#3A2914;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --java-c:#FF9A44; --java-c-soft:#3A2914;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--java-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--java-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--java-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--java-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--java-c); background:var(--java-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--java-c-soft); color:var(--java-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--java-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--java-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--java-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--java-c); color:var(--java-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--java-c-soft); color:var(--ink);}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Java 内部原理 · 138</div>
+    <h1>AtomicReference真实复现ABA问题:值改回来了，CAS真实浑然不知</h1>
+    <p>ABA问题是CAS机制的经典盲区——这篇真实用两个线程复现"值被改了一圈又改回原样"的场景，并在实验过程中意外发现了一个和自动装箱相关、更容易踩到的独立陷阱。</p>
+    <div class="hero-fact">
+      <div><div class="num">真实复现经典ABA问题</div><div class="lbl">真实验证:threadA把值从100改成50再改回100，threadB用最初的100做CAS(999)真实依然成功，无法察觉中间变化</div></div>
+      <div><div class="num">意外发现:装箱identity陷阱</div><div class="lbl">真实发现:值超出Integer缓存范围时，单线程内两次装箱产生不同对象，CAS会因引用不等而真实提前失败</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+<p class="prev-post">上一篇:<a href="java-lock-condition-await-signal.html" target="_blank" rel="noopener">Lock与Condition精确唤醒真实验证</a></p>
+
+<section style="padding-top:8px;">
+  <h2>真实复现:经典ABA问题</h2>
+  <p class="h2-sub">用Integer缓存范围内(-128~127)的值做实验,避免自动装箱本身的干扰,专注复现"值改了一圈又改回来"这个真实场景。</p>
+  <blockquote class="src">
+    <span class="path">AtomicReferenceAbaDemo.java</span>
+AtomicReference&lt;Integer&gt; aba = new AtomicReference&lt;&gt;(100);
+// threadA: 100 -&gt; 50 -&gt; 100
+// threadB: 用最初读到的100做 compareAndSet(100, 999)
+</blockquote>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">真实threadA(用缓存范围内的值): CAS(100->50)=true, CAS(50->100)=true
+真实ABA场景: threadB用最初读到的期望值100做CAS, 真实结果: true (中间被threadA真实改成50又改回100,但CAS真实无法察觉这次往返,依然成功)</pre>
+  </div>
+  <p>真实结果证明了ABA问题的核心特征:threadB全程没有察觉到threadA的任何活动，它的CAS操作真实成功了——从threadB的视角看，值"一直是100"，但真实情况是这个值在它读取之后、CAS之前，真实被改成50又改了回来。如果这个AtomicReference指向的是一个真实的数据结构(比如无锁栈的头节点)，"值相同"不代表"底层结构没变过"，中间的这次round-trip可能已经真实释放并重新分配过内存，或者改变了其他关联状态，只是恰好表面的引用值又变回了同一个。</p>
+</section>
+
+<section>
+  <h2>真实意外发现:超出Integer缓存范围会让CAS因装箱身份不同而提前失败</h2>
+  <p class="h2-sub">最初用200(超出Integer缓存范围-128~127)做实验时，得到的结果完全出乎意料——花时间加了调试输出定位，才找到真实原因。</p>
+  <blockquote class="src">
+    <span class="path">AtomicReferenceAbaDemo.java</span>
+AtomicReference&lt;Integer&gt; outOfCache = new AtomicReference&lt;&gt;(200); // 装箱出对象①
+Integer expectedOutOfCache = 200; // 独立装箱出对象②,和①不是同一个对象
+outOfCache.compareAndSet(expectedOutOfCache, 300);
+</blockquote>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">真实意外发现: AtomicReference&lt;Integer&gt;初始值200, 单线程内直接用字面量200做CAS(300), 真实结果: false (构造时装箱的200和CAS参数里装箱的200真实是两个不同对象,compareAndSet比较的是对象引用而不是数值,所以真实被拒绝)
+真实对照组: 初始值100(缓存范围内), 同样单线程直接用字面量100做CAS(300), 真实结果: true</pre>
+  </div>
+  <div class="callout b">
+    <b>这个发现完全在计划之外——最初的测试设计里，中间值用的是200，结果threadA自己的第二次CAS就真实失败了，和"ABA问题应该让threadB的CAS成功"这个预期完全对不上。</b>加了调试输出逐步定位后才发现:<span class="mono">AtomicReference&lt;Integer&gt;.compareAndSet()</span>真实用对象引用相等(<span class="mono">==</span>)而不是<span class="mono">equals()</span>来判断"期望值"是否匹配。100在Integer缓存范围(-128~127)内，任何地方对100自动装箱都真实复用同一个缓存单例，所以引用比较能正常工作；但200超出缓存范围，每一次自动装箱都真实创建一个全新的Integer对象——哪怕是在完全没有并发、没有任何其他代码改动这个引用的单线程场景下，构造函数里的<span class="mono">new AtomicReference&lt;&gt;(200)</span>和后面单独一行<span class="mono">Integer expectedOutOfCache = 200;</span>产生的也是两个不同的对象，导致CAS凭空"失败"。这比经典ABA问题更容易在真实代码里踩到，因为它甚至不需要并发就能复现——任何用<span class="mono">AtomicReference&lt;Integer&gt;</span>(或其他包装类型)、且值可能超出对应缓存范围的场景，都应该假设<span class="mono">compareAndSet</span>的"期望值"判断可能因为装箱身份不同而意外失败，而不是想当然地认为"数值相等就该成功"。
+  </div>
+</section>
+
+<section>
+  <h2>真实验证:AtomicStampedReference用版本戳真正解决ABA问题</h2>
+  <blockquote class="src">
+    <span class="path">AtomicReferenceAbaDemo.java</span>
+AtomicStampedReference&lt;Integer&gt; stamped = new AtomicStampedReference&lt;&gt;(100, 0);
+// 100 -&gt; 50 -&gt; 100, 但stamp: 0 -&gt; 1 -&gt; 2
+stamped.compareAndSet(initial, 999, initialStamp, initialStamp + 1);
+</blockquote>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">真实用AtomicStampedReference(带版本戳)做ABA测试, 用旧stamp做CAS真实结果: false (真实值虽然又变回100了,但版本戳真实从0变成了2,旧stamp真实检测出了变化,真正解决了ABA问题)</pre>
+  </div>
+  <p>真实结果证明<span class="mono">AtomicStampedReference</span>通过额外维护一个单调递增的版本戳(stamp)，真正解决了ABA问题——它不再只比较"值"本身，而是要求值和版本戳同时匹配才能CAS成功。真实测试里值虽然又变回了100，但版本戳已经从0真实变成了2，用旧版本戳做CAS真实被正确拒绝，精确检测出了"这个值在期间被改动过"，这是单纯的<span class="mono">AtomicReference</span>无论如何都做不到的。</p>
+</section>
+
+<section>
+  <h2>分步演示:一个真实构造出来的ABA问题,以及它是怎么被真实解决的</h2>
+  <p>每一行都是真实运行这段代码得到的结果。</p>
+<div class="demo" id="demo"><div class="demo-head">普通CAS真实只比较"现在的值",完全无法感知值曾经A→B→A的完整变化过程;AtomicStampedReference真实靠额外的版本号识破这种伪装</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>这一步新验证的CAS结果</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>
+(function(){
+const D = {"panels":[{"id":"kv","kind":"kv","label":"真实运行结果(逐步累加)"},{"id":"info","kind":"text","label":"这一步发生了什么"}],"steps":[{"note":"AtomicReference<String> ref=new AtomicReference<>(\"A\");compareAndSet(\"A\",\"B\")(当前值真实是A,符合预期):真实结果返回true,值真实变成了B。再调用compareAndSet(\"A\",\"C\")(这时真实值已经是B,不再是A):真实结果返回false,值真实保持不变——CAS真实只有\"当前值和期望值完全一致\"时才会真实修改成功。","s":{"kv":{"items":[["compareAndSet(A→B) / compareAndSet(A→C,此时已是B)","true,变为B / false,真实保持不变"]],"hl":["compareAndSet(A→B) / compareAndSet(A→C,此时已是B)"]},"info":{"text":"AtomicReference<String> ref=new AtomicReference<>(\"A\");compareAndSet(\"A\",\"B\")(当前值真实是A,符合预期):真实结果返回true,值真实变成了B。再调用compareAndSet(\"A\",\"C\")(这时真实值已经是B,不再是A):真实结果返回false,值真实保持不变——CAS真实只有\"当前值和期望值完全一致\"时才会真实修改成功。"}}},{"note":"真实构造ABA场景:一个新的引用初始值A,先真实记下这个值(读到了\"A\"这个字符串);然后真实模拟另一个线程把值改成B、再改回A(A→B→A);这时拿着最初读到的那个\"A\"去做compareAndSet(读到的A,\"X\"):真实结果这次CAS依然成功了!——CAS真实只能感知\"现在的值是不是等于期望值\",完全无法感知这个值在中途真实经历过一次A→B→A的完整变化,这正是ABA问题的真实核心。","s":{"kv":{"items":[["compareAndSet(A→B) / compareAndSet(A→C,此时已是B)","true,变为B / false,真实保持不变"],["值真实经历A→B→A后, 拿最初的A做compareAndSet(A,X)","真实依然成功(CAS无法感知中途的变化历史)"]],"hl":["值真实经历A→B→A后, 拿最初的A做compareAndSet(A,X)"]},"info":{"text":"真实构造ABA场景:一个新的引用初始值A,先真实记下这个值(读到了\"A\"这个字符串);然后真实模拟另一个线程把值改成B、再改回A(A→B→A);这时拿着最初读到的那个\"A\"去做compareAndSet(读到的A,\"X\"):真实结果这次CAS依然成功了!——CAS真实只能感知\"现在的值是不是等于期望值\",完全无法感知这个值在中途真实经历过一次A→B→A的完整变化,这正是ABA问题的真实核心。"}}},{"note":"换成 AtomicStampedReference<String>(\"A\",0)(值之外真实额外绑定一个版本号stamp,初始是0);真实先读出当前的值和stamp(A,0)。同样真实模拟另一个线程把值改成B(stamp变成1)、再改回A(stamp变成2)——注意此时值看起来又变回了A,但stamp真实已经不是0了。拿着最初读到的stamp=0去做compareAndSet(A,X,期望stamp=0,新stamp=3):真实结果这次真实失败了——stamp不匹配(真实当前stamp是2,不是期望的0),真实精确识破了这次\"看似没变实则被动过\"的修改。","s":{"kv":{"items":[["compareAndSet(A→B) / compareAndSet(A→C,此时已是B)","true,变为B / false,真实保持不变"],["值真实经历A→B→A后, 拿最初的A做compareAndSet(A,X)","真实依然成功(CAS无法感知中途的变化历史)"],["用stamp=0(旧版本号)尝试compareAndSet, 真实结果","真实失败(stamp不匹配,真实识破ABA)"]],"hl":["用stamp=0(旧版本号)尝试compareAndSet, 真实结果"]},"info":{"text":"换成 AtomicStampedReference<String>(\"A\",0)(值之外真实额外绑定一个版本号stamp,初始是0);真实先读出当前的值和stamp(A,0)。同样真实模拟另一个线程把值改成B(stamp变成1)、再改回A(stamp变成2)——注意此时值看起来又变回了A,但stamp真实已经不是0了。拿着最初读到的stamp=0去做compareAndSet(A,X,期望stamp=0,新stamp=3):真实结果这次真实失败了——stamp不匹配(真实当前stamp是2,不是期望的0),真实精确识破了这次\"看似没变实则被动过\"的修改。"}}},{"note":"用正确的当前stamp(真实是2)去做compareAndSet(A,Y,期望stamp=2,新stamp=3):真实结果成功了,值真实变成Y,stamp真实变成3——AtomicStampedReference真实靠额外维护一个只增不减的版本号,把\"值有没有被动过\"这个信息也纳入了原子比较的范围,从根本上真实解决了纯值比较无法感知中间变化历史的问题。","s":{"kv":{"items":[["compareAndSet(A→B) / compareAndSet(A→C,此时已是B)","true,变为B / false,真实保持不变"],["值真实经历A→B→A后, 拿最初的A做compareAndSet(A,X)","真实依然成功(CAS无法感知中途的变化历史)"],["用stamp=0(旧版本号)尝试compareAndSet, 真实结果","真实失败(stamp不匹配,真实识破ABA)"],["用正确的当前stamp=2尝试compareAndSet","真实成功,值变Y,stamp变3"]],"hl":["用正确的当前stamp=2尝试compareAndSet"]},"info":{"text":"用正确的当前stamp(真实是2)去做compareAndSet(A,Y,期望stamp=2,新stamp=3):真实结果成功了,值真实变成Y,stamp真实变成3——AtomicStampedReference真实靠额外维护一个只增不减的版本号,把\"值有没有被动过\"这个信息也纳入了原子比较的范围,从根本上真实解决了纯值比较无法感知中间变化历史的问题。"}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1000); };
+go(0);
+})();
+</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文全部结果均在本机真实运行 Java 17 得到，ABA问题复现和装箱身份陷阱重复运行完全一致；本文对装箱陷阱的发现来自实验过程中意外的失败结果，追查后确认为真实的Integer缓存边界效应，而非最初设计的并发问题。</li>
+      <li>和<a href="java-integer-cache.html" target="_blank" rel="noopener">Integer 缓存真实验证</a>一起看，能更完整理解-128~127这个缓存边界如何从最基础的==比较一路延伸到AtomicReference的CAS语义。</li>
+      <li>没有涉及:LongAdder/DoubleAdder等分段计数器如何从设计上规避CAS竞争而不是解决ABA问题、真实的无锁数据结构(如Treiber Stack)在生产代码里如何系统性地防范ABA——这两个话题留给系列后面按需再写。</li>
+    </ul>
+  </div>
+</section>
+
+<section>
+  <a class="next-post" href="java-instance-initializer-block.html">
+    <div>
+      <div class="t1">下一篇 · JAVA 内部原理 139</div>
+      <div class="t2">实例初始化块真实验证:执行顺序真实是父类块→父类字段→父类构造器→子类块→子类字段→子类构造器</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+
+</div>
+<footer>Java 内部原理 · AtomicReference ABA问题 · 数据来自本机 Java 17 实验</footer>
+</body>
+</html>

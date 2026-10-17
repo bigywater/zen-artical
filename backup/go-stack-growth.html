@@ -1,0 +1,485 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>goroutine 栈增长:从 2KB 到复制整个栈的过程</title>
+<meta name="description" content="在 Go 1.27.1 里实测 goroutine 栈:初始约 2 KiB(10 万个阻塞的 goroutine 每个约 2050 字节),递归时栈大约每次翻倍并被整体拷贝(20 万层递归搬动 14 次、共 20.57 ms);函数返回后栈不立即变小,每次 GC 约减半(32.3 MiB → 0.53 MiB);第一次深递归 5.5–7.8 ms,栈已够大时 0.73 ms;无限递归在 1 GB 上限处 fatal error;函数序言的栈检查与 //go:nosplit 链的链接限制。">
+<link rel="canonical" href="https://bigywater.tech/go-stack-growth.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="goroutine 栈增长:从 2KB 到复制整个栈的过程">
+<meta property="og:description" content="在 Go 1.27.1 里实测 goroutine 栈:初始约 2 KiB(10 万个阻塞的 goroutine 每个约 2050 字节),递归时栈大约每次翻倍并被整体拷贝(20 万层递归搬动 14 次、共 20.57 ms);函数返回后栈不立即变小,每次 GC 约减半(32.3 MiB → 0.53 MiB);第一次深递归 5.5–7.8 ms,栈已够大时 0.73 ms;无限递归在 1 GB 上限处 fatal error;函数序言的栈检查与 //go:nosplit 链的链接限制。">
+<meta property="og:url" content="https://bigywater.tech/go-stack-growth.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="goroutine 栈增长:从 2KB 到复制整个栈的过程">
+<meta name="twitter:description" content="在 Go 1.27.1 里实测 goroutine 栈:初始约 2 KiB(10 万个阻塞的 goroutine 每个约 2050 字节),递归时栈大约每次翻倍并被整体拷贝(20 万层递归搬动 14 次、共 20.57 ms);函数返回后栈不立即变小,每次 GC 约减半(32.3 MiB → 0.53 MiB);第一次深递归 5.5–7.8 ms,栈已够大时 0.73 ms;无限递归在 1 GB 上限处 fatal error;函数序言的栈检查与 //go:nosplit 链的链接限制。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">1979</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">53</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#00799A; --series-c-soft:#D9F1F8;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#4FC3E8; --series-c-soft:#0B2A33;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#4FC3E8; --series-c-soft:#0B2A33;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Go · 54</div>
+  <h1>goroutine 栈增长:从 2KB 到复制整个栈的过程</h1>
+  <p>goroutine 能那么便宜,是因为它的栈从很小开始、不够再长。这篇用递归把栈撑大,从指针地址的变化直接看到栈被拷贝,量出每个 goroutine 的初始开销、增长与收缩的节奏、增长的成本、栈的上限,以及序言里那条触发增长的检查。</p>
+  <div class="hero-fact">
+<div><div class="num">约 2 KiB</div><div class="lbl">一个刚创建的 goroutine 的栈内存(实测每个 2050 字节)</div></div><div><div class="num">14 次</div><div class="lbl">递归 20 万层时栈被整体搬动(翻倍)的次数,共 20.57 ms</div></div><div><div class="num">约减半</div><div class="lbl">深递归返回后,栈内存每次 GC 缩小的比例(32.3 → 16.3 → 8.3 → 4.4 MiB)</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="go-heap-allocator.html">内存分配器:mcache、mcentral、mheap 与 size class</a></div>
+<section>
+  <h2>初始栈</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  每个 goroutine 先递归   0 层再阻塞:100000 个 goroutine 的栈内存增加 195.5 MiB → 每个约 2050 字节
+  每个 goroutine 先递归  20 层再阻塞:100000 个 goroutine 的栈内存增加 391.0 MiB → 每个约 4100 字节
+  每个 goroutine 先递归 200 层再阻塞:100000 个 goroutine 的栈内存增加 3126.1 MiB → 每个约 32779 字节</pre></div>
+  <p>每个 goroutine 从大约 2 KiB 的栈开始(10 万个阻塞的 goroutine 每个增加约 2050 字节),所以可以轻松创建几十万个。栈用完时增长到更大的容量并保持,深一点的 goroutine 就占更多:递归 20 层后是 4 KiB,200 层后 32 KiB。</p>
+</section>
+<section>
+  <h2>栈如何增长</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  main.rec 的函数头(go build -gcflags=-S):main.rec STEXT size=512 align=0x0 args=0x30 locals=0xd8 funcid=0x0
+  递归 100 层:共搬动栈 3 次,耗时 0.04 ms;前几次搬动:
+    深度 9(距上次搬动 9 层):地址差 +339968 字节
+    深度 28(距上次搬动 19 层):地址差 -688128 字节
+    深度 64(距上次搬动 36 层):地址差 +761856 字节
+  递归 5000 层:共搬动栈 9 次,耗时 0.66 ms;前几次搬动:
+    深度 9(距上次搬动 9 层):地址差 +1028096 字节
+    深度 28(距上次搬动 19 层):地址差 -1376256 字节
+    深度 64(距上次搬动 36 层):地址差 +1449984 字节
+    深度 137(距上次搬动 73 层):地址差 +65536 字节
+    深度 284(距上次搬动 147 层):地址差 +303104 字节
+    深度 576(距上次搬动 292 层):地址差 +262144 字节
+    深度 1161(距上次搬动 585 层):地址差 +524288 字节
+    深度 2332(距上次搬动 1171 层):地址差 +1048576 字节
+    深度 4672(距上次搬动 2340 层):地址差 +2097152 字节
+  递归 200000 层:共搬动栈 14 次,耗时 20.57 ms;前几次搬动:
+    深度 9(距上次搬动 9 层):地址差 +593920 字节
+    深度 28(距上次搬动 19 层):地址差 -942080 字节
+    深度 64(距上次搬动 36 层):地址差 +1015808 字节
+    深度 137(距上次搬动 73 层):地址差 +65536 字节
+    深度 284(距上次搬动 147 层):地址差 +253952 字节
+    深度 576(距上次搬动 292 层):地址差 +262144 字节
+    深度 1161(距上次搬动 585 层):地址差 +524288 字节
+    深度 2332(距上次搬动 1171 层):地址差 +1048576 字节
+    ……
+    深度 74889(距上次搬动 37449 层):地址差 +33554432 字节
+    深度 149788(距上次搬动 74899 层):地址差 +67108864 字节</pre></div>
+  <p>实验里递归的每一层都带着一个指向底部变量的 <code>unsafe.Pointer</code>,运行时在拷贝栈时会改写栈上所有指针,所以只要它的值变了就说明栈被整体搬走了。第一次在栈用到约 2 KiB 时(9 层 × 216 字节栈帧),之后每隔的层数大约翻倍——栈的容量每次翻倍,新栈地址与旧栈不同。这也是为什么<b>指向栈上变量的指针不能被存成整数</b>(见前面 unsafe 一篇)。</p>
+</section>
+<section>
+  <h2>栈会收缩</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  递归 20 万层之前栈内存 0.3 MiB;递归之后(函数已返回)32.3 MiB
+    第 1 次 runtime.GC() 之后:16.31 MiB
+    第 2 次 runtime.GC() 之后:8.34 MiB
+    第 3 次 runtime.GC() 之后:4.38 MiB
+    第 4 次 runtime.GC() 之后:2.38 MiB
+    第 5 次 runtime.GC() 之后:1.38 MiB
+    第 6 次 runtime.GC() 之后:0.88 MiB
+    第 7 次 runtime.GC() 之后:0.62 MiB
+    第 8 次 runtime.GC() 之后:0.53 MiB</pre></div>
+  <p>深递归返回后栈不会马上变小(32.3 MiB 还在),要等 GC:GC 发现栈只用了一小部分时把它缩小一半,所以每次 GC 约减半,八次之后回到 0.53 MiB。需要及时归还内存的程序,不要依赖栈收缩——它是渐进的。</p>
+</section>
+<section>
+  <h2>成本</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  第 1 轮:第一次递归 10 万层 7.79 ms;紧接着第二次 0.74 ms
+  第 2 轮:第一次递归 10 万层 6.58 ms;紧接着第二次 0.73 ms
+  第 3 轮:第一次递归 10 万层 5.48 ms;紧接着第二次 0.73 ms
+  创建 200000 个 goroutine,每个递归 10 层后退出:每个 365 ns
+  创建 200000 个 goroutine,每个递归 100 层后退出:每个 893 ns</pre></div>
+  <p>增长要分配新栈并拷贝旧栈:10 万层的第一次递归比第二次慢 7–10 倍(5.5–7.8 ms 对 0.73 ms)。对短命的小 goroutine,需要增长的一次约多花 500 ns(365 对 893 ns)。热路径里反复创建需要深栈的 goroutine,会反复付这个成本;用 goroutine 池复用栈是一种做法(本文没有试)。</p>
+</section>
+<section>
+  <h2>上限</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  默认:退出码 2;max stack = 1000000000 / runtime: goroutine stack exceeds 1000000000-byte limit / runtime: sp=0x… stack=[0x…, 0x…] / fatal error: stack overflow
+  SetMaxStack(1 MiB):退出码 2;max stack = 1048576 / runtime: goroutine stack exceeds 1048576-byte limit / runtime: sp=0x… stack=[0x…, 0x…] / fatal error: stack overflow</pre></div>
+  <p>栈的上限默认是 1 GB(<code>debug.SetMaxStack</code> 可调),无限递归会在到达上限时 <code>fatal error: stack overflow</code>,不是 panic,<code>recover</code> 接不住,进程以退出码 2 结束。</p>
+</section>
+<section>
+  <h2>序言与 nosplit</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">    (&lt;gtmp&gt;/sg2/main.go:4)	SUB	$32, RSP, R17
+    (&lt;gtmp&gt;/sg2/main.go:4)	CMP	R16, R17
+    (&lt;gtmp&gt;/sg2/main.go:4)	BLS	124
+    (&lt;gtmp&gt;/sg2/main.go:4)	SUB	$8, RSP, R29
+    (&lt;gtmp&gt;/sg2/main.go:4)	SUB	$1, R0, R0
+    (&lt;gtmp&gt;/sg2/main.go:4)	CALL	runtime.morestack_noctxt(SB)
+  函数头:main.f STEXT size=144 align=0x0 args=0x8 locals=0x98 funcid=0x0
+  40 个依次调用、每个有 64 字节局部数组的 //go:nosplit 函数:go build rc=1
+    # lab
+    main.n1: nosplit stack over 792 byte limit
+    main.n1&lt;1&gt;
+        grows 144 bytes, calls main.n3&lt;1&gt;
+            grows 144 bytes, calls main.n5&lt;1&gt;</pre></div>
+  <p>增长的触发点是每个函数序言里的比较:栈指针预留出这个函数的栈帧后,与 goroutine 的栈保护线比较,不够就调用 <code>runtime.morestack_noctxt</code>。<code>//go:nosplit</code> 函数不做这个比较,所以它们的调用链必须总共不超过链接器给的一小块预留空间(这里是 792 字节),否则链接时就报错。除了运行时内部,一般代码用不上 <code>nosplit</code>。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">goroutine 栈增长</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "b", "kind": "bars", "label": "数字对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "10 万个 goroutine 阻塞在 channel 上,看 /memory/classes/heap/stacks 的增量:每个 goroutine 不递归直接阻塞,栈内存增加 195.5 MiB → 每个约 2050 字节(2 KiB 起步);先递归 20 层再阻塞(栈已长到 4 KiB)增加 391.0 MiB → 每个约 4100 字节;先递归 200 层再阻塞(栈长到 32 KiB)增加 3126.1 MiB → 每个约 32779 字节。", "s": {"t": {"lines": ["  每个 goroutine 先递归   0 层再阻塞:100000 个 goroutine 的栈内存增加 195.5 MiB → 每个约 2050 字节", "  每个 goroutine 先递归  20 层再阻塞:100000 个 goroutine 的栈内存增加 391.0 MiB → 每个约 4100 字节", "  每个 goroutine 先递归 200 层再阻塞:100000 个 goroutine 的栈内存增加 3126.1 MiB → 每个约 32779 字节"], "cur": [], "mark": [], "done": []}, "done": [0], "mark": [1, 2], "b": {"items": [["不递归(字节)", 2050, "2050"], ["递归 20 层", 4100, "4100"], ["递归 200 层", 32779, "32779"]], "max": 32779, "cur": [], "mark": [1, 2], "done": [0]}, "kv": {"items": [["不递归", "约 2050 字节(2 KiB 起步)"], ["递归 20 层", "约 4100 字节(长到 4 KiB)"], ["递归 200 层", "约 32779 字节(长到 32 KiB)"]], "hl": ["递归 200 层"]}}}, {"note": "栈增长的过程:main.rec 的函数头是 locals=0xd8(216 字节栈帧)。递归 100 层栈被搬动 3 次、0.04 ms;5000 层 9 次、0.66 ms;20 万层 14 次、20.57 ms。每次搬动发生的深度依次是 9、28、64、137、284、576、1161、2332、4672……,相邻两次的间隔 9、19、36、73、147、292、585、1171、2340 层——大约每次翻倍,最后两次在深度 74889 与 149788(新栈地址与旧栈地址差 +33554432、+67108864 字节,即 32 MiB、64 MiB)。第一次在 9 层:9 × 216 字节 ≈ 2 KiB。", "s": {"t": {"lines": ["  main.rec 的函数头(go build -gcflags=-S):main.rec STEXT size=512 align=0x0 args=0x30 locals=0xd8 funcid=0x0", "  递归 100 层:共搬动栈 3 次,耗时 0.04 ms;前几次搬动:", "    深度 9(距上次搬动 9 层):地址差 +339968 字节", "    深度 28(距上次搬动 19 层):地址差 -688128 字节", "    深度 64(距上次搬动 36 层):地址差 +761856 字节", "  递归 5000 层:共搬动栈 9 次,耗时 0.66 ms;前几次搬动:", "    深度 9(距上次搬动 9 层):地址差 +1028096 字节", "    深度 28(距上次搬动 19 层):地址差 -1376256 字节", "    深度 64(距上次搬动 36 层):地址差 +1449984 字节", "    深度 137(距上次搬动 73 层):地址差 +65536 字节", "    深度 284(距上次搬动 147 层):地址差 +303104 字节", "    深度 576(距上次搬动 292 层):地址差 +262144 字节", "    深度 1161(距上次搬动 585 层):地址差 +524288 字节", "    深度 2332(距上次搬动 1171 层):地址差 +1048576 字节", "    深度 4672(距上次搬动 2340 层):地址差 +2097152 字节", "  递归 200000 层:共搬动栈 14 次,耗时 20.57 ms;前几次搬动:", "    深度 9(距上次搬动 9 层):地址差 +593920 字节", "    深度 28(距上次搬动 19 层):地址差 -942080 字节", "    深度 64(距上次搬动 36 层):地址差 +1015808 字节", "    深度 137(距上次搬动 73 层):地址差 +65536 字节", "    深度 284(距上次搬动 147 层):地址差 +253952 字节", "    深度 576(距上次搬动 292 层):地址差 +262144 字节", "    深度 1161(距上次搬动 585 层):地址差 +524288 字节", "    深度 2332(距上次搬动 1171 层):地址差 +1048576 字节", "    ……", "    深度 74889(距上次搬动 37449 层):地址差 +33554432 字节", "    深度 149788(距上次搬动 74899 层):地址差 +67108864 字节"], "cur": [], "mark": [], "done": []}, "done": [0, 1], "mark": [5, 15, 26], "b": {"items": [["100 层:搬动次数", 3, "3"], ["5000 层", 9, "9"], ["20 万层", 14, "14"]], "max": 14, "cur": [], "mark": [1, 2], "done": [0]}, "kv": {"items": [["栈帧", "main.rec locals=0xd8(216 字节)"], ["第一次搬动", "深度 9(≈ 2 KiB 栈用完)"], ["后续", "间隔大约每次翻倍,每次容量翻倍"], ["20 万层", "共搬动 14 次,20.57 ms"]], "hl": ["后续"]}}}, {"note": "栈会收缩:递归 20 万层之前栈内存 0.3 MiB;递归之后(函数已经返回)32.3 MiB;之后每次 runtime.GC() 约减半:16.31、8.34、4.38、2.38、1.38、0.88、0.62、0.53 MiB。", "s": {"t": {"lines": ["  递归 20 万层之前栈内存 0.3 MiB;递归之后(函数已返回)32.3 MiB", "    第 1 次 runtime.GC() 之后:16.31 MiB", "    第 2 次 runtime.GC() 之后:8.34 MiB", "    第 3 次 runtime.GC() 之后:4.38 MiB", "    第 4 次 runtime.GC() 之后:2.38 MiB", "    第 5 次 runtime.GC() 之后:1.38 MiB", "    第 6 次 runtime.GC() 之后:0.88 MiB", "    第 7 次 runtime.GC() 之后:0.62 MiB", "    第 8 次 runtime.GC() 之后:0.53 MiB"], "cur": [], "mark": [], "done": []}, "done": [0], "mark": [1, 4, 8], "b": {"items": [["函数返回后", 32.3, "32.3"], ["GC 1 次后", 16.31, "16.31"], ["GC 3 次后", 4.38, "4.38"], ["GC 8 次后", 0.53, "0.53"]], "max": 32.3, "cur": [], "mark": [0, 1, 2], "done": [3]}, "kv": {"items": [["返回后", "32.3 MiB(栈不会立刻变小)"], ["每次 GC", "约减半"], ["8 次 GC 之后", "0.53 MiB"]], "hl": ["每次 GC"]}}}, {"note": "栈增长的成本:第一次递归 10 万层 7.79、6.58、5.48 ms(三轮),紧接着第二次(栈已经够大)0.74、0.73、0.73 ms——一次增长约花 5–7 ms 的差。小栈的增长也有成本:创建 20 万个 goroutine,每个递归 10 层(不需要增长)后退出,每个 365 ns;递归 100 层(需要增长)每个 893 ns。", "s": {"t": {"lines": ["  第 1 轮:第一次递归 10 万层 7.79 ms;紧接着第二次 0.74 ms", "  第 2 轮:第一次递归 10 万层 6.58 ms;紧接着第二次 0.73 ms", "  第 3 轮:第一次递归 10 万层 5.48 ms;紧接着第二次 0.73 ms", "  创建 200000 个 goroutine,每个递归 10 层后退出:每个 365 ns", "  创建 200000 个 goroutine,每个递归 100 层后退出:每个 893 ns"], "cur": [], "mark": [], "done": []}, "done": [0, 3], "mark": [4], "b": {"items": [["第一次递归 10 万层 ms", 7.79, "7.79"], ["第二次 ms", 0.74, "0.74"], ["递归 10 层的 goroutine(ns)", 365, "365"], ["递归 100 层", 893, "893"]], "max": 893, "cur": [], "mark": [0, 3], "done": [1, 2]}, "kv": {"items": [["需要增长 vs 不需要", "7.79 ms vs 0.74 ms(10 万层)"], ["小 goroutine", "10 层 365 ns;100 层(需增长)893 ns"]], "hl": ["需要增长 vs 不需要"]}}}, {"note": "栈的上限:无限递归,默认 max stack = 1000000000(1 GB):runtime: goroutine stack exceeds 1000000000-byte limit,fatal error: stack overflow,退出码 2;debug.SetMaxStack(1 << 20) 之后:exceeds 1048576-byte limit,同样是 fatal error。这是 fatal error,不是 panic,recover 接不住。", "s": {"t": {"lines": ["  默认:退出码 2;max stack = 1000000000 / runtime: goroutine stack exceeds 1000000000-byte limit / runtime: sp=0x… stack=[0x…, 0x…] / fatal error: stack overflow", "  SetMaxStack(1 MiB):退出码 2;max stack = 1048576 / runtime: goroutine stack exceeds 1048576-byte limit / runtime: sp=0x… stack=[0x…, 0x…] / fatal error: stack overflow"], "cur": [], "mark": [], "done": []}, "mark": [0, 1], "kv": {"items": [["默认上限", "1000000000 字节(1 GB)"], ["debug.SetMaxStack(1 MiB)", "1048576 字节"], ["溢出时", "fatal error: stack overflow,退出码 2"]], "hl": ["溢出时"]}}}, {"note": "函数序言里的栈检查:f 的函数头 locals=0x98;汇编里先 SUB $32, RSP, R17 算出栈指针预留后的位置,CMP R16, R17(R16 取自 goroutine 结构体里的一个字段,我认为是栈保护线,没有核对)、BLS 不够就跳到末尾 CALL runtime.morestack_noctxt——就是它触发栈增长。//go:nosplit 函数不做这个检查,所以一串 nosplit 调用会撑爆链接器的限制:40 个依次调用、每个有 64 字节局部数组的 nosplit 函数:go build 失败,main.n1: nosplit stack over 792 byte limit,并列出调用链(每层 grows 144 bytes)。", "s": {"t": {"lines": ["    (<gtmp>/sg2/main.go:4)\tSUB\t$32, RSP, R17", "    (<gtmp>/sg2/main.go:4)\tCMP\tR16, R17", "    (<gtmp>/sg2/main.go:4)\tBLS\t124", "    (<gtmp>/sg2/main.go:4)\tSUB\t$8, RSP, R29", "    (<gtmp>/sg2/main.go:4)\tSUB\t$1, R0, R0", "    (<gtmp>/sg2/main.go:4)\tCALL\truntime.morestack_noctxt(SB)", "  函数头:main.f STEXT size=144 align=0x0 args=0x8 locals=0x98 funcid=0x0", "  40 个依次调用、每个有 64 字节局部数组的 //go:nosplit 函数:go build rc=1", "    # lab", "    main.n1: nosplit stack over 792 byte limit", "    main.n1<1>", "        grows 144 bytes, calls main.n3<1>", "            grows 144 bytes, calls main.n5<1>"], "cur": [], "mark": [], "done": []}, "done": [1, 2], "mark": [5, 9], "kv": {"items": [["序言", "SUB 算出新栈顶,CMP 与栈保护线比较,BLS 跳转"], ["不够时", "CALL runtime.morestack_noctxt → 分配更大的栈并拷贝"], ["//go:nosplit", "跳过检查;调用链总栈深度受限,超限时链接失败:nosplit stack over 792 byte limit"]], "hl": ["不够时"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / Go 1.27.1(brew);用 go run / go build / go test 直接编译运行,需要第三方库时经代理从 proxy.golang.org 下载;计时用 time.Now / testing.B,数字每次运行会有小幅抖动。栈内存来自 runtime/metrics 的 /memory/classes/heap/stacks:bytes;搬动次数由递归时每层携带的 unsafe.Pointer 的值变化推断(第一次比较发生在第 1 层之后);函数头与序言来自 go build -gcflags=-S;栈上限的实验是独立进程(默认 1 GB 的那次要占用较多内存);每个数字来自一次运行</li><li>没有验证:自适应初始栈大小(adaptivestackstart)的行为、栈增长算法里“翻倍”的具体规则(只从搬动间隔看出大致翻倍)、栈收缩的触发条件(只看到每次 GC 约减半)、amd64 上的栈帧与序言、不同帧大小下 792 字节限制的来源</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="go-goroutine-cost.html">
+    <div>
+      <div class="t1">下一篇 · GO 55</div>
+      <div class="t2">goroutine 的成本:创建一个要多少内存、多少时间</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Go · goroutine 栈增长:从 2KB 到复制整个栈的过程 · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

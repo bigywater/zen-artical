@@ -1,0 +1,20 @@
+from lib import *
+S = SS('c57')
+steps = [
+    step("Docker Desktop 虚拟机的 iptables 是 v1.8.9 (nf_tables)。nat 表里和默认 bridge 相关的规则:-A POSTROUTING -o docker0 -m addrtype --src-type LOCAL -j MASQUERADE,以及 -A POSTROUTING -s 172.17.0.0/16 ! -o docker0 -j MASQUERADE(172.17.0.0/16 的容器出网时做源地址转换)。发布端口 -p 9830:8000 之后 nat 表新增两条:-A DOCKER -p tcp -m tcp --dport 9830 -j DNAT --to-destination 172.17.0.2:8000,和 -A POSTROUTING -s 172.17.0.2/32 -d 172.17.0.2/32 -p tcp -m tcp --dport 8000 -j MASQUERADE;filter 表的 DOCKER 链里也多了一条放行 172.17.0.2 的 8000 端口的 ACCEPT。", t=tl(S(1)), done=lidx(S(1), '-j DNAT', '172.17.0.0/16 ! -o docker0'), mark=lidx(S(1), '新增的与这个端口相关'), kv=KV([['出网', 'POSTROUTING … MASQUERADE'], ['发布端口', 'DOCKER 链 DNAT 到 172.17.0.2:8000'], ['filter 表', 'DOCKER 链放行目标容器的端口']], ['发布端口'])),
+    step("conntrack 里看一次出站连接的转换:容器 172.17.0.x 连 20.205.243.166:443,条目是 tcp SYN_SENT src=<容器IP> dst=20.205.243.166 sport=40525 dport=443 [UNREPLIED] src=20.205.243.166 dst=192.168.65.3 sport=443 dport=40525。前半是发出去的方向(容器地址),后半是预期回来的方向——目的地址是虚拟机的 192.168.65.3,不是容器地址,这就是 MASQUERADE 把源地址换成了虚拟机地址。这个连接停在 SYN_SENT [UNREPLIED],因为在这个环境里连 github.com:443 没有完成(之前 c52 里也超时过),但 NAT 的转换关系已经能看到。", t=tl(S(2)), done=lidx(S(2), 'SYN_SENT'), kv=KV([['发出方向', 'src=容器IP → dst=20.205.243.166:443'], ['回来方向', 'dst=192.168.65.3(虚拟机),不是容器'], ['状态', 'SYN_SENT [UNREPLIED]']], ['回来方向'])),
+    step("发布端口的流量走哪里:虚拟机里 0.0.0.0:9830 的监听者是 dockerd 自己(ss 显示 users:((\"dockerd\",pid=283…)))。Mac 上 curl 127.0.0.1:9830 3 次,DNAT 规则的包计数 0 → 0,没有走 DNAT;另一个容器经 172.17.0.1:9830 访问 3 次,DNAT 规则的包计数 0 → 3,走了 DNAT。", t=tl(S(3)), done=lidx(S(3), '另一个容器经'), mark=lidx(S(3), 'Mac 上 curl', '谁在监听'), b=bars([['Mac 访问 3 次:DNAT 包计数增量', 0, '0'], ['容器访问 3 次:DNAT 包计数增量', 3, '3']], 3, done=[1], mark=[0]), kv=KV([['监听发布端口的', 'dockerd(虚拟机里)'], ['Mac → 发布端口', 'DNAT 计数不变'], ['容器 → 172.17.0.1:端口', 'DNAT 计数 +3']], ['Mac → 发布端口'])),
+    step("conntrack 表的容量与超时:nf_conntrack_max = 262144;当前 count 约 1352(虚拟机里还有别的容器的连接);tcp_timeout_established = 432000 秒(5 天)、tcp_timeout_time_wait = 120 秒、udp_timeout = 30 秒、udp_timeout_stream = 120 秒。删除服务容器之后,刚才新增的 2 条 nat 规则都被清除了。", t=tl(S(4)), done=lidx(S(4), '都没了', 'nf_conntrack_max'), mark=lidx(S(4), 'tcp_timeout_established'), b=bars([['count(当前)', 1352, '1352'], ['nf_conntrack_max', 262144, '262144']], 262144, done=[0], mark=[1]), kv=KV([['nf_conntrack_max', '262144'], ['established 超时', '432000 秒'], ['删除容器后', '发布端口的 nat 规则被清除']], ['删除容器后'])),
+]
+A = mkartc('c57', 57, 'Docker,iptables,NAT,MASQUERADE,DNAT,conntrack,端口映射,真实验证,动画演示',
+    '进入 Docker Desktop 虚拟机读 iptables 与 conntrack:172.17.0.0/16 出网有 MASQUERADE,发布端口新增 DNAT 和放行规则;一次出站连接的 conntrack 条目显示回来方向的目的地址是虚拟机而不是容器;Mac 访问发布端口时 DNAT 包计数不增(监听者是 dockerd),容器经 172.17.0.1 访问则 DNAT +3;nf_conntrack_max=262144,删除容器后规则被清除。',
+    '容器的网络是怎么被转换的?端口映射在 iptables 里是哪几条规则?conntrack 表里长什么样?这篇进入 Docker Desktop 的虚拟机读 nat 表和 /proc/net/nf_conntrack,并用包计数验证流量到底走没走 DNAT。',
+    [('MASQUERADE', '172.17.0.0/16 的容器出网时被转换成虚拟机的地址'), ('0 → 0 对 0 → 3', '发布端口的 DNAT 规则包计数:Mac 访问 3 次不变,容器经 172.17.0.1 访问 3 次增加 3'), ('262144', '虚拟机的 nf_conntrack_max')],
+    [('规则', '<p>出网靠 <code>POSTROUTING … MASQUERADE</code>;发布端口增加 <code>DOCKER</code> 链里的 DNAT(目的地址改成容器的 IP 和端口),外加一条 MASQUERADE 和 filter 表的放行规则;容器删除后这些规则被清掉。这台虚拟机的 iptables 是 nf_tables 后端。</p>'),
+     ('conntrack 条目', '<p>一个条目同时记录两个方向:发出去的方向是容器地址,回来的方向目的地址是虚拟机的地址,说明源地址被转换了。我观察到的连接停在 SYN_SENT [UNREPLIED](这个环境里连外网 443 没有成功),所以这里没有看到完整的 ESTABLISHED 条目。</p>'),
+     ('Mac 的流量不走 DNAT', '<p>虚拟机里监听发布端口的是 dockerd 自己;Mac 访问时 DNAT 规则的计数不变,说明这条路径经过 dockerd 的监听而不是 DNAT。而容器经 172.17.0.1 访问发布端口时,DNAT 计数会增加。这是在 Docker Desktop 上的观察,Linux 宿主机上的路径我没有测。</p>'),
+     ('容量', '<p>conntrack 表上限 262144,当前约 1352 条;已建立 TCP 连接的超时是 432000 秒(5 天),TIME_WAIT 120 秒,UDP 30 秒。</p>')],
+    steps,
+    [ENV_C + '。规则与 conntrack 读自虚拟机(特权容器加 nsenter,方法见 c19);容器 IP 在输出中替换为占位符;虚拟机里同时还有 kind 等其它容器的规则和连接,文中只引用与本实验相关的;实验后已删除容器',
+     '没有验证:入站 DNAT 连接的完整 conntrack 条目(我读 /proc/net/nf_conntrack 时没有抓到)、ESTABLISHED 条目、conntrack 表满时的丢包、nftables 视角的规则、--iptables=false 的效果、Linux 宿主机上的 docker-proxy'],
+    'NAT 与 conntrack')

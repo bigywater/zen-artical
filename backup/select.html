@@ -1,0 +1,708 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>Go select 内部原理</title>
+<meta name="description" content="多路 case 的随机选择算法与两轮扫描的真实实现。">
+<link rel="canonical" href="https://bigywater.tech/select.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Go select 内部原理">
+<meta property="og:description" content="多路 case 的随机选择算法与两轮扫描的真实实现。">
+<meta property="og:url" content="https://bigywater.tech/select.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Go select 内部原理">
+<meta name="twitter:description" content="多路 case 的随机选择算法与两轮扫描的真实实现。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#FAF8F5; --surface:#FFFFFF; --surface-2:#F1EEE8; --surface-3:#E9E4D8;
+  --ink:#201C2B; --ink-soft:#55506A; --ink-faint:#8B85A0;
+  --line:#E4DFD5; --line-soft:#EDE9DF;
+  --phase-c:#2E5C9E; --phase-soft:#DCE7F5;
+  --order-c:#C2571A; --order-soft:#F8E2D2;
+  --cleanup-c:#128577; --cleanup-soft:#D6F1EA;
+  --warn:#B8791A; --warn-soft:#FBEBD3;
+  --code-bg:#211D30; --code-ink:#E7E2F5; --code-comment:#8D84AE; --code-kw:#7FD4C7; --code-str:#E3B368;
+  --shadow:0 1px 2px rgba(32,28,43,.06),0 10px 28px -14px rgba(32,28,43,.16);
+  --radius:12px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#15121F; --surface:#1D1930; --surface-2:#241F3B; --surface-3:#2C2647;
+    --ink:#EDE9F7; --ink-soft:#B5AECB; --ink-faint:#756D91;
+    --line:#332C4D; --line-soft:#2A2440;
+    --phase-c:#7FA8E8; --phase-soft:#1E2D47;
+    --order-c:#E8975C; --order-soft:#3A2618;
+    --cleanup-c:#4FD1BE; --cleanup-soft:#14332E;
+    --warn:#E3A94C; --warn-soft:#3A2A16;
+    --code-bg:#0F0D1A; --code-ink:#E7E2F5; --code-comment:#786F9C; --code-kw:#7FD4C7; --code-str:#E3B368;
+    --shadow:0 1px 2px rgba(0,0,0,.35),0 14px 32px -16px rgba(0,0,0,.55);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#15121F; --surface:#1D1930; --surface-2:#241F3B; --surface-3:#2C2647;
+  --ink:#EDE9F7; --ink-soft:#B5AECB; --ink-faint:#756D91;
+  --line:#332C4D; --line-soft:#2A2440;
+  --phase-c:#7FA8E8; --phase-soft:#1E2D47;
+  --order-c:#E8975C; --order-soft:#3A2618;
+  --cleanup-c:#4FD1BE; --cleanup-soft:#14332E;
+  --warn:#E3A94C; --warn-soft:#3A2A16;
+  --code-bg:#0F0D1A; --code-ink:#E7E2F5; --code-comment:#786F9C; --code-kw:#7FD4C7; --code-str:#E3B368;
+  --shadow:0 1px 2px rgba(0,0,0,.35),0 14px 32px -16px rgba(0,0,0,.55);
+}
+*{box-sizing:border-box;}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;}
+.wide{max-width:1080px;margin:0 auto;padding:0 22px;}
+.prose{max-width:1080px;margin:0 auto;padding:0 22px;}
+h1,h2,h3{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;letter-spacing:-.01em;text-wrap:balance;}
+
+header.hero{padding:64px 0 30px;}
+.eyebrow{font-size:12.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-faint);margin:0 0 14px;}
+h1{font-size:clamp(30px,5vw,44px);margin:0 0 16px;line-height:1.12;}
+.hero-sub{font-size:17px;color:var(--ink-soft);margin:0 0 22px;}
+.meta-row{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--ink-faint);}
+.meta-row span{display:inline-flex;align-items:center;gap:6px;}
+
+.legend-row{display:flex;gap:10px;flex-wrap:wrap;margin:28px 0 4px;}
+.legend-chip{display:inline-flex;align-items:center;gap:8px;padding:7px 13px;border-radius:999px;border:1px solid var(--line);background:var(--surface);font-size:13px;font-weight:600;}
+.legend-dot{width:11px;height:11px;border-radius:50%;flex:none;}
+.legend-chip .phase-dot{background:var(--phase-c);} .legend-chip .order-dot{background:var(--order-c);} .legend-chip .cleanup-dot{background:var(--cleanup-c);}
+
+section{padding:40px 0;}
+section.divider-top{border-top:1px solid var(--line);}
+h2{font-size:22px;margin:0 0 4px;}
+.section-kicker{font-size:12.5px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.08em;font-weight:700;margin:0 0 8px;}
+p{font-size:15.5px;color:var(--ink-soft);margin:0 0 16px;}
+.prose p b, .prose li b{color:var(--ink);font-weight:700;}
+.prose ul{padding-left:22px;font-size:15.5px;color:var(--ink-soft);}
+.prose li{margin-bottom:8px;}
+.phase-tag{color:var(--phase-c);font-weight:700;}
+.order-tag{color:var(--order-c);font-weight:700;}
+.cleanup-tag{color:var(--cleanup-c);font-weight:700;}
+
+.entity-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:22px 0;}
+@media (max-width:760px){.entity-cards{grid-template-columns:1fr;}}
+.ecard{border:1px solid var(--line);border-radius:var(--radius);padding:18px;background:var(--surface);box-shadow:var(--shadow);}
+.ecard .etitle{font-family:ui-monospace,monospace;font-size:18px;font-weight:700;display:flex;align-items:center;gap:9px;margin-bottom:8px;}
+.ecard.phase .etitle{color:var(--phase-c);} .ecard.order .etitle{color:var(--order-c);} .ecard.cleanup .etitle{color:var(--cleanup-c);}
+.ecard p{font-size:14px;margin:0;}
+.edot{width:13px;height:13px;border-radius:50%;flex:none;}
+.ecard.phase .edot{background:var(--phase-c);} .ecard.order .edot{background:var(--order-c);} .ecard.cleanup .edot{background:var(--cleanup-c);}
+
+.code-quote{background:var(--code-bg);border-radius:var(--radius);overflow:hidden;margin:20px 0;box-shadow:var(--shadow);}
+.code-head{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;background:rgba(255,255,255,.04);border-bottom:1px solid rgba(255,255,255,.08);}
+.code-path{font-family:ui-monospace,monospace;font-size:12.5px;color:var(--code-comment);}
+.code-link{font-family:ui-monospace,monospace;font-size:12px;color:var(--code-kw);text-decoration:none;white-space:nowrap;}
+.code-link:hover{text-decoration:underline;}
+.code-quote pre{margin:0;padding:16px;overflow-x:auto;}
+.code-quote code{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;font-size:12.8px;line-height:1.6;color:var(--code-ink);white-space:pre;}
+
+.callout{border-left:3px solid var(--warn);background:var(--warn-soft);border-radius:0 8px 8px 0;padding:12px 16px;font-size:14px;color:var(--ink);margin:18px 0;}
+.callout b{color:var(--warn);}
+.callout.good{border-left-color:var(--cleanup-c);background:var(--cleanup-soft);}
+.callout.good b{color:var(--cleanup-c);}
+
+/* ---- simulator ---- */
+.sim-panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px;margin:22px 0;}
+.sim-controls{display:flex;align-items:center;gap:8px;margin-bottom:18px;flex-wrap:wrap;}
+button.ctrl{appearance:none;border:1px solid var(--line);background:var(--surface-2);color:var(--ink);padding:8px 14px;border-radius:8px;font-size:14px;cursor:pointer;font-weight:600;transition:background .15s,border-color .15s;font-family:ui-monospace,monospace;}
+button.ctrl:hover:not(:disabled){background:var(--surface-3);}
+button.ctrl:disabled{opacity:.4;cursor:not-allowed;}
+button.ctrl.primary{background:var(--ink);color:var(--bg);border-color:var(--ink);}
+button.ctrl:focus-visible{outline:2px solid var(--phase-c);outline-offset:2px;}
+.sim-progress{font-size:12.5px;color:var(--ink-faint);margin-left:2px;font-family:ui-monospace,monospace;}
+.spacer{flex:1;}
+select.ctrl{padding:6px 10px;font-family:ui-monospace,monospace;}
+
+.selector-card{border:2px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:16px;transition:border-color .25s,background .25s;}
+.selector-card[data-state="blocked-on-both"]{border-color:var(--phase-c);background:var(--phase-soft);}
+.selector-card[data-state="woken"],.selector-card[data-state="done"]{border-color:var(--cleanup-c);background:var(--cleanup-soft);}
+.selector-title{font-family:ui-monospace,monospace;font-weight:700;font-size:14px;margin-bottom:4px;}
+.selector-status{font-family:ui-monospace,monospace;font-size:12px;color:var(--ink-faint);}
+
+.chans-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;}
+@media (max-width:640px){.chans-row{grid-template-columns:1fr;}}
+.chan-col{border:1.5px solid var(--line);border-radius:10px;padding:12px;background:var(--surface-2);transition:border-color .25s,background .25s;}
+.chan-col[data-winner="true"]{border-color:var(--cleanup-c);background:var(--cleanup-soft);}
+.chan-col[data-loser="true"]{border-color:var(--order-c);opacity:.75;}
+.chan-col-title{font-family:ui-monospace,monospace;font-weight:700;font-size:14px;margin-bottom:8px;}
+.recvq-label{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-faint);margin-bottom:6px;font-weight:700;font-family:ui-monospace,monospace;}
+.recvq-chips{display:flex;gap:6px;flex-wrap:wrap;min-height:30px;}
+.s-chip{border:1.5px solid var(--phase-c);background:var(--phase-soft);color:var(--ink);border-radius:7px;padding:5px 10px;font-size:12px;font-family:ui-monospace,monospace;font-weight:700;transition:opacity .3s,border-color .3s,background .3s;}
+.s-chip[data-removed="true"]{opacity:.25;text-decoration:line-through;}
+.s-chip[data-won="true"]{border-color:var(--cleanup-c);background:var(--cleanup-soft);}
+.queue-empty{font-size:12px;color:var(--ink-faint);font-style:italic;}
+
+.sim-desc{background:var(--surface-2);border-radius:8px;padding:12px 14px;font-size:13.5px;color:var(--ink-soft);margin-bottom:14px;min-height:44px;border:1px solid var(--line-soft);}
+.sim-desc b{color:var(--ink);}
+.sim-formula{font-family:ui-monospace,monospace;font-size:13px;color:var(--ink-faint);margin-bottom:8px;}
+
+.sim-log{max-height:190px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:8px;}
+.log-item{padding:6px 9px;border-radius:6px;font-size:12.5px;color:var(--ink-faint);cursor:pointer;font-family:ui-monospace,monospace;display:flex;gap:8px;}
+.log-item:hover{background:var(--surface-2);}
+.log-item[data-active="true"]{background:var(--phase-soft);color:var(--ink);font-weight:600;}
+.log-idx{min-width:22px;color:var(--ink-faint);}
+
+.refs{font-size:14px;color:var(--ink-soft);}
+.refs li{margin-bottom:10px;}
+.refs a{color:var(--phase-c);}
+footer.endnote{border-top:1px solid var(--line);padding:26px 0 60px;font-size:13px;color:var(--ink-faint);}
+
+.legend2{display:flex;gap:16px;flex-wrap:wrap;margin-top:14px;font-size:12.5px;color:var(--ink-faint);}
+.legend2 span{display:inline-flex;align-items:center;gap:6px;}
+.lg-chip{width:14px;height:14px;border-radius:4px;border:2px solid var(--phase-c);background:var(--phase-soft);display:inline-block;}
+.lg-won{width:14px;height:14px;border-radius:4px;border:2px solid var(--cleanup-c);background:var(--cleanup-soft);display:inline-block;}
+.lg-removed{width:14px;height:14px;border-radius:4px;border:2px dashed var(--order-c);display:inline-block;}
+
+@media (prefers-reduced-motion:reduce){*{transition:none !important;}}
+</style>
+
+<article>
+<header class="hero prose">
+  <p class="eyebrow">GO 运行时内部原理 · 延续 channel 一篇</p>
+  <h1>Go select 内部原理</h1>
+  <p class="hero-sub"><a href="chan.html" target="_blank" rel="noopener">上一篇</a>讲了 <code class="mono">select</code> 在多个 case 都就绪时怎么公平随机挑一个。这一篇讲的是更少人知道的部分:<b>如果一个 case 都没就绪呢?</b> 答案不是"随便挑一个先阻塞",而是<b>同时</b>注册到所有相关 channel 的等待队列上,谁先来就跟谁走,再从其它 channel 上悄悄"退订"。这篇配了一个和真实 <code class="mono">go run -race</code> 输出比对过的模拟场景。</p>
+  <div class="meta-row">
+    <span>· 引用 Go 源码 commit <code class="mono">72aa6db7</code>,文件 <code class="mono">src/runtime/select.go</code></span>
+    <span>· 源码遵循 BSD-3-Clause 协议,版权归 The Go Authors 所有,下文均为简短引用并附原文链接</span>
+  </div>
+  <div class="legend-row">
+    <span class="legend-chip"><span class="legend-dot phase-dot"></span>两阶段 · 先查一遍有没有现成的,没有就全部注册排队</span>
+    <span class="legend-chip"><span class="legend-dot order-dot"></span>两种顺序 · 轮询顺序随机,加锁顺序却必须固定</span>
+    <span class="legend-chip"><span class="legend-dot cleanup-dot"></span>退订 · 谁先来选谁,其它排队全部撤销</span>
+  </div>
+</header>
+
+<section class="prose">
+  <p class="section-kicker">01 · select 的最小单位</p>
+  <h2>scase:一个 channel + 一个数据槽</h2>
+  <p>每个 <code class="mono">case</code> 在运行时就是这样一个极简的描述符:</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">select.go · L20-L23</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/runtime/select.go#L20-L23" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>type scase struct {
+	c    *hchan         // chan
+	elem unsafe.Pointer // data element
+}</code></pre>
+  </div>
+  <p>一个 <code class="mono">select</code> 语句在编译期被翻译成一个 <code class="mono">scase</code> 数组传给 <code class="mono">selectgo</code>。有意思的是空 <code class="mono">select{}</code>——没有任何 case,直接调用一个更简单的函数,永远park 这个 goroutine:</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">select.go · L103-L105</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/runtime/select.go#L103-L105" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>func block() {
+	gopark(nil, nil, waitReasonSelectNoCases, traceBlockForever, 1) // forever
+}</code></pre>
+  </div>
+  <p>这就是 <code class="mono">select{}</code> 能"永久阻塞当前 goroutine"这个经典技巧的全部原理——没有任何 channel 能把它唤醒。如果这个 goroutine 恰好是最后一个还活着的,Go 的死锁检测器会立刻发现"所有 goroutine 都睡着了":</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">go run 真实输出(select{} 且是唯一 goroutine)</span><span class="code-path">已验证</span></div>
+    <pre><code>fatal error: all goroutines are asleep - deadlock!
+
+goroutine 1 [select (no cases)]:
+main.main()</code></pre>
+  </div>
+  <p>但只要还有<b>别的</b> goroutine 在跑,<code class="mono">select{}</code> 就会老老实实一直等,死锁检测不会误报——这也是"用 <code class="mono">select{}</code> 让 main 永远阻塞、把程序交给后台 goroutine"这个写法能成立的原因(实测:后台 goroutine 跑完退出之后,只剩 <code class="mono">select{}</code> 一个,这时才会立刻报死锁)。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">02 · 三个核心概念</p>
+  <h2>两阶段 / 两种顺序 / 退订</h2>
+  <div class="entity-cards">
+    <div class="ecard phase"><div class="etitle"><span class="edot"></span>两阶段</div><p>第一阶段(pass 1)挨个检查每个 case 是否已经就绪(有等待的对家,或者缓冲区可用);全都没有,又没有 <code class="mono">default</code>,才进入第二阶段(pass 2):把自己<b>同时</b>注册到所有相关 channel 的等待队列上,然后真正休眠。</p></div>
+    <div class="ecard order"><div class="etitle"><span class="edot"></span>两种顺序</div><p>检查用的<b>轮询顺序</b>每次都随机打乱,保证公平;但真正<b>加锁</b>用的顺序必须固定(按 channel 内存地址排序)——同时锁多个 channel 时,顺序不固定会有死锁风险。</p></div>
+    <div class="ecard cleanup"><div class="etitle"><span class="edot"></span>退订</div><p>一旦某个 channel 先把这个 goroutine 唤醒,它就要立刻从<b>其它所有</b>还注册着的 channel 队列里把自己摘掉——否则那些 channel 上会挂着一个再也不会被真正使用的"僵尸"等待者。</p></div>
+  </div>
+</section>
+
+<section class="prose divider-top" id="sim-section">
+  <p class="section-kicker">03 · 现场直播</p>
+  <h2>两个 case 都没就绪时,select 做了什么</h2>
+  <p>下面这段场景<b>先用 <code class="mono">go run -race</code> 跑出真实结果,再逐项比对生成的轨迹</b>:一个 goroutine 同时 <code class="mono">select</code> 两个空的无缓冲 channel(<code class="mono">chA</code>、<code class="mono">chB</code>),都没有人发送;之后另一个 goroutine 往 <code class="mono">chB</code> 发送——看 select 具体经历了哪几步。</p>
+</section>
+
+<section class="wide">
+  <div class="sim-panel">
+    <div class="selector-card" id="selectorCard">
+      <div class="selector-title">selector goroutine S</div>
+      <div class="selector-status" id="selectorStatus">state: idle</div>
+    </div>
+
+    <div class="chans-row" id="chansRow"></div>
+
+    <div class="sim-desc">
+      <div class="sim-formula" id="simFormula">&mdash;</div>
+      <div id="simDesc">点击"下一步"或"播放"开始。</div>
+    </div>
+
+    <div class="sim-controls">
+      <button class="ctrl" id="btnReset">重置</button>
+      <button class="ctrl" id="btnPrev">上一步</button>
+      <button class="ctrl primary" id="btnPlay">播放</button>
+      <button class="ctrl" id="btnNext">下一步</button>
+      <span class="sim-progress" id="simProgress">0 / 0</span>
+      <div class="spacer"></div>
+      <label class="sim-progress" for="simSpeed">速度</label>
+      <select class="ctrl" id="simSpeed">
+        <option value="2200">慢</option>
+        <option value="1300" selected>中</option>
+        <option value="600">快</option>
+      </select>
+    </div>
+
+    <div class="sim-log" id="simLog"></div>
+
+    <div class="legend2">
+      <span><span class="lg-chip"></span>S 注册在这个 channel 的等待队列上</span>
+      <span><span class="lg-won"></span>这个 case 赢了,S 被唤醒</span>
+      <span><span class="lg-removed"></span>S 已经从这里退订(pass 3 清理)</span>
+    </div>
+  </div>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">04 · nil channel 的 case 永远不会被选中</p>
+  <h2>生成轮询顺序时,直接跳过它</h2>
+  <p>轮询顺序(pollorder)是在遍历所有 case 时现场生成的,生成的第一步就是把 <code class="mono">c == nil</code> 的 case 直接排除在外:</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">select.go · L167-L177</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/runtime/select.go#L167-L177" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>	// generate permuted order
+	norder := 0
+	allSynctest := true
+	for i := range scases {
+		cas := &amp;scases[i]
+
+		// Omit cases without channels from the poll and lock orders.
+		if cas.c == nil {
+			cas.elem = nil // allow GC
+			continue
+		}</code></pre>
+  </div>
+  <p>一个指向 <code class="mono">nil</code> 的 channel 变量,它对应的 case 从始至终都不会出现在轮询顺序里,也就永远不可能被选中——这正是"把某个 case 的 channel 变量设成 <code class="mono">nil</code> 来临时禁用它"这个技巧的原理:不需要重写 <code class="mono">select</code> 语句本身,只要在外面把变量置 <code class="mono">nil</code>,这个分支就从"可能被选中"变成"逻辑上不存在"。实测验证过:</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">go run 真实输出</span><span class="code-path">已验证</span></div>
+    <pre><code>OK: nil channel case was skipped, got 99 from the real channel</code></pre>
+  </div>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">05 · 两种顺序,两个目的</p>
+  <h2>轮询顺序为了公平,加锁顺序为了不死锁</h2>
+  <p><a href="chan.html" target="_blank" rel="noopener">上一篇</a>讲过轮询顺序(<code class="mono">pollorder</code>)每次都会被随机打乱,保证多个 case 同时就绪时机会均等。但 <code class="mono">select</code> 要同时操作好几个 channel,每个 channel 都有自己的锁——<b>加锁的顺序</b>如果也跟着随机,会有一个真实的死锁风险:两个 goroutine 各自 <code class="mono">select</code> 同一组 channel,如果一个按 A→B 加锁、另一个按 B→A 加锁,就可能互相等待对方释放锁。Go 的解法是把加锁顺序(<code class="mono">lockorder</code>)按 <b>channel 的内存地址</b>重新排序——地址是固定的,所以无论哪个 goroutine、无论轮询顺序怎么随机,最终加锁的顺序永远一致:</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">select.go · L206-L218</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/runtime/select.go#L206-L218" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>	// sort the cases by Hchan address to get the locking order.
+	// simple heap sort, to guarantee n log n time and constant stack footprint.
+	for i := range lockorder {
+		j := i
+		// Start with the pollorder to permute cases on the same channel.
+		c := scases[pollorder[i]].c
+		for j &gt; 0 &amp;&amp; scases[lockorder[(j-1)/2]].c.sortkey() &lt; c.sortkey() {
+			k := (j - 1) / 2
+			lockorder[j] = lockorder[k]
+			j = k
+		}
+		lockorder[j] = pollorder[i]
+	}</code></pre>
+  </div>
+  <p>这是经典的"锁排序"(lock ordering)death-avoidance 手法——只要所有参与者都按同一个全局顺序申请锁,就不可能出现循环等待。<code class="mono">select</code> 恰好需要一次性申请好几把锁,是这个技巧在 Go 运行时里少数几个直接现身的地方。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">06 · 没有一个就绪,select 会注册在所有 channel 上</p>
+  <h2>pass 2:同时排队,不是排在某一个上</h2>
+  <p>如果 pass 1 一个 case 都没找到就绪的,又没有 <code class="mono">default</code>,<code class="mono">selectgo</code> 会按(刚刚排好序的)加锁顺序,把这个 goroutine 包成一个 <code class="mono">sudog</code>,<b>逐个注册到每一个 case 对应的 channel</b>上,然后才真正 <code class="mono">gopark</code> 休眠:</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">select.go · L309-L342(pass 2 节选)</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/runtime/select.go#L309-L342" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>	// pass 2 - enqueue on all chans
+	if gp.waiting != nil {
+		throw("gp.waiting != nil")
+	}
+	nextp = &amp;gp.waiting
+	for _, casei := range lockorder {
+		casi = int(casei)
+		cas = &amp;scases[casi]
+		c = cas.c
+		sg := acquireSudog()
+		sg.g = gp
+		sg.isSelect = true
+		// No stack splits between assigning elem and enqueuing
+		// sg on gp.waiting where copystack can find it.
+		sg.elem.set(cas.elem)
+		sg.releasetime = 0
+		if t0 != 0 {
+			sg.releasetime = -1
+		}
+		sg.c.set(c)
+		// Construct waiting list in lock order.
+		*nextp = sg
+		nextp = &amp;sg.waitlink
+
+		if casi &lt; nsends {
+			c.sendq.enqueue(sg)
+		} else {
+			c.recvq.enqueue(sg)
+		}
+
+		if c.timer != nil {
+			blockTimerChan(c)
+		}
+	}</code></pre>
+  </div>
+  <p>对应模拟器里的那一步:<code class="mono">chA</code> 和 <code class="mono">chB</code> 的 <code class="mono">recvq</code> 里<b>同时</b>出现了 S。这意味着任何一个 channel 只要有人发送,都能把 S 唤醒——select 不是"押注在某一个 channel 上等",而是把所有可能性都占住,谁先来都能接住。</p>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">07 · 谁先来,就跟谁走,其它的退订</p>
+  <h2>pass 3:清理掉没被选中的注册</h2>
+  <p>某个 channel(模拟器里是 <code class="mono">chB</code>)一旦有人发送,会走前几篇讲过的正常 <code class="mono">chanrecv</code>/<code class="mono">send</code> 流程,把 S 从 <b>那一个</b> channel 的队列里摘下来并唤醒。但 S 当初是同时注册在两个 channel 上的——S 醒来之后,必须回头把自己从<b>另一个</b>(没被选中的)channel 队列里也摘掉:</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">select.go · L360-L401(pass 3 节选)</span><a class="code-link" href="https://github.com/golang/go/blob/72aa6db7943024b48c4d41c1fbc32b57b9fa036e/src/runtime/select.go#L360-L401" target="_blank" rel="noopener">在 GitHub 上查看 ↗</a></div>
+    <pre><code>	// pass 3 - dequeue from unsuccessful chans
+	// otherwise they stack up on quiet channels
+	// record the successful case, if any.
+	// We singly-linked up the SudoGs in lock order.
+	casi = -1
+	cas = nil
+	caseSuccess = false
+	sglist = gp.waiting
+	// Clear all elem before unlinking from gp.waiting.
+	for sg1 := gp.waiting; sg1 != nil; sg1 = sg1.waitlink {
+		sg1.isSelect = false
+		sg1.elem.set(nil)
+		sg1.c.set(nil)
+	}
+	gp.waiting = nil
+
+	for _, casei := range lockorder {
+		k = &amp;scases[casei]
+		if k.c.timer != nil {
+			unblockTimerChan(k.c)
+		}
+		if sg == sglist {
+			// sg has already been dequeued by the G that woke us up.
+			casi = int(casei)
+			cas = k
+			caseSuccess = sglist.success
+			if sglist.releasetime &gt; 0 {
+				caseReleaseTime = sglist.releasetime
+			}
+		} else {
+			c = k.c
+			if int(casei) &lt; nsends {
+				c.sendq.dequeueSudoG(sglist)
+			} else {
+				c.recvq.dequeueSudoG(sglist)
+			}
+		}
+		sgnext = sglist.waitlink
+		sglist.waitlink = nil
+		releaseSudog(sglist)
+		sglist = sgnext
+	}</code></pre>
+  </div>
+  <p>代码里那句注释说得很直白:<b>"otherwise they stack up on quiet channels"</b>——如果不清理,一个很少被用到的 channel 上会渐渐堆积一堆早就不需要的僵尸等待者,内存泄漏且拖慢这个 channel 之后所有的操作。真实验证过:退订之后,原来那个没被选中的 channel(<code class="mono">chA</code>)上确实一个等待者都不剩:</p>
+  <div class="code-quote">
+    <div class="code-head"><span class="code-path">go run -race 真实输出</span><span class="code-path">已验证</span></div>
+    <pre><code>main: about to send on chB (chA has nobody sending)
+selector: got 7 from chB
+main: selector picked branch 2
+confirmed: nobody is waiting on chA anymore (pass-3 cleanup worked)</code></pre>
+  </div>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">08 · 两个容易忽略的点</p>
+  <h2>顺手提两个问题</h2>
+  <ul>
+    <li><b>只有 0 个或 1 个 case 加 <code class="mono">default</code> 时,编译器根本不会调用这套通用逻辑。</b> <code class="mono">selectgo</code> 源码开头就有注释说明:这种极简的 <code class="mono">select</code> 会被编译器直接改写成更简单的结构,跳过整个 pollorder/lockorder/两阶段的机器——这也是为什么 <code class="mono">select { case &lt;-ctx.Done(): return; default: }</code> 这类单 case 判断的开销,比想象中要小得多。</li>
+    <li><b>select 里的 <code class="mono">default</code> 只在 pass 1 生效。</b> 有 <code class="mono">default</code> 意味着 pass 1 找不到就绪 case 时不会进入 pass 2 阻塞,而是直接执行 <code class="mono">default</code> 分支返回——所以"非阻塞地试一下 channel"和"真的排队等待"是两套完全不同的执行路径,不是同一套逻辑加了个超时。</li>
+  </ul>
+</section>
+
+<section class="prose divider-top">
+  <p class="section-kicker">09 · 参考与说明</p>
+  <h2>引用与这个模拟器做了哪些简化</h2>
+  <ul class="refs">
+    <li>本文所有源码引用均来自 <a href="https://github.com/golang/go" target="_blank" rel="noopener">golang/go</a>,commit <code class="mono">72aa6db7943024b48c4d41c1fbc32b57b9fa036e</code>,文件 <code class="mono">src/runtime/select.go</code>,遵循 Go 项目的 BSD-3-Clause 协议(© The Go Authors)。每段引用都标了具体文件、行号,并附了指向该 commit 的永久链接。</li>
+    <li>模拟器场景、<code class="mono">select{}</code> 死锁、以及 nil channel 跳过的行为,都是真实跑过的(<code class="mono">go run</code>,部分加了 <code class="mono">-race</code>,Go 1.26)。</li>
+    <li>模拟器省略了 <code class="mono">timer</code> channel(<code class="mono">time.After</code> 底层用的特殊路径)、<code class="mono">synctest</code> bubble 检查,以及 race/内存检测相关的分支——它们不影响两阶段/两种顺序/退订这条主线逻辑。</li>
+    <li><code class="mono">lockorder</code> 具体用的是堆排序(heap sort),保证 O(n log n) 时间和常数栈空间;模拟器只展示了"为什么要排序、按什么排序",没有还原堆排序本身的过程。</li>
+  </ul>
+</section>
+
+<footer class="endnote prose">
+  Go 运行时系列 · select 的心智模型:先把所有 case 检查一遍,有现成的就直接用;没有的话,不是随便押一个,而是全部占位排队,谁先来都接得住,输了的立刻退订。
+</footer>
+</article>
+
+<script>
+var EVENTS = [{"chan": "chA", "ready": false, "type": "check-case", "snapshot": {"chans": {"chA": {"recvq": []}, "chB": {"recvq": []}}, "selector": {"state": "idle", "winner": null, "value": null}}}, {"chan": "chB", "ready": false, "type": "check-case", "snapshot": {"chans": {"chA": {"recvq": []}, "chB": {"recvq": []}}, "selector": {"state": "idle", "winner": null, "value": null}}}, {"registeredOn": ["chA", "chB"], "type": "select-block", "snapshot": {"chans": {"chA": {"recvq": ["S"]}, "chB": {"recvq": ["S"]}}, "selector": {"state": "blocked-on-both", "winner": null, "value": null}}}, {"g": "G", "chan": "chB", "value": 7, "to": "S", "type": "send-direct", "snapshot": {"chans": {"chA": {"recvq": ["S"]}, "chB": {"recvq": ["S"]}}, "selector": {"state": "blocked-on-both", "winner": null, "value": null}}}, {"removedFrom": "chA", "type": "cleanup", "snapshot": {"chans": {"chA": {"recvq": []}, "chB": {"recvq": []}}, "selector": {"state": "woken", "winner": "chB", "value": 7}}}, {"winner": "chB", "value": 7, "type": "selected", "snapshot": {"chans": {"chA": {"recvq": []}, "chB": {"recvq": []}}, "selector": {"state": "done", "winner": "chB", "value": 7}}}, {"type": "done-all", "snapshot": {"chans": {"chA": {"recvq": []}, "chB": {"recvq": []}}, "selector": {"state": "done", "winner": "chB", "value": 7}}}];
+var idx = -1;
+var playTimer = null;
+
+var selectorCard = document.getElementById('selectorCard');
+var selectorStatus = document.getElementById('selectorStatus');
+var chansRow = document.getElementById('chansRow');
+var simLog = document.getElementById('simLog');
+
+function render(){
+  var snap = idx >= 0 ? EVENTS[idx].snapshot : {chans: {chA: {recvq: []}, chB: {recvq: []}}, selector: {state: 'idle', winner: null, value: null}};
+  var e = idx >= 0 ? EVENTS[idx] : null;
+  var sel = snap.selector;
+
+  selectorCard.dataset.state = sel.state;
+  var statusText = 'state: ' + sel.state;
+  if(sel.winner) statusText += '   winner: ' + sel.winner + ' (value=' + sel.value + ')';
+  selectorStatus.textContent = statusText;
+
+  chansRow.innerHTML = '';
+  ['chA','chB'].forEach(function(name){
+    var c = snap.chans[name];
+    var col = document.createElement('div');
+    col.className = 'chan-col';
+    col.dataset.winner = (sel.winner === name) ? 'true' : 'false';
+    col.dataset.loser = (sel.winner && sel.winner !== name && sel.state !== 'blocked-on-both') ? 'true' : 'false';
+    var title = document.createElement('div');
+    title.className = 'chan-col-title';
+    title.textContent = name;
+    var label = document.createElement('div');
+    label.className = 'recvq-label';
+    label.textContent = 'recvq';
+    var chips = document.createElement('div');
+    chips.className = 'recvq-chips';
+    if(c.recvq.length === 0){
+      var em = document.createElement('span');
+      em.className = 'queue-empty';
+      em.textContent = '(空)';
+      chips.appendChild(em);
+    } else {
+      c.recvq.forEach(function(g){
+        var chip = document.createElement('span');
+        chip.className = 's-chip';
+        chip.textContent = g;
+        chip.dataset.won = (sel.winner === name) ? 'true' : 'false';
+        chips.appendChild(chip);
+      });
+    }
+    col.appendChild(title); col.appendChild(label); col.appendChild(chips);
+    chansRow.appendChild(col);
+  });
+
+  var formulaEl = document.getElementById('simFormula');
+  var descEl = document.getElementById('simDesc');
+  if(idx < 0){
+    formulaEl.textContent = '—';
+    descEl.innerHTML = '点击"下一步"或"播放"开始。';
+  } else {
+    formulaEl.textContent = formulaFor(e);
+    descEl.innerHTML = descFor(e);
+  }
+
+  document.getElementById('simProgress').textContent = (idx+1) + ' / ' + EVENTS.length;
+  document.getElementById('btnPrev').disabled = idx < 0;
+  document.getElementById('btnNext').disabled = idx >= EVENTS.length - 1;
+
+  var items = simLog.children;
+  for(var i2=0;i2<items.length;i2++){
+    items[i2].setAttribute('data-active', i2 === idx ? 'true' : 'false');
+  }
+  if(idx >= 0 && items[idx]) items[idx].scrollIntoView({block:'nearest'});
+}
+
+function formulaFor(e){
+  if(e.type === 'check-case') return 'pass 1: case ' + e.chan + ' ready? ' + e.ready;
+  if(e.type === 'select-block') return 'pass 2: 注册到 [' + e.registeredOn.join(', ') + '],gopark()';
+  if(e.type === 'send-direct') return e.g + ': ' + e.chan + ' <- ' + e.value + '  // 直接交给 S';
+  if(e.type === 'cleanup') return 'pass 3: 从 ' + e.removedFrom + '.recvq 里移除 S';
+  if(e.type === 'selected') return '// select 走 ' + e.winner + ' 分支,v = ' + e.value;
+  if(e.type === 'done-all') return '// 演示结束';
+  return '—';
+}
+
+function descFor(e){
+  if(e.type === 'check-case') return 'pass 1 检查 <b>' + e.chan + '</b>:目前没有等待中的发送者,这个 case 还没就绪。';
+  if(e.type === 'select-block') return '两个 case 都没就绪,又没有 default——进入 pass 2:把 S 同时挂到 <b>chA.recvq</b> 和 <b>chB.recvq</b> 上,然后真正休眠。此刻谁先来都能接住。';
+  if(e.type === 'send-direct') return '<b>' + e.g + '</b> 向 <b>' + e.chan + '</b> 发送 ' + e.value + '。' + e.chan + '.recvq 里发现 S 在等——按无缓冲 channel 的直接交接规则,值直接搬给 S,S 被唤醒,这一支(' + e.chan + ')成为赢家。';
+  if(e.type === 'cleanup') return 'S 醒来后执行 pass 3:发现自己还注册在 <b>' + e.removedFrom + '.recvq</b> 上(那一支没有被选中)——把自己从那里摘除,避免留下一个永远不会被用到的僵尸等待者。';
+  if(e.type === 'selected') return 'select 语句最终执行 <b>' + e.winner + '</b> 对应的分支,拿到的值是 <b>' + e.value + '</b>。';
+  if(e.type === 'done-all') return '演示结束——两个 channel 的等待队列现在都是空的。';
+  return '';
+}
+
+function labelForEvent(e){
+  if(e.type === 'check-case') return 'pass1 检查 ' + e.chan;
+  if(e.type === 'select-block') return 'pass2: 注册到两个 channel';
+  if(e.type === 'send-direct') return e.g + ' 发送到 ' + e.chan;
+  if(e.type === 'cleanup') return 'pass3: 从 ' + e.removedFrom + ' 退订';
+  if(e.type === 'selected') return '选中 ' + e.winner + ' 分支';
+  if(e.type === 'done-all') return '结束';
+  return '';
+}
+
+function buildLog(){
+  simLog.innerHTML = '';
+  EVENTS.forEach(function(e,i){
+    var item = document.createElement('div');
+    item.className = 'log-item';
+    item.setAttribute('data-active','false');
+    var idxSpan = document.createElement('span');
+    idxSpan.className = 'log-idx';
+    idxSpan.textContent = i+1;
+    var txt = document.createElement('span');
+    txt.textContent = labelForEvent(e);
+    item.appendChild(idxSpan); item.appendChild(txt);
+    item.addEventListener('click', function(ii){ return function(){ stopPlay(); idx = ii; render(); }; }(i));
+    simLog.appendChild(item);
+  });
+}
+
+function goTo(i){
+  idx = Math.max(-1, Math.min(EVENTS.length-1, i));
+  render();
+}
+function stopPlay(){
+  if(playTimer){ clearInterval(playTimer); playTimer = null; }
+  document.getElementById('btnPlay').textContent = '播放';
+}
+document.getElementById('btnNext').addEventListener('click', function(){ stopPlay(); goTo(idx+1); });
+document.getElementById('btnPrev').addEventListener('click', function(){ stopPlay(); goTo(idx-1); });
+document.getElementById('btnReset').addEventListener('click', function(){ stopPlay(); goTo(-1); });
+document.getElementById('btnPlay').addEventListener('click', function(){
+  if(playTimer){ stopPlay(); return; }
+  if(idx >= EVENTS.length - 1) goTo(-1);
+  document.getElementById('btnPlay').textContent = '暂停';
+  var speed = parseInt(document.getElementById('simSpeed').value, 10);
+  playTimer = setInterval(function(){
+    if(idx >= EVENTS.length - 1){ stopPlay(); return; }
+    goTo(idx+1);
+  }, speed);
+});
+document.getElementById('simSpeed').addEventListener('change', function(){
+  if(playTimer){ stopPlay(); document.getElementById('btnPlay').click(); }
+});
+
+buildLog();
+goTo(-1);
+</script>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+</body>
+</html>

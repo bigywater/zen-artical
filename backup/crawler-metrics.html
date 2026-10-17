@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>爬虫指标:成功率与延迟分位数</title>
+<meta name="description" content="在本机服务器上抓 2000 个 URL 实测:平均值是中位数的 1.8 倍;不同分位数算法在小样本时差十几个百分点;100 个样本的 p99 可以差 10 倍;worker 各自的 p99 不能平均;超时封顶会让 p99 失真;只看状态码会把空正文算成成功。">
+<link rel="canonical" href="https://bigywater.tech/crawler-metrics.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="爬虫指标:成功率与延迟分位数">
+<meta property="og:description" content="在本机服务器上抓 2000 个 URL 实测:平均值是中位数的 1.8 倍;不同分位数算法在小样本时差十几个百分点;100 个样本的 p99 可以差 10 倍;worker 各自的 p99 不能平均;超时封顶会让 p99 失真;只看状态码会把空正文算成成功。">
+<meta property="og:url" content="https://bigywater.tech/crawler-metrics.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="爬虫指标:成功率与延迟分位数">
+<meta name="twitter:description" content="在本机服务器上抓 2000 个 URL 实测:平均值是中位数的 1.8 倍;不同分位数算法在小样本时差十几个百分点;100 个样本的 p99 可以差 10 倍;worker 各自的 p99 不能平均;超时封顶会让 p99 失真;只看状态码会把空正文算成成功。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">2505</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">64</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">97</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">56</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">78</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">114</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">111</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">87</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#5F7F1E; --series-c-soft:#E6EFD2;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#A3C45A; --series-c-soft:#222C0E;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#A3C45A; --series-c-soft:#222C0E;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>爬虫工程 · 65</div>
+  <h1>爬虫指标:成功率与延迟分位数</h1>
+  <p>爬虫上线后要看指标:成功率多少、延迟多少。但平均值、分位数、成功率各有几种算法,算错了会得出完全不同的结论。这篇用一个本机服务器把这几个坑逐个量出来。</p>
+  <div class="hero-fact">
+<div><div class="num">12.8 对 266.5 ms</div><div class="lbl">2000 个请求的延迟中位数与 p99(平均值 23.7 ms)</div></div><div><div class="num">64–629 ms</div><div class="lbl">只有 100 个样本时 p99 的 5%–95% 范围(同一个分布,真实 p99 约 305 ms)</div></div><div><div class="num">595 对 366 ms</div><div class="lbl">各 worker 的 p99 直接平均 与 合在一起算的 p99(合成数据)</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="crawler-batch-size.html">批量写入:批大小对吞吐的影响</a></div>
+<section>
+  <h2>平均值会骗人</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  总耗时 3.55 秒,平均 23.7 ms,中位数 12.8 ms,p90 26.2 ms,p95 63.0 ms,p99 266.5 ms,最大 1532 ms
+  平均值比中位数高 1.8 倍;低于平均值的请求占 90%</pre></div>
+  <p>延迟分布通常是一堆很快的请求加一小撮很慢的。平均值被长尾拉高:实验里平均 23.7 ms,中位数 12.8 ms,90% 的请求低于平均值。看 p95、p99 才能看到长尾。</p>
+</section>
+<section>
+  <h2>分位数的算法</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  取前  100 个:p99 最近排名    83.4、statistics.quantiles inclusive(线性插值)    83.5、exclusive    96.9;p95 最近排名   50.3、inclusive   50.6、exclusive   55.8
+  取前 2000 个:p99 最近排名   266.5、statistics.quantiles inclusive(线性插值)   266.5、exclusive   270.6;p95 最近排名   63.0、inclusive   63.0、exclusive   63.1</pre></div>
+  <p>同一批 100 个数据,p99 用最近排名法和 statistics.quantiles 的 inclusive 差不多(83 ms),exclusive 是 96.9 ms;2000 个数据时三种差在 4 ms 以内。样本少时要写明算法。</p>
+</section>
+<section>
+  <h2>样本量</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  用 40 万个样本估计的"真实" p99 ≈ 305 ms
+  每次   100 个样本:p99 的 5%–95% 范围     64 –    629 ms,中位    172 ms
+  每次  1000 个样本:p99 的 5%–95% 范围    160 –    462 ms,中位    297 ms
+  每次 10000 个样本:p99 的 5%–95% 范围    260 –    358 ms,中位    305 ms</pre></div>
+  <p>样本少时分位数本身就不稳定。同一个分布,100 个样本的 p99 在 64–629 ms 之间,1000 个样本是 160–462 ms,10000 个样本才收敛到 260–358 ms。统计窗口太短、请求太少时,p99 的抖动大多是噪声。</p>
+</section>
+<section>
+  <h2>不能平均分位数</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  各 worker 的 p99:[322, 327, 623, 1109] ms;平均 595 ms;合在一起算 p99 366 ms;按请求数加权平均 387 ms
+  每个 worker 只上报直方图(桶边界 [5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000] ms),合并之后估计 p99 = 500 ms(桶的上边界);换成更细的 19 个桶估计 p99 = 400 ms;精确值 366 ms</pre></div>
+  <p>多个 worker 各自的 p99 求平均没有意义:负载小的 worker 权重被放大(实验里平均出 595 ms,真实是 366 ms)。要上报原始值或直方图再合并;直方图的桶越粗,合并后的估计误差越大(500 ms 对 366 ms)。这一节是合成数据,不是真实请求。</p>
+</section>
+<section>
+  <h2>超时的请求怎么算</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  超时 28 个,错误类型 {'ReadTimeout': 28};超时请求记下的耗时 中位 201 ms(都被 timeout 截在 200 ms 附近)
+  全部 2000 个请求(含超时)p99 201 ms;只统计成功请求 1847 个 p99 78 ms;真实耗时的 p99(不设 timeout,第一节的数据)是 267 ms</pre></div>
+  <p>被 timeout 截断的请求,耗时就是 timeout 本身。含上它们,p99 被封顶在 201 ms;只算成功的,把最慢的请求都丢了,p99 只有 78 ms;真实值(不设 timeout)是 267 ms。报告里要同时给出超时的比例。</p>
+</section>
+<section>
+  <h2>成功率</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  状态码分布 {200: 1895, 503: 105};只看状态码 200:1895/2000 = 94.8%;200 且正文非空:1874/2000 = 93.7%
+  按窗口看:前 200 个 96.5%,后 200 个 95.5%;各 200 个一窗口的 10 个窗口:[96, 95, 92, 96, 90, 95, 93, 92, 92, 96]
+  对失败的 126 个 URL 各重试 1 次:重试成功 57 个;最终成功率 96.5%(第一次 93.7%);一共发出 2126 个请求(多发 6.3%);重试仍失败的 69 个里,按 URL 固定会失败的有 67 个(这是我在服务器里设定的,真实站点上看不到这个标签)</pre></div>
+  <p>只看状态码 200 会把“200 但正文为空”算成功(94.8% 对 93.7%)。成功率还要说清是“第一次请求成功率”还是“重试之后每个 URL 的最终成功率”:重试一次把 93.7% 提到 96.5%,多发 6.3% 的请求,而固定失败的 URL 重试也救不回来(第 30 篇的退避、第 32 篇的分类讲过重试策略)。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">爬虫指标</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "b", "kind": "bars", "label": "数字对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "本机服务器、16 个线程抓 2000 个 URL(服务器延迟:90% 在 5–15 ms,8% 在 30–80 ms,2% 是长尾),总耗时 3.55 秒:平均 23.7 ms,中位数 12.8 ms,p90 26.2 ms,p95 63.0 ms,p99 266.5 ms,最大 1532 ms。平均值是中位数的 1.8 倍,90% 的请求低于平均值。只报平均值会让人以为“一个请求 24 ms”,而一半的请求在 13 ms 以内,1% 的请求要 267 ms 以上。", "s": {"t": {"lines": ["  总耗时 3.55 秒,平均 23.7 ms,中位数 12.8 ms,p90 26.2 ms,p95 63.0 ms,p99 266.5 ms,最大 1532 ms", "  平均值比中位数高 1.8 倍;低于平均值的请求占 90%"], "cur": [], "mark": [], "done": []}, "done": [0], "b": {"items": [["中位数 ms", 12.8, "12.8"], ["平均 ms", 23.7, "23.7"], ["p95 ms", 63.0, "63.0"], ["p99 ms", 266.5, "266.5"], ["最大 ms", 1532, "1532"]], "max": 1600, "cur": [], "mark": [3, 4], "done": [0]}, "kv": {"items": [["中位数", "12.8 ms"], ["平均", "23.7 ms(1.8 倍)"], ["p99", "266.5 ms"]], "hl": ["p99"]}}}, {"note": "同一批数据,不同算法的分位数不一样。取前 100 个:p99 最近排名法 83.4 ms、statistics.quantiles 的 inclusive(线性插值)83.5 ms、exclusive 96.9 ms;p95 分别是 50.3、50.6、55.8 ms。取全部 2000 个:p99 为 266.5、266.5、270.6 ms;p95 为 63.0、63.0、63.1 ms。样本多时算法的差别可以忽略;样本少时 exclusive 比另外两种高十几个百分点,报告时要说明用的哪种。", "s": {"t": {"lines": ["  取前  100 个:p99 最近排名    83.4、statistics.quantiles inclusive(线性插值)    83.5、exclusive    96.9;p95 最近排名   50.3、inclusive   50.6、exclusive   55.8", "  取前 2000 个:p99 最近排名   266.5、statistics.quantiles inclusive(线性插值)   266.5、exclusive   270.6;p95 最近排名   63.0、inclusive   63.0、exclusive   63.1"], "cur": [], "mark": [], "done": []}, "done": [0], "mark": [1], "b": {"items": [["100 个:p99 最近排名", 83.4, "83.4"], ["100 个:p99 inclusive", 83.5, "83.5"], ["100 个:p99 exclusive", 96.9, "96.9"]], "max": 100, "cur": [], "mark": [2], "done": [0, 1]}, "kv": {"items": [["100 个样本", "exclusive 的 p99 高 13 ms"], ["2000 个样本", "三种算法差 4 ms 以内"], ["做法", "报告里写明算法"]], "hl": ["100 个样本"]}}}, {"note": "样本少时 p99 很不稳定(从同一个分布生成延迟,每个样本量重复 1000 次,p99 的 5%–95% 范围):用 40 万个样本估计的“真实”p99 约 305 ms;每次 100 个样本:64–629 ms,中位 172 ms;每次 1000 个:160–462 ms,中位 297 ms;每次 10000 个:260–358 ms,中位 305 ms。100 个请求算出的 p99 可能差 10 倍,一小时内只抓了几百个请求的 p99 并不可靠。", "s": {"t": {"lines": ["  用 40 万个样本估计的\"真实\" p99 ≈ 305 ms", "  每次   100 个样本:p99 的 5%–95% 范围     64 –    629 ms,中位    172 ms", "  每次  1000 个样本:p99 的 5%–95% 范围    160 –    462 ms,中位    297 ms", "  每次 10000 个样本:p99 的 5%–95% 范围    260 –    358 ms,中位    305 ms"], "cur": [], "mark": [], "done": []}, "done": [1], "mark": [3], "b": {"items": [["100 个样本:p99 范围上界 ms", 629, "629"], ["1000 个样本:p99 范围上界 ms", 462, "462"], ["10000 个样本:p99 范围上界 ms", 358, "358"], ["真实 p99 ms", 305, "305"]], "max": 650, "cur": [], "mark": [0], "done": [3]}, "kv": {"items": [["100 个样本", "64–629 ms"], ["1000 个样本", "160–462 ms"], ["10000 个样本", "260–358 ms"]], "hl": ["100 个样本"]}}}, {"note": "几个 worker 各自算 p99 再平均,和合在一起算不一样(合成数据,4 个 worker 各抓 4000、2000、1000、200 个请求,最后一个更慢):各 worker 的 p99 是 322、327、623、1109 ms,直接平均 595 ms;合在一起算 p99 366 ms;按请求数加权平均 387 ms。每个 worker 只上报直方图:桶很粗时(10 个桶,边界 5…5000 ms)合并估计 p99 为 500 ms(桶上界);换成更细的 19 个桶估计 400 ms;精确值 366 ms。分位数不能平均,要上报原始样本或直方图再合并,桶的粒度决定误差。", "s": {"t": {"lines": ["  各 worker 的 p99:[322, 327, 623, 1109] ms;平均 595 ms;合在一起算 p99 366 ms;按请求数加权平均 387 ms", "  每个 worker 只上报直方图(桶边界 [5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000] ms),合并之后估计 p99 = 500 ms(桶的上边界);换成更细的 19 个桶估计 p99 = 400 ms;精确值 366 ms"], "cur": [], "mark": [], "done": []}, "done": [0], "mark": [0], "b": {"items": [["各 worker p99 直接平均 ms", 595, "595"], ["按请求数加权 ms", 387, "387"], ["合并 19 个桶估计 ms", 400, "400"], ["精确 p99 ms", 366, "366"]], "max": 620, "cur": [], "mark": [0], "done": [3]}, "kv": {"items": [["平均各 worker 的 p99", "595 ms"], ["合在一起算", "366 ms"], ["粗桶合并估计", "500 ms,细桶 400 ms"]], "hl": ["合在一起算"]}}}, {"note": "超时请求的延迟记不记?客户端 timeout=0.2 秒,同样 2000 个 URL:28 个 ReadTimeout,记下的耗时中位 201 ms(被 timeout 截断)。含超时的全部 2000 个请求 p99 为 201 ms;只统计成功的 1847 个请求 p99 为 78 ms;真实的 p99(不设 timeout)是 267 ms。三个数字说的是三件事:含超时的被 timeout 封顶,只算成功的把最慢的那批全丢了。", "s": {"t": {"lines": ["  超时 28 个,错误类型 {'ReadTimeout': 28};超时请求记下的耗时 中位 201 ms(都被 timeout 截在 200 ms 附近)", "  全部 2000 个请求(含超时)p99 201 ms;只统计成功请求 1847 个 p99 78 ms;真实耗时的 p99(不设 timeout,第一节的数据)是 267 ms"], "cur": [], "mark": [], "done": []}, "done": [1], "mark": [0], "b": {"items": [["只统计成功请求 p99 ms", 78, "78"], ["含超时(截断在 timeout)p99 ms", 201, "201"], ["真实 p99(不设 timeout)ms", 267, "267"]], "max": 280, "cur": [], "mark": [0, 1], "done": [2]}, "kv": {"items": [["只算成功请求", "p99 78 ms(最慢的被丢掉了)"], ["含超时", "p99 201 ms(被 timeout 封顶)"], ["不设 timeout", "p99 267 ms"]], "hl": ["含超时"]}}}, {"note": "“成功率”的算法:2000 个请求里状态码 200 的占 94.8%(1895 个)、503 有 105 个;200 且正文非空的占 93.7%(1874 个)——服务器对 1% 的 URL 固定返回 200 + 空正文。每 200 个一个窗口:96、95、92、96、90、95、93、92、92、96(%),波动 90–96。对第一次失败的 126 个 URL 各重试一次:成功 57 个,最终成功率 96.5%,多发 6.3% 的请求;仍失败的 69 个里 67 个是我在服务器里设定的“按 URL 固定会失败”的。只看状态码会把空正文算成成功;重试能挽回的是随机失败,救不了固定失败。", "s": {"t": {"lines": ["  状态码分布 {200: 1895, 503: 105};只看状态码 200:1895/2000 = 94.8%;200 且正文非空:1874/2000 = 93.7%", "  按窗口看:前 200 个 96.5%,后 200 个 95.5%;各 200 个一窗口的 10 个窗口:[96, 95, 92, 96, 90, 95, 93, 92, 92, 96]", "  对失败的 126 个 URL 各重试 1 次:重试成功 57 个;最终成功率 96.5%(第一次 93.7%);一共发出 2126 个请求(多发 6.3%);重试仍失败的 69 个里,按 URL 固定会失败的有 67 个(这是我在服务器里设定的,真实站点上看不到这个标签)"], "cur": [], "mark": [], "done": []}, "done": [2], "mark": [0], "b": {"items": [["状态码 200 的占比 %", 94.8, "94.8"], ["200 且正文非空 %", 93.7, "93.7"], ["重试一次后的最终成功率 %", 96.5, "96.5"]], "max": 100, "cur": [], "mark": [0], "done": [2]}, "kv": {"items": [["只看状态码", "94.8%"], ["要求正文非空", "93.7%"], ["重试 1 次", "96.5%,多发 6.3% 请求"]], "hl": ["要求正文非空"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / Python 3.14.8 / requests 2.34.2 / aiohttp 3.14.3 / lxml 6.1.1(系统 Python);所有请求只发给本机自己起的测试服务器(127.0.0.1,端口 9960 以上,不访问任何真实网站);服务器可以按实验需要制造延迟、断连、压缩、重定向等行为,并记录收到的原始请求;计时用 time.perf_counter,数字每次运行会有小幅抖动。服务器是本机的 Srv(延迟按 URL 编号用固定随机数确定;2% 的 URL 固定 503、1% 的 URL 固定返回 200 加空正文,每次请求另有 3% 的随机 503),客户端是 requests Session + 16 个线程;第一、二、五、六节用真实请求(各一次);第三、四节是用同一个延迟分布生成的合成数据(第三节每个样本量重复 1000 次)</li><li>没有验证:真实站点的延迟分布(它们常常比这个更偏、有多个峰);更高的并发下客户端自身排队造成的延迟(coordinated omission:延迟从请求发出算起,没有包含等待发出的时间);Prometheus、HdrHistogram 等工具的分位数实现;滑动窗口里的 p99 怎么高效计算;时间序列上的告警阈值</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="crawler-user-agent-contact.html">
+    <div>
+      <div class="t1">下一篇 · 爬虫工程 66</div>
+      <div class="t2">User-Agent 与联系方式:服务端日志里看到什么</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>爬虫工程 · 爬虫指标:成功率与延迟分位数 · 实验记录 · 2026-09-29</footer>
+</body>
+</html>

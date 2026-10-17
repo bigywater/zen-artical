@@ -1,0 +1,14 @@
+from lib import *
+S = SS('f174')
+R = J('f174'); fo = R['failover']; nr = R['no_retry']; hg = R['hang']
+steps = [
+    step(f"两个 gunicorn 后端(A、B)放在 nginx 的 upstream 里,默认 round-robin:40 个请求平分,A {R['rr']['A']} 个、B {R['rr']['B']} 个;给它们加权重 weight=3 比 1,A {R['weight']['A']} 个、B {R['weight']['B']} 个。", t=tl(S(1)), done=lidx(S(1), '分布', 'weight'), kv=KV([['默认', '轮流,平分'], ['weight=3:1', f"A {R['weight']['A']} / B {R['weight']['B']}"]], ['默认'])),
+    step(f"一个后端挂了(B 进程停掉):默认配置(proxy_next_upstream error timeout)下,B 停掉后发 40 个请求,成功 {fo[0]} 个、失败 {40 - fo[0]} 个,全部落在 A 上;nginx 的 error.log 里「Connection refused」只出现 {R['refused']} 次——第一次碰到连不上的后端就失败了一次(请求被重试到 A,客户端没感觉),之后 nginx 把 B 标记为不可用一段时间(默认 max_fails=1、fail_timeout=10 秒),这期间不再往它发。这是被动健康检查:要靠真实请求去「踩」才发现。把 proxy_next_upstream 设成 off 时,40 个请求里 {nr[0]} 个成功、{40 - nr[0]} 个失败(碰到挂掉的后端的那一个请求直接 502),之后同样被标记为不可用。", t=tl(S(2)), done=lidx(S(2), 'B 停掉后', 'error.log'), mark=lidx(S(2), 'proxy_next_upstream off'), kv=KV([['默认重试', '客户端无感'], ['被动检查', '一次失败后标记不可用 10 秒'], ['next_upstream off', '那一个请求 502']], ['被动检查'])),
+    step(f"一个后端卡住(收到请求后 5 秒不响应):proxy_read_timeout 1 秒、max_fails=0(不把它标记为不可用,每个请求都会轮到它)。GET 6 个请求全部 200,最慢 {hg['GET'][1]:.0f} ms——落到卡住的后端的请求等 1 秒超时后,被重试到 A;POST 6 个请求有 {hg['POST'][0]['504']} 个返回 504、{hg['POST'][0]['200']} 个 200,最慢 {hg['POST'][1]:.0f} ms——POST 不会被重试(非幂等请求在已经发出之后默认不换后端,以免重复执行)。GET 的重试会让慢后端的负载翻倍转给其它后端,POST 则直接失败给客户端。", b=bars([['GET 最慢', hg['GET'][1], f"{hg['GET'][1]:.0f} ms,全 200"], ['POST 最慢', hg['POST'][1], f"{hg['POST'][1]:.0f} ms,{hg['POST'][0]['504']} 个 504"]], 1100, done=[0], mark=[1]), t=tl(S(3)), done=lidx(S(3), 'GET'), mark=lidx(S(3), 'POST'), kv=KV([['GET', '超时后换后端重试,全部成功'], ['POST', f"不重试,{hg['POST'][0]['504']} 个 504"]], ['POST'])),
+]
+A = mkartf('f174', 174, 'Flask,Nginx,反向代理,负载均衡,故障转移,真实验证,动画演示',
+    f'用真实的 nginx 与两个 gunicorn 后端实测反向代理:round-robin 与 weight=3 比 1 的分布、后端停掉时默认重试让 40 个请求全部成功并被动标记不可用、proxy_next_upstream off 时失败 {40 - nr[0]} 个、后端卡住时 GET 超时后被重试而 POST 不被重试({hg["POST"][0]["504"]} 个 504)。',
+    'nginx 做负载均衡与故障转移时,后端挂了会怎样?GET 和 POST 的重试有什么区别?健康检查是怎么发现问题的?这篇用真实的两个后端把每种情形跑出来(HTTPS 与代理头见第 134、135 篇)。',
+    [(f'{R["weight"]["A"]}:{R["weight"]["B"]}', 'weight=3 比 1 时 40 个请求在两个后端的分布'), (f'失败 {40 - fo[0]}', '一个后端挂了、默认重试配置下 40 个请求的失败数'), (f'{hg["POST"][0]["504"]} 个 504', '后端卡住时 POST 不被重试而直接超时的请求数(6 个里)')],
+    [('负载均衡', '<p>上一篇:<a href="flask-uwsgi-flask.html">uWSGI 与 Flask</a>;下一篇:<a href="flask-proxyfix.html">ProxyFix 的作用</a>。</p><p>nginx 是自己起的实例(非默认端口),后端是两个 gunicorn gthread 进程。</p>'), ('后端挂了', None), ('后端卡住', '<p>这一节的 nginx 配置里设了 max_fails=0,不把后端标记为不可用,每个请求都会轮到卡住的那个。</p>')],
+    steps, [ENV_F + '。nginx 1.31.6、gunicorn gthread', '没有验证:nginx Plus 的主动健康检查、upstream keepalive 连接复用的效果、proxy_next_upstream_tries 与 proxy_next_upstream_timeout、least_conn 与 ip_hash 等其它负载均衡算法、nginx 重载配置时的连接处理'], 'Nginx 反向代理')

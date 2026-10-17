@@ -1,0 +1,20 @@
+from lib import *
+S = SS('p24')
+steps = [
+    step("这台机器的限制:shell 的 ulimit -n 软限制是 1048576,硬限制 unlimited,内核的 kern.maxfilesperproc 是 61440。把进程的软限制用 setrlimit 设成 10000000 不报错(读回来也是 10000000),但内核实际给单个进程的上限仍是 61440,我没有去验证真能开到多少个。很多 Linux 服务器默认只有 1024,这台 Mac 的默认值很宽松,不会碰到本文的问题。", t=tl(S(1)), done=lidx(S(1), 'ulimit -n', '设成 10000000'), kv=KV([['ulimit -n(软)', '1048576'], ['硬限制', 'unlimited'], ['内核每进程上限', 'kern.maxfilesperproc = 61440']], ['内核每进程上限'])),
+    step("每个并发连接占多少描述符:aiohttp 同时打开 20 条在途连接,进程里 /dev/fd 的数量从请求前的 3 个变成 26 个,多出 23 个,平均每条连接 1.1 个。20 个是连接本身(每条连接一个套接字),另外 3 个我没有逐个核对,推测是 asyncio 事件循环自己的 kqueue 和自管道的两个套接字。", t=tl(S(2)), done=lidx(S(2), '每条连接多出'), b=bars([['请求前', 3, '3'], ['20 条连接在途时', 26, '26']], 26, done=[1]), kv=KV([['20 条连接', '多出 23 个描述符'], ['每条连接', '约 1 个套接字'], ['其余 3 个', '推测是事件循环自己的']], ['每条连接'])),
+    step("把软限制压到 100(在子进程里 setrlimit),并发 300 个连接(服务器每个请求停 0.3 秒):aiohttp 成功 94、失败 206,异常是 ClientConnectorError,底层 OSError 的 errno 是 24(EMFILE:Too many open files),过程中同时打开的描述符顶到 100;requests(300 个线程)成功 97、失败 203,异常是 ConnectionError,底层同样是 OSError 24。对照软限制 5000:aiohttp 300 个全部成功,最多同时打开 306 个描述符。成功数略少于 100 是因为进程本身已占了几个描述符。", t=tl(S(3)), done=lidx(S(3), '软限制 5000', '成功 300'), mark=lidx(S(3), 'aiohttp:成功 94', 'requests(300 个线程)'), b=bars([['限制 100:aiohttp 成功', 94, '94'], ['限制 100:requests 成功', 97, '97'], ['限制 5000:aiohttp 成功', 300, '300']], 300, mark=[0, 1], done=[2]), kv=KV([['限制 100', '约 100 个成功,其余 OSError 24'], ['异常', 'ClientConnectorError / ConnectionError'], ['限制 5000', '300 个全成功,峰值 306 个描述符']], ['限制 100'])),
+    step("比并发更隐蔽的是“保留 Response 对象”:软限制 100,连续发 300 个很快返回的请求并存进列表。results.append(requests.get(url)) 完成 97 个后第 98 个就失败(ConnectionError),进程里有 100 个描述符——每个被保留的 Response 背后的连接一直开着;读完后调用 r.close() 也一样(97 个、第 98 个失败)。只保留 requests.get(url).content(bytes):300 个全部成功,结束时只有 4 个描述符;同一个 Session.get 并保留整个 Response 也是 300 个全成功(4 个描述符)。", t=tl(S(4)), done=lidx(S(4), '只保留 bytes', '同一个 Session.get'), mark=lidx(S(4), '保留整个 Response)', 'r.close()'), b=bars([['保留 Response:能完成', 97, '97'], ['只保留 bytes:能完成', 300, '300'], ['同一个 Session:能完成', 300, '300']], 300, mark=[0], done=[1, 2]), kv=KV([['保留 requests.get 的 Response', '连接一直开着,97 个就耗尽'], ['只保留 .content', '300 个全成功'], ['同一个 Session', '连接被复用,不涨']], ['保留 requests.get 的 Response'])),
+]
+A = mkartp('p24', 24, '爬虫,文件描述符,ulimit,Too many open files,EMFILE,aiohttp,requests,Python,真实验证,动画演示',
+    '实测文件描述符上限:软限制压到 100 时 300 个并发连接只有约 94–97 个成功,其余是 OSError errno 24;每条连接约占 1 个描述符;更隐蔽的是保留 requests.get 返回的 Response 对象——97 个就耗尽描述符,而只保留 .content 或用同一个 Session 则全部成功。',
+    '“Too many open files”是爬虫放大并发后最经典的报错之一。这篇在本机把软限制压低到 100,复现它在 aiohttp 和 requests 里的样子,量每条连接占多少描述符,再查出一个比并发更隐蔽的原因:把 Response 对象存起来。',
+    [('errno 24', '描述符耗尽时,aiohttp 的 ClientConnectorError 和 requests 的 ConnectionError 底层都是 OSError 24'), ('97 对 300', '软限制 100 时,保留 Response 对象能完成的请求数,对只保留 .content 能完成的请求数'), ('1.1', 'aiohttp 每条并发连接占的描述符数(20 条连接多出 23 个)')],
+    [('限制是多少', '<p>这台 Mac 的软限制是 1048576,内核对单个进程的上限是 61440,所以本文的问题在默认设置下碰不到;很多 Linux 服务器默认 1024,更容易碰到。把软限制 <code>setrlimit</code> 成一个很大的数不会报错,但内核的上限仍然生效。</p>'),
+     ('每条连接占多少', '<p>每条并发连接占一个套接字描述符;asyncio 事件循环自己还占几个(这里推测是 kqueue 和自管道)。同时在途的连接数加上这几个,不能超过软限制。</p>'),
+     ('耗尽时的报错', '<p>软限制压到 100、并发 300:aiohttp 抛 <code>ClientConnectorError</code>,requests 抛 <code>ConnectionError</code>,里面的 <code>OSError</code> 都是 errno 24(<code>Too many open files</code>);成功的数量略少于 100,因为进程本身已占了几个描述符。注意同样的错误也会出现在“打开文件、读写数据库”等任何要新描述符的地方,不只是网络请求。</p>'),
+     ('保留 Response 对象', '<p>把 <code>requests.get(url)</code> 的返回值存进列表,每个响应背后的连接就一直开着,哪怕响应体已经读完、哪怕调用了 <code>r.close()</code>。软限制 100 时 97 个请求之后就耗尽。只保留需要的内容(<code>.content</code>、<code>.text</code>、解析结果),连接随响应被回收;共用一个 <code>Session</code> 时连接被复用,也不涨。为什么读完的响应仍占着连接,我没有读源码查。</p>')],
+    steps,
+    [ENV_P + '。限制在客户端子进程里用 resource.setrlimit 把软限制压低(服务器在父进程里,软限制保持默认);描述符数量通过读 /dev/fd 目录统计(减去读目录本身占的 1 个);第四节的服务器如果与客户端在同一进程会把两端都数进去(我一开始就踩了这个坑,所以最终实验把服务器放在父进程、客户端在子进程);aiohttp 3.14.3、requests 2.34.2',
+     '没有验证:Linux 上的行为与默认限制;kern.maxfilesperproc 实际能开到多少个;HTTPS、代理下每条连接占用的描述符数;保留 Response 时连接为什么没被关闭(没读源码);aiohttp 里保留 ClientResponse 对象的类似问题;ulimit 与 launchd/systemd 的服务级配置;文件、管道等其它描述符消耗与网络连接混合时的预算'],
+    '文件描述符上限')

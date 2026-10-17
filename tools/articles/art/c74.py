@@ -1,0 +1,18 @@
+from lib import *
+S = SS('c74')
+steps = [
+    step("docker system df 有四行,JSON 字段是 Type、TotalCount、Active、Size、Reclaimable:Images(7 个、1 个在用、Size 1.573GB、可回收 273.8MB)、Containers(8 个、全部在用、Size 10.04MB、可回收 0B)、Local Volumes(19 个、8 个在用、Size 6.818GB、可回收 267.8MB)、Build Cache(662 条、9 条在用、Size 4.458GB、可回收 4.242GB)。Docker Desktop 里还有别的项目留下的数据,所以后面只看增量。", t=tl(S(1)), done=lidx(S(1), 'Images', 'Containers', 'Local Volumes', 'Build Cache'), mark=lidx(S(1), 'JSON 字段'), b=bars([['Images (GB)', 1.573, '1.573'], ['Local Volumes (GB)', 6.818, '6.818'], ['Build Cache (GB)', 4.458, '4.458']], 6.818, done=[0], mark=[1, 2]), kv=KV([['Images', 'Size 1.573GB'], ['Local Volumes', 'Size 6.818GB'], ['Build Cache', 'Size 4.458GB,可回收 4.242GB']], ['Build Cache'])),
+    step("制造三个 30 MB 的东西看增量:往命名卷写 30 MB 随机数据,Local Volumes 的 Size 6.818GB → 6.849GB(+31.0 MB);容器可写层写 30 MB,Containers 的 Size 10.04MB → 41.5MB(+31.5 MB),TotalCount 8 → 9;构建带 30 MB 随机层的镜像,Images 的 Size +63.0 MB(压缩内容加解包层,见 c18),同时 Build Cache 也 +63.0 MB——同一个层在两处各算了一份。", t=tl(S(2)), done=lidx(S(2), '往命名卷写 30 MB', '容器可写层写 30 MB'), mark=lidx(S(2), '构建带 30 MB'), b=bars([['卷 +30 MB 数据 → Local Volumes 增量 (MB)', 31.0, '31.0'], ['容器可写层 +30 MB → Containers 增量 (MB)', 31.5, '31.5'], ['镜像 30 MB 层 → Images 增量 (MB)', 63.0, '63.0'], ['镜像 30 MB 层 → Build Cache 增量 (MB)', 63.0, '63.0']], 63, done=[0, 1], mark=[2, 3]), kv=KV([['卷', '+31.0 MB'], ['容器可写层', '+31.5 MB'], ['镜像', 'Images +63.0 MB 且 Build Cache +63.0 MB']], ['镜像'])),
+    step("Reclaimable 的变化:删掉带 30 MB 可写层的容器,Containers 的 Size 41.5MB → 10.04MB;卷 bwlab-c74v 和镜像 bwlab-c74img 此时都没有容器用,已经计入可回收(卷的 Reclaimable 299.3MB,镜像 323.2MB)。再起一个同时用这个卷和这个镜像的容器:Local Volumes Reclaimable 299.3MB → 267.8MB(少了约 31.5 MB),Images Reclaimable 323.2MB → 260.3MB(少了约 63 MB)。可回收就是没有容器引用的部分。", t=tl(S(3)), done=lidx(S(3), '起一个使用这个卷和这个镜像的容器'), mark=lidx(S(3), '现在:卷 Reclaimable', '删掉那个运行中的容器后'), b=bars([['卷 Reclaimable:未被引用 (MB)', 299.3, '299.3'], ['卷 Reclaimable:被容器用上后 (MB)', 267.8, '267.8'], ['镜像 Reclaimable:未被引用 (MB)', 323.2, '323.2'], ['镜像 Reclaimable:被容器用上后 (MB)', 260.3, '260.3']], 323.2, done=[1, 3], mark=[0, 2]), kv=KV([['没有容器引用的卷', '计入 Reclaimable'], ['没有容器使用的镜像', '计入 Reclaimable'], ['起容器引用它们', 'Reclaimable 对应减少']], ['起容器引用它们'])),
+]
+A = mkartc('c74', 74, 'Docker,docker system df,磁盘占用,Reclaimable,构建缓存,真实验证,动画演示',
+    '在 Docker Engine 29.8.2 里实测 docker system df:四行(Images、Containers、Local Volumes、Build Cache);往卷写 30 MB 随机数据 Local Volumes 增 31.0 MB,容器可写层 30 MB 使 Containers 增 31.5 MB,30 MB 的镜像层使 Images 和 Build Cache 各增 63.0 MB;Reclaimable 就是没有容器引用的部分(卷 299.3MB → 267.8MB、镜像 323.2MB → 260.3MB)。',
+    'docker system df 的四行各算什么?写 30 MB 数据到不同的地方,它们各涨多少?Reclaimable 到底怎么定义?这篇制造已知大小的数据,逐项对照数字。',
+    [('+63.0 MB', '一个 30 MB 随机层的镜像,在 Images 和 Build Cache 两行各增加的大小'), ('+31.0 / +31.5 MB', '往卷、往容器可写层写 30 MB 随机数据后,对应一行的增量'), ('Reclaimable', '没有被容器引用的卷和镜像所占的大小,起容器引用后立刻变小')],
+    [('四行', '<p>Images、Containers(可写层)、Local Volumes、Build Cache。每行有总数(TotalCount)、在用的数(Active)、大小和可回收大小。</p>'),
+     ('同样 30 MB 在不同行', '<p>卷里的数据和容器可写层里的数据按实际字节计(增量约 31 MB,含元数据);镜像按「压缩内容加解包后的层」计,所以 30 MB 随机数据变成 63 MB;构建缓存里同样的层又计一份。这些增量是在一个本来就有不少数据的 Docker Desktop 里测的,可能受其它活动影响。</p>'),
+     ('可回收', '<p>Reclaimable 是没有被任何容器引用的部分:没有容器使用的镜像、没有容器挂载的卷。起一个容器引用它们,可回收立刻变小。docker prune 回收的就是这部分(见下一篇)。</p>')],
+    steps,
+    [ENV_C + '。docker system df --format json 取数,单位换算成 MB 后相减;Docker Desktop 里还有其它项目留下的镜像、卷和构建缓存(Build Cache 就有 4.458GB),所以只看增量;随机数据用 /dev/urandom(几乎不可压缩);实验后已删除我创建的卷、容器、镜像',
+     '没有验证:docker system df -v 的逐对象数据(c18 里用过 SHARED / UNIQUE)、Reclaimable 百分比的分母、构建缓存的回收条件(最近使用时间)、Build Cache 里 63.0 MB 与 Images 里的 63.0 MB 是否就是同一份数据(只看到数字相同)'],
+    'docker system df')

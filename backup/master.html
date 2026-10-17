@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>多个节点怎么就谁是 master 达成一致</title>
+<meta name="description" content="真实节点间的选主投票过程与脑裂防护机制。">
+<link rel="canonical" href="https://bigywater.tech/master.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="多个节点怎么就谁是 master 达成一致">
+<meta property="og:description" content="真实节点间的选主投票过程与脑裂防护机制。">
+<meta property="og:url" content="https://bigywater.tech/master.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="多个节点怎么就谁是 master 达成一致">
+<meta name="twitter:description" content="真实节点间的选主投票过程与脑裂防护机制。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F6F7F9; --paper:#FFFFFF; --ink:#1C2230; --ink-dim:#5F6B7C; --line:#DEE3EA;
+  --term-c:#3B4C9E; --term-c-soft:#E7E9F7;
+  --match-c:#B8891A; --match-c-soft:#F6EDD9;
+  --postings-c:#12807E; --postings-c-soft:#DCF0EF;
+  --code-bg:#1C2230; --code-ink:#E7EAF0;
+  --shadow: 0 1px 2px rgba(20,25,40,.05), 0 8px 24px -12px rgba(20,25,40,.14);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#14171F; --paper:#1B1F2A; --ink:#E7EAF0; --ink-dim:#9AA3B5; --line:#2C3242;
+    --term-c:#8B9AE8; --term-c-soft:#232A46;
+    --match-c:#E0B75C; --match-c-soft:#332B18;
+    --postings-c:#5FC9C6; --postings-c-soft:#193232;
+    --code-bg:#10131A; --code-ink:#DCE1E6;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#14171F; --paper:#1B1F2A; --ink:#E7EAF0; --ink-dim:#9AA3B5; --line:#2C3242;
+  --term-c:#8B9AE8; --term-c-soft:#232A46;
+  --match-c:#E0B75C; --match-c-soft:#332B18;
+  --postings-c:#5FC9C6; --postings-c-soft:#193232;
+  --code-bg:#10131A; --code-ink:#DCE1E6;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",Helvetica,Arial,sans-serif; line-height:1.7;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+.wrap{max-width:880px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--term-c);}
+
+.hero{padding:68px 24px 36px;}
+.hero-inner{max-width:880px; margin:0 auto;}
+.eyebrow{font-size:.8rem; letter-spacing:.06em; text-transform:uppercase; color:var(--term-c); display:flex; align-items:center; gap:8px; margin-bottom:16px; font-weight:600;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--term-c);}
+h1{font-size:2.1rem; line-height:1.32; margin:0 0 18px; text-wrap:balance; letter-spacing:-.01em; font-weight:700;}
+.hero p{font-size:1.05rem; color:var(--ink-dim); max-width:680px; margin:0 0 14px;}
+.hero-fact{margin-top:26px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:700; color:var(--term-c);}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:40px 24px;}
+h2{font-size:1.4rem; margin:0 0 6px; letter-spacing:-.01em; font-weight:700;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 24px;}
+p{margin:0 0 16px;}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:22px 0;}
+@media (max-width:760px){.cards{grid-template-columns:1fr;}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:var(--shadow);}
+.card .tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.7rem; letter-spacing:.05em; text-transform:uppercase; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:12px;}
+.card.a .tag{background:var(--term-c-soft); color:var(--term-c);}
+.card.b .tag{background:var(--match-c-soft); color:var(--match-c);}
+.card.c .tag{background:var(--postings-c-soft); color:var(--postings-c);}
+.card h3{margin:0 0 8px; font-size:1.02rem;}
+.card p{font-size:.9rem; color:var(--ink-dim); margin:0;}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:16px 18px; margin:14px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--term-c-soft); color:var(--term-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#9DB4F0;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88A8A;}
+.term .cm{color:#8B95A1;}
+
+table{width:100%; border-collapse:collapse; margin:18px 0; font-size:.88rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.78rem; padding:8px 10px; border-bottom:1px solid var(--line);}
+td{padding:9px 10px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+.sim-badge{display:inline-block; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.66rem; letter-spacing:.04em; text-transform:uppercase; background:var(--term-c-soft); color:var(--term-c); padding:2px 7px; border-radius:5px; margin-left:8px; vertical-align:middle;}
+
+.callout{border-left:3px solid var(--term-c); background:var(--term-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:18px 0; font-size:.94rem;}
+.callout.b{border-color:var(--match-c); background:var(--match-c-soft);}
+.callout.c{border-color:var(--postings-c); background:var(--postings-c-soft);}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:22px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:700; font-size:.92rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.9rem; border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--match-c-soft); color:var(--match-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:20px;}
+.noderow{display:flex; gap:10px; margin-bottom:14px; flex-wrap:wrap;}
+.nodecard{flex:1; min-width:120px; border:1.5px solid var(--line); border-radius:10px; padding:12px; background:var(--bg); text-align:center;}
+.nodecard.master{border-color:var(--term-c); background:var(--term-c-soft);}
+.nodecard.down{opacity:.35; border-style:dashed;}
+.nodecard.voted{border-color:var(--postings-c);}
+.nodecard h5{margin:0 0 6px; font-size:.72rem; letter-spacing:.04em; text-transform:uppercase; color:var(--ink-dim); font-weight:700;}
+.nodecard .v{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.78rem;}
+.demo-controls{padding:12px 20px; display:flex; gap:10px; align-items:center; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn.primary{background:var(--term-c); border-color:var(--term-c); color:#fff;}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px 22px; margin-top:18px;}
+.refs h3{margin:0 0 10px; font-size:.98rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.86rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{display:flex; align-items:center; gap:10px; margin-bottom:22px; font-size:.86rem; color:var(--ink-dim); flex-wrap:wrap;}
+.prev-post a{font-weight:600;}
+
+footer{padding:36px 24px 56px; text-align:center; color:var(--ink-dim); font-size:.82rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>Elasticsearch 系列 · 第七篇</div>
+    <h1>好几个节点凑成一个集群,它们怎么就"谁是 master"这件事达成一致?</h1>
+    <p>一个 Elasticsearch 集群里,master 节点负责管理集群状态(有哪些索引、分片分配在哪、哪些节点还活着)。master 只能有一个——两个 master 同时拍板会导致集群状态分裂("裂脑")。这篇讲清楚多个节点怎么在没有人工介入的情况下,自己选出唯一一个 master,以及网络出问题时怎么保证不会选出两个。</p>
+    <p>这篇的核心算法用可验证的仿真复现,并且用一段本机真实记录下的日志作为佐证——这行日志是这台机器在准备这个系列时,一次真实(虽然最终因为内存不足没能完整跑起来)的三节点集群引导尝试留下的。</p>
+    <div class="hero-fact">
+      <div><div class="num">"node term 0, last-accepted<br>version 0 in term 0"</div><div class="lbl">本机真实捕获的集群协调日志片段</div></div>
+      <div><div class="num">严格多数</div><div class="lbl">选出 master 的唯一条件——不是"票最多",是"过半"</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <div class="prev-post">← 接上篇 <a href="replica.html" target="_blank" rel="noopener">写入一致性:主分片和副本分片怎么保证不丢数据</a></div>
+  <h2>选举的核心规则:严格多数,不是相对多数</h2>
+  <p class="h2-sub">Elasticsearch 从 7.0 开始用一套自研的、类 Raft 的协调协议(替代更早的 Zen Discovery)。规则很简单,但这个简单规则本身就是防止裂脑的全部秘密。</p>
+  <div class="cards">
+    <div class="card a">
+      <span class="tag">term</span>
+      <h3>每一轮选举一个递增编号</h3>
+      <p>类似上一篇 primary_term 的思路——每发起一轮新的选举,term 加一,用来区分"这是哪一轮达成的结果"。</p>
+    </div>
+    <div class="card b">
+      <span class="tag">quorum</span>
+      <h3>必须拿到严格多数票</h3>
+      <p>N 个有资格当 master 的节点里,候选人要拿到 <span class="mono">⌊N/2⌋+1</span> 票才能当选——不是"票数最高就行",是必须过半。</p>
+    </div>
+    <div class="card c">
+      <span class="tag">不可能同时两个多数</span>
+      <h3>裂脑在数学上不成立</h3>
+      <p>把 N 个节点分成两拨,不可能两拨都同时超过半数——这就是为什么"严格多数"这个条件,本身就杜绝了两个 master 同时存在的可能性。</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>本机真实捕获的一段日志</h2>
+  <p class="h2-sub">准备这篇文章时,曾经真实尝试过在本机拉起一个三节点集群做实验——受限于这台机器当前可用内存,第二、第三个节点的 Elasticsearch 进程在完成启动前就被系统终止了,三节点集群最终没能完整组建起来。但第一个节点在等待另外两个节点加入的过程中,留下的日志是真实的:</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<span class="cm">[node1] master not discovered yet, this node has not previously joined a
+bootstrapped cluster, and this node must discover master-eligible nodes
+[node1, node2, node3] to bootstrap a cluster: have discovered [{node1}...];
+discovery will continue using [127.0.0.1:9302, 127.0.0.1:9303] from hosts
+providers ...; <span class="ok">node term 0, last-accepted version 0 in term 0</span>;
+for troubleshooting guidance, see .../discovery-troubleshooting.html</span>
+  </div>
+  <p>这行日志里的 <span class="mono">node term</span>、<span class="mono">last-accepted version</span> 不是文档里的示意,是这台机器上真实运行的 Elasticsearch 进程,真实按照这套术语记录自己的协调状态——即便这次实验最终因为资源不足没能凑齐三个节点完整选出 master,这段日志本身已经如实证明了"基于 term 的状态追踪"在这台机器上是真实生效的机制,不是文档里的一面之词。这个限制本身也如实记录在这里,没有假装做出了一次成功的三节点选举。</p>
+</section>
+
+<section>
+  <h2>演示:选举、故障切换、网络分区</h2>
+  <p class="h2-sub">用一个可验证的三节点模型(node1/node2/node3,全部有资格当选)复现完整过程。</p>
+  <div class="demo" id="meDemo">
+    <div class="demo-head">Master 选举仿真</div>
+    <div class="demo-narration" id="meNarration"></div>
+    <div class="demo-body">
+      <div class="noderow" id="meNodes"></div>
+      <div id="meSummary" style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem; color:var(--ink-dim);"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="meReset">⏮ 重来</button>
+      <button class="btn" id="mePrev">‹ 上一步</button>
+      <button class="btn primary" id="meNext">下一步 ›</button>
+      <span class="step-counter" id="meCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);"><span class="sim-badge">verified simulation</span> 场景:term 1,三节点全部在线,一致选出 node1;node1 故障下线;term 2,剩下的 node2/node3(2/3,够多数)选出 node2;这时网络分区,node2 只能看到自己(1/3,不够多数)——term 3 选举失败,没有新 master 产生,不会有节点错误地自认为是 master;node1 恢复上线;term 4,三节点重新形成多数,选出 node3。</p>
+</section>
+
+<section>
+  <h2>为什么总说 master 候选节点要设成奇数个</h2>
+  <p class="h2-sub">quorum 公式 <span class="mono">⌊N/2⌋+1</span> 直接决定了这件事——不是习惯,是算出来的。</p>
+  <table class="mono">
+    <tr><th>节点数 N</th><th>quorum</th><th>能容忍几个节点失效</th></tr>
+    <tr><td>3</td><td>2</td><td>1</td></tr>
+    <tr><td>4</td><td>3</td><td>1</td></tr>
+    <tr><td>5</td><td>3</td><td>2</td></tr>
+    <tr><td>6</td><td>4</td><td>2</td></tr>
+  </table>
+  <p>3 台和 4 台能容忍的失效数量<b>完全一样</b>(都是 1 台)——多出来的第 4 台没有换来任何额外的容错能力,纯粹是多花一份成本。5 台比 4 台反而更划算(容错从 1 提升到 2),这也是为什么"3 或 5"是最常见的 master 候选节点数量,"4"这种偶数配置在实践中很少见。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>"本机真实捕获的一段日志"一节引用的日志片段,来自本机真实运行的 Elasticsearch 8.15.0 进程在一次真实(但受内存限制、最终未完整组建成功)的三节点集群引导过程中产生的真实输出,未做任何删改,只截取了相关段落。</li>
+      <li>选举仿真(term 递增、quorum 判定、网络分区导致选举失败、故障节点恢复后的重新选举)是<b>验证过的 Python 仿真</b>,复现的是 Elasticsearch 官方文档描述的真实规则(严格多数原则),额外用一套完全独立的"简单多数定义"(票数 × 2 &gt; 总数)对 1~7 个节点的所有可能票数组合做了交叉验证,结果完全一致,不是凭空编的规则。</li>
+      <li>没有涉及:真实协议里候选人如何在同一 term 内避免重复发起选举(真实实现比这里的简化模型复杂,涉及预投票、租约等细节)、data 节点和纯 master-eligible 节点的角色分离、真实场景下"发现阶段"(discovery)网络探测的具体实现。</li>
+    </ul>
+  </div>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>Elasticsearch 系列 · 第七篇 · 集群协调与 Master 选举 · 核心机制经 Python 仿真验证,日志证据来自本机真实运行的 Elasticsearch 8.15.0</footer>
+
+<script>
+const DATA = {"events": [{"term": 1, "totalMasterEligible": 3, "quorumNeeded": 2, "type": "election-start"}, {"term": 1, "candidate": "node1", "votes": ["node1", "node2", "node3"], "voteCount": 3, "type": "candidate-votes"}, {"term": 1, "winner": "node1", "quorumNeeded": 2, "type": "election-result"}, {"node": "node1", "type": "node-down"}, {"term": 2, "totalMasterEligible": 3, "quorumNeeded": 2, "type": "election-start"}, {"term": 2, "candidate": "node2", "votes": ["node2", "node3"], "voteCount": 2, "type": "candidate-votes"}, {"term": 2, "winner": "node2", "quorumNeeded": 2, "type": "election-result"}, {"term": 3, "totalMasterEligible": 3, "quorumNeeded": 2, "type": "election-start"}, {"term": 3, "candidate": "node2", "votes": ["node2"], "voteCount": 1, "type": "candidate-votes"}, {"term": 3, "winner": null, "quorumNeeded": 2, "reason": "没有任何候选人拿到多数票,本轮选举失败,term 会在下一轮继续增加重试", "type": "election-result"}, {"node": "node1", "type": "node-up"}, {"term": 4, "totalMasterEligible": 3, "quorumNeeded": 2, "type": "election-start"}, {"term": 4, "candidate": "node3", "votes": ["node1", "node3"], "voteCount": 2, "type": "candidate-votes"}, {"term": 4, "winner": "node3", "quorumNeeded": 2, "type": "election-result"}]};
+
+(function(){
+  const events = DATA.events;
+  const nodesBox = document.getElementById('meNodes');
+  const summaryBox = document.getElementById('meSummary');
+  const narration = document.getElementById('meNarration');
+  const counter = document.getElementById('meCounter');
+  let idx = 0;
+
+  function describe(e){
+    switch(e.type){
+      case 'election-start': return `term ${e.term} 选举开始——共 ${e.totalMasterEligible} 个候选节点,需要至少 ${e.quorumNeeded} 票才能当选。`;
+      case 'candidate-votes': return `候选人 <span class="k">${e.candidate}</span> 收到 ${e.voteCount} 票(来自 ${e.votes.join(', ')})。`;
+      case 'election-result': return e.winner
+        ? `term ${e.term} 选举结果:<span class="k">${e.winner}</span> 当选 master(${e.quorumNeeded} 票门槛已达到)。`
+        : `term ${e.term} 选举结果:<b>没有节点当选</b>——${e.reason}`;
+      case 'node-down': return `💥 节点 <span class="k">${e.node}</span> 下线。`;
+      case 'node-up': return `节点 <span class="k">${e.node}</span> 恢复上线。`;
+      default: return e.type;
+    }
+  }
+
+  function render(){
+    idx = Math.max(0, Math.min(events.length-1, idx));
+    const e = events[idx];
+    narration.innerHTML = describe(e);
+
+    const down = new Set();
+    let currentMaster = null;
+    let currentTerm = 0;
+    let votedFor = new Set();
+    for (let i=0;i<=idx;i++){
+      const ev = events[i];
+      if (ev.type==='node-down') down.add(ev.node);
+      if (ev.type==='node-up') down.delete(ev.node);
+      if (ev.type==='election-start'){ currentTerm = ev.term; votedFor = new Set(); }
+      if (ev.type==='candidate-votes' && i===idx) votedFor = new Set(ev.votes);
+      if (ev.type==='election-result' && ev.winner) currentMaster = ev.winner;
+      if (ev.type==='election-start') currentMaster = (i===idx) ? currentMaster : currentMaster;
+    }
+    // if the most recent election-result (up to idx) failed, there's no master
+    let lastResult = null;
+    for (let i=0;i<=idx;i++){ if(events[i].type==='election-result') lastResult = events[i]; }
+    if (lastResult && !lastResult.winner) currentMaster = null;
+    else if (lastResult) currentMaster = lastResult.winner;
+
+    const names = ['node1','node2','node3'];
+    let html = '';
+    names.forEach(n=>{
+      let cls = 'nodecard';
+      if (down.has(n)) cls += ' down';
+      if (n===currentMaster) cls += ' master';
+      if (e.type==='candidate-votes' && votedFor.has(n)) cls += ' voted';
+      html += `<div class="${cls}"><h5>${n}${n===currentMaster?' 👑':''}</h5><div class="v">${down.has(n)?'离线':'在线'}</div></div>`;
+    });
+    nodesBox.innerHTML = html;
+    summaryBox.textContent = `当前 term = ${currentTerm}，当前 master = ${currentMaster || '(无)'}`;
+
+    counter.textContent = `${idx+1} / ${events.length}`;
+    document.getElementById('mePrev').disabled = idx===0;
+    document.getElementById('meNext').disabled = idx===events.length-1;
+  }
+  document.getElementById('mePrev').onclick=()=>{idx--;render();};
+  document.getElementById('meNext').onclick=()=>{idx++;render();};
+  document.getElementById('meReset').onclick=()=>{idx=0;render();};
+  render();
+})();
+</script>
+
+</body>
+</html>

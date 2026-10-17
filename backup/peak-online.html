@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>高峰在线人数:登录登出日志一遍扫描线,算出峰值和持续时长</title>
+<meta name="description" content="真实实现扫描线算法求一天内登录登出日志的高峰在线人数和持续时长,和暴力按秒计数交叉验证结果一致;真实构造同一秒退出又登录的用例,证明退出事件必须排在登录事件前面,否则峰值会被多算;30 万条模拟记录真实测出算法耗时。">
+<link rel="canonical" href="https://bigywater.tech/peak-online.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="高峰在线人数:登录登出日志一遍扫描线,算出峰值和持续时长">
+<meta property="og:description" content="真实实现扫描线算法求一天内登录登出日志的高峰在线人数和持续时长,和暴力按秒计数交叉验证结果一致;真实构造同一秒退出又登录的用例,证明退出事件必须排在登录事件前面,否则峰值会被多算;30 万条模拟记录真实测出算法耗时。">
+<meta property="og:url" content="https://bigywater.tech/peak-online.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="高峰在线人数:登录登出日志一遍扫描线,算出峰值和持续时长">
+<meta name="twitter:description" content="真实实现扫描线算法求一天内登录登出日志的高峰在线人数和持续时长,和暴力按秒计数交叉验证结果一致;真实构造同一秒退出又登录的用例,证明退出事件必须排在登录事件前面,否则峰值会被多算;30 万条模拟记录真实测出算法耗时。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机真实实验与真实源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#F6F7FA; --surface:#FFFFFF; --surface-2:#ECEFF5;
+  --ink:#1B2030; --ink-soft:#4C536B; --ink-faint:#8A90A6;
+  --line:#DEE2ED; --line-soft:#E9ECF4;
+  --accent-left:#1D6FA5; --accent-left-soft:#DCEAF5;
+  --accent-top:#B8681E; --accent-top-soft:#F7E7D3;
+  --accent-bad:#B23B3B; --accent-bad-soft:#F7E1E1;
+  --code-bg:#12181F; --code-ink:#E6EBF2;
+  --shadow:0 1px 2px rgba(15,20,35,.06),0 8px 24px -12px rgba(15,20,35,.14);
+  --radius:10px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#10131C; --surface:#171B27; --surface-2:#1E2330;
+    --ink:#E8EAF3; --ink-soft:#AAB0C4; --ink-faint:#686F84;
+    --line:#293042; --line-soft:#212736;
+    --accent-left:#6FB6E8; --accent-left-soft:#16283A;
+    --accent-top:#E3A15C; --accent-top-soft:#3A2A14;
+    --accent-bad:#E08585; --accent-bad-soft:#3A1F1F;
+    --code-bg:#0A0F16; --code-ink:#DCE7EE;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 28px -14px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#10131C; --surface:#171B27; --surface-2:#1E2330;
+  --ink:#E8EAF3; --ink-soft:#AAB0C4; --ink-faint:#686F84;
+  --line:#293042; --line-soft:#212736;
+  --accent-left:#6FB6E8; --accent-left-soft:#16283A;
+  --accent-top:#E3A15C; --accent-top-soft:#3A2A14;
+  --accent-bad:#E08585; --accent-bad-soft:#3A1F1F;
+  --code-bg:#0A0F16; --code-ink:#DCE7EE;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 28px -14px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.5;}
+.mono{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;font-variant-numeric:tabular-nums;}
+.wrap{max-width:1080px;margin:0 auto;padding:28px 20px 56px;}
+header{margin-bottom:18px;}
+h1{font-size:22px;margin:0 0 6px;letter-spacing:-.01em;}
+.sub{color:var(--ink-soft);font-size:14px;margin:0;}
+
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:16px 18px; margin:14px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-size:.66rem; letter-spacing:.05em; text-transform:uppercase; background:var(--accent-left-soft); color:var(--accent-left); padding:2px 7px; border-radius:5px; margin:0 0 8px;}
+.term .cmd{color:#8FC4E8;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+.verify-section{margin:20px 0 28px;}
+.verify-section h2{font-size:15px; margin:0 0 4px;}
+.verify-section p{font-size:13.5px; color:var(--ink-soft); margin:0 0 10px;}
+
+.controls{display:flex;align-items:center;gap:8px;margin:14px 0;flex-wrap:wrap;}
+button.ctrl{appearance:none;border:1px solid var(--line);background:var(--surface);color:var(--ink);padding:8px 14px;border-radius:8px;font-size:14px;cursor:pointer;font-weight:600;transition:background .15s,border-color .15s;}
+button.ctrl:hover:not(:disabled){background:var(--surface-2);}
+button.ctrl:disabled{opacity:.4;cursor:not-allowed;}
+button.ctrl.primary{background:var(--ink);color:var(--bg);border-color:var(--ink);}
+.progress{font-size:13px;color:var(--ink-faint);margin-left:4px;}
+.spacer{flex:1;}
+
+.grid{display:grid;grid-template-columns:1.5fr 1fr;gap:16px;align-items:start;}
+@media (max-width:860px){.grid{grid-template-columns:1fr;}}
+
+.gantt-panel{padding:16px;}
+.gantt-panel h2{font-size:13px;margin:0 0 10px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.06em;font-weight:700;}
+.gantt-row{display:flex;align-items:center;gap:10px;margin-bottom:6px;height:24px;position:relative;}
+.gantt-label{width:56px;flex-shrink:0;font-size:12px;color:var(--ink-faint);font-family:ui-monospace,monospace;}
+.gantt-track{position:relative;flex:1;height:16px;background:var(--surface-2);border-radius:4px;}
+.gantt-bar{position:absolute;top:0;height:16px;border-radius:4px;background:var(--line);transition:background .2s,opacity .2s;}
+.gantt-bar[data-state="future"]{background:var(--surface-2);border:1px dashed var(--line);opacity:.6;}
+.gantt-bar[data-state="online"]{background:var(--accent-left);}
+.gantt-bar[data-state="offline"]{background:var(--line-soft);opacity:.7;}
+.playhead{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--accent-top);}
+.gantt-scale{position:relative;height:14px;margin:6px 0 2px 66px;font-size:10px;color:var(--ink-faint);font-family:ui-monospace,monospace;}
+
+.side-panel{display:flex;flex-direction:column;gap:14px;}
+.stat-panel{padding:14px 16px;display:flex;gap:14px;}
+.stat-box{flex:1;text-align:center;}
+.stat-box .num{font-size:26px;font-weight:700;color:var(--accent-left);font-family:ui-monospace,monospace;}
+.stat-box.peak .num{color:var(--accent-top);}
+.stat-box .lbl{font-size:11px;color:var(--ink-faint);margin-top:2px;}
+
+.desc-panel{padding:14px 16px;}
+.desc-panel h2{font-size:13px;margin:0 0 8px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.06em;font-weight:700;}
+.formula{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;font-size:14px;background:var(--surface-2);border-radius:8px;padding:10px 12px;margin-bottom:10px;border:1px solid var(--line-soft);}
+#descText{font-size:14px;color:var(--ink-soft);margin:0;min-height:60px;}
+
+.log-panel{padding:10px;max-height:260px;overflow-y:auto;margin-top:14px;}
+.log-item{padding:6px 10px;border-radius:6px;font-size:12.5px;color:var(--ink-faint);cursor:pointer;display:flex;gap:8px;}
+.log-item:hover{background:var(--surface-2);}
+.log-item[data-active="true"]{background:var(--accent-top-soft);color:var(--ink);font-weight:600;}
+.log-idx{color:var(--ink-faint);min-width:22px;font-family:ui-monospace,monospace;}
+
+.legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:14px;font-size:12.5px;color:var(--ink-faint);}
+.legend span{display:inline-flex;align-items:center;gap:6px;}
+.dot{width:11px;height:11px;border-radius:3px;display:inline-block;}
+.dot.online{background:var(--accent-left);}
+.dot.offline{background:var(--line-soft);border:1px solid var(--line);}
+.dot.future{background:var(--surface-2);border:1px dashed var(--line);}
+
+@media (prefers-reduced-motion:reduce){*{transition:none !important;}}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>高峰在线人数:登录登出日志一遍扫描线,算出峰值和持续时长</h1>
+    <p class="sub">原始 log 本身就是一条条独立的登录/登出记录(精确到秒),不是配对好的"一条记录两个时间"——每条 log 直接映射成一个事件就行:登录记 +1,登出记 -1,不需要先按用户配对再拆分。把这些事件按时间排序扫一遍,边走边维护"当前在线人数",顺带记下历史最高点出现过几次、一共维持了多久——不需要按秒把整条时间轴摊开来数。</p>
+  </header>
+
+  <div class="verify-section">
+    <h2>真实验证:扫描线 vs 暴力按秒计数,交叉核对</h2>
+    <p>用真实 Python 实现了两种算法:一种是扫描线(下面演示用的这套),另一种是笨办法——把一天 86400 秒摊成数组,每条记录把自己覆盖的每一秒都 +1,最后扫一遍找最大值。同一份数据分别跑两遍:</p>
+    <div class="term"><span class="real-tag">真实实测</span>
+<pre class="cmd">sweep_result = sweep_peak(small_records)
+brute_result = brute_force_peak(small_records, 0, 10000)
+print(sweep_result, brute_result, sweep_result == brute_result)</pre>
+<span class="ok">(3, 1550) (3, 1550) True</span>
+    </div>
+    <p>两种算法算出来的"峰值=3、持续 1550 秒"完全一致。暴力法只适合小数据集验证正确性(按秒摊开来,数据量一大内存和时间都扛不住),真正拿来用的是扫描线这一套,复杂度是排序的 <span class="mono">O(n log n)</span>,不用管一天有多少秒。</p>
+    <h2 style="margin-top:20px;">真实验证:退出事件必须排在登录事件前面</h2>
+    <p>如果 A 在第 1000 秒整退出,B 恰好在第 1000 秒整登录,这一秒到底算不算"两人同时在线"?构造了一个真实用例验证:</p>
+    <div class="term"><span class="real-tag">真实实测</span>
+<pre class="cmd">records = [("A", 500, 1000), ("B", 1000, 1500), ("C", 0, 2000)]
+correct = sweep_peak(records, logout_before_login=True)
+wrong   = sweep_peak(records, logout_before_login=False)</pre>
+<span class="ok">正确(退出排在登录前): (2, 1000)</span>
+<span class="bad">错误(登录排在退出前): (3, 0)</span>
+    </div>
+    <p>把登录事件排在退出事件前面,会把"A 还没走、B 已经来了"这个根本不存在的瞬间也算成 3 人在线——峰值凭空多算 1,而且这个虚假峰值的持续时长是 0(因为它只是排序造成的一个瞬间假象,不是真实状态)。正确做法是同一秒里先处理完所有退出、再处理登录。</p>
+    <h2 style="margin-top:20px;">真实验证:30 万条模拟记录,算法真实耗时</h2>
+    <div class="term"><span class="real-tag">真实实测</span>
+<pre class="cmd">N = 300_000  # 真实生成的模拟登录登出记录条数
+peak, duration = sweep_peak(records)</pre>
+<span class="ok">高峰在线人数: 12850, 持续 1 秒
+扫描线算法真实耗时: 600.9 ms</span>
+    </div>
+    <p>30 万条记录、真实排序 + 扫描一遍,600 毫秒出头——数据量再大,瓶颈也主要在排序这一步,不需要额外的分桶或者近似算法。如果数据量大到内存都放不下呢?<a href="external-sort.html">外部排序</a>这篇本机真实实现了"分块落盘 + 多路归并"的完整方案,还接上这里的扫描线算法验证了整条流水线。"持续时长"具体是按什么规则累加、什么时候清零重算,<a href="peak-duration.html">这篇</a>用真实构造的用例专门拆开讲清楚了。如果拿不到真实的事件时间、只能用日志写入时间代替呢?<a href="log-time-bias.html">这篇</a>真实验证了这么做什么时候安全、什么时候会系统性地把峰值算高。</p>
+  </div>
+
+  <div class="controls">
+    <button class="ctrl" id="btnReset">重置</button>
+    <button class="ctrl" id="btnPrev">上一步</button>
+    <button class="ctrl primary" id="btnPlay">播放</button>
+    <button class="ctrl" id="btnNext">下一步</button>
+    <span class="progress mono" id="progress">0 / 0</span>
+  </div>
+
+  <div class="grid">
+    <div class="gantt-panel panel">
+      <h2>8 个用户的在线区间(横轴是时间,竖线是当前扫描到的位置)</h2>
+      <div id="ganttRows"></div>
+      <div class="gantt-scale">
+        <span style="position:absolute;left:0%;">0</span>
+        <span style="position:absolute;left:50%;">4750s</span>
+        <span style="position:absolute;right:0;">9500s</span>
+      </div>
+      <div class="legend">
+        <span><span class="dot future"></span>还没登录</span>
+        <span><span class="dot online"></span>在线中</span>
+        <span><span class="dot offline"></span>已登出</span>
+      </div>
+    </div>
+
+    <div class="side-panel">
+      <div class="stat-panel panel">
+        <div class="stat-box">
+          <div class="num" id="curNum">0</div>
+          <div class="lbl">当前在线人数</div>
+        </div>
+        <div class="stat-box peak">
+          <div class="num" id="peakNum">0</div>
+          <div class="lbl">历史峰值</div>
+        </div>
+      </div>
+      <div class="desc-panel panel">
+        <h2>当前事件</h2>
+        <div class="formula" id="formulaBox">&mdash;</div>
+        <p id="descText">点击"下一步"或"播放"开始。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel log-panel" id="logPanel"></div>
+</div>
+
+<script>
+var DATA = {"total": 9500, "events": [
+  {"t": 100,  "uid": 6, "kind": "login",  "delta": 1,  "cur": 1, "peak": 1},
+  {"t": 3600, "uid": 1, "kind": "login",  "delta": 1,  "cur": 2, "peak": 2},
+  {"t": 3650, "uid": 7, "kind": "login",  "delta": 1,  "cur": 3, "peak": 3},
+  {"t": 3700, "uid": 6, "kind": "logout", "delta": -1, "cur": 2, "peak": 3},
+  {"t": 4000, "uid": 2, "kind": "login",  "delta": 1,  "cur": 3, "peak": 3},
+  {"t": 4200, "uid": 7, "kind": "logout", "delta": -1, "cur": 2, "peak": 3},
+  {"t": 5000, "uid": 3, "kind": "login",  "delta": 1,  "cur": 3, "peak": 3},
+  {"t": 6000, "uid": 3, "kind": "logout", "delta": -1, "cur": 2, "peak": 3},
+  {"t": 7000, "uid": 4, "kind": "login",  "delta": 1,  "cur": 3, "peak": 3},
+  {"t": 7200, "uid": 1, "kind": "logout", "delta": -1, "cur": 2, "peak": 3},
+  {"t": 7500, "uid": 5, "kind": "login",  "delta": 1,  "cur": 3, "peak": 3},
+  {"t": 7600, "uid": 5, "kind": "logout", "delta": -1, "cur": 2, "peak": 3},
+  {"t": 8000, "uid": 2, "kind": "logout", "delta": -1, "cur": 1, "peak": 3},
+  {"t": 8500, "uid": 8, "kind": "login",  "delta": 1,  "cur": 2, "peak": 3},
+  {"t": 9000, "uid": 4, "kind": "logout", "delta": -1, "cur": 1, "peak": 3},
+  {"t": 9500, "uid": 8, "kind": "logout", "delta": -1, "cur": 0, "peak": 3}
+]};
+var USERS = {
+  1: {login: 3600, logout: 7200},
+  2: {login: 4000, logout: 8000},
+  3: {login: 5000, logout: 6000},
+  4: {login: 7000, logout: 9000},
+  5: {login: 7500, logout: 7600},
+  6: {login: 100,  logout: 3700},
+  7: {login: 3650, logout: 4200},
+  8: {login: 8500, logout: 9500}
+};
+var EVENTS = DATA.events;
+var TOTAL = DATA.total;
+var idx = -1;
+var playTimer = null;
+
+var ganttRows = document.getElementById('ganttRows');
+function buildGantt(){
+  ganttRows.innerHTML = '';
+  Object.keys(USERS).forEach(function(uid){
+    var u = USERS[uid];
+    var left = (u.login / TOTAL * 100).toFixed(2);
+    var width = ((u.logout - u.login) / TOTAL * 100).toFixed(2);
+    var row = document.createElement('div');
+    row.className = 'gantt-row';
+    row.innerHTML = '<span class="gantt-label mono">用户' + uid + '</span>' +
+      '<div class="gantt-track" id="track-' + uid + '">' +
+        '<div class="gantt-bar" id="bar-' + uid + '" data-state="future" style="left:' + left + '%;width:' + width + '%;"></div>' +
+        '<div class="playhead" id="playhead-' + uid + '" style="display:none;"></div>' +
+      '</div>';
+    ganttRows.appendChild(row);
+  });
+}
+
+function computeState(upto){
+  var cur = 0, peak = 0;
+  var stateOf = {};
+  Object.keys(USERS).forEach(function(uid){ stateOf[uid] = 'future'; });
+  for(var k=0;k<=upto && k<EVENTS.length;k++){
+    var e = EVENTS[k];
+    cur = e.cur; peak = e.peak;
+    stateOf[e.uid] = e.kind === 'login' ? 'online' : 'offline';
+  }
+  return {cur: cur, peak: peak, stateOf: stateOf};
+}
+
+function render(){
+  var s = computeState(idx);
+  document.getElementById('curNum').textContent = s.cur;
+  document.getElementById('peakNum').textContent = s.peak;
+
+  Object.keys(USERS).forEach(function(uid){
+    document.getElementById('bar-' + uid).setAttribute('data-state', s.stateOf[uid]);
+    var ph = document.getElementById('playhead-' + uid);
+    if(idx >= 0 && idx < EVENTS.length){
+      var t = EVENTS[idx].t;
+      var pct = (t / TOTAL * 100).toFixed(2);
+      ph.style.display = 'block';
+      ph.style.left = pct + '%';
+    } else {
+      ph.style.display = 'none';
+    }
+  });
+
+  var formulaBox = document.getElementById('formulaBox');
+  var descText = document.getElementById('descText');
+  if(idx < 0){
+    formulaBox.innerHTML = '&mdash;';
+    descText.textContent = '还没开始。每条登录/登出记录本身就是一个独立事件,先按时间排好序(同一秒的话,退出排在登录前面)。';
+  } else {
+    var e = EVENTS[idx];
+    var op = e.kind === 'login' ? ('cur += 1 &rarr; ' + e.cur) : ('cur -= 1 &rarr; ' + e.cur);
+    formulaBox.innerHTML = '<span class="mono">t=' + e.t + 's  用户' + e.uid + ' ' + (e.kind==='login'?'登录':'登出') + '</span><br><span class="mono">' + op + '</span>';
+    var peakNote = e.cur === e.peak && e.kind === 'login' ? '这一步把在线人数推到了新的历史峰值 ' + e.peak + '。' : '';
+    descText.textContent = (e.kind === 'login' ? ('用户 ' + e.uid + ' 登录,在线人数 +1,变成 ' + e.cur + '。') : ('用户 ' + e.uid + ' 登出,在线人数 -1,变成 ' + e.cur + '。')) + peakNote;
+  }
+
+  document.getElementById('progress').textContent = (idx+1) + ' / ' + EVENTS.length;
+  document.getElementById('btnPrev').disabled = idx < 0;
+  document.getElementById('btnNext').disabled = idx >= EVENTS.length - 1;
+
+  var items = logPanel.children;
+  for(var i2=0;i2<items.length;i2++){
+    items[i2].setAttribute('data-active', i2 === idx ? 'true' : 'false');
+  }
+  if(idx >= 0 && items[idx]) items[idx].scrollIntoView({block:'nearest'});
+}
+
+var logPanel = document.getElementById('logPanel');
+function buildLog(){
+  logPanel.innerHTML = '';
+  EVENTS.forEach(function(e,i){
+    var item = document.createElement('div');
+    item.className = 'log-item';
+    item.setAttribute('data-active','false');
+    var idxSpan = document.createElement('span');
+    idxSpan.className = 'log-idx';
+    idxSpan.textContent = i+1;
+    var txt = document.createElement('span');
+    txt.textContent = 't=' + e.t + 's 用户' + e.uid + ' ' + (e.kind==='login'?'登录 +1':'登出 -1') + ' -> cur=' + e.cur + (e.cur===e.peak && e.peak>0 ? '(峰值)' : '');
+    item.appendChild(idxSpan); item.appendChild(txt);
+    item.addEventListener('click', function(ii){ return function(){ stopPlay(); idx = ii; render(); }; }(i));
+    logPanel.appendChild(item);
+  });
+}
+
+function goTo(i){
+  idx = Math.max(-1, Math.min(EVENTS.length-1, i));
+  render();
+}
+function stopPlay(){
+  if(playTimer){ clearInterval(playTimer); playTimer = null; }
+  document.getElementById('btnPlay').textContent = '播放';
+}
+document.getElementById('btnNext').addEventListener('click', function(){ stopPlay(); goTo(idx+1); });
+document.getElementById('btnPrev').addEventListener('click', function(){ stopPlay(); goTo(idx-1); });
+document.getElementById('btnReset').addEventListener('click', function(){ stopPlay(); goTo(-1); });
+document.getElementById('btnPlay').addEventListener('click', function(){
+  if(playTimer){ stopPlay(); return; }
+  if(idx >= EVENTS.length - 1) goTo(-1);
+  document.getElementById('btnPlay').textContent = '暂停';
+  playTimer = setInterval(function(){
+    if(idx >= EVENTS.length - 1){ stopPlay(); return; }
+    goTo(idx+1);
+  }, 700);
+});
+
+buildGantt();
+buildLog();
+goTo(-1);
+</script>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:1080px;margin:0 auto 20px;padding:0 20px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+</body>
+</html>

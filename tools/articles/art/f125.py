@@ -1,0 +1,16 @@
+from lib import *
+S = SS('f125')
+R = J('f125'); rg = R['range']
+steps = [
+    step("send_from_directory(基目录, 文件名) 对各种文件名的结果(目录外放了一个哨兵文件 outside.txt):合法文件与子目录里的文件 200;不存在的文件 404;sub/../a.txt 规整后仍在目录内,200;指向目录外的 ../outside.txt 与 sub/../../outside.txt 都是 404;以斜杠开头的形式在 URL 层被规整成 308 重定向;含空字节的名字 404;目录本身 404。哨兵内容没有出现在任何响应里。这个函数内部先用 safe_join 检查路径,出了基目录就当作不存在。", t=tl(S(1)), done=lidx(S(1), '合法文件', '子目录里', 'sub/../a.txt'), mark=lidx(S(1), '../outside.txt', '嵌在中间', '含空字节', '哨兵'), kv=KV([['目录内', '200'], ['出了基目录', '404'], ['哨兵内容', '没有出现']], ['出了基目录'])),
+    step("safe_join(基目录, 名字) 的返回值:a.txt、sub/b.txt、规整后在目录内的 sub/../a.txt 都返回基目录下的完整路径;../outside.txt、/outside.txt、sub/../../outside.txt 返回 None(拒绝);空字符串返回基目录本身。自己写下载逻辑时用它,不要用 os.path.join 直接拼用户给的名字。", t=tl(S(2)), done=lidx(S(2), "'a.txt'", "'sub/b.txt'", "'sub/../a.txt'"), mark=lidx(S(2), 'None'), kv=KV([['返回路径', '仍在基目录内'], ['返回 None', '要拒绝']], ['返回 None'])),
+    step("符号链接是一个容易漏掉的坑:基目录里放一个指向目录外的链接 link.txt,访问 /files/link.txt 得到 200 和哨兵内容 SENTINEL-OUTSIDE——send_from_directory 不解析符号链接。如果目录里可能出现不受控的链接(上传、解压),要自己用 os.path.realpath 再检查一次是否仍在基目录内(这里的检查结果是 False,应当拒绝)。", t=tl(S(3)), mark=lidx(S(3), '访问 pub/link.txt', '自己再检查'), kv=KV([['符号链接', 'safe_join 不解析,会放行'], ['补救', 'realpath + commonpath 再检查']], ['符号链接'])),
+    step(f"下载响应头:as_attachment=True 加 download_name='下载 的文件.txt' 得到 Content-Disposition: attachment; filename=\" .txt\"; filename*=UTF-8''%E4%B8%8B…(带一个 ASCII 的回退文件名,中文走 RFC 5987 的 filename*);普通响应有 Content-Type: text/plain; charset=utf-8、ETag、Last-Modified、Cache-Control: no-cache、Accept-Ranges: bytes;Range: bytes=0-4 → {rg[0]} 加 Content-Range: {rg[2]},内容 {rg[1]!r};带 If-None-Match 的再请求 → 304;中文名的文件 /files/报告.txt 可以正常下载(200)。send_from_directory 自带条件请求与 Range 支持。", t=tl(S(4)), done=lidx(S(4), 'Content-Disposition', 'Range', 'If-None-Match', '中文名'), kv=KV([['filename*', '中文文件名走 UTF-8 编码'], ['Range / ETag', '内置支持']], ['filename*'])),
+    step("secure_filename 用来生成存盘的文件名:'my file (1).txt' → 'my_file_1.txt';'../x.txt' → 'x.txt';'a/b/c.txt' → 'a_b_c.txt';'.hidden' → 'hidden';'' → ''。注意它会丢掉非 ASCII 字符:'报告.txt' → 'txt'(中文名整个没了,只剩扩展名),所以中文文件名要另存原名、用生成的名字(比如 UUID)存盘;它也返回空字符串,调用方要处理空结果。它是清洗文件名的工具,不能代替路径校验。", t=tl(S(5)), done=lidx(S(5), 'my file', 'x.txt', 'a/b/c.txt'), mark=lidx(S(5), '报告.txt', "('')", "(''"), kv=KV([['非 ASCII', '被丢弃,可能只剩扩展名'], ['空结果', '要处理'], ['用途', '生成存盘名,不是路径校验']], ['非 ASCII'])),
+]
+A = mkartf('f125', 125, 'Flask,文件下载,send_from_directory,safe_join,真实验证,动画演示',
+    '实测 Flask 安全地提供文件下载:send_from_directory 对各种文件名的结果、safe_join 的返回值、符号链接指向目录外时不会被拦、Content-Disposition 的中文文件名、Range 与条件请求内置支持、secure_filename 会丢掉非 ASCII 字符。',
+    '用户给一个文件名,服务端怎么安全地把文件发出去?send_from_directory 保证了什么、没保证什么?文件名清洗会有什么副作用?这篇只验证标准库函数的行为(用一个目录外的哨兵文件确认没有泄漏)。',
+    [('404', '文件名指向基目录之外时 send_from_directory 的结果'), ('200', '基目录里指向目录外的符号链接被放行的状态码'), ('报告.txt → txt', 'secure_filename 对中文文件名的处理')],
+    [('send_from_directory', '<p>上一篇:<a href="flask-sql-injection.html">SQL Injection 与参数化查询</a>;下一篇:<a href="flask-upload-type-validation.html">文件上传类型校验</a>。</p><p>本篇是防御向的验证:没有演示任何绕过方法,只确认标准函数会拒绝什么、会放行什么。</p>'), ('safe_join', None), ('符号链接', None), ('下载响应头', None), ('secure_filename', None)],
+    steps, [ENV_F + '。Werkzeug 3.1.9', '没有验证:Windows 上的保留文件名与反斜杠路径、send_file 直接接收用户路径的用法、反向代理的 X-Accel-Redirect 与 X-Sendfile 方式、大文件的流式下载与内存、文件名里的换行与响应头注入(Werkzeug 对 download_name 的处理未单独验证)'], '路径穿越与文件下载')

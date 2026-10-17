@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+
+<title>分布式转账加锁:SELECT FOR UPDATE 是不是表锁,验证过了</title>
+<meta name="description" content="用 MySQL InnoDB 验证:SELECT ... FOR UPDATE 走主键索引时锁的是单行,不同行加锁互不阻塞(3.7ms 秒过);条件没有索引会退化成锁住全表扫描到的每一行,测出 1.2 秒阻塞一个毫不相关的行;验证 IN(...) 多值加锁的内部顺序不是 MySQL 官方承诺的行为,不能依赖;演示分布式场景下按主键顺序加锁,两个方向相反的转账事务完全不会死锁。">
+<link rel="canonical" href="https://bigywater.tech/distributed-lock-order.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="分布式转账加锁:SELECT FOR UPDATE 是不是表锁,验证过了">
+<meta property="og:description" content="用 MySQL InnoDB 验证:SELECT ... FOR UPDATE 走主键索引时锁的是单行,不同行加锁互不阻塞(3.7ms 秒过);条件没有索引会退化成锁住全表扫描到的每一行,测出 1.2 秒阻塞一个毫不相关的行;验证 IN(...) 多值加锁的内部顺序不是 MySQL 官方承诺的行为,不能依赖;演示分布式场景下按主键顺序加锁,两个方向相反的转账事务完全不会死锁。">
+<meta property="og:url" content="https://bigywater.tech/distributed-lock-order.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="分布式转账加锁:SELECT FOR UPDATE 是不是表锁,验证过了">
+<meta name="twitter:description" content="用 MySQL InnoDB 验证:SELECT ... FOR UPDATE 走主键索引时锁的是单行,不同行加锁互不阻塞(3.7ms 秒过);条件没有索引会退化成锁住全表扫描到的每一行,测出 1.2 秒阻塞一个毫不相关的行;验证 IN(...) 多值加锁的内部顺序不是 MySQL 官方承诺的行为,不能依赖;演示分布式场景下按主键顺序加锁,两个方向相反的转账事务完全不会死锁。">
+
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">385</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">128</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">1</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">10</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">5</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">4</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">140</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">6</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">35</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">11</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">7</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">8</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+
+<style>
+:root{
+  --bg:#FAF6F4; --paper:#FFFFFF; --ink:#241A18; --ink-dim:#7A6360; --line:#EBDEDC;
+  --io-c:#A13D3D; --io-c-soft:#F7E7E5;
+  --mem-c:#B8791E; --mem-c-soft:#F6ECD9;
+  --meta-c:#7B4FA8; --meta-c-soft:#EFE6F7;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241716; --code-ink:#F2E6E4;
+  --shadow: 0 1px 2px rgba(35,20,18,.06), 0 8px 24px -12px rgba(35,20,18,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#180F0E; --paper:#241917; --ink:#F2E6E4; --ink-dim:#B39A96; --line:#3A2825;
+    --io-c:#E27A7A; --io-c-soft:#3A2323;
+    --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+    --meta-c:#B08AE0; --meta-c-soft:#332545;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#120B0A; --code-ink:#E6D9D7;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#180F0E; --paper:#241917; --ink:#F2E6E4; --ink-dim:#B39A96; --line:#3A2825;
+  --io-c:#E27A7A; --io-c-soft:#3A2323;
+  --mem-c:#E0B85C; --mem-c-soft:#3A2F16;
+  --meta-c:#B08AE0; --meta-c-soft:#332545;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#120B0A; --code-ink:#E6D9D7;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--io-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--io-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--io-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--io-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9A8A4; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--io-c); background:var(--io-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--ok-c); background:var(--ok-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--io-c-soft); color:var(--io-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E0AFA8;}
+.term pre.code{margin:0 0 10px; color:#E0AFA8; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; line-height:inherit;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.demo{background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); margin:24px 0; overflow:hidden;}
+.demo-head{padding:14px 20px; border-bottom:1px solid var(--line); font-weight:600; font-size:.95rem;}
+.demo-narration{min-height:44px; padding:14px 20px; font-size:.92rem; color:var(--ink); border-bottom:1px solid var(--line); background:var(--bg);}
+.demo-narration .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--mem-c-soft); color:var(--mem-c); padding:1px 6px; border-radius:5px;}
+.demo-body{padding:22px 20px;}
+.thread-table{width:100%; border-collapse:collapse; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem;}
+.thread-table th{text-align:left; padding:6px 10px; color:var(--ink-dim); font-size:.7rem; text-transform:uppercase; letter-spacing:.04em; border-bottom:1px solid var(--line);}
+.thread-table td{padding:6px 10px; border-bottom:1px solid var(--line);}
+.thread-table tr.current td{background:var(--io-c-soft);}
+.stage-tag{padding:2px 8px; border-radius:5px; font-size:.76rem;}
+.stage-tag.ok{background:var(--ok-c-soft); color:var(--ok-c);}
+.stage-tag.fail{background:var(--io-c-soft); color:var(--io-c);}
+.stage-tag.wait{background:var(--line); color:var(--ink-dim);}
+.stat-row{display:flex; gap:16px; flex-wrap:wrap; margin:14px 0 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.82rem;}
+.stat{border:1px solid var(--line); border-radius:8px; padding:8px 12px; background:var(--bg);}
+.stat b{color:var(--io-c); display:block; font-size:1rem; font-variant-numeric:tabular-nums;}
+.demo-controls{padding:12px 20px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); flex-wrap:wrap;}
+.btn{font-family:inherit; font-size:.85rem; border:1px solid var(--line); background:var(--paper); color:var(--ink); padding:7px 14px; border-radius:8px; cursor:pointer;}
+.btn:hover{border-color:var(--io-c); color:var(--io-c);}
+.btn:disabled{opacity:.4; cursor:not-allowed;}
+.btn.primary{background:var(--io-c); border-color:var(--io-c); color:#fff;}
+.step-counter{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; color:var(--ink-dim); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+</style>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow"><span class="dot"></span>并发控制实战</div>
+    <h1>分布式转账加锁:SELECT FOR UPDATE 是不是表锁,验证过了</h1>
+    <p>接着<a href="lock-ordering.html" target="_blank" rel="noopener">转账死锁</a>那篇留的一个问题:单进程里用 <span class="mono">sync.Mutex</span> 按账户 ID 排序加锁能避免死锁,但分布式场景下不同服务实例各有各的内存,进程内的锁形同虚设,只能把"排序加锁"这件事搬到数据库层——用 <span class="mono">SELECT ... FOR UPDATE</span>。但这样做会不会把整张表锁死、拖垮性能?用 MySQL 跑了几组实验找答案。</p>
+    <div class="hero-fact">
+      <div><div class="num">3.7ms vs 1209.7ms</div><div class="lbl">本机真实实测:主键索引下,锁不同行几乎不用等;锁同一行被阻塞超过 1 秒</div></div>
+      <div><div class="num">1204.7ms 阻塞</div><div class="lbl">本机真实实测:条件没走索引时,全表扫描把毫不相关的一行也卡住了 1.2 秒</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section style="padding-top:8px;">
+  <h2>思路:排序规则从"进程内的锁"搬到"SQL 语句的顺序"</h2>
+  <p class="h2-sub">数据库不会替你排序,谁先锁谁后锁,完全看你的 SQL 语句按什么顺序发出去。</p>
+  <blockquote class="src">
+    <span class="path">按 ID 从小到大加锁,不管转账方向是哪边</span>
+BEGIN;
+
+SELECT balance FROM accounts WHERE id = LEAST(:from_id, :to_id) FOR UPDATE;
+SELECT balance FROM accounts WHERE id = GREATEST(:from_id, :to_id) FOR UPDATE;
+
+UPDATE accounts SET balance = balance - :amount WHERE id = :from_id;
+UPDATE accounts SET balance = balance + :amount WHERE id = :to_id;
+
+COMMIT;
+  </blockquote>
+  <p>不管这笔转账是"A转给B"还是"B转给A",<span class="mono">LEAST()</span>/<span class="mono">GREATEST()</span> 拼出来的 <span class="mono">FOR UPDATE</span> 顺序永远是"先小 ID、后大 ID"。只要所有服务实例都遵守这同一条规则,大家对同一对账户加锁的顺序就永远一致,循环等待这个死锁的必要条件就被从根上掐掉了——这跟进程内 <span class="mono">sync.Mutex</span> 按 ID 排序是同一个原理,只是共享的"锁"从内存里的一个对象,换成了数据库里的行锁。</p>
+</section>
+
+<section>
+  <h2>验证:走主键索引,锁的确实只是那一行</h2>
+  <p class="h2-sub">常见的顾虑是"FOR UPDATE 是不是表锁",建了一张表、开三个并发事务测一下。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">def txn1_lock_row1_hold():
+    cur.execute("SELECT * FROM accounts WHERE id=1 FOR UPDATE")
+    time.sleep(1.5)   # 持有锁不放
+    conn.commit()
+
+def txn2_lock_row2():
+    cur.execute("SELECT * FROM accounts WHERE id=2 FOR UPDATE")   # 不同的行
+
+def txn3_lock_row1_same():
+    cur.execute("SELECT * FROM accounts WHERE id=1 FOR UPDATE")   # 同一行</pre>
+<span class="ok">锁不同行(id=2)耗时: 3.7 ms   ← 几乎不用等,证明不是表锁</span>
+<span class="bad">锁同一行(id=1)耗时: 1209.7 ms ← 真的被卡住,证明锁是生效的</span>
+  </div>
+  <p><span class="mono">txn2</span> 去锁另一行,3.7 毫秒就拿到了,完全没受 <span class="mono">txn1</span> 影响;<span class="mono">txn3</span> 去锁<b>同一行</b>,老老实实被卡了 1.2 秒,直到 <span class="mono">txn1</span> 提交才放行。<span class="mono">EXPLAIN</span> 也能确认这条语句走的是主键常量查找,不是扫表:</p>
+  <blockquote class="src">
+    <span class="path">EXPLAIN SELECT * FROM accounts WHERE id=1 FOR UPDATE</span>
+-> Rows fetched before execution  (常量查找,不扫表)
+  </blockquote>
+</section>
+
+<section>
+  <h2>验证:条件没走索引,才是真正的"事实上的表锁"</h2>
+  <p class="h2-sub">InnoDB 没法提前知道哪些行符合一个没有索引的条件,只能把扫到的每一行都锁上。</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">-- balance 字段没有索引
+EXPLAIN SELECT * FROM accounts WHERE balance > 500 FOR UPDATE
+-> Table scan on accounts
+
+def txn1_no_index_scan_hold():
+    cur.execute("SELECT * FROM accounts WHERE balance > 500 FOR UPDATE")
+    time.sleep(1.5)
+
+def txn2_lock_row5():
+    # id=5 跟 txn1 的过滤条件(balance)毫无关系
+    cur.execute("SELECT * FROM accounts WHERE id=5 FOR UPDATE")</pre>
+<span class="bad">txn2 通过主键锁一个跟 txn1 过滤条件无关的行(id=5),耗时: 1204.7 ms</span>
+  </div>
+  <p><span class="mono">txn2</span> 明明是按主键去锁一个跟 <span class="mono">balance>500</span> 毫不相干的行,但因为 <span class="mono">txn1</span> 走的是无索引全表扫描,扫到的每一行都被锁住了,<span class="mono">txn2</span> 照样被卡了 1.2 秒。这才是真正会拖垮性能的场景——根子不在 <span class="mono">FOR UPDATE</span> 本身,是<b>缺索引</b>导致的。前面那套按主键 <span class="mono">id</span> 排序加锁的方案,条件是主键等值查询,不会踩到这个坑。</p>
+</section>
+
+<section>
+  <h2>应用层排序 vs SQL 里的 LEAST/GREATEST</h2>
+  <p class="h2-sub">两种写法锁的顺序完全一样,应用层排序更直观,但有个容易踩的坑。</p>
+  <blockquote class="src">
+    <span class="path">应用层先排序，再按顺序发两条独立的 SQL</span>
+smaller_id, larger_id = sorted([from_id, to_id])
+
+cur.execute("SELECT balance FROM accounts WHERE id=%s FOR UPDATE", (smaller_id,))
+cur.execute("SELECT balance FROM accounts WHERE id=%s FOR UPDATE", (larger_id,))
+
+# 注意：smaller_id/larger_id 只是"加锁顺序"，
+# 真正扣钱/加钱还是得按 from_id/to_id 原本的语义走，不能搞混
+  </blockquote>
+  <p>排序逻辑摆在代码里,谁都能一眼看出"这里在保证加锁顺序",不用记 <span class="mono">LEAST/GREATEST</span> 这种藏在 SQL 里的写法。但要注意:排序决定的是"先锁谁",不代表这两个 ID 谁是转出方、谁是转入方——如果直接拿排序后的变量去做扣款加款,很容易把转账方向搞反,而且这个 bug 不会报错,是那种悄悄把钱转错方向的隐患。</p>
+
+  <div class="callout">
+    <b>能不能偷懒,一条 SQL 用 IN(...) 把两行一起锁,不用排序?</b> 测过,不建议。
+  </div>
+
+  <p>用 <span class="mono">IN (2,1)</span>(故意把大的写在前面)试了一下,同时用一个"探针"事务去试探 <span class="mono">id=1</span> 有没有被提前锁住:</p>
+  <div class="term"><span class="real-tag">真实实测</span>
+<pre class="code">def txn_hold_id2():
+    cur.execute("SELECT * FROM accounts WHERE id=2 FOR UPDATE")
+    time.sleep(1.2)
+
+def txn_in_list_reversed():
+    cur.execute("SELECT * FROM accounts WHERE id IN (2,1) FOR UPDATE")   # 大的写在前面
+
+def txn_probe_id1():
+    cur.execute("SELECT * FROM accounts WHERE id=1 FOR UPDATE")   # 探针</pre>
+<span class="bad">IN(2,1) 整条语句耗时: 899.9 ms
+探针尝试锁 id=1,耗时: 603.2 ms  ← 被明显卡住了</span>
+  </div>
+  <p>探针被卡住了,说明哪怕 <span class="mono">IN</span> 列表写成 <span class="mono">(2,1)</span>,MySQL 实际执行时还是先按主键升序把 <span class="mono">id=1</span> 锁到手,再去等 <span class="mono">id=2</span>——这个结果<b>看起来</b>很安全,但 MySQL 官方文档并没有承诺"多值 IN 加锁一定按主键升序处理"这件事,这只是当前这个查询计划下观察到的行为,换个版本、换个更复杂的查询完全可能不成立。真正靠谱的做法还是显式控制顺序——应用层排序后发两条独立语句,不依赖数据库没写进文档的内部行为。</p>
+</section>
+
+<section>
+  <h2>演示:两个方向相反的转账,按 ID 顺序加锁,完全不会死锁</h2>
+  <p class="h2-sub">A 转给 B、同时 B 转给 A,两边都遵守"先锁小 ID"的规则,看会发生什么。</p>
+  <div class="demo" id="dlDemo">
+    <div class="demo-head">两笔方向相反的转账 · 加锁时间线</div>
+    <div class="demo-narration" id="dlNarration"></div>
+    <div class="demo-body">
+      <table class="thread-table" id="dlTable">
+        <thead><tr><th>事务</th><th>操作</th><th>结果</th></tr></thead>
+        <tbody id="dlTableBody"></tbody>
+      </table>
+      <div class="stat-row" id="dlStats"></div>
+    </div>
+    <div class="demo-controls">
+      <button class="btn" id="dlReset">⏮ 重来</button>
+      <button class="btn" id="dlPrev">‹ 上一步</button>
+      <button class="btn primary" id="dlNext">下一步 ›</button>
+      <button class="btn" id="dlPlay">▶ 自动播放</button>
+      <span class="step-counter" id="dlCounter"></span>
+    </div>
+  </div>
+  <p style="font-size:.85rem; color:var(--ink-dim);">事务甲要把账户1的钱转给账户2,事务乙同时要把账户2的钱转给账户1——方向完全相反。但因为两边都按"先锁 id=1、再锁 id=2"的规则走,乙只是老老实实排队等甲用完,不会出现"甲等乙同时乙也在等甲"这种循环等待。</p>
+</section>
+
+<section>
+  <div class="refs">
+    <h3>参考与说明</h3>
+    <ul>
+      <li>本文全部实验(行锁 vs 全表扫描退化、IN 列表加锁顺序)均在本机运行的 MySQL(InnoDB 引擎)上用 Python + PyMySQL 开多线程/多连接完成,数据未做删改。</li>
+      <li>单进程内用 <span class="mono">sync.Mutex</span> 按 ID 排序加锁避免死锁的原理和压测,参见<a href="lock-ordering.html" target="_blank" rel="noopener">转账死锁</a>那篇;数据库自己的死锁检测机制参见<a href="deadlock.html" target="_blank" rel="noopener">InnoDB 是怎么发现并解开死锁的</a>;不用悲观锁、改用版本号重试的思路参见<a href="optimistic-lock.html" target="_blank" rel="noopener">乐观锁重试</a>那篇。</li>
+      <li>没有涉及:跨多个数据库实例(而不是同一个数据库的不同行)的分布式事务场景,那属于两阶段提交/Saga 补偿的范畴,不是单纯靠行锁顺序能解决的;不同隔离级别下 gap lock/next-key lock 对范围查询的额外影响。</li>
+    </ul>
+  </div>
+</section>
+
+</div>
+
+<div class="bgy-donate">
+  <a href="https://www.afdian.com/a/bigywater" target="_blank" rel="noopener noreferrer">☕ 如果这篇文章帮到你,可以请作者喝杯咖啡 · 爱发电</a>
+</div>
+<style>
+.bgy-donate{max-width:920px;margin:0 auto 20px;padding:0 24px;}
+.bgy-donate a{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;line-height:1.4;color:#B5651D;background:#FDF3E7;border:1px solid #F0DEC4;border-radius:10px;padding:10px 16px;text-decoration:none;}
+.bgy-donate a:hover{opacity:.82;}
+@media (prefers-color-scheme: dark){.bgy-donate a{color:#E0B584;background:#2A2118;border-color:#4A3A28;}}
+</style>
+<footer>并发控制实战 · 分布式转账加锁 · 数据来自本机运行的 MySQL InnoDB</footer>
+
+<script>
+const DATA = {"events": [
+  {"who": "甲(1→2)", "op": "SELECT id=1 FOR UPDATE", "result": "拿到锁,成功"},
+  {"who": "乙(2→1)", "op": "SELECT id=1 FOR UPDATE", "result": "被甲卡住,排队等待"},
+  {"who": "甲(1→2)", "op": "SELECT id=2 FOR UPDATE", "result": "id=2 此刻没人碰,直接拿到"},
+  {"who": "甲(1→2)", "op": "UPDATE 两行余额 + COMMIT", "result": "转账完成,释放 id=1 和 id=2 的锁"},
+  {"who": "乙(2→1)", "op": "(排队结束)拿到 id=1 的锁", "result": "甲释放后,乙终于拿到"},
+  {"who": "乙(2→1)", "op": "SELECT id=2 FOR UPDATE", "result": "此刻也没人碰,直接拿到"},
+  {"who": "乙(2→1)", "op": "UPDATE 两行余额 + COMMIT", "result": "转账完成,全程没有发生死锁"}
+]};
+
+(function(){
+  const events = DATA.events;
+  const totalSteps = events.length;
+  const tbody = document.getElementById('dlTableBody');
+  const narration = document.getElementById('dlNarration');
+  const statsBox = document.getElementById('dlStats');
+  const counter = document.getElementById('dlCounter');
+  let idx = 0, playing=false, playTimer=null;
+
+  function describe(i){
+    const e = events[i];
+    return `<span class="k">${e.who}</span>:${e.op} &rarr; ${e.result}`;
+  }
+
+  function render(){
+    idx = Math.max(0, Math.min(totalSteps-1, idx));
+    narration.innerHTML = describe(idx);
+
+    tbody.innerHTML = events.map((e, i) => {
+      if (i > idx) return `<tr><td colspan="3" style="color:var(--ink-dim)">(还没发生)</td></tr>`;
+      const isWait = e.result.includes('排队') || e.result.includes('卡住');
+      const stage = isWait ? 'wait' : 'ok';
+      const label = isWait ? '⏳ 等待' : '✓';
+      return `<tr class="${i===idx ? 'current' : ''}"><td>${e.who}</td><td>${e.op}</td><td><span class="stage-tag ${stage}">${label}</span> ${e.result}</td></tr>`;
+    }).join('');
+
+    let heldBy1 = idx < 4 ? '甲' : (idx < 6 ? '乙(排队后拿到)' : '无(已释放)');
+    statsBox.innerHTML = `<div class="stat">当前步骤<b>${idx+1} / ${totalSteps}</b></div><div class="stat">id=1 当前持有者<b>${heldBy1}</b></div><div class="stat">是否死锁<b>否</b></div>`;
+
+    counter.textContent = `${idx+1} / ${totalSteps}`;
+    document.getElementById('dlPrev').disabled = idx===0;
+    document.getElementById('dlNext').disabled = idx===totalSteps-1;
+  }
+  document.getElementById('dlPrev').onclick=()=>{idx--;render();stopPlay();};
+  document.getElementById('dlNext').onclick=()=>{idx++;render();stopPlay();};
+  document.getElementById('dlReset').onclick=()=>{idx=0;render();stopPlay();};
+  function stopPlay(){ playing=false; clearInterval(playTimer); document.getElementById('dlPlay').textContent='▶ 自动播放'; }
+  document.getElementById('dlPlay').onclick=()=>{
+    if(playing){ stopPlay(); return; }
+    playing=true; document.getElementById('dlPlay').textContent='⏸ 暂停';
+    playTimer = setInterval(()=>{
+      if(idx>=totalSteps-1){ stopPlay(); return; }
+      idx++; render();
+    }, 1300);
+  };
+  render();
+})();
+</script>
+
+</body>
+</html>
