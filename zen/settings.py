@@ -149,6 +149,10 @@ STORAGES = {
 # TLS 在 nginx 终止，nginx 通过 X-Forwarded-Proto 告诉 Django 原始请求是不是 https。
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
+# Django 默认是 same-origin,跨站请求不带 referrer,百度统计会提示"referrer被禁用"、
+# 拿不到来源。改成浏览器默认值:同站带完整地址,跨站只带域名。
+SECURE_REFERRER_POLICY = 'strict-origin-when-cross-origin'
+
 # 本地开发是 http，这两个只在上线（DJANGO_DEBUG=False）时打开，不然本地登录后台会因为
 # cookie 要求 https 而直接失效。
 SESSION_COOKIE_SECURE = not DEBUG
