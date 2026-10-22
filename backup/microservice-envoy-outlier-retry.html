@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>Envoy 的异常检测、熔断、重试与超时策略</title>
+<meta name="description" content="实测 Envoy 的重试、熔断与异常点检测:retry_on 5xx 且避开已试过的主机,成功率从 75.5% 到 100.0%,后端多收 28% 的请求;per_try_timeout 把 p99 从 1013 ms 降到 229 ms;max_connections 2 加等待队列 2 时 20 个并发请求只有 4 个成功,16 个立即 503;两个坏主机都被摘除后触发 panic 模式,失败比例仍有 57%~67%。">
+<link rel="canonical" href="https://bigywater.tech/microservice-envoy-outlier-retry.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Envoy 的异常检测、熔断、重试与超时策略">
+<meta property="og:description" content="实测 Envoy 的重试、熔断与异常点检测:retry_on 5xx 且避开已试过的主机,成功率从 75.5% 到 100.0%,后端多收 28% 的请求;per_try_timeout 把 p99 从 1013 ms 降到 229 ms;max_connections 2 加等待队列 2 时 20 个并发请求只有 4 个成功,16 个立即 503;两个坏主机都被摘除后触发 panic 模式,失败比例仍有 57%~67%。">
+<meta property="og:url" content="https://bigywater.tech/microservice-envoy-outlier-retry.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Envoy 的异常检测、熔断、重试与超时策略">
+<meta name="twitter:description" content="实测 Envoy 的重试、熔断与异常点检测:retry_on 5xx 且避开已试过的主机,成功率从 75.5% 到 100.0%,后端多收 28% 的请求;per_try_timeout 把 p99 从 1013 ms 降到 229 ms;max_connections 2 加等待队列 2 时 20 个并发请求只有 4 个成功,16 个立即 503;两个坏主机都被摘除后触发 panic 模式,失败比例仍有 57%~67%。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">2885</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">70</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">97</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">56</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">78</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">114</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">111</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">88</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#8A6D12; --series-c-soft:#F3EBCB;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#D9B94A; --series-c-soft:#332B0B;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#D9B94A; --series-c-soft:#332B0B;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>微服务 · 86</div>
+  <h1>Envoy 的异常检测、熔断、重试与超时策略</h1>
+  <p>Envoy 的重试该怎么配?重试时要不要避开已经试过的主机?per_try_timeout 能解决慢主机吗?熔断器的阈值溢出时什么样?异常点检测什么时候摘除、为什么摘除不了所有坏主机?这篇用 Envoy 1.39.3 和已知行为的后端逐项量出来。</p>
+  <div class="hero-fact">
+<div><div class="num">75.5% → 100.0%</div><div class="lbl">bad 主机有 50% 失败时,不重试与重试 1 次且避开已试过主机的客户端成功率(后端多收到 1.28 倍的请求)</div></div><div><div class="num">1013 → 229 ms</div><div class="lbl">加上 per_try_timeout 0.2 s 和重试之后,有一个慢主机时的 p99 延迟</div></div><div><div class="num">163</div><div class="lbl">两个坏主机都被摘除后,Envoy 在 panic 模式下分配的请求数(lb_healthy_panic)</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="microservice-envoy-filter-chain.html">Envoy 的过滤器链</a></div>
+<section>
+  <h2>重试</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  策略                 | 客户端看到的成功率 | 后端收到的请求数 ÷ 客户端请求数 | Envoy 记录的重试次数 | 重试成功次数 | bad 收到的请求数
+  -------------------+-----------+-------------------+---------------+--------+-----------
+  (a)不重试             | 75.5%     | 1.00              | 0             | 0      | 1000      
+  (b)重试 1 次,避开已试过的主机 | 100.0%    | 1.28              | 570           | 570    | 1157      
+  (c)重试 1 次,不避开      | 94.0%     | 1.25              | 500           | 379    | 1250      
+  重试把一半请求的失败(轮询到 bad 并且 bad 这次失败,约 25%)变成成功,代价是后端多收到请求;重试时避开已经试过的主机,重试几乎都落在 good 上;不避开时重试仍有机会选到 bad 并再次失败,成功率低一些</pre></div>
+  <p>重试能把失败变成成功,代价是后端多收到请求;避开已试过的主机比不避开更有效。</p>
+</section>
+<section>
+  <h2>per_try_timeout</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  配置                                | 成功率  | 延迟 p25(ms) | p50(ms) | p75(ms) | p99(ms) | 延迟超过 150 ms 的请求比例 | slow 后端收到的请求数
+  ----------------------------------+------+------------+---------+---------+---------+-------------------+--------------
+  (a)只有总超时 2 s                      | 100% | 2          | 505     | 1008    | 1013    | 50%               | 100          
+  (b)per_try_timeout 0.2 s + 重试 1 次 | 100% | 3          | 209     | 220     | 229     | 66%               | 133          
+  没有 per_try_timeout 时,轮询落到 slow 的请求要等满 1 s;设了 per_try_timeout 之后,第一次尝试 0.2 s 超时就换到 fast 重试,这些请求的延迟变成 0.2 s 多一点,所以 p99 从约 1 s 降到 0.2 s 多;代价是要等满 per_try_timeout 的请求仍然比较多,slow 后端收到的请求数也比 (a) 多——重试本身会让 Envoy 的轮询游标多走几步,我的猜测是这让更多请求第一次落到 slow 上(这个猜测没有另外验证,每次运行具体数字略有不同);超时只是 Envoy 不再等,slow 后端并没有因此少收请求</pre></div>
+  <p>它缩短了单个请求的等待时间,但不减少慢主机收到的请求。</p>
+</section>
+<section>
+  <h2>熔断</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  配置                                          | 200 | 503 | 带 x-envoy-overloaded 头的 | 最慢的请求耗时(ms) | upstream_rq_pending_overflow | upstream_cx_overflow | 后端实际收到的请求数
+  --------------------------------------------+-----+-----+-------------------------+-------------+------------------------------+----------------------+-----------
+  (a)默认阈值                                     | 20  | 0   | 0                       | 316         | 0                            | 0                    | 20        
+  (b)max_connections 2、max_pending_requests 2 | 4   | 16  | 16                      | 627         | 16                           | 4                    | 4         
+  上游是 HTTP/1.1 时一个连接同时只处理一个请求,超过 max_connections 的请求进入等待队列,等待队列也满了就立即被拒绝(503,响应头带 x-envoy-overloaded);熔断的作用是在上游已经跟不上时快速失败,而不是把更多请求堆在上游前面</pre></div>
+  <p>连接数和等待队列满了之后,多出的请求立即返回 503(x-envoy-overloaded)。</p>
+</section>
+<section>
+  <h2>异常点检测</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  (a)h3 坏,max_ejection_percent 50:
+  时间段     | 请求数 | 200 | 500 | 500 的比例
+  --------+-----+-----+-----+--------
+  0~3 s   | 30  | 27  | 3   | 10%    
+  3~6 s   | 30  | 30  | 0   | 0%     
+  6~9 s   | 30  | 25  | 5   | 17%    
+  9~12 s  | 30  | 29  | 1   | 3%     
+  12~15 s | 30  | 30  | 0   | 0%     
+  15~18 s | 30  | 30  | 0   | 0%     
+  18~21 s | 30  | 28  | 2   | 7%     
+  21~24 s | 30  | 26  | 4   | 13%    
+    Envoy 的异常点检测统计:ejections_enforced_total = 3,ejections_active(结束时)= 1,ejections_consecutive_5xx = 3;lb_healthy_panic(进入 panic 模式后被选主机的请求数)= 0
+  (b)h2、h3 都坏,max_ejection_percent 100:
+  时间段     | 请求数 | 200 | 500 | 500 的比例
+  --------+-----+-----+-----+--------
+  0~3 s   | 30  | 11  | 19  | 63%    
+  3~6 s   | 30  | 10  | 20  | 67%    
+  6~9 s   | 30  | 13  | 17  | 57%    
+  9~12 s  | 30  | 12  | 18  | 60%    
+  12~15 s | 30  | 10  | 20  | 67%    
+  15~18 s | 30  | 12  | 18  | 60%    
+  18~21 s | 30  | 11  | 19  | 63%    
+  21~24 s | 30  | 12  | 18  | 60%    
+    Envoy 的异常点检测统计:ejections_enforced_total = 6,ejections_active(结束时)= 2,ejections_consecutive_5xx = 6;lb_healthy_panic(进入 panic 模式后被选主机的请求数)= 163
+  (a)刚开始 h3 收到约三分之一的请求并且全部失败,连续 3 次 5xx 之后 h3 被摘除,失败消失;6 s 的摘除时间到了之后 h3 被放回来,又收到请求、失败,再被摘除;这一次摘除之后要到约 18 s 才再有失败,比 6 s 的 base_ejection_time 长得多(摘除时间随摘除次数增加是我对文档的了解,表里的先后是实测)。(b)两个坏主机被摘除之后只剩 1 个健康主机,健康比例低于默认的 panic 阈值,按 lb_healthy_panic 的计数看 Envoy 进入了 panic 模式——忽略摘除状态,把请求分给所有主机,坏主机重新收到流量,失败的比例和没有异常点检测时差不多(约三分之二)
+ERRORS {}</pre></div>
+  <p>连续 5xx 会摘除主机;健康主机比例低于 panic 阈值时,Envoy 会忽略摘除状态。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">Envoy 的重试、熔断与异常点检测</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "b", "kind": "bars", "label": "数字对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "重试策略(good 总是 200,bad 有 50% 返回 503,轮询;每种 2000 个请求)。不重试:客户端成功率 75.5%,后端收到的请求数是客户端请求数的 1.00 倍,bad 收到 1000 个。重试 1 次、避开已经试过的主机:成功率 100.0%,后端收到 1.28 倍,Envoy 记录重试 570 次、全部成功,bad 收到 1157 个。重试 1 次、不避开:成功率 94.0%,后端收到 1.25 倍,重试 500 次、其中 379 次成功,bad 收到 1250 个。重试把失败变成成功,代价是后端多收到请求;避开已经试过的主机,重试都落在 good 上。", "s": {"t": {"lines": ["  策略                 | 客户端看到的成功率 | 后端收到的请求数 ÷ 客户端请求数 | Envoy 记录的重试次数 | 重试成功次数 | bad 收到的请求数", "  -------------------+-----------+-------------------+---------------+--------+-----------", "  (a)不重试             | 75.5%     | 1.00              | 0             | 0      | 1000      ", "  (b)重试 1 次,避开已试过的主机 | 100.0%    | 1.28              | 570           | 570    | 1157      ", "  (c)重试 1 次,不避开      | 94.0%     | 1.25              | 500           | 379    | 1250      ", "  重试把一半请求的失败(轮询到 bad 并且 bad 这次失败,约 25%)变成成功,代价是后端多收到请求;重试时避开已经试过的主机,重试几乎都落在 good 上;不避开时重试仍有机会选到 bad 并再次失败,成功率低一些"], "cur": [], "mark": [], "done": []}, "mark": [4], "done": [2, 3], "b": {"items": [["不重试:成功率 %", 75.5, "75.5%"], ["重试(避开):成功率 %", 100.0, "100.0%"], ["重试(不避开):成功率 %", 94.0, "94.0%"], ["重试(避开):后端请求 ÷ 客户端请求(×100)", 128, "1.28 倍"]], "max": 128, "cur": [0, 3], "mark": [2], "done": [1]}, "kv": {"items": [["不重试", "75.5% 成功,后端 1.00 倍"], ["重试 + 避开已试主机", "100.0% 成功,后端 1.28 倍"], ["重试,不避开", "94.0% 成功,后端 1.25 倍"]], "hl": ["重试 + 避开已试主机"]}}}, {"note": "per_try_timeout(fast 5 ms,slow 每个请求 1 s,路由总超时 2 s,200 个请求)。只有总超时:延迟 p25 2 ms、p50 505 ms、p75 1008 ms、p99 1013 ms,延迟超过 150 ms 的请求占 50%,slow 收到 100 个请求。per_try_timeout 0.2 s 加重试 1 次(避开已试过的主机):p25 3 ms、p50 209 ms、p75 220 ms、p99 229 ms,超过 150 ms 的请求占 66%,slow 收到 133 个请求。p99 从 1 s 降到 0.2 s 多,但等满 per_try_timeout 的请求更多(66%),slow 收到的请求比不重试时多。超时只是 Envoy 不再等,slow 并没有少收请求。", "s": {"t": {"lines": ["  配置                                | 成功率  | 延迟 p25(ms) | p50(ms) | p75(ms) | p99(ms) | 延迟超过 150 ms 的请求比例 | slow 后端收到的请求数", "  ----------------------------------+------+------------+---------+---------+---------+-------------------+--------------", "  (a)只有总超时 2 s                      | 100% | 2          | 505     | 1008    | 1013    | 50%               | 100          ", "  (b)per_try_timeout 0.2 s + 重试 1 次 | 100% | 3          | 209     | 220     | 229     | 66%               | 133          ", "  没有 per_try_timeout 时,轮询落到 slow 的请求要等满 1 s;设了 per_try_timeout 之后,第一次尝试 0.2 s 超时就换到 fast 重试,这些请求的延迟变成 0.2 s 多一点,所以 p99 从约 1 s 降到 0.2 s 多;代价是要等满 per_try_timeout 的请求仍然比较多,slow 后端收到的请求数也比 (a) 多——重试本身会让 Envoy 的轮询游标多走几步,我的猜测是这让更多请求第一次落到 slow 上(这个猜测没有另外验证,每次运行具体数字略有不同);超时只是 Envoy 不再等,slow 后端并没有因此少收请求"], "cur": [], "mark": [], "done": []}, "mark": [3], "done": [2], "b": {"items": [["只有总超时:p99 ms", 1013, "1013"], ["per_try_timeout:p99 ms", 229, "229"], ["只有总超时:slow 收到", 100, "100"], ["per_try_timeout:slow 收到", 133, "133"]], "max": 1013, "cur": [0], "mark": [2, 3], "done": [1]}, "kv": {"items": [["p99", "1013 ms → 229 ms"], ["超过 150 ms 的请求", "50% → 66%"], ["slow 后端收到的请求", "100 → 133"]], "hl": ["slow 后端收到的请求"]}}}, {"note": "熔断器(一个后端,每个请求 300 ms,上游走 HTTP/1.1;20 个请求同时发出)。默认阈值:20 个全部 200,最慢 316 ms,没有溢出。max_connections 2、max_pending_requests 2:4 个 200、16 个 503;这 16 个都带 x-envoy-overloaded 头,最慢 627 ms,upstream_rq_pending_overflow 为 16,upstream_cx_overflow 为 4,后端实际只收到 4 个请求。上游跟不上时,熔断让多出的请求立即失败,而不是堆在上游前面。", "s": {"t": {"lines": ["  配置                                          | 200 | 503 | 带 x-envoy-overloaded 头的 | 最慢的请求耗时(ms) | upstream_rq_pending_overflow | upstream_cx_overflow | 后端实际收到的请求数", "  --------------------------------------------+-----+-----+-------------------------+-------------+------------------------------+----------------------+-----------", "  (a)默认阈值                                     | 20  | 0   | 0                       | 316         | 0                            | 0                    | 20        ", "  (b)max_connections 2、max_pending_requests 2 | 4   | 16  | 16                      | 627         | 16                           | 4                    | 4         ", "  上游是 HTTP/1.1 时一个连接同时只处理一个请求,超过 max_connections 的请求进入等待队列,等待队列也满了就立即被拒绝(503,响应头带 x-envoy-overloaded);熔断的作用是在上游已经跟不上时快速失败,而不是把更多请求堆在上游前面"], "cur": [], "mark": [], "done": []}, "mark": [3], "done": [2], "b": {"items": [["默认阈值:200", 20, "20"], ["熔断:200", 4, "4"], ["熔断:503", 16, "16"], ["熔断:后端收到", 4, "4"]], "max": 20, "cur": [3], "mark": [2], "done": [0, 1]}, "kv": {"items": [["默认阈值", "20 个全部成功;最慢 316 ms"], ["max_connections 2 + 等待队列 2", "4 个成功;16 个 503(x-envoy-overloaded)"]], "hl": ["max_connections 2 + 等待队列 2"]}}}, {"note": "异常点检测与 panic 模式(10 个请求/秒,24 s,按每 3 秒统计)。(a)h3 总是返回 500,consecutive_5xx 为 3,base_ejection_time 为 6 s,max_ejection_percent 为 50:0~3 s 里 3 个 500(10%);3~6 s 为 0;6~9 s 里 5 个(17%);9~12 s 里 1 个;12~18 s 为 0;18~21 s 里 2 个;21~24 s 里 4 个。ejections_enforced_total 为 3,lb_healthy_panic 为 0。(b)h2 和 h3 都返回 500,max_ejection_percent 100:每个 3 秒窗口的 500 比例在 57% 到 67% 之间,和没有异常点检测时的三分之二差不多;ejections_enforced_total 为 6,结束时 2 个主机被摘除,lb_healthy_panic 为 163:健康主机比例低于 panic 阈值,Envoy 进入 panic 模式,忽略摘除状态把请求分给所有主机。", "s": {"t": {"lines": ["  (a)h3 坏,max_ejection_percent 50:", "  时间段     | 请求数 | 200 | 500 | 500 的比例", "  --------+-----+-----+-----+--------", "  0~3 s   | 30  | 27  | 3   | 10%    ", "  3~6 s   | 30  | 30  | 0   | 0%     ", "  6~9 s   | 30  | 25  | 5   | 17%    ", "  9~12 s  | 30  | 29  | 1   | 3%     ", "  12~15 s | 30  | 30  | 0   | 0%     ", "  15~18 s | 30  | 30  | 0   | 0%     ", "  18~21 s | 30  | 28  | 2   | 7%     ", "  21~24 s | 30  | 26  | 4   | 13%    ", "    Envoy 的异常点检测统计:ejections_enforced_total = 3,ejections_active(结束时)= 1,ejections_consecutive_5xx = 3;lb_healthy_panic(进入 panic 模式后被选主机的请求数)= 0", "  (b)h2、h3 都坏,max_ejection_percent 100:", "  时间段     | 请求数 | 200 | 500 | 500 的比例", "  --------+-----+-----+-----+--------", "  0~3 s   | 30  | 11  | 19  | 63%    ", "  3~6 s   | 30  | 10  | 20  | 67%    ", "  6~9 s   | 30  | 13  | 17  | 57%    ", "  9~12 s  | 30  | 12  | 18  | 60%    ", "  12~15 s | 30  | 10  | 20  | 67%    ", "  15~18 s | 30  | 12  | 18  | 60%    ", "  18~21 s | 30  | 11  | 19  | 63%    ", "  21~24 s | 30  | 12  | 18  | 60%    ", "    Envoy 的异常点检测统计:ejections_enforced_total = 6,ejections_active(结束时)= 2,ejections_consecutive_5xx = 6;lb_healthy_panic(进入 panic 模式后被选主机的请求数)= 163", "  (a)刚开始 h3 收到约三分之一的请求并且全部失败,连续 3 次 5xx 之后 h3 被摘除,失败消失;6 s 的摘除时间到了之后 h3 被放回来,又收到请求、失败,再被摘除;这一次摘除之后要到约 18 s 才再有失败,比 6 s 的 base_ejection_time 长得多(摘除时间随摘除次数增加是我对文档的了解,表里的先后是实测)。(b)两个坏主机被摘除之后只剩 1 个健康主机,健康比例低于默认的 panic 阈值,按 lb_healthy_panic 的计数看 Envoy 进入了 panic 模式——忽略摘除状态,把请求分给所有主机,坏主机重新收到流量,失败的比例和没有异常点检测时差不多(约三分之二)", "ERRORS {}"], "cur": [], "mark": [], "done": []}, "mark": [11, 12, 23, 24], "done": [0, 3, 5, 15, 17], "b": {"items": [["(a)0~3 s 的 500", 3, "3"], ["(a)6~9 s 的 500", 5, "5"], ["(a)12~18 s 的 500", 0, "0"], ["(b)lb_healthy_panic", 163, "163"]], "max": 163, "cur": [], "mark": [3], "done": [0, 1, 2]}, "kv": {"items": [["(a)h3 被摘除", "摘除期间 500 为 0;时间到了又试一次、再被摘除"], ["(b)两个坏主机", "被摘除后触发 panic:500 比例仍是 57%~67%"], ["lb_healthy_panic", "163 个请求在 panic 模式下被分配"]], "hl": ["(b)两个坏主机"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / Python 3.14.8 / Go / nginx / Envoy / etcd / Consul / Nacos / OpenTelemetry / Prometheus(按各篇注明用到哪些及版本);所有服务都是本机自己起的进程,端口 9150 以上,只监听 127.0.0.1,不连任何外部服务,不碰本机已有的实例;故障用 kill -9 进程、让连接断开或在代码里注入延迟与错误来制造;计时用 time.perf_counter,数字每次运行会有小幅抖动。Envoy 1.39.3(--concurrency 1),静态配置;后端是本机的 Python 服务(固定的失败率和延迟);各节只跑了一次(第二节 200 个请求、第三节 20 个并发请求),数字每次运行略有不同(例如熔断那节开发中的一次运行是 3 个成功、17 个 503;重试那节成功率相差一个百分点);第二节 slow 后端收到的请求比不重试时多,我的解释(重试推进轮询游标)没有另外验证</li><li>没有验证:retry_budget(用百分比限制重试);HTTP/2 上游时 max_requests 的作用;outlier detection 的 success_rate 和 local_origin 类型;重试的退避(retry_back_off)与 retriable_status_codes;熔断器的 track_remaining;更多主机时 panic 阈值的边界(默认 50% 来自我对文档的了解,本节只观察到了触发)</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="microservice-mtls-rotation.html">
+    <div>
+      <div class="t1">下一篇 · 微服务 87</div>
+      <div class="t2">mTLS:证书签发与轮换</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>微服务 · Envoy 的异常检测、熔断、重试与超时策略 · 实验记录 · 2026-10-19</footer>
+</body>
+</html>

@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>Nacos:临时实例与持久实例</title>
+<meta name="description" content="实测 Nacos 3.2.4:临时实例被 SIGKILL 后 0.58 s 消失,被 SIGSTOP 冻住要 26.12 s 才消失且期间一直 healthy;持久实例离开 61 s 仍在、停掉监听 0.6 s 变 unhealthy、恢复却要 13.1 s;保护阈值 0.2 起客户端视图把停了的 4 个也报成 healthy;同一服务不能混用两类;重启后临时实例要 14.3 s 才回来。">
+<link rel="canonical" href="https://bigywater.tech/microservice-nacos-ephemeral.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Nacos:临时实例与持久实例">
+<meta property="og:description" content="实测 Nacos 3.2.4:临时实例被 SIGKILL 后 0.58 s 消失,被 SIGSTOP 冻住要 26.12 s 才消失且期间一直 healthy;持久实例离开 61 s 仍在、停掉监听 0.6 s 变 unhealthy、恢复却要 13.1 s;保护阈值 0.2 起客户端视图把停了的 4 个也报成 healthy;同一服务不能混用两类;重启后临时实例要 14.3 s 才回来。">
+<meta property="og:url" content="https://bigywater.tech/microservice-nacos-ephemeral.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Nacos:临时实例与持久实例">
+<meta name="twitter:description" content="实测 Nacos 3.2.4:临时实例被 SIGKILL 后 0.58 s 消失,被 SIGSTOP 冻住要 26.12 s 才消失且期间一直 healthy;持久实例离开 61 s 仍在、停掉监听 0.6 s 变 unhealthy、恢复却要 13.1 s;保护阈值 0.2 起客户端视图把停了的 4 个也报成 healthy;同一服务不能混用两类;重启后临时实例要 14.3 s 才回来。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">2853</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">70</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">97</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">56</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">78</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">114</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">111</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">88</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#8A6D12; --series-c-soft:#F3EBCB;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#D9B94A; --series-c-soft:#332B0B;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#D9B94A; --series-c-soft:#332B0B;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>微服务 · 54</div>
+  <h1>Nacos:临时实例与持久实例</h1>
+  <p>Nacos 的临时实例和持久实例有什么区别?服务端怎么判断实例没了?实例不健康会被删除吗?保护阈值到底保护什么?服务端重启之后各自怎样?这篇用 Nacos 3.2.4 和真的被杀、被冻住的客户端逐项量出来。</p>
+  <div class="hero-fact">
+<div><div class="num">0.58 s vs 26.12 s</div><div class="lbl">临时实例的客户端被 SIGKILL 和被 SIGSTOP 冻住后,实例从列表里消失的用时</div></div><div><div class="num">61 s</div><div class="lbl">持久实例停掉监听后过了约这么久,仍在列表里,healthy=false,没有被删除</div></div><div><div class="num">4 → 0</div><div class="lbl">保护阈值 0.2(不低于健康比例 1/5)时,客户端视图看到的 unhealthy 数,实际上有 4 个已经停了</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="microservice-consul-kv-session.html">Consul KV 与 session 锁</a></div>
+<section>
+  <h2>临时实例靠连接</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  让它消失的方式 | 子进程登记完成后到列表里可见 | 动作到列表里消失 | 期间 healthy 标志的变化(相对动作时刻)
+  --------+----------------+----------+-------------------------
+  优雅注销    | 0.20 s         | 0.68 s   | 0.0s:healthy=True       
+  SIGKILL | 0.00 s         | 0.58 s   | 0.0s:healthy=True       
+  SIGSTOP | 0.00 s         | 26.12 s  | 0.0s:healthy=True       </pre></div>
+  <p>连接断了立刻消失;连接没断但对方没响应,要等服务端探测超时,期间一直报 healthy。</p>
+</section>
+<section>
+  <h2>持久实例靠探活</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  登记持久实例 p1(端口 9151):HTTP 200 {"code":0,"message":"success","data":"ok"}
+  登记后立刻查:ephemeral=False,healthy=True
+  监听一直开着,12 s 后:healthy=True
+  关掉监听后:healthy 变 false 用了 0.6 s;此时管理 API healthyOnly=false 返回 1 个、healthyOnly=true 返回 0 个;客户端 API(healthyOnly=true)返回 1 个,其中 healthy=[False]
+  再等 60 s(共离开约 61 s):实例仍在列表里,healthy=False
+  重新监听同一个端口后:healthy 恢复用了 13.1 s
+  从头没人监听的实例 p2:登记后立刻查 healthy=True;变 false 用了 3.4 s(从登记后第一次查询算起)</pre></div>
+  <p>服务端主动探测,变 unhealthy 很快、恢复慢;没人续约不会被删除。</p>
+</section>
+<section>
+  <h2>保护阈值</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  4 个实例停掉监听后,3.4 s 在管理视图里全部变成 unhealthy;服务的 protectThreshold 初始值:0.0
+  protectThreshold  | 管理视图 unhealthy / 总数 | 客户端视图 unhealthy / 总数 | 客户端 API healthyOnly=true 返回 | 管理 API healthyOnly=true 返回
+  ------------------+---------------------+----------------------+-----------------------------+---------------------------
+  0.0               | 4 / 5               | 4 / 5                | 5                           | 1                         
+  0.1(PUT HTTP 200) | 4 / 5               | 4 / 5                | 5                           | 1                         
+  0.2(PUT HTTP 200) | 4 / 5               | 0 / 5                | 5                           | 1                         
+  0.5(PUT HTTP 200) | 4 / 5               | 0 / 5                | 5                           | 1                         
+  0.0(PUT HTTP 200) | 4 / 5               | 4 / 5                | 5                           | 1                         
+  健康比例 = 1 / 5 = 0.2。客户端视图在阈值不低于这个比例时把所有实例都报成 healthy(包括实际上已经停了的 4 个),低于时才如实返回;/nacos/v3/client/ns/instance/list 这一版对 healthyOnly 参数没有做过滤(本次实测,返回数与 false 时相同),管理 API 的 healthyOnly=true 则只返回原始状态为 healthy 的</pre></div>
+  <p>阈值不低于健康比例时,客户端看到所有实例都是 healthy,包括已经停了的。</p>
+</section>
+<section>
+  <h2>混用与重启</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  (a1)服务里已经有临时实例,再登记持久实例:HTTP 400 '{"code":30000,"message":"server error","data":"errCode: 400, errMsg: Current service DEFAULT_GROUP@@mix is ephemeral service, can\'t register persistent instance. "}'
+  (a2)服务里已经有持久实例,再用 SDK 登记临时实例:NacosException: Error [500]: errCode: 400, errMsg: Current service DEFAULT_GROUP@@mix2 is persistent service, can't register ephemeral instance. 
+       两个服务的最终内容:mix → [('10.2.0.1', True)];mix2 → [('127.0.0.1', False)]
+  Nacos 被 SIGKILL 后重启(从启动命令算起):HTTP 接口可用 6.7 s;之后持久实例 keep 在列表里出现用了 0.0 s(刚出现时 healthy=True,healthy 为 true 用了 0.0 s);临时实例 eph(SDK 客户端子进程一直活着)重新出现用了 14.3 s(以上都从接口可用的时刻开始算)
+ERRORS {}</pre></div>
+  <p>一个服务只能是一类;重启后持久实例数据还在,临时实例要靠客户端重连重新登记。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">Nacos 临时与持久实例</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "b", "kind": "bars", "label": "数字对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "临时实例随客户端连接而活。每个临时实例是一个独立的 SDK 客户端子进程,登记完成后 0.20 s 内(优雅注销那次)或马上(另外两次)就能在列表里看到。让它消失的三种方式:优雅注销(deregister),0.68 s 后从列表里消失;SIGKILL 子进程(操作系统替它关掉连接),0.58 s 后消失;SIGSTOP 子进程(进程被冻住,连接还开着但没有任何数据),26.12 s 后才消失,而且这 26 秒里实例的 healthy 标志一直是 true,从来没有变成 false。服务端靠连接判活:连接断了立刻知道,连接没断但对方不回应要等探测超时。", "s": {"t": {"lines": ["  让它消失的方式 | 子进程登记完成后到列表里可见 | 动作到列表里消失 | 期间 healthy 标志的变化(相对动作时刻)", "  --------+----------------+----------+-------------------------", "  优雅注销    | 0.20 s         | 0.68 s   | 0.0s:healthy=True       ", "  SIGKILL | 0.00 s         | 0.58 s   | 0.0s:healthy=True       ", "  SIGSTOP | 0.00 s         | 26.12 s  | 0.0s:healthy=True       "], "cur": [], "mark": [], "done": []}, "mark": [4], "done": [2, 3], "b": {"items": [["优雅注销:消失 s", 0.68, "0.68"], ["SIGKILL:消失 s", 0.58, "0.58"], ["SIGSTOP:消失 s", 26.12, "26.12(healthy 一直 true)"]], "max": 27, "cur": [], "mark": [2], "done": [0, 1]}, "kv": {"items": [["优雅注销", "0.68 s"], ["SIGKILL", "0.58 s"], ["SIGSTOP", "26.12 s,期间 healthy=true"], ["判活依据", "连接是否还在"]], "hl": ["SIGSTOP"]}}}, {"note": "持久实例由服务端探活,不会因为没人续约而消失。用管理 API 登记 p1(HTTP 200),立刻查:ephemeral=false,healthy=true;监听一直开着,12 s 后 healthy 仍是 true。关掉监听:0.6 s 后原始 healthy 变 false,管理 API healthyOnly=false 返回 1 个、healthyOnly=true 返回 0 个;客户端 API healthyOnly=true 仍返回 1 个,healthy 是 false。再等 60 s(共约 61 s),实例仍在列表里,healthy=false,没有被删除。重新监听同一个端口:13.1 s 后 healthy 才恢复(变 false 只要 0.6 s)。从头没人监听的 p2:登记后立刻查还是 healthy=true,3.4 s 后才变 false。", "s": {"t": {"lines": ["  登记持久实例 p1(端口 9151):HTTP 200 {\"code\":0,\"message\":\"success\",\"data\":\"ok\"}", "  登记后立刻查:ephemeral=False,healthy=True", "  监听一直开着,12 s 后:healthy=True", "  关掉监听后:healthy 变 false 用了 0.6 s;此时管理 API healthyOnly=false 返回 1 个、healthyOnly=true 返回 0 个;客户端 API(healthyOnly=true)返回 1 个,其中 healthy=[False]", "  再等 60 s(共离开约 61 s):实例仍在列表里,healthy=False", "  重新监听同一个端口后:healthy 恢复用了 13.1 s", "  从头没人监听的实例 p2:登记后立刻查 healthy=True;变 false 用了 3.4 s(从登记后第一次查询算起)"], "cur": [], "mark": [], "done": []}, "mark": [3, 4, 6], "done": [1, 2, 5, 6], "b": {"items": [["变 false s", 0.6, "0.6"], ["恢复 healthy s", 13.1, "13.1"], ["p2 首次变 false s", 3.4, "3.4"]], "max": 14, "cur": [], "mark": [0, 2], "done": [1]}, "kv": {"items": [["离开 61 s 后", "仍在列表里,healthy=false"], ["变 false", "0.6 s"], ["恢复 healthy", "13.1 s"], ["登记时", "先是 healthy=true"]], "hl": ["离开 61 s 后"]}}}, {"note": "保护阈值 protectThreshold。服务 prot 有 5 个持久实例,停掉其中 4 个的监听,3.4 s 后管理视图里 4 个都是 unhealthy,服务的阈值初始是 0.0。阈值 0.0 和 0.1:管理视图 unhealthy 4/5,客户端视图 unhealthy 也是 4/5。阈值 0.2 和 0.5:管理视图仍是 4/5,客户端视图却变成 0/5——所有实例都被报成 healthy,包括已经停了的 4 个。阈值改回 0.0 后客户端视图恢复 4/5。健康比例是 1/5 = 0.2,阈值不低于这个比例时客户端看到的是“全部健康”。另外 /nacos/v3/client/ns/instance/list 这一版对 healthyOnly=true 没有过滤(任何阈值下都返回 5 个),管理 API 的 healthyOnly=true 返回 1 个。", "s": {"t": {"lines": ["  4 个实例停掉监听后,3.4 s 在管理视图里全部变成 unhealthy;服务的 protectThreshold 初始值:0.0", "  protectThreshold  | 管理视图 unhealthy / 总数 | 客户端视图 unhealthy / 总数 | 客户端 API healthyOnly=true 返回 | 管理 API healthyOnly=true 返回", "  ------------------+---------------------+----------------------+-----------------------------+---------------------------", "  0.0               | 4 / 5               | 4 / 5                | 5                           | 1                         ", "  0.1(PUT HTTP 200) | 4 / 5               | 4 / 5                | 5                           | 1                         ", "  0.2(PUT HTTP 200) | 4 / 5               | 0 / 5                | 5                           | 1                         ", "  0.5(PUT HTTP 200) | 4 / 5               | 0 / 5                | 5                           | 1                         ", "  0.0(PUT HTTP 200) | 4 / 5               | 4 / 5                | 5                           | 1                         ", "  健康比例 = 1 / 5 = 0.2。客户端视图在阈值不低于这个比例时把所有实例都报成 healthy(包括实际上已经停了的 4 个),低于时才如实返回;/nacos/v3/client/ns/instance/list 这一版对 healthyOnly 参数没有做过滤(本次实测,返回数与 false 时相同),管理 API 的 healthyOnly=true 则只返回原始状态为 healthy 的"], "cur": [], "mark": [], "done": []}, "mark": [5, 6], "done": [3, 4, 7], "b": {"items": [["阈值 0.1:客户端看到 unhealthy", 4, "4 / 5"], ["阈值 0.2:客户端看到 unhealthy", 0, "0 / 5"], ["阈值 0.5:客户端看到 unhealthy", 0, "0 / 5"], ["管理视图 unhealthy(任何阈值)", 4, "4 / 5"]], "max": 5, "cur": [], "mark": [1, 2], "done": [0, 3]}, "kv": {"items": [["阈值 < 0.2", "客户端如实看到 4 个 unhealthy"], ["阈值 ≥ 0.2", "客户端看到全部 healthy"], ["客户端 API healthyOnly=true", "没有过滤,返回 5 个"], ["管理 API healthyOnly=true", "返回 1 个"]], "hl": ["阈值 ≥ 0.2"]}}}, {"note": "同一个服务里不能混用,以及 Nacos 重启。服务里已经有临时实例,再用管理 API 登记持久实例:HTTP 400,errMsg 说该服务是 ephemeral service,不能登记 persistent instance;反过来服务里已有持久实例,再用 SDK 登记临时实例:NacosException 500,errMsg 说是 persistent service,不能登记 ephemeral instance。两个服务最终都只有最先登记的那一类。Nacos 被 SIGKILL 后重启:HTTP 接口 6.7 s 后可用;之后持久实例 keep 马上(0.0 s)就在列表里,刚出现时 healthy=true;临时实例 eph(SDK 客户端一直活着)用了 14.3 s 才重新出现,要等客户端重连、重新登记。", "s": {"t": {"lines": ["  (a1)服务里已经有临时实例,再登记持久实例:HTTP 400 '{\"code\":30000,\"message\":\"server error\",\"data\":\"errCode: 400, errMsg: Current service DEFAULT_GROUP@@mix is ephemeral service, can\\'t register persistent instance. \"}'", "  (a2)服务里已经有持久实例,再用 SDK 登记临时实例:NacosException: Error [500]: errCode: 400, errMsg: Current service DEFAULT_GROUP@@mix2 is persistent service, can't register ephemeral instance. ", "       两个服务的最终内容:mix → [('10.2.0.1', True)];mix2 → [('127.0.0.1', False)]", "  Nacos 被 SIGKILL 后重启(从启动命令算起):HTTP 接口可用 6.7 s;之后持久实例 keep 在列表里出现用了 0.0 s(刚出现时 healthy=True,healthy 为 true 用了 0.0 s);临时实例 eph(SDK 客户端子进程一直活着)重新出现用了 14.3 s(以上都从接口可用的时刻开始算)", "ERRORS {}"], "cur": [], "mark": [], "done": []}, "mark": [3], "done": [0, 1, 2], "b": {"items": [["接口可用 s", 6.7, "6.7"], ["持久实例重新出现 s", 0.0, "0.0"], ["临时实例重新出现 s", 14.3, "14.3"]], "max": 15, "cur": [], "mark": [2], "done": [0, 1]}, "kv": {"items": [["混用", "同一个服务只能是一类,另一类被 400 拒绝"], ["重启后持久实例", "数据在,马上出现"], ["重启后临时实例", "14.3 s,靠客户端重连重新登记"]], "hl": ["重启后临时实例"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / Python 3.14.8 / Go / nginx / Envoy / etcd / Consul / Nacos / OpenTelemetry / Prometheus(按各篇注明用到哪些及版本);所有服务都是本机自己起的进程,端口 9150 以上,只监听 127.0.0.1,不连任何外部服务,不碰本机已有的实例;故障用 kill -9 进程、让连接断开或在代码里注入延迟与错误来制造;计时用 time.perf_counter,数字每次运行会有小幅抖动。Nacos 是 3.2.4(单机,Java 17),客户端是 nacos-sdk-python 3.2.0 的子进程(用于真的 SIGKILL 和 SIGSTOP),持久实例用 /nacos/v3/admin/ns/instance 登记,“实例”是本进程里开的 TCP 监听;服务端的默认健康检查是 TCP;每种情形只测了 1 到 2 次(恢复用 13 s 在前后两次开发运行里一致,变 false 的 0.6 s / 1.5 s 因探测周期而不同)</li><li>没有验证:Nacos 集群模式(Raft/Distro 同步)下的行为;HTTP / MySQL 类健康检查;持久实例在集群里谁来探活;临时实例的 gRPC 保活间隔是多少、SIGSTOP 的 26 s 由哪些参数构成(没有看源码或配置);保护阈值的本意和边界判断(只测了 0 到 0.5 里的几个值,阈值 0.2 和比例 0.2 相等时也触发了保护);SDK 的 list_instances(healthy_only=True)(探测时它在阈值调回 0 之后仍返回 5 个全是 healthy 的实例,和 HTTP 视图对不上,原因我没有查,所以文章里没有用它);Nacos 1.x 的 HTTP 心跳模式;权重、元数据与分组(见第 50 篇)</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="microservice-change-notification.html">
+    <div>
+      <div class="t1">下一篇 · 微服务 55</div>
+      <div class="t2">变更通知:Nacos 的推拉结合与配置中心的长轮询</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>微服务 · Nacos:临时实例与持久实例 · 实验记录 · 2026-10-19</footer>
+</body>
+</html>

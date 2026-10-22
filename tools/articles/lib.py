@@ -24,9 +24,11 @@ HTOPICS = {int(k): v for k, v in json.load(open(HERE / 'grpc_topics.json')).item
 QTOPICS = {int(k): v for k, v in json.load(open(HERE / 'rabbitmq_topics.json')).items()}
 WTOPICS = {int(k): v for k, v in json.load(open(HERE / 'network_topics.json')).items()}
 TTOPICS = {int(k): v for k, v in json.load(open(HERE / 'transaction_topics.json')).items()}
+VTOPICS = {int(k): v for k, v in json.load(open(HERE / 'microservice_topics.json')).items()}
+XTOPICS = {int(k): v for k, v in json.load(open(HERE / 'spring_topics.json')).items()}
 YTOPICS = {int(k): v for k, v in json.load(open(HERE / 'scrapy_topics.json')).items()}
 # 新批次系列在 DB 里原有的篇数(显示编号接在后面)
-OFF = {'java': 140, 'go': 11, 'docker': 5, 'k8s': 6, 'gin': 4, 'git': 4, 'mongo': 8, 'crawler': 1, 'codec': 0, 'scrapy': 0, 'grpc': 0, 'rabbitmq': 0, 'network': 0, 'transaction': 0}
+OFF = {'java': 140, 'go': 11, 'docker': 5, 'k8s': 6, 'gin': 4, 'git': 4, 'mongo': 8, 'crawler': 1, 'codec': 0, 'scrapy': 0, 'grpc': 0, 'rabbitmq': 0, 'network': 0, 'transaction': 0, 'microservice': 0, 'spring': 0}
 SERIES_COLORS = {  # key: (light c, light soft, dark c, dark soft)
     'go': ('#00799A', '#D9F1F8', '#4FC3E8', '#0B2A33'),
     'docker': ('#1769B8', '#DCEBFA', '#5AAEF2', '#10263D'),
@@ -41,10 +43,15 @@ SERIES_COLORS = {  # key: (light c, light soft, dark c, dark soft)
     'rabbitmq': ('#D9531E', '#FBE3D8', '#F58A5B', '#3A1A0F'),
     'network': ('#40678F', '#DDE7F2', '#86B1DC', '#16263A'),
     'transaction': ('#B0485B', '#F6DEE2', '#E58A9A', '#3A1820'),
+    'microservice': ('#8A6D12', '#F3EBCB', '#D9B94A', '#332B0B'),
+    'spring': ('#3E8E2C', '#DDEFD6', '#7FD068', '#12290C'),
     'grpc': ('#2B7A78', '#D6EEEC', '#6CC5C1', '#0F2E2D'),
 }
 PREV71 = ('python-signal.html', 'signal：进程收到信号后到底发生什么')
-DATE = '2026-09-29'
+import datetime as _dt
+DATE = _dt.date.today().isoformat()   # dates.json 里没有登记的文章按“今天写的”处理;一批写完后跑 python3 mkdates.py 把日期冻结进 dates.json
+try: DATES = json.load(open(pathlib.Path(__file__).parent / 'dates.json'))   # url -> 写作日期,由 mkdates.py 生成
+except Exception: DATES = {}
 
 _style = re.search(r'<style>\n(.*?)</style>', SAMPLE, re.S).group(1)
 EXTRA_CSS = r"""
@@ -154,6 +161,15 @@ def demo(title, panels, steps, legend='这一步新出现/被高亮的对象'):
 
 
 def step(note, **panels):
+    # 终端面板只认 tl(...) 自己带的 cur/mark/done;写在 step() 这一层的 mark=/done= 以前被悄悄丢掉了,这里并进去
+    if isinstance(panels.get('t'), dict):
+        t = dict(panels['t'])
+        for k in ('cur', 'mark', 'done'):
+            if k in panels and not isinstance(panels[k], dict) and panels[k]:
+                t[k] = sorted(set(t.get(k, [])) | set(panels[k]))
+        panels['t'] = t
+    for k in ('mark', 'done'):
+        if isinstance(panels.get(k), list): panels.pop(k)
     return {'note': note, 's': panels}
 
 
@@ -168,13 +184,13 @@ def nav_html(counts):
 
 def render(a, counts):
     """a: dict(n, title, desc, lead, facts[(num,lbl)], body[html...], refs[str], )"""
-    n = a['n']; ser = a.get('series', 'python'); T = {'redis': RTOPICS, 'django': DTOPICS, 'zookeeper': ZTOPICS, 'rust': UTOPICS, 'flask': FTOPICS, 'java': JTOPICS, 'go': GTOPICS, 'docker': CTOPICS, 'k8s': KTOPICS, 'gin': NTOPICS, 'git': ITOPICS, 'mongo': MTOPICS, 'crawler': PTOPICS, 'codec': ETOPICS, 'scrapy': YTOPICS, 'grpc': HTOPICS, 'rabbitmq': QTOPICS, 'network': WTOPICS, 'transaction': TTOPICS}.get(ser, TOPICS); pre = ser
+    n = a['n']; ser = a.get('series', 'python'); T = {'redis': RTOPICS, 'django': DTOPICS, 'zookeeper': ZTOPICS, 'rust': UTOPICS, 'flask': FTOPICS, 'java': JTOPICS, 'go': GTOPICS, 'docker': CTOPICS, 'k8s': KTOPICS, 'gin': NTOPICS, 'git': ITOPICS, 'mongo': MTOPICS, 'crawler': PTOPICS, 'codec': ETOPICS, 'scrapy': YTOPICS, 'grpc': HTOPICS, 'rabbitmq': QTOPICS, 'network': WTOPICS, 'transaction': TTOPICS, 'microservice': VTOPICS, 'spring': XTOPICS}.get(ser, TOPICS); pre = ser
     slug = T[n]['slug']; url = f'{pre}-{slug}.html'
     title = a['title'] if 'title' in a else T[n]['title']
     desc = a['desc']
-    prev = PREV71 if (ser == 'python' and n == 71) else ('queryset-sql.html', 'QuerySet 怎么编译成 SQL:filter() 链式调用为什么不查库,select_related 又是怎么把 N+1 变成 1 次的') if (ser == 'django' and n == 11) else None if (ser in ('zookeeper', 'rust', 'flask', 'java', 'go', 'docker', 'k8s', 'gin', 'git', 'mongo', 'crawler', 'codec', 'scrapy', 'grpc', 'rabbitmq', 'network', 'transaction') and n == 1) else (f"{pre}-{T[n-1]['slug']}.html", T[n-1]['title'])
+    prev = PREV71 if (ser == 'python' and n == 71) else ('queryset-sql.html', 'QuerySet 怎么编译成 SQL:filter() 链式调用为什么不查库,select_related 又是怎么把 N+1 变成 1 次的') if (ser == 'django' and n == 11) else None if (ser in ('zookeeper', 'rust', 'flask', 'java', 'go', 'docker', 'k8s', 'gin', 'git', 'mongo', 'crawler', 'codec', 'scrapy', 'grpc', 'rabbitmq', 'network', 'transaction', 'microservice', 'spring') and n == 1) else (f"{pre}-{T[n-1]['slug']}.html", T[n-1]['title'])
     nxt = (f"{pre}-{T[n+1]['slug']}.html", T[n+1]['title'], n + 1) if n + 1 in T else None
-    SER = {'redis': 'Redis', 'django': 'Django', 'zookeeper': 'ZooKeeper', 'rust': 'Rust', 'flask': 'Flask', 'java': 'Java', 'go': 'Go', 'docker': 'Docker', 'k8s': 'Kubernetes', 'gin': 'Gin', 'git': 'Git', 'mongo': 'MongoDB', 'crawler': '爬虫工程', 'codec': '数据编码与压缩', 'scrapy': 'Scrapy', 'grpc': 'gRPC', 'rabbitmq': 'RabbitMQ', 'network': '网络协议', 'transaction': '分布式事务'}.get(ser, 'Python')
+    SER = {'redis': 'Redis', 'django': 'Django', 'zookeeper': 'ZooKeeper', 'rust': 'Rust', 'flask': 'Flask', 'java': 'Java', 'go': 'Go', 'docker': 'Docker', 'k8s': 'Kubernetes', 'gin': 'Gin', 'git': 'Git', 'mongo': 'MongoDB', 'crawler': '爬虫工程', 'codec': '数据编码与压缩', 'scrapy': 'Scrapy', 'grpc': 'gRPC', 'rabbitmq': 'RabbitMQ', 'network': '网络协议', 'transaction': '分布式事务', 'microservice': '微服务', 'spring': 'Spring'}.get(ser, 'Python')
     NO = n + OFF.get(ser, 0)
     style = _style + EXTRA_CSS
     if ser == 'k8s': style += '.term pre.code{white-space:pre-wrap; word-break:break-word; overflow-x:visible;}\n'  # kubectl 输出里的长行自动换行,不横向滚动
@@ -247,7 +263,7 @@ def render(a, counts):
             + (f'<div class="prev-post">← 上一篇 <a href="{prev[0]}">{esc(prev[1])}</a></div>\n' if prev else '')
             + '\n'.join(a['body']) +
             f'\n<section>\n  <div class="refs">\n    <h3>本文用到的工具与边界</h3>\n    <ul>{refs}</ul>\n  </div>\n</section>\n'
-            + nextsec + f'</div>\n<footer>{SER} · {t} · 实验记录 · {DATE}</footer>\n</body>\n</html>\n')
+            + nextsec + f'</div>\n<footer>{SER} · {t} · 实验记录 · {DATES.get(url, DATE)}</footer>\n</body>\n</html>\n')
     return url, title, page
 
 
@@ -298,7 +314,7 @@ def mkart(name, n, tags, desc, lead, facts, items, steps, refs, demo_title, pane
     if _n != len(items) or _n != len(steps):
         raise SystemExit(f'[段数不一致] {name}: out 里有 {_n} 个 "== " 小节,但 items={len(items)}、steps={len(steps)};三者必须相等,否则最后的小节会被悄悄丢掉')
     body = [sec(h, '', term('', blk(name, k + 1)), *([note] if note else [])) for k, (h, note) in enumerate(items)]
-    if panels is None and series in ('go', 'docker', 'k8s', 'gin', 'git', 'mongo', 'crawler', 'codec', 'scrapy', 'grpc', 'rabbitmq', 'network', 'transaction'):  # 新批次系列:步骤里用了 b= 就真的渲染柱状图面板
+    if panels is None and series in ('go', 'docker', 'k8s', 'gin', 'git', 'mongo', 'crawler', 'codec', 'scrapy', 'grpc', 'rabbitmq', 'network', 'transaction', 'microservice', 'spring'):  # 新批次系列:步骤里用了 b= 就真的渲染柱状图面板
         panels = [('t', 'term', '编译与运行输出')] + ([('b', 'bars', '数字对比')] if any('b' in st['s'] for st in steps) else []) + [('kv', 'kv', '要点')]
     body.append(sec('分步演示', '', demo(demo_title, panels or [('t', 'term', '编译与运行输出'), ('kv', 'kv', '要点')], steps, '本步的对象')))
     return dict(n=n, series=series, tags=tags, desc=desc, lead=lead, facts=facts, body=body, refs=refs)
@@ -309,6 +325,7 @@ ENV_F = '本机 macOS 27 arm64 / Python 3.14.7 / Flask 3.1.3 / Werkzeug 3.1.9 / 
 def mkartf(name, n, tags, desc, lead, facts, items, steps, refs, demo_title, panels=None):
     return mkart(name, n, tags, desc, lead, facts, items, steps, refs, demo_title, panels, series='flask')
 
+ENV_X = '本机 macOS 27 arm64 / OpenJDK 21.0.12(Homebrew) / Spring Boot 4.0.8(Spring Framework 7.0.9、Tomcat 11.0.24) / Spring Cloud 2025.1.3;用 javac 编译、java 直接运行,依赖由 Maven 从 Maven Central 解析;数字每次运行会有小幅抖动'
 ENV_J = '本机 macOS 27 arm64 / OpenJDK(Temurin 17.0.20、Homebrew 21.0.12 与 27,每篇注明实际用的版本);用 javac 编译、java 直接运行,需要第三方库时用 Maven 解析依赖;计时用 System.nanoTime,数字每次运行会有小幅抖动'
 def mkartj(name, n, tags, desc, lead, facts, items, steps, refs, demo_title, panels=None):
     return mkart(name, n, tags, desc, lead, facts, items, steps, refs, demo_title, panels, series='java')
@@ -364,3 +381,10 @@ def mkartw(name, n, tags, desc, lead, facts, items, steps, refs, demo_title, pan
 ENV_T = '本机 macOS 27 arm64 / MySQL 26.7.0 与 PostgreSQL 16.15(Homebrew,每个实验自己 initdb、自己起实例,端口 9150 以上,只监听 127.0.0.1)/ Python 3.14.8 + PyMySQL 1.2.3 + psycopg 3.3.6 / Redis 8.10.2 / Kafka 4.3.1 / RabbitMQ 4.3.6 / etcd 3.7.2(按各篇注明用到哪些);不连任何外部服务,不碰本机已有的数据库实例;故障用 kill -9 进程、让连接断开或在代码里的指定位置抛异常来制造;计时用 time.perf_counter,数字每次运行会有小幅抖动'
 def mkartt(name, n, tags, desc, lead, facts, items, steps, refs, demo_title, panels=None):
     return mkart(name, n, tags, desc, lead, facts, items, steps, refs, demo_title, panels, series='transaction')
+
+ENV_V = '本机 macOS 27 arm64 / Python 3.14.8 / Go / nginx / Envoy / etcd / Consul / Nacos / OpenTelemetry / Prometheus(按各篇注明用到哪些及版本);所有服务都是本机自己起的进程,端口 9150 以上,只监听 127.0.0.1,不连任何外部服务,不碰本机已有的实例;故障用 kill -9 进程、让连接断开或在代码里注入延迟与错误来制造;计时用 time.perf_counter,数字每次运行会有小幅抖动'
+def mkartv(name, n, tags, desc, lead, facts, items, steps, refs, demo_title, panels=None):
+    return mkart(name, n, tags, desc, lead, facts, items, steps, refs, demo_title, panels, series='microservice')
+
+def mkartx(name, n, tags, desc, lead, facts, items, steps, refs, demo_title, panels=None):
+    return mkart(name, n, tags, desc, lead, facts, items, steps, refs, demo_title, panels, series='spring')

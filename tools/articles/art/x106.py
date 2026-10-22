@@ -1,0 +1,20 @@
+from lib import *
+S = SS('x106')
+steps = [
+    step("默认配置下的 CSRF 令牌(表单登录之后)。令牌的请求头名是 X-CSRF-TOKEN,请求参数名是 _csrf。同一个会话里连续取两次令牌,拿到两个不同的值(长度都是 96 个字符,形如 bBaOabKG…)——默认的请求处理器每次都给令牌加不同的掩码。两个不同的值都能通过校验:POST /post 用请求头带第 1 次的令牌是 200 posted,带第 2 次的令牌也是 200,用表单参数 _csrf 带令牌同样 200;不带令牌是 403(Forbidden),随便写一个 abc 也是 403。HTTP 方法:GET、HEAD、OPTIONS 不带令牌都是 200;POST 和 DELETE 不带令牌都是 403。", t=tl(S(1)), mark=lidx(S(1), '同一个会话里连续取两次令牌', '不带令牌', '随便写的令牌'), done=lidx(S(1), '第 1 次的令牌', '第 2 次的令牌', '表单参数', '不同的 HTTP 方法'), b=bars([['令牌长度(字符)', 96, '96'], ['两次取到的令牌是否相同(1=相同)', 0, '不同'], ['不带令牌的 POST 状态码', 403, '403'], ['带令牌的 POST 状态码', 200, '200']], 403, mark=[1, 2], done=[0, 3]), kv=KV([['令牌', '每次取到的值不同(掩码),都能通过校验'], ['需要令牌', 'POST、DELETE 等会改状态的方法'], ['不需要', 'GET、HEAD、OPTIONS'], ['带法', '请求头 X-CSRF-TOKEN 或表单参数 _csrf']], ['令牌'])),
+    step("登录之前取到的令牌,登录之后还能用吗。登录页里的令牌 ZFkMvKn5…是用来登录的,POST /login 成功(HTTP 302)。登录之后再用登录页那个旧令牌 POST /post:403;重新取一个令牌再 POST /post:200。登录会让服务端换掉令牌(同时 session id 也变了),页面上登录前缓存的令牌在登录后都作废,表单页放着不刷新、登录后再提交就会 403。", t=tl(S(2)), mark=lidx(S(2), '旧令牌'), done=lidx(S(2), '新令牌', '登录成功'), b=bars([['登录后用登录页旧令牌:状态码', 403, '403'], ['登录后用新令牌:状态码', 200, '200']], 403, mark=[0], done=[1]), kv=KV([['登录之后', '令牌被换掉,登录前拿到的旧令牌作废'], ['旧令牌 POST', '403'], ['新令牌 POST', '200'], ['症状', '表单页放着,登录后再提交就 403']], ['登录之后'])),
+    step("单页应用常用的 CookieCsrfTokenRepository.withHttpOnlyFalse()。配上默认的请求处理器:Cookie XSRF-TOKEN 的值是 36 个字符的原始令牌,而 /csrf 接口给出的令牌是 96 个字符的掩码版本。把 Cookie 里的值原样放进 X-XSRF-TOKEN 请求头 POST /post:403(前端 JS 读 cookie 再发回去的标准做法被拒绝了);放 /csrf 接口给的掩码令牌:200。换成 CsrfTokenRequestAttributeHandler(明文处理器):Cookie 的值是 36 个字符,/csrf 给的也是 36 个字符;Cookie 里的值原样放进请求头:200,放 /csrf 的令牌:200。所以前端按「读 cookie 再放进请求头」的惯例时,服务端要配成明文处理器(据我所知官方文档给 SPA 的是专门的 SpaCsrfTokenRequestHandler,本篇没有测它,用的是明文处理器)。", t=tl(S(3)), mark=lidx(S(3), '把 Cookie 里的值原样放进 X-XSRF-TOKEN 请求头 POST /post → (403'), done=lidx(S(3), '明文'), b=bars([['Cookie 里令牌长度(默认处理器)', 36, '36'], ['/csrf 接口给的令牌长度(默认处理器)', 96, '96'], ['默认处理器:cookie 值放进请求头的状态码', 403, '403'], ['明文处理器:cookie 值放进请求头的状态码', 200, '200']], 403, mark=[2], done=[0, 1, 3]), kv=KV([['Cookie 方案', 'XSRF-TOKEN 的值是 36 字符原始令牌'], ['默认处理器', '期待掩码令牌,cookie 原值 → 403'], ['明文处理器', 'cookie 原值 → 200'], ['要求', '前端读 cookie 回传时,服务端配明文处理器']], ['默认处理器'])),
+    step("放行与关闭。csrf.ignoringRequestMatchers(\"/api/**\"):POST /api/post 不带令牌是 200 api posted,同一个应用里 POST /post 不带令牌仍是 403。csrf.disable():POST /post 不带令牌 200。只有真正无状态的 API(不靠 cookie 登录态)才适合放行或关闭,否则就把保护整个拿掉了。", t=tl(S(4)), mark=lidx(S(4), 'csrf.disable()'), done=lidx(S(4), 'ignoringRequestMatchers'), b=bars([['被放行的 /api/post(无令牌)状态码', 200, '200'], ['没放行的 /post(无令牌)状态码', 403, '403'], ['csrf.disable() 后 /post(无令牌)状态码', 200, '200']], 403, done=[0], mark=[1, 2]), kv=KV([['ignoringRequestMatchers', '只放行指定路径'], ['其他路径', '仍然要令牌'], ['csrf.disable()', '全部放行'], ['适用', '不用 cookie 登录态的无状态 API']], ['ignoringRequestMatchers'])),
+]
+A = mkartx('x106', 106, 'Spring,Security,CSRF,令牌,CookieCsrfTokenRepository,真实验证,动画演示',
+    '实测 Spring Security 7 的 CSRF:默认令牌每次取到的值不同(96 字符的掩码)但都能通过校验;POST、DELETE 不带令牌 403,GET、HEAD、OPTIONS 放行;登录后旧令牌作废;Cookie 方案下把 36 字符的 cookie 值原样放进请求头会被默认处理器拒绝,换成明文处理器才通过;ignoringRequestMatchers 只放行指定路径。',
+    'CSRF 令牌每次刷新都不一样为什么还能通过校验?哪些请求方法需要令牌?单页应用读 cookie 再放进请求头为什么会 403?登录之后旧页面的令牌还有效吗?这篇在 Spring Boot 4.0.8、Spring Security 7 上逐个实测。',
+    [('96 字符,每次不同', '默认令牌的长度,同一个会话里连续取两次得到不同的值,都能通过校验'), ('403 vs 200', 'Cookie 方案下把 cookie 里的原始令牌放进请求头:默认处理器 403,明文处理器 200'), ('登录后作废', '登录之前拿到的令牌在登录之后 POST 会 403')],
+    [('默认令牌', '<p>每次取到的值不同但都有效;POST、DELETE 等需要令牌,GET、HEAD、OPTIONS 不需要。</p>'),
+     ('登录之后', '<p>登录会换掉令牌,登录前缓存的旧令牌作废。</p>'),
+     ('Cookie 方案', '<p>cookie 里是原始令牌,默认处理器不认,要换成明文处理器或用 SPA 专用处理器。</p>'),
+     ('放行与关闭', '<p>ignoringRequestMatchers 按路径放行;disable 全部关闭。</p>')],
+    steps,
+    [ENV_X + '(Spring Security 7)。用户 alice / pw,表单登录;客户端是 Python http.client,手动带 Cookie;令牌从登录页 HTML 中解析,或由我写的 /csrf 接口(返回当前请求的 CsrfToken)取得;不同的 SecurityFilterChain 由 -Dx106.cfg 切换',
+     '没有验证:BREACH 攻击的具体防护原理(只观察到令牌每次不同);SameSite cookie 对 CSRF 的补充作用;SpaCsrfTokenRequestHandler 本身(用的是明文处理器);多页面、多标签同时使用时的令牌表现;Origin / Referer 校验;WebFlux 里的 CSRF;第 107 篇会讲 CORS 与 Security 的交互'],
+    'CSRF')

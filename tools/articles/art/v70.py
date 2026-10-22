@@ -1,0 +1,20 @@
+from lib import *
+S = SS('v70')
+steps = [
+    step("序列数与资源。服务暴露 N 条序列(带 route 和 user 标签,值固定),Prometheus 每 5 s 抓取,稳定后:N = 1,000:RSS 76 MB,抓取耗时 2 ms,/metrics 0.05 MB,sum() 查询 2 ms。N = 10,000:RSS 112 MB,抓取 8 ms,0.49 MB,sum() 8 ms。N = 100,000:RSS 357 MB,抓取 50 ms,4.97 MB,sum() 58 ms,topk(5) 55 ms。N = 300,000:RSS 890 MB(刚启动时是 92 MB),抓取 137 ms,15.13 MB,sum() 167 ms,topk(5) 189 ms。内存、抓取耗时、体积和查询耗时都随序列数增长。", t=tl(S(1)), mark=lidx(S(1), '300,000', '100,000'), done=lidx(S(1), '1,000   ', '10,000'), b=bars([['1,000 条:RSS MB', 76, '76'], ['10,000 条:RSS MB', 112, '112'], ['100,000 条:RSS MB', 357, '357'], ['300,000 条:RSS MB', 890, '890']], 890, done=[0, 1], mark=[2, 3]), kv=KV([['300,000 条序列', 'RSS 890 MB,抓取 137 ms,/metrics 15.13 MB'], ['100,000 条', 'RSS 357 MB,sum() 58 ms'], ['1,000 条', 'RSS 76 MB,sum() 2 ms']], ['300,000 条序列'])),
+    step("标签维度相乘。method 5 个取值 × route 20 个 × status 5 个:500 条序列,/metrics 文本 64 KB。再加 user_id(1000 个用户,每个用户随机访问 30 次,共 3 万次请求):29180 条序列,文本 4580 KB。序列数由标签值的组合决定,不是由请求量决定;用户 ID、请求 ID、完整 URL、IP 这类取值很多的值放进标签,序列数会和请求量一起涨。", t=tl(S(2)), mark=lidx(S(2), '再加 user_id'), done=lidx(S(2), 'method × route'), b=bars([['5 × 20 × 5', 500, '500 条'], ['再加 user_id', 29180, '29180 条']], 29180, done=[0], mark=[1]), kv=KV([['method × route × status', '500 条,64 KB'], ['再加 user_id', '29180 条,4580 KB'], ['决定序列数的是', '标签值的组合数,不是请求量']], ['再加 user_id'])),
+    step("标签值不断变化(churn)。服务每次被抓取都暴露 1000 条序列,其中 request_id 每次都是新值,同一时刻能查到的“活”序列始终是 1000。Prometheus 每 2 s 抓取一次,运行 60 s:head 里的序列数:10 s 时 5,735;20 s 时 10,735;30 s 时 15,735;40 s 时 20,735;50 s 时 25,735;60 s 时 30,735;累计创建的序列数与它相同;RSS 从 94 MB 涨到 125 MB。旧的序列停止更新后仍然留在 head 里。", t=tl(S(3)), mark=lidx(S(3), '60 s'), done=lidx(S(3), '10 s', '30 s'), b=bars([['10 s:head 里的序列数', 5735, '5,735'], ['30 s:head 里的序列数', 15735, '15,735'], ['60 s:head 里的序列数', 30735, '30,735'], ['任何时刻的“活”序列', 1000, '1,000']], 30735, mark=[2], done=[0, 1], cur=[3]), kv=KV([['“活”序列', '一直是 1,000'], ['head 里的序列', '60 s 涨到 30,735'], ['RSS', '94 → 125 MB']], ['head 里的序列'])),
+    step("限制与保护。目标暴露 10000 条序列。(a)sample_limit: 5000:up = 0,scrape_samples_scraped 是 10,000,重新打标签后 10,000,实际存进去的序列 0 条——整次抓取失败。(b)metric_relabel_configs 里 labeldrop user:up = 1,count() 只有 6 条,一万条序列合并成了 6 个标签集合,Prometheus 自己的 sample_duplicate_timestamp 计数是 0,日志里没有 duplicate 的行,也就是悄悄合并。(c)先 hashmod 成 6 个桶再 labeldrop user:up = 1,count() 是 36 条(6 个 route × 6 个桶)。", t=tl(S(4)), mark=lidx(S(4), '(a)sample_limit', '(b)labeldrop'), done=lidx(S(4), '(c)hashmod'), b=bars([['(a)存进去的序列', 0, '0(整次抓取失败)'], ['(b)存进去的序列', 6, '6'], ['(c)存进去的序列', 36, '36'], ['暴露的序列', 10000, '10,000']], 10000, mark=[0, 1], done=[2], cur=[3]), kv=KV([['sample_limit: 5000', '10,000 条超限 → up = 0,一条都不存'], ['labeldrop user', '10,000 条合并成 6 条,没有报错'], ['hashmod 后 labeldrop', '36 条']], ['sample_limit: 5000'])),
+]
+A = mkartv('v70', 70, '微服务,可观测性,Prometheus,基数,标签,真实验证,动画演示',
+    '实测基数爆炸:30 万条序列让 Prometheus 的 RSS 达到 890 MB(1000 条时 76 MB),抓取 137 ms;5 × 20 × 5 个标签组合 500 条序列,加上 user_id 变成 29180 条;request_id 每次变化时 60 s 里 head 序列数涨到 30,735 而“活”序列始终是 1,000;sample_limit 让整次抓取失败,labeldrop 让一万条序列悄悄合并成 6 条。',
+    '标签加一个维度会让序列数涨多少?序列数和 Prometheus 的内存、抓取、查询耗时是什么关系?标签值不断变化(比如请求 ID)会怎样?sample_limit 和 labeldrop 能不能保护 Prometheus?这篇用 Prometheus 3.15.0 逐项量出来。',
+    [('76 → 890 MB', 'Prometheus 抓取稳定后的 RSS:暴露 1,000 条序列与 300,000 条序列'), ('500 → 29180', '加上 user_id 标签前后的序列数(请求只有 3 万次)'), ('30,735 vs 1,000', '标签值不断变化 60 s 后 head 里的序列数,与同一时刻“活”着的序列数')],
+    [('序列数与资源', '<p>内存、抓取耗时、/metrics 体积和查询耗时都随序列数增长。</p>'),
+     ('标签相乘', '<p>序列数由标签值的组合决定,取值很多的标签(用户 ID、请求 ID)会让它和请求量一起涨。</p>'),
+     ('churn', '<p>标签值不断变化时旧序列留在 head 里,序列数和内存持续增长。</p>'),
+     ('限制与保护', '<p>sample_limit 超限整次抓取失败;labeldrop 会让序列悄悄合并;hashmod 能保留一点分布。</p>')],
+    steps,
+    [ENV_V + '。Prometheus 3.15.0(默认存储设置,没有设置内存限制),暴露端是我写的 Python HTTP 服务(固定内容的 /metrics);RSS 来自 ps,包含 Go 运行时尚未归还给系统的内存;每种 N 各测 1 次,查询耗时是 5 次取中位数;样本值固定,真实指标的值变化会让压缩率和内存略有不同',
+     '没有验证:Prometheus 内存随序列数增长的精确公式;长时间运行时 head 压缩(2 小时块)后内存的回落;远程写入、VictoriaMetrics 等其他后端对高基数的处理;native histogram;relabel 把重复样本合并时到底保留了哪一个样本(Prometheus 的日志和计数里没有看到记录);exemplar'],
+    '基数爆炸')

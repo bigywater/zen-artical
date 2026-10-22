@@ -1,0 +1,22 @@
+from lib import *
+S = SS('v57')
+steps = [
+    step("Nacos 的历史版本存了什么。对配置 rb 依次发布 v1 到 v6,历史列表有 6 条:id 1(opType I)内容 v1,id 2(U)内容 v1,id 3(U)内容 v2,id 4(U)内容 v3,id 5(U)内容 v4,id 6(U)内容 v5。当前内容是 v6。每条 U 历史里放的是那次修改“之前”的内容,所以最新的一版 v6 不在历史列表里;要回到某个旧版本,取的是比它晚一条的那条历史。", t=tl(S(1)), mark=lidx(S(1), '当前内容'), done=lidx(S(1), '| U ', '| I '), b=bars([['发布次数', 6, '6'], ['历史条数', 6, '6'], ['历史里最新一版的编号(v)', 5, 'v5(当前是 v6)']], 6, done=[0, 1], mark=[2]), kv=KV([['历史 id N(U)', '存的是第 N 次修改之前的内容'], ['当前内容', 'v6,不在历史里'], ['opType', 'I 是第一次发布,U 是修改']], ['历史 id N(U)'])),
+    step("回滚。想回到 v3:找到内容是 v3 的那条历史(id 4),把它的内容重新发布:HTTP 200,当前内容 v3,md5 与当初 v3 的 md5 相同。历史从 6 条变成 7 条,最新一条(id 7)存的内容是 v6,也就是回滚之前的版本。再用这一条的内容发布一次(撤销回滚):当前内容回到 v6,历史变成 8 条。回滚本身也是一次新的发布,所以回滚之前的状态没有丢。", t=tl(S(2)), mark=lidx(S(2), '用最新一条历史'), done=lidx(S(2), '回滚(重新发布'), b=bars([['回滚前历史条数', 6, '6'], ['回滚后历史条数', 7, '7'], ['撤销回滚后历史条数', 8, '8']], 8, done=[0, 1], mark=[2]), kv=KV([['回滚', '重新发布历史 id 4 的内容 → 当前 v3'], ['md5', '与原来的 v3 相同'], ['新增的历史', 'id 7 存着回滚前的 v6']], ['新增的历史'])),
+    step("删除之后。对 gone 发布 g1、g2,然后删除:DELETE 返回 HTTP 200,再取当前内容得到 HTTP 404(code 20004)。历史有 3 条:id 9(I)内容 g1,id 10(U)内容 g1,id 11(D)内容 g2——删除记录里存着删除之前的最后一版。用这条内容重新发布:HTTP 200,当前内容 g2,恢复了。", t=tl(S(3)), mark=lidx(S(3), '| D '), done=lidx(S(3), 'DELETE', '用删除记录'), b=bars([['删除后取当前内容', 404, 'HTTP 404'], ['历史条数', 3, '3'], ['恢复后取当前内容', 200, 'g2(HTTP 200)']], 404, mark=[0], done=[1, 2]), kv=KV([['删除', 'HTTP 200,当前内容 404'], ['D 记录', '存着删除前的 g2'], ['恢复', '重新发布 D 记录的内容 → g2']], ['D 记录'])),
+    step("并发编辑。内容是两行 a: 1 和 b: 1;编辑者 1 把 a 改成 2,编辑者 2 把 b 改成 2,两人都是先读到原来的内容再发布。不带 CAS:两次发布都返回 True,最终内容是 a: 1 加 b: 2,编辑者 1 的修改被覆盖了。带 cas_md5(SDK):编辑者 1 发布 True;编辑者 2 用已经过期的 md5 发布,NacosException 500 “Cas publish fail, server md5 may have changed.”;重新读取、合并、再带新 md5 发布,True,最终内容 a: 2 加 b: 2。另外:管理 API 的 POST 带明显不对的 casMd5=deadbeef 照样发布成功(参数没起作用);SDK 的 get_config 在刚发布后立刻得到空串(发布 c0 之后)或旧内容(发布 c1 之后),1.5 s 后才对,所以读取走管理 API。", t=tl(S(4)), mark=lidx(S(4), '(a)不带 CAS', '另一个观察', '顺带'), done=lidx(S(4), '(b)带 cas_md5'), b=bars([['不带 CAS 最终内容里改成 2 的字段数', 1, '1(a: 1 加 b: 2)'], ['带 CAS 合并后最终内容里改成 2 的字段数', 2, '2(a: 2 加 b: 2)'], ['过期 md5 的发布', 0, '被拒绝']], 2, mark=[0], done=[1, 2]), kv=KV([['不带 CAS', '后发布的覆盖先发布的:丢了 a 的修改'], ['带 cas_md5', '过期的发布被拒绝,合并后成功'], ['管理 API casMd5', '参数没起作用,错的 md5 也成功']], ['不带 CAS'])),
+    step("etcd 和 Consul 的对照。etcd:对 /cfg 写 v1 到 v5,五次写入的 revision 是 2、3、4、5、6;按 revision 3 读得到 v2;compact 到 revision 6 之后,按 revision 3 读返回 HTTP 400 “required revision has been compacted”,按 revision 6 读还是 v5。key 的 version=5,create_revision=2,mod_revision=6(全局 revision)。Consul:写了 v1(ModifyIndex 17)和 v2,用早于 v1 的索引 16 去读,0 ms 后返回的是 ModifyIndex 18 的当前值 v2,不是旧版本。", t=tl(S(5)), mark=lidx(S(5), 'compact 到', 'Consul'), done=lidx(S(5), '按 revision 3 读(未压缩)', 'compact 之后'), b=bars([['etcd:key 的 version(写入次数)', 5, '5'], ['etcd:压缩前能读到的旧 revision', 1, 'revision 3 → v2'], ['etcd:压缩后能读到旧 revision', 0, 'HTTP 400']], 5, done=[0, 1], mark=[2]), kv=KV([['etcd 按旧 revision 读', '压缩前 v2,压缩后 HTTP 400'], ['Consul 带旧索引读', '得到当前值 v2'], ['Nacos 历史', '独立的历史表,可取旧内容']], ['etcd 按旧 revision 读'])),
+]
+A = mkartv('v57', 57, '微服务,配置中心,Nacos,etcd,Consul,版本,回滚,CAS,真实验证,动画演示',
+    '实测配置的版本与回滚:Nacos 3.2.4 的每条 U 历史存的是修改之前的内容,回滚就是重新发布旧内容(历史多一条,回滚前的 v6 还在);删除记录里存着最后一版;不带 CAS 的并发编辑丢了一个字段,带 cas_md5 的会被拒绝;etcd 旧 revision 压缩后读不到(HTTP 400),Consul 带旧索引读得到的是当前值。',
+    '配置改坏了怎么回滚?Nacos 的历史里存的是哪一版?删除之后还找得回来吗?两个人同时改同一份配置会不会互相覆盖?etcd 和 Consul 有没有历史?这篇用 Nacos 3.2.4、etcd 3.7.2 和 Consul 2.0.4 逐项试出来。',
+    [('6 → 7 → 8', '回滚到 v3 和撤销回滚后,Nacos 里这份配置的历史条数(回滚也是一次新发布)'), ('a: 1 加 b: 2', '两个编辑者各改一行、都不带 CAS 时的最终内容(编辑者 1 的修改丢了);带 cas_md5 后是 a: 2 加 b: 2'), ('HTTP 400', 'etcd compact 之后按旧 revision 读的结果;Consul 带旧索引读得到的是当前值')],
+    [('Nacos 历史存了什么', '<p>U 记录存的是那次修改之前的内容,最新一版不在历史里;要回到某个版本取比它晚一条的历史。</p>'),
+     ('回滚', '<p>回滚是把旧内容重新发布一次,md5 与原来相同,回滚之前的状态也进了历史。</p>'),
+     ('删除之后', '<p>删除记录里存着删除之前的最后一版,可以用它恢复。</p>'),
+     ('并发编辑', '<p>不带 CAS 后发布的会覆盖先发布的;带 cas_md5 过期的发布会被拒绝,需要重新读取合并再发布。</p>'),
+     ('etcd 与 Consul', '<p>etcd 能按旧 revision 读,但压缩后读不到;Consul 带旧索引读得到的是当前值。</p>')],
+    steps,
+    [ENV_V + '。Nacos 3.2.4(单机,Java 17),发布、历史、删除用 /nacos/v3/admin/cs/ 下的管理 API,CAS 用 nacos-sdk-python 3.2.0;etcd 3.7.2 单节点;Consul 2.0.4 单节点;每项各测 1 次(这些是确定性的操作,不是性能数字)',
+     '没有验证:Nacos 历史的保留时间和清理(我印象里默认保留 30 天,没有验证);历史条目的数量上限;灰度发布(beta)与按 tag 的配置;Nacos 配置的权限与审计;管理 API 正确的 CAS 参数名(试了 casMd5 无效);配置内容很大时的历史开销;etcd 的自动压缩配置;Consul 里除了 index 参数之外是否有别的读旧版本的办法(没有穷尽)'],
+    '配置的版本与回滚')

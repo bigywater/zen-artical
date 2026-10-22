@@ -166,6 +166,7 @@ def table(rows, hdr=None):
 
 # ---------- RocketMQ 5.5.1(官方 bin 包,ttmp/rocketmq-all-5.5.1-bin-release;实验结束后可整体删除)----------
 RMQ_HOME = TT / 'rocketmq-all-5.5.1-bin-release'
+JHOME = TT / 'jhome'; JHOME.mkdir(exist_ok=True)   # 给 RocketMQ 的 JVM 指定 user.home,它的日志(~/logs/rocketmqlogs)就不会写进真正的家目录
 JAVA17 = '/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home'
 
 
@@ -186,7 +187,7 @@ class RocketMQ:
     def start(self, timeout=90):
         cp = str(RMQ_HOME / 'lib' / '*')
         (self.d / 'namesrv.conf').write_text(f'listenPort={self.ns_port}\nkvConfigPath={self.d}/kvConfig.json\nconfigStorePath={self.d}/namesrv.properties\n')
-        self.ps.append(subprocess.Popen([f'{JAVA17}/bin/java', '-Xms128m', '-Xmx256m', '-cp', cp, 'org.apache.rocketmq.namesrv.NamesrvStartup', '-c', str(self.d / 'namesrv.conf')],
+        self.ps.append(subprocess.Popen([f'{JAVA17}/bin/java', f'-Duser.home={JHOME}', '-Xms128m', '-Xmx256m', '-cp', cp, 'org.apache.rocketmq.namesrv.NamesrvStartup', '-c', str(self.d / 'namesrv.conf')],
                                         stdout=open(self.d / 'ns.out', 'w'), stderr=subprocess.STDOUT, env=self._env(), start_new_session=True))
         wait_port(self.ns_port, timeout, self.ps[0], self.d / 'ns.out')
         conf = dict(brokerClusterName='DefaultCluster', brokerName='broker-a', brokerId=0, namesrvAddr=f'127.0.0.1:{self.ns_port}', listenPort=self.port,
@@ -196,7 +197,7 @@ class RocketMQ:
                     mappedFileSizeCommitLog=64 * 1024 * 1024, mappedFileSizeConsumeQueue=300000 * 20, diskMaxUsedSpaceRatio=99)
         conf.update(self.conf)
         (self.d / 'broker.conf').write_text('\n'.join(f'{k}={v}' for k, v in conf.items()) + '\n')
-        self.ps.append(subprocess.Popen([f'{JAVA17}/bin/java', '-Xms256m', '-Xmx512m', '-XX:MaxDirectMemorySize=512m', '-cp', cp, 'org.apache.rocketmq.broker.BrokerStartup', '-c', str(self.d / 'broker.conf')],
+        self.ps.append(subprocess.Popen([f'{JAVA17}/bin/java', f'-Duser.home={JHOME}', '-Xms256m', '-Xmx512m', '-XX:MaxDirectMemorySize=512m', '-cp', cp, 'org.apache.rocketmq.broker.BrokerStartup', '-c', str(self.d / 'broker.conf')],
                                         stdout=open(self.d / 'broker.out', 'w'), stderr=subprocess.STDOUT, env=self._env(), start_new_session=True))
         wait_port(self.port, timeout, self.ps[1], self.d / 'broker.out')
         # 等 broker 注册到 NameServer
@@ -208,7 +209,7 @@ class RocketMQ:
         return self
 
     def admin(self, *a, timeout=60):
-        r = subprocess.run([f'{JAVA17}/bin/java', '-Xmx128m', '-cp', str(RMQ_HOME / 'lib' / '*'), 'org.apache.rocketmq.tools.command.MQAdminStartup', *a, '-n', f'127.0.0.1:{self.ns_port}'] if a[0] != 'x' else [],
+        r = subprocess.run([f'{JAVA17}/bin/java', f'-Duser.home={JHOME}', '-Xmx128m', '-cp', str(RMQ_HOME / 'lib' / '*'), 'org.apache.rocketmq.tools.command.MQAdminStartup', *a, '-n', f'127.0.0.1:{self.ns_port}'] if a[0] != 'x' else [],
                            capture_output=True, text=True, env=self._env(), timeout=timeout)
         return (r.stdout + r.stderr)
 
@@ -234,5 +235,46 @@ def java_run(name, files, main, classpath='', args=(), timeout=180, env=None, ja
     r = subprocess.run([f'{JAVA17}/bin/javac', '-nowarn', '-encoding', 'UTF-8', '-cp', cp, '-d', str(d / 'cls'), *javac_opts, *[str(d / p) for p in files if p.endswith('.java')]],
                        capture_output=True, text=True, env=e)
     if r.returncode: return r.returncode, r.stdout + r.stderr
-    r = subprocess.run([f'{JAVA17}/bin/java', '-Xmx256m', '-cp', f'{d}/cls:{cp}', main, *args], capture_output=True, text=True, env=e, timeout=timeout)
+    r = subprocess.run([f'{JAVA17}/bin/java', f'-Duser.home={JHOME}', '-Xmx256m', '-cp', f'{d}/cls:{cp}', main, *args], capture_output=True, text=True, env=e, timeout=timeout)
     return r.returncode, r.stdout + r.stderr
+
+
+class JProc:
+    """后台 Java 进程,逐行收集 stdout(附上收到该行的时刻,单位秒,相对 JProc.T0)。"""
+    T0 = time.time()
+    def __init__(self, d, main, args=(), classpath=None, xmx='192m'):
+        cp = classpath or str(RMQ_HOME / 'lib' / '*')
+        e = dict(os.environ, JAVA_HOME=JAVA17, PATH=JAVA17 + '/bin:' + os.environ['PATH'])
+        self.p = subprocess.Popen([f'{JAVA17}/bin/java', f'-Duser.home={JHOME}', f'-Xmx{xmx}', '-cp', f'{d}/cls:{cp}', main, *map(str, args)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=e, start_new_session=True)
+        self.lines = []; self.lk = threading.Lock()
+        self.th = threading.Thread(target=self._read, daemon=True); self.th.start()
+    def _read(self):
+        for l in self.p.stdout:
+            with self.lk: self.lines.append((time.time(), l.rstrip('\n')))
+    def wait_line(self, pat, timeout=60, start=0):
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            with self.lk:
+                for i in range(start, len(self.lines)):
+                    if re.search(pat, self.lines[i][1]): return i
+            if self.p.poll() is not None and not self.th.is_alive(): break
+            time.sleep(0.02)
+        return None
+    def grep(self, pat):
+        with self.lk: return [(t, l) for t, l in self.lines if re.search(pat, l)]
+    def kill(self):
+        if self.p.poll() is None:
+            try: os.killpg(self.p.pid, signal.SIGKILL)
+            except Exception: self.p.kill()
+            self.p.wait()
+    def stop(self): self.kill()
+
+
+def java_compile(name, files, classpath):
+    d = tdir('j_' + name)
+    for p, c in files.items():
+        f = d / p; f.parent.mkdir(parents=True, exist_ok=True); f.write_text(textwrap.dedent(c).lstrip('\n'))
+    e = dict(os.environ, JAVA_HOME=JAVA17, PATH=JAVA17 + '/bin:' + os.environ['PATH'])
+    r = subprocess.run([f'{JAVA17}/bin/javac', '-nowarn', '-encoding', 'UTF-8', '-cp', classpath, '-d', str(d / 'cls'), *[str(d / p) for p in files if p.endswith('.java')]], capture_output=True, text=True, env=e)
+    if r.returncode: raise RuntimeError(r.stdout + r.stderr)
+    return d

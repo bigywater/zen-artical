@@ -1,0 +1,446 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>时钟:逻辑时钟与混合逻辑时钟</title>
+<meta name="description" content="3 个进程注入 [0, +50, -80] ms 的时钟偏差实测:物理时间戳让 140 / 276 条消息的接收早于发送;Lamport 保证因果但把 87.3% 的并发事件对排出了先后;向量时钟判定 100% 正确但消息头随节点数线性增长;HLC 因果 0 违反,l 与物理时间的差最大 130 ms;物理时钟做 LWW 丢 44.7% 的因果写入。">
+<link rel="canonical" href="https://bigywater.tech/transaction-logical-clocks.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="时钟:逻辑时钟与混合逻辑时钟">
+<meta property="og:description" content="3 个进程注入 [0, +50, -80] ms 的时钟偏差实测:物理时间戳让 140 / 276 条消息的接收早于发送;Lamport 保证因果但把 87.3% 的并发事件对排出了先后;向量时钟判定 100% 正确但消息头随节点数线性增长;HLC 因果 0 违反,l 与物理时间的差最大 130 ms;物理时钟做 LWW 丢 44.7% 的因果写入。">
+<meta property="og:url" content="https://bigywater.tech/transaction-logical-clocks.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="时钟:逻辑时钟与混合逻辑时钟">
+<meta name="twitter:description" content="3 个进程注入 [0, +50, -80] ms 的时钟偏差实测:物理时间戳让 140 / 276 条消息的接收早于发送;Lamport 保证因果但把 87.3% 的并发事件对排出了先后;向量时钟判定 100% 正确但消息头随节点数线性增长;HLC 因果 0 违反,l 与物理时间的差最大 130 ms;物理时钟做 LWW 丢 44.7% 的因果写入。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">2792</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">70</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">97</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">56</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">78</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">114</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">111</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">88</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#B0485B; --series-c-soft:#F6DEE2;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#E58A9A; --series-c-soft:#3A1820;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#E58A9A; --series-c-soft:#3A1820;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>分布式事务 · 27</div>
+  <h1>时钟:逻辑时钟与混合逻辑时钟</h1>
+  <p>分布式系统里“谁先谁后”靠什么判断?物理时钟有偏差,会让接收早于发送。Lamport 时钟、向量时钟、混合逻辑时钟各保证什么、各付出什么?拿它们做最后写入者胜会怎样?这篇用 3 个真实进程互发消息、注入时钟偏差,把它们的行为数出来。</p>
+  <div class="hero-fact">
+<div><div class="num">140 / 276</div><div class="lbl">时钟偏差 [0, +50, -80] ms 时,接收事件物理时间戳比发送事件还小的消息数(偏差为 0 时是 0)</div></div><div><div class="num">87.3%</div><div class="lbl">Lamport 时钟给真正并发的事件对排出了先后的比例(向量时钟判定 100% 正确)</div></div><div><div class="num">44.7% vs 0%</div><div class="lbl">LWW 用物理时钟时间戳与用 HLC 时间戳,因果上在后的写入被压掉的比例</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="transaction-session-consistency.html">读己之写、单调读:会话一致性怎么实现</a></div>
+<section>
+  <h2>物理时钟的问题</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  时钟偏差               | 收到的消息数 | 接收时间戳 &lt; 发送时间戳的消息数 | 最大倒退量 
+  -------------------+--------+-------------------+-------
+  三个节点时钟完全一致(偏差 0)   | 276    | 0                 | 0 ms  
+  偏差 [0, 50, -80] ms | 276    | 140               | 130 ms
+  偏差为 0 时(本机同一个时钟)没有一条消息倒退;偏差 [0, +50, -80] 时,从“快”的节点发给“慢”的节点的消息,在接收方看来是“来自未来”——这里注入的偏差只是模拟机器之间的时钟不同步</pre></div>
+  <p>节点之间的时钟偏差让因果上在后的事件时间戳更小。</p>
+</section>
+<section>
+  <h2>Lamport 时钟</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  共 713 个事件;Lamport 条件 “发送的 L &lt; 接收的 L” 被违反的消息数:0
+  抽样 19964 对:有因果关系的 19727 对,真正并发的 237 对
+  并发的 237 对里,Lamport 给出了先后(L 不相等)的有 207 对(87.3%):单看 Lamport 值分不清“有因果”还是“碰巧数字大小不同”
+  有因果关系的 19727 对里,按物理时间戳反而是“后发生的更小或相等”的有 196 对(1.0%)
+  向量时钟对全部 19964 对的判定(a 先于 b / b 先于 a / 并发)和真值一致的有 19964 对(100.0%)</pre></div>
+  <p>保证因果在前则数字更小,但数字大小不能反推因果,并发事件也被排出了先后。</p>
+</section>
+<section>
+  <h2>向量时钟</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  节点数 N | Lamport(1 个整数) | HLC(l, c) | 向量时钟(N 个整数)
+  ------+----------------+-----------+------------
+  3     | 5 字节           | 19 字节     | 21 字节      
+  10    | 5 字节           | 19 字节     | 70 字节      
+  50    | 5 字节           | 19 字节     | 350 字节     
+  200   | 5 字节           | 19 字节     | 1400 字节    
+  Lamport 和 HLC 的大小不随节点数增长,向量时钟线性增长;换来的是向量时钟能精确判定并发</pre></div>
+  <p>能精确区分先于、后于、并发,代价是每条消息带 N 个计数器。</p>
+</section>
+<section>
+  <h2>混合逻辑时钟</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  “发送的 HLC &lt; 接收的 HLC” 被违反的消息数 0;抽样的有因果关系的 9690 对里,HLC 顺序和因果相反的 0 对(同一批 9690 对里,物理时间戳顺序和因果相反或相等的有 80 对)
+  l 与事件发生时本节点物理时钟的差(l - pt):最小 -1 ms,最大 130 ms(注入的偏差之差最大是 130 ms);c 的最大值 10,c &gt; 0 的事件占 55.4%
+  HLC 把“因果”交给逻辑部分、把“离真实时间不远”交给物理部分:时间戳还能当成大致的墙上时间用,偏差也有上界(取决于节点间时钟偏差)</pre></div>
+  <p>l 追物理时间、c 补序号:因果不违反,时间戳离真实时间的差有上界,消息头不随节点数增长。</p>
+</section>
+<section>
+  <h2>LWW 的时间戳</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  LWW 用的时间戳   | 写入对数 | 因果上在后的 v2 被压掉的次数 | 比例   
+  ------------+------+------------------+------
+  物理时钟时间戳     | 1000 | 447              | 44.7%
+  HLC 时间戳     | 1000 | 0                | 0.0% 
+  Lamport 时间戳 | 1000 | 0                | 0.0% 
+  用物理时钟做 LWW,两个节点时钟差 130 ms:相隔不到 130 ms 的因果写入,后面的会输给前面的(这里相隔 0 到 300 ms 均匀分布,理论上约 130/300 = 43%);HLC 和 Lamport 保证因果在后的时间戳更大</pre></div>
+  <p>物理时钟做 LWW 会丢掉因果在后的写入;HLC 或 Lamport 不会。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">逻辑时钟与 HLC</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "b", "kind": "bars", "label": "数字对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "物理时钟加上偏差。3 个节点各是一个独立进程,用 UDP 互发消息,每个事件记录物理时间、Lamport、向量时钟和 HLC;偏差是人为注入的([0, +50, -80] ms)。三个节点时钟完全一致(偏差 0)时:276 条消息,接收时间戳小于发送时间戳的有 0 条。偏差 [0, 50, -80] ms 时:同样 276 条消息里有 140 条,接收事件的物理时间戳反而比发送事件还小,最大倒退 130 ms——从“快”的节点发给“慢”的节点的消息,在接收方看来是来自未来。因果上在后的事件,物理时间戳却更小。", "s": {"t": {"lines": ["  时钟偏差               | 收到的消息数 | 接收时间戳 < 发送时间戳的消息数 | 最大倒退量 ", "  -------------------+--------+-------------------+-------", "  三个节点时钟完全一致(偏差 0)   | 276    | 0                 | 0 ms  ", "  偏差 [0, 50, -80] ms | 276    | 140               | 130 ms", "  偏差为 0 时(本机同一个时钟)没有一条消息倒退;偏差 [0, +50, -80] 时,从“快”的节点发给“慢”的节点的消息,在接收方看来是“来自未来”——这里注入的偏差只是模拟机器之间的时钟不同步"], "cur": [], "mark": [], "done": []}, "mark": [3], "done": [2], "b": {"items": [["偏差 0:接收时间戳倒退的消息数", 0, "0 / 276"], ["偏差 [0,50,-80]:倒退的消息数", 140, "140 / 276"], ["最大倒退量 ms", 130, "130"]], "max": 276, "cur": [2], "mark": [1], "done": [0]}, "kv": {"items": [["偏差 0", "没有一条倒退"], ["偏差 [0, +50, -80] ms", "140 / 276 条倒退,最大 130 ms"], ["原因", "节点之间物理时钟不同步"]], "hl": ["原因"]}}}, {"note": "Lamport 时钟与因果。共 713 个事件。Lamport 条件“发送的 L < 接收的 L”被违反的消息数是 0——因果在前的事件 L 一定更小。反过来不成立:抽样 19964 对事件,其中有因果关系的 19727 对、真正并发的 237 对;并发的 237 对里,Lamport 给出了先后(L 不相等)的有 207 对(87.3%),单看 Lamport 值分不清是有因果还是碰巧数字不同。按物理时间戳,有因果关系的 19727 对里有 196 对(1.0%)反而是“后发生的更小或相等”。向量时钟对全部 19964 对的判定(a 先于 b、b 先于 a、并发)和由消息图得到的真值完全一致(100.0%)。", "s": {"t": {"lines": ["  共 713 个事件;Lamport 条件 “发送的 L < 接收的 L” 被违反的消息数:0", "  抽样 19964 对:有因果关系的 19727 对,真正并发的 237 对", "  并发的 237 对里,Lamport 给出了先后(L 不相等)的有 207 对(87.3%):单看 Lamport 值分不清“有因果”还是“碰巧数字大小不同”", "  有因果关系的 19727 对里,按物理时间戳反而是“后发生的更小或相等”的有 196 对(1.0%)", "  向量时钟对全部 19964 对的判定(a 先于 b / b 先于 a / 并发)和真值一致的有 19964 对(100.0%)"], "cur": [], "mark": [], "done": []}, "mark": [2, 3], "done": [0, 4], "b": {"items": [["Lamport 条件被违反的消息数", 0, "0"], ["并发对被 Lamport 排出先后的比例 %", 87.3, "87.3%"], ["物理时间戳顺序与因果相反的比例 %", 1.0, "1.0%"], ["向量时钟判定正确率 %", 100, "100%"]], "max": 100, "cur": [], "mark": [1, 2], "done": [0, 3]}, "kv": {"items": [["Lamport", "因果在前 ⇒ L 更小;反过来不成立"], ["并发的 237 对", "87.3% 被排出了先后"], ["向量时钟", "19964 对 100% 判对"]], "hl": ["向量时钟"]}}}, {"note": "向量时钟的代价:每条消息要带 N 个计数器。N 个节点的消息头大小(JSON 序列化、计数器取 5 位数):N=3 时 Lamport 5 字节、HLC 19 字节、向量时钟 21 字节;N=10 时向量时钟 70 字节;N=50 时 350 字节;N=200 时 1400 字节;Lamport 与 HLC 的大小不随节点数增长。向量时钟换来的是能精确判定并发,代价随节点数线性增长。", "s": {"t": {"lines": ["  节点数 N | Lamport(1 个整数) | HLC(l, c) | 向量时钟(N 个整数)", "  ------+----------------+-----------+------------", "  3     | 5 字节           | 19 字节     | 21 字节      ", "  10    | 5 字节           | 19 字节     | 70 字节      ", "  50    | 5 字节           | 19 字节     | 350 字节     ", "  200   | 5 字节           | 19 字节     | 1400 字节    ", "  Lamport 和 HLC 的大小不随节点数增长,向量时钟线性增长;换来的是向量时钟能精确判定并发"], "cur": [], "mark": [], "done": []}, "mark": [5], "done": [2, 3, 4], "b": {"items": [["N=3 向量时钟字节", 21, "21"], ["N=10 向量时钟字节", 70, "70"], ["N=50 向量时钟字节", 350, "350"], ["N=200 向量时钟字节", 1400, "1400"]], "max": 1400, "cur": [0, 1, 2], "mark": [3], "done": []}, "kv": {"items": [["Lamport", "5 字节,与 N 无关"], ["HLC", "19 字节,与 N 无关"], ["向量时钟", "21 → 1400 字节(N=3 → 200)"]], "hl": ["向量时钟"]}}}, {"note": "混合逻辑时钟(HLC):(l, c) 中 l 追着物理时间走但不倒退,c 在物理时间不前进时补充序号。“发送的 HLC < 接收的 HLC”被违反的消息数 0;抽样的有因果关系的 9690 对里,HLC 顺序和因果相反的 0 对,同一批 9690 对里物理时间戳顺序与因果相反或相等的有 80 对。l 与事件发生时本节点物理时钟的差:最小 -1 ms,最大 130 ms,正好等于注入的偏差之差(最大偏差 130 ms);c 的最大值是 10,c > 0 的事件占 55.4%。HLC 把因果交给逻辑部分、把“离真实时间不远”交给物理部分,时间戳还可以当大致的墙上时间用,与真实时间的差有上界(取决于节点间的时钟偏差)。", "s": {"t": {"lines": ["  “发送的 HLC < 接收的 HLC” 被违反的消息数 0;抽样的有因果关系的 9690 对里,HLC 顺序和因果相反的 0 对(同一批 9690 对里,物理时间戳顺序和因果相反或相等的有 80 对)", "  l 与事件发生时本节点物理时钟的差(l - pt):最小 -1 ms,最大 130 ms(注入的偏差之差最大是 130 ms);c 的最大值 10,c > 0 的事件占 55.4%", "  HLC 把“因果”交给逻辑部分、把“离真实时间不远”交给物理部分:时间戳还能当成大致的墙上时间用,偏差也有上界(取决于节点间时钟偏差)"], "cur": [], "mark": [], "done": []}, "mark": [0, 1], "done": [2], "b": {"items": [["HLC 因果违反的对数", 0, "0 / 9690"], ["物理时间戳因果违反的对数", 80, "80 / 9690"], ["l - pt 的最大值 ms", 130, "130"], ["c 的最大值", 10, "10"]], "max": 130, "cur": [2, 3], "mark": [1], "done": [0]}, "kv": {"items": [["因果", "HLC 违反 0 对,物理时间戳 80 对"], ["离物理时间", "最多 130 ms(等于注入的偏差之差)"], ["c", "最大 10,55.4% 的事件 c > 0"]], "hl": ["离物理时间"]}}}, {"note": "最后写入者胜(LWW)用哪种时间戳。这一节不是进程实测,是用 HLC 与 Lamport 的更新规则和注入的时钟偏差,对 1000 对随机间隔的因果写入做计算(Lamport 的结果由规则本身保证)。节点 B(时钟 +50 ms)写入 v1,节点 C(时钟 -80 ms)在收到 v1 之后写入 v2,两次写入相隔 0 到 300 ms 随机。用物理时钟时间戳做 LWW:447 / 1000 对里因果上在后的 v2 被压掉(44.7%,理论约 130/300 = 43%);HLC 时间戳:0 对;Lamport 时间戳:0 对。物理时钟 LWW 会让两个节点时钟差(130 ms)以内的因果写入丢掉后面的那个。", "s": {"t": {"lines": ["  LWW 用的时间戳   | 写入对数 | 因果上在后的 v2 被压掉的次数 | 比例   ", "  ------------+------+------------------+------", "  物理时钟时间戳     | 1000 | 447              | 44.7%", "  HLC 时间戳     | 1000 | 0                | 0.0% ", "  Lamport 时间戳 | 1000 | 0                | 0.0% ", "  用物理时钟做 LWW,两个节点时钟差 130 ms:相隔不到 130 ms 的因果写入,后面的会输给前面的(这里相隔 0 到 300 ms 均匀分布,理论上约 130/300 = 43%);HLC 和 Lamport 保证因果在后的时间戳更大"], "cur": [], "mark": [], "done": []}, "mark": [2], "done": [3, 4], "b": {"items": [["物理时钟 LWW:后写的被压掉", 447, "447 / 1000"], ["HLC LWW:后写的被压掉", 0, "0 / 1000"], ["Lamport LWW:后写的被压掉", 0, "0 / 1000"]], "max": 1000, "cur": [], "mark": [0], "done": [1, 2]}, "kv": {"items": [["物理时钟 LWW", "44.7% 的因果写入丢失"], ["HLC / Lamport", "因果在后的时间戳一定更大,0 丢失"], ["原因", "物理时钟偏差 130 ms"]], "hl": ["原因"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / MySQL 26.7.0 与 PostgreSQL 16.15(Homebrew,每个实验自己 initdb、自己起实例,端口 9150 以上,只监听 127.0.0.1)/ Python 3.14.8 + PyMySQL 1.2.3 + psycopg 3.3.6 / Redis 8.10.2 / Kafka 4.3.1 / RabbitMQ 4.3.6 / etcd 3.7.2(按各篇注明用到哪些);不连任何外部服务,不碰本机已有的数据库实例;故障用 kill -9 进程、让连接断开或在代码里的指定位置抛异常来制造;计时用 time.perf_counter,数字每次运行会有小幅抖动。本篇第一到第四节用 3 个独立的 Python 进程(UDP 互发消息,每进程 4 秒)和人为注入的物理时钟偏差([0, +50, -80] ms,是把 time.time() 加上偏移量,不是真的让系统时钟不同步);HLC 按 Kulkarni 等人的更新规则实现;“谁先于谁”的真值由消息收发图的可达性计算;第五节是用同样的规则对随机写入对做的计算,不是进程实测</li><li>没有验证:真实 NTP / PTP 的偏差与漂移大小;时钟回拨、闰秒;Spanner TrueTime 的提交等待;HLC 在更多节点、更高消息速率下 c 的增长;向量时钟的精简(版本向量、dotted version vectors);本篇的节点数只有 3 个,并发事件对只有二百多对,比例的精度有限</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="transaction-duplicate-submit.html">
+    <div>
+      <div class="t1">下一篇 · 分布式事务 28</div>
+      <div class="t2">幂等接口的设计:同一请求重复提交</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>分布式事务 · 时钟:逻辑时钟与混合逻辑时钟 · 实验记录 · 2026-10-17</footer>
+</body>
+</html>

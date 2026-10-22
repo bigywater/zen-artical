@@ -1,0 +1,22 @@
+from lib import *
+S = SS('x21')
+steps = [
+    step("一个切面里五种通知加两个切面。正常返回 ok():A(@Order(1))的 @Around 前、A.before,然后进入 B(@Order(2))的 @Around 前、B.before,目标方法,B.afterReturning、B.after、B 的 @Around 后(finally),再 A.afterReturning、A.after、A 的 @Around 后,一共 11 步。顺序小的切面在最外层,把顺序大的整个包在里面。同一个切面里,@Around 最外,接着 @Before,方法返回后先 @AfterReturning、再 @After。抛异常 fail():把 afterReturning 换成 afterThrowing,其余相同,最后调用者收到 IllegalStateException。", t=tl(S(1)), mark=lidx(S(1), '▶ 目标方法 ok()', '▶ 目标方法 fail()'), done=lidx(S(1), 'A.around 前', 'A.around 后', 'B.afterReturning', 'B.afterThrowing', '调用者收到'), b=bars([['正常路径的步数', 11, '11'], ['抛异常路径的步数(含调用者收到)', 12, '12'], ['A 的 @Around 前是第几步', 1, '第 1'], ['目标方法是第几步', 5, '第 5']], 12, done=[0, 1, 2], mark=[3]), kv=KV([['不同切面', 'order 小的在外层'], ['同一个切面', '@Around → @Before → 目标 → @AfterReturning / @AfterThrowing → @After'], ['@After', '总会执行(finally 型)'], ['异常路径', 'afterThrowing 代替 afterReturning']], ['同一个切面'])),
+    step("把 @Bean 的定义顺序倒过来(B 先 A 后),有 @Order 的两个切面的执行顺序一点没变:仍是 A.around 前、A.before、B.around 前、B.before、目标方法、B.afterReturning、B.after、B.around 后、A.afterReturning、A.after、A.around 后。有 @Order 时,Bean 的定义顺序不影响通知顺序。", t=tl(S(2)), mark=lidx(S(2), 'B 先 A 后'), b=bars([['定义顺序改变后通知顺序改变', 0, '没有变'], ['两个切面的步数', 11, '11']], 11, done=[0], cur=[1]), kv=KV([['定义顺序', 'B 先 A 后'], ['A(@Order(1))', '仍在最外层'], ['结果', '11 步顺序完全相同'], ['前提', '切面上有明确的顺序']], ['前提'])),
+    step("同一个切面里的通知,没有 @Order,方法名故意和声明顺序相反。顺序:@Around 前(mmm),然后两个 @Before:aaa(后声明)先于 zzz(先声明),目标方法,@After(yyy),@Around 后。同类型的通知看起来是按方法名排序的,不是按声明顺序;不要靠方法名来表达顺序,需要顺序就拆成不同的切面加 @Order。", t=tl(S(3)), mark=lidx(S(3), 'Names.aaa', 'Names.zzz'), done=lidx(S(3), 'Names.mmm(@Around)前', '目标方法 ok()', 'Names.yyy', 'Names.mmm(@Around)后'), b=bars([['aaa(后声明)在两个 @Before 里排第', 1, '第 1'], ['zzz(先声明)排第', 2, '第 2']], 2, done=[0], mark=[1]), kv=KV([['不同类型', 'Around → Before → ... → After'], ['同类型的两个 @Before', '看起来按方法名排(aaa 先于 zzz)'], ['声明顺序', '没有起作用'], ['建议', '需要顺序就拆成多个切面']], ['同类型的两个 @Before'])),
+    step("@Around 里可以改参数、也可以不调用 proceed()。Skip 的 @Around 看到参数 [原值],用 proceed(new Object[]{\"改过\"}) 传了新参数,目标方法收到“改过”,返回值是“改过”。Swallow 的 @Around 没有调用 proceed(),目标方法根本没被执行,直接返回了“缓存值”。@Around 通知完全控制目标方法是否执行、用什么参数、返回什么。", t=tl(S(4)), mark=lidx(S(4), 'Swallow.around 没有调用 proceed()'), done=lidx(S(4), 'Skip.around 看到参数', '目标方法 arg(改过)'), b=bars([['Skip:目标方法被执行', 1, '是(参数被改)'], ['Swallow:目标方法被执行', 0, '否(返回缓存值)']], 1, done=[0], mark=[1]), kv=KV([['proceed(新参数)', '目标收到新参数'], ['不调用 proceed()', '目标方法不执行'], ['返回值', '由 @Around 决定'], ['用途', '改参数、缓存、拦截']], ['不调用 proceed()'])),
+    step("切面的顺序从哪里来。三个切面:实现 Ordered(getOrder = 0)的先执行,没有顺序的 Plain 第二,@Order(-5) 写在 @Bean 方法上的 OrderedViaBean 反而最后。@Bean 方法上的 @Order 对切面的先后没有效果(它和没有顺序的 Plain 一样排在最低优先级,靠定义顺序排在后面)。要让切面有顺序,把 @Order 写在切面的类上,或者让它实现 Ordered。", t=tl(S(5)), mark=lidx(S(5), 'OrderedViaBean.before'), done=lidx(S(5), 'OrderedViaInterface(getOrder=0).before', 'PlainNoOrder.before'), b=bars([['实现 Ordered(0)的排第', 1, '第 1'], ['没有顺序的 Plain 排第', 2, '第 2'], ['@Bean 方法上 @Order(-5)的排第', 3, '第 3(@Order 没生效)']], 3, done=[0], cur=[1], mark=[2]), kv=KV([['实现 Ordered', '生效'], ['类上的 @Order', '生效(第 1、2 节用到)'], ['@Bean 方法上的 @Order', '这次测到没有生效'], ['没有顺序', '最低优先级']], ['@Bean 方法上的 @Order'])),
+]
+A = mkartx('x21', 21, 'Spring,AOP,通知顺序,Around,Order,真实验证,动画演示',
+    '实测通知执行顺序:切面按 @Order 从外到内包裹,同一个切面里是 @Around → @Before → 目标 → @AfterReturning(或 @AfterThrowing)→ @After;@Bean 定义顺序不影响有 @Order 的切面;同类型的两个 @Before 看起来按方法名排序;@Around 可以改参数或不调用 proceed();写在 @Bean 方法上的 @Order 对切面没有生效。',
+    '多个切面、多种通知同时作用在一个方法上,谁先谁后?@After 和 @AfterReturning 谁在前?@Order 写在哪里才有用?@Around 能做什么?这篇在 Spring Framework 7.0.9 上用带编号的时间线逐项验证。',
+    [('11 步', '两个切面、每个五种通知,正常返回一次调用的步骤数'), ('第 1 对第 3', '实现 Ordered 的切面与 @Bean 方法上标 @Order(-5) 的切面的执行位置:@Bean 方法上的 @Order 没有生效'), ('0 次', 'Swallow 切面在 @Around 里不调用 proceed() 时目标方法被执行的次数')],
+    [('一次调用的完整顺序', '<p>顺序小的切面在外层;同一个切面内按 Around、Before、目标、AfterReturning 或 AfterThrowing、After 展开。</p>'),
+     ('定义顺序无关', '<p>有 @Order 时 @Bean 的定义顺序不影响通知顺序。</p>'),
+     ('同切面内的同类通知', '<p>看起来按方法名排序,不是按声明顺序。</p>'),
+     ('@Around 的权力', '<p>可以改参数、不调用 proceed() 直接返回。</p>'),
+     ('顺序的来源', '<p>类上的 @Order 与 Ordered 接口有效,@Bean 方法上的 @Order 对切面没有效果。</p>')],
+    steps,
+    [ENV_X + '。用不带 Boot 的 Spring Framework 7.0.9 + AspectJ 注解,proxyTargetClass = true;“同类型的通知按方法名排序”是根据一个例子(aaa 与 zzz)的现象下的结论,只测了方法名与声明顺序相反的一种情形;“@Bean 方法上的 @Order 无效”只测了 @Aspect 切面这一种用法',
+     '没有验证:Spring 5.2.7 之前 @After 与 @AfterReturning 的顺序(这里只看 7.0.9);@Order 写在 @Aspect 类上与 @Component 扫描方式的组合;多个切面的 @Around 嵌套下异常传播;Advisor(非注解风格)与切面的顺序;事务拦截器与自定义切面的顺序(见事务篇)'],
+    '通知的执行顺序')

@@ -1,0 +1,20 @@
+from lib import *
+S = SS('x35')
+steps = [
+    step("TransactionTemplate 的基本行为。execute 返回回调的返回值,表里 1 行,提交。回调里抛 RuntimeException:调用者收到 IllegalStateException,表里 0 行,回滚。回调里调用 status.setRollbackOnly():正常返回,表里 0 行,回滚。回调里把受检异常包成 RuntimeException 抛出:回滚。回滚的规则和声明式一致:运行时异常回滚,另外可以用 setRollbackOnly() 主动标记。", t=tl(S(1)), mark=lidx(S(1), '回调里抛 RuntimeException', 'setRollbackOnly()', '受检异常包成'), done=lidx(S(1), 'execute 返回值'), b=bars([['execute 正常:剩余行数', 1, '1(提交)'], ['回调抛 RuntimeException:剩余行数', 0, '0(回滚)'], ['setRollbackOnly():剩余行数', 0, '0(回滚)'], ['受检异常包装后抛:剩余行数', 0, '0(回滚)']], 1, done=[0], mark=[1, 2, 3]), kv=KV([['正常返回', '提交,execute 返回回调的值'], ['抛 RuntimeException', '回滚'], ['setRollbackOnly()', '回滚,方法正常返回'], ['写法', 'executeWithoutResult 适合没有返回值的情形']], ['setRollbackOnly()'])),
+    step("与自调用的关系。@Transactional 方法被同一个类里的方法 this 调用:抛异常后表里剩 1 行,事务没有生效(自调用)。同样的逻辑换成 TransactionTemplate,在同一个类里的方法中使用:表里 0 行,回滚——TransactionTemplate 是直接调用事务管理器,不需要代理,所以没有自调用问题。", t=tl(S(2)), mark=lidx(S(2), '@Transactional 方法被同类方法'), done=lidx(S(2), 'TransactionTemplate 在同类方法里使用'), b=bars([['@Transactional 被 this 调用:剩余行数', 1, '1(没回滚)'], ['TransactionTemplate 同类里使用:剩余行数', 0, '0(回滚)']], 1, mark=[0], done=[1]), kv=KV([['@Transactional', '靠代理,自调用失效'], ['TransactionTemplate', '直接调事务管理器,不需要代理'], ['同类里调用', '编程式事务不受影响'], ['代价', '事务边界要自己写在代码里']], ['TransactionTemplate'])),
+    step("隔离级别、只读与超时。新建 TransactionTemplate 设 setIsolationLevel(SERIALIZABLE)、setReadOnly(true),在回调里读出:隔离级别 8(SERIALIZABLE),只读 true。setTimeout(1) 的事务里执行 select sleep(3):约 1025 ms 就失败了,QueryTimeoutException,原因是 MySQLTimeoutException:Statement cancelled due to timeout or client request。事务的超时是通过给后面的语句设置语句超时实现的。", t=tl(S(3)), mark=lidx(S(3), 'setTimeout(1)'), done=lidx(S(3), '事务内:隔离级别=8'), b=bars([['事务超时设置 s', 1, '1'], ['select sleep(3) 实际等待 ms', 1025, '1025(被取消)'], ['sleep 本来要 s', 3, '3']], 3, done=[0], mark=[1], cur=[2]), kv=KV([['setIsolationLevel(SERIALIZABLE)', '事务内读出 8'], ['setReadOnly(true)', '读出 true'], ['setTimeout(1)', '约 1 秒后语句被取消'], ['异常', 'QueryTimeoutException ← MySQLTimeoutException']], ['异常'])),
+    step("事务范围缩小到只包数据库操作。每个任务有 300 ms 的非数据库工作(比如调用外部服务)和一条 insert;连接池只有 2 个连接,8 个线程并发。@Transactional 包住整个方法(300 ms 的非数据库工作在事务里,连接一直被占着):全部完成用了 1225 ms(8 个任务两个一批,4 批,每批 300 ms)。TransactionTemplate 只包 insert(300 ms 的工作在事务外):全部完成用了 308 ms。事务越宽,占用连接越久,连接池就越成为瓶颈。", t=tl(S(4)), mark=lidx(S(4), '@Transactional 包住整个方法'), done=lidx(S(4), 'TransactionTemplate 只包数据库那一步'), b=bars([['@Transactional 包整个方法:总耗时 ms', 1225, '1225'], ['TransactionTemplate 只包数据库:总耗时 ms', 308, '308'], ['连接池大小', 2, '2'], ['并发线程数', 8, '8']], 1225, mark=[0], done=[1], cur=[2, 3]), kv=KV([['事务里做了 300 ms 非数据库工作', '占着连接 300 ms,8 个任务排 4 批'], ['只把数据库操作放进事务', '连接占用时间很短'], ['总耗时', '1225 对 308 ms'], ['原则', '事务内别做慢的非数据库调用']], ['原则'])),
+]
+A = mkartx('x35', 35, 'Spring,事务,TransactionTemplate,编程式事务,连接池,真实验证,动画演示',
+    '实测 TransactionTemplate:回调抛 RuntimeException 或 setRollbackOnly() 都回滚;在同一个类里使用没有自调用问题;事务超时通过语句超时实现(setTimeout(1) 约 1025 ms 取消 select sleep(3));把 300 ms 的非数据库工作移出事务后,8 线程 2 连接的池从 1225 ms 降到 308 ms。',
+    '什么时候该用编程式事务?TransactionTemplate 和 @Transactional 有什么不同?事务超时是怎么实现的?事务范围放得太宽会怎样?这篇在 Spring Framework 7.0.9、HikariCP 和 MySQL 26.7.0 上逐项量出来。',
+    [('1225 → 308 ms', '把 300 ms 的非数据库工作移出事务后,8 个线程共用 2 个连接时全部完成的时间'), ('1025 ms', 'setTimeout(1) 的事务里 select sleep(3) 被取消的用时'), ('0 行', '同类里 this 调用时 TransactionTemplate 仍然回滚(@Transactional 则剩 1 行)')],
+    [('基本用法', '<p>execute 返回回调的值,抛运行时异常或 setRollbackOnly() 都回滚。</p>'),
+     ('没有自调用问题', '<p>TransactionTemplate 直接调事务管理器,不依赖代理。</p>'),
+     ('属性', '<p>隔离级别、只读、超时都可以在模板上设置,超时靠语句超时实现。</p>'),
+     ('缩小事务范围', '<p>只把数据库操作放进事务,连接占用时间短,连接池吞吐高得多。</p>')],
+    steps,
+    [ENV_X + '。用不带 Boot 的 Spring Framework 7.0.9 + DataSourceTransactionManager + HikariCP(第四节连接池大小 2)+ 自己起的 MySQL 26.7.0;300 ms 的非数据库工作用 Thread.sleep 模拟;总耗时每次运行有十几 ms 的抖动',
+     '没有验证:TransactionTemplate 在响应式环境里的替代(TransactionalOperator);嵌套 TransactionTemplate 与传播行为组合;事务超时在不同数据库驱动上的实现差别(只测了 MySQL Connector/J);PlatformTransactionManager 手工 getTransaction / commit / rollback 的泄漏风险'],
+    '编程式事务')

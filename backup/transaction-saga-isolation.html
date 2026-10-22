@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>Saga 的隔离性缺失:脏读与补偿冲突</title>
+<meta name="description" content="实测 Saga 没有隔离性的后果:中间状态被别人读到(1007 次读里 506 次错误拒绝)、绝对值补偿覆盖并发更新(200 次里丢 90 次)、预留窗口里到达的 27 个买家全被拒;相对增量补偿把丢失更新降到 0,语义锁(pending 列)把错误拒绝降到 0。">
+<link rel="canonical" href="https://bigywater.tech/transaction-saga-isolation.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Saga 的隔离性缺失:脏读与补偿冲突">
+<meta property="og:description" content="实测 Saga 没有隔离性的后果:中间状态被别人读到(1007 次读里 506 次错误拒绝)、绝对值补偿覆盖并发更新(200 次里丢 90 次)、预留窗口里到达的 27 个买家全被拒;相对增量补偿把丢失更新降到 0,语义锁(pending 列)把错误拒绝降到 0。">
+<meta property="og:url" content="https://bigywater.tech/transaction-saga-isolation.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Saga 的隔离性缺失:脏读与补偿冲突">
+<meta name="twitter:description" content="实测 Saga 没有隔离性的后果:中间状态被别人读到(1007 次读里 506 次错误拒绝)、绝对值补偿覆盖并发更新(200 次里丢 90 次)、预留窗口里到达的 27 个买家全被拒;相对增量补偿把丢失更新降到 0,语义锁(pending 列)把错误拒绝降到 0。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">2768</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">70</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">97</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">56</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">78</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">114</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">111</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">88</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#B0485B; --series-c-soft:#F6DEE2;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#E58A9A; --series-c-soft:#3A1820;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#E58A9A; --series-c-soft:#3A1820;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>分布式事务 · 10</div>
+  <h1>Saga 的隔离性缺失:脏读与补偿冲突</h1>
+  <p>Saga 的每一步都是已经提交的本地事务,所以别的事务能读到它的中间状态,补偿也可能和别人的更新交错。这篇把脏读、补偿覆盖并发更新、中间状态造成的丢单三种异常逐个复现,再试语义锁和相对增量两种对策。</p>
+  <div class="hero-fact">
+<div><div class="num">506 / 1007</div><div class="lbl">审批服务读到 Saga 的中间状态而错误拒绝贷款的次数 / 总读取次数</div></div><div><div class="num">90 / 200</div><div class="lbl">补偿“恢复成扣款前的值”时,覆盖掉并发利息更新的次数(相对增量是 0)</div></div><div><div class="num">27 / 27</div><div class="lbl">库存预留窗口里到达的买家全部被拒(窗口外的都买到了)</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="transaction-saga-compensation-failure.html">Saga 的补偿:补偿失败怎么办</a></div>
+<section>
+  <h2>脏读</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  30 个 saga 依次跑完,每个 saga 里“已扣款、还没补偿”的窗口 100 ms,共 6.3 秒;审批服务一共读了 1007 次,读到过的余额值 [200, 1000]
+  其中读到中间状态 200 并因此“拒绝”贷款的有 506 次(50%)—— 这些拒绝都是错的:每个 saga 最后都被补偿了,账户余额从来没有真的低过 1000
+  最终余额: 1000</pre></div>
+  <p>每一步都已提交,中间状态对所有人可见。审批服务一半的读取看到被扣掉的 800,于是拒绝了本来能批准的贷款。</p>
+</section>
+<section>
+  <h2>补偿覆盖别人的更新</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  补偿写法            | 试验次数 | 终态不是 1005 的次数(丢了利息) | 比例 
+  ----------------+------+---------------------+----
+  写法 A:恢复成扣款前读到的值 | 200  | 90                  | 45%
+  写法 B:加回扣掉的 100  | 200  | 0                   | 0% 
+  利息更新落在“扣款之后、补偿之前”的窗口里时,A 把它覆盖掉了(丢失更新);B 是相对增量,先后顺序不影响结果</pre></div>
+  <p>补偿写“恢复成旧值”会抹掉扣款与补偿之间别人写入的更新;写“加回扣掉的数”则与别的更新可交换。</p>
+</section>
+<section>
+  <h2>中间状态造成丢单</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  60 次试验,买家到达时刻在 0 到 0.4 秒之间均匀随机;预留窗口是 0.1 到 0.3 秒
+  买家被拒绝(库存不足)的有 27 次;其中到达时刻落在预留窗口里的 27 次;到达时落在窗口里的买家共 27 个
+  被拒绝的买家全部落在预留窗口里
+  窗口里到达的买家被拒了,可是 0.2 秒后 saga 补偿把这 1 件放回去了:这些订单本来是卖得出去的(丢单)。晚于 0.3 秒到的买家买到了</pre></div>
+  <p>库存被预留的那段时间,买家被拒;预留释放后这些单本可成交。</p>
+</section>
+<section>
+  <h2>语义锁</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  同样的 30 个 saga:读 balance + pending 的审批服务读了 1006 次,其中 505 次读到了 saga 进行中的状态(pending &gt; 0),错误拒绝 0 次
+  “等待型”读者(看到 pending &gt; 0 就等到 saga 收尾再决定):等待了 30 次,每次平均等 102 ms,最长 106 ms;等待换来的是它永远只看到已收尾的状态</pre></div>
+  <p>在 pending 列里标出“正在被 saga 处理”的量,读者用 balance + pending 判断总资产就不被中间状态误导;等待型读者则等到 saga 收尾。代价是读者要理解 pending。</p>
+</section>
+<section>
+  <h2>对策对比</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  做法                    | 审批被错误拒绝(第一节的 saga 窗口,次) | 丢失的更新(第二节,200 次里)
+  ----------------------+-------------------------+------------------
+  无防护:读 balance + 绝对值补偿 | 506                     | 90               
+  只改补偿:相对增量             | 506                     | 0                
+  相对增量 + 语义锁(pending 列) | 0                       | 0                
+  (第一列的数字是第一节“只读 balance”的错误拒绝次数,第三行是第四节读 balance + pending 的结果;丢失更新数第一行来自写法 A,后两行来自写法 B)</pre></div>
+  <p>相对增量解决丢失更新,语义锁解决脏读误判,两者各管一类。没有通用开关。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">Saga 的隔离性</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "b", "kind": "bars", "label": "数字对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "脏读。Saga 第一步把账户扣掉 800(已经提交),第二步失败、100 ms 后补偿加回 800;一个“额度审批”服务每 5 ms 读一次余额,规则是余额 >= 500 才批准贷款。30 个 saga 依次跑完共 6.3 秒,审批服务读了 1007 次,读到过的余额值是 200 和 1000。读到中间状态 200 并因此拒绝贷款的有 506 次(50%)——这些拒绝全是错的:每个 saga 最后都被补偿了,账户余额从来没有真的低于 1000。Saga 的每一步都是已提交的本地事务,中间状态对所有人可见。", "s": {"t": {"lines": ["  30 个 saga 依次跑完,每个 saga 里“已扣款、还没补偿”的窗口 100 ms,共 6.3 秒;审批服务一共读了 1007 次,读到过的余额值 [200, 1000]", "  其中读到中间状态 200 并因此“拒绝”贷款的有 506 次(50%)—— 这些拒绝都是错的:每个 saga 最后都被补偿了,账户余额从来没有真的低过 1000", "  最终余额: 1000"], "cur": [], "mark": [], "done": []}, "mark": [1], "done": [2], "b": {"items": [["审批读到的次数", 1007, "1007"], ["其中读到 200 而错误拒绝", 506, "506"]], "max": 1007, "cur": [0], "mark": [1], "done": []}, "kv": {"items": [["Saga 步骤", "每一步都已提交,别人读得到"], ["审批服务", "506 / 1007 次基于中间状态拒绝"], ["真实余额", "从未低于 1000"]], "hl": ["审批服务"]}}}, {"note": "补偿覆盖别人的更新。Saga 扣款 100 后需要补偿,同时另一个事务给账户加了 5 元利息(落在随机时刻),正确终态是 1005。写法 A:补偿“把余额恢复成扣款之前读到的值”:200 次里有 90 次终态不是 1005(45%),利息被覆盖掉了(丢失更新)。写法 B:补偿“把扣掉的 100 加回去”(相对增量):200 次里 0 次。利息落在“扣款之后、补偿之前”这个窗口里时,绝对值补偿会抹掉它;相对增量不关心先后顺序。", "s": {"t": {"lines": ["  补偿写法            | 试验次数 | 终态不是 1005 的次数(丢了利息) | 比例 ", "  ----------------+------+---------------------+----", "  写法 A:恢复成扣款前读到的值 | 200  | 90                  | 45%", "  写法 B:加回扣掉的 100  | 200  | 0                   | 0% ", "  利息更新落在“扣款之后、补偿之前”的窗口里时,A 把它覆盖掉了(丢失更新);B 是相对增量,先后顺序不影响结果"], "cur": [], "mark": [], "done": []}, "mark": [2], "done": [3], "b": {"items": [["写法 A 丢了利息的次数", 90, "90 / 200"], ["写法 B 丢了利息的次数", 0, "0 / 200"]], "max": 200, "cur": [], "mark": [0], "done": [1]}, "kv": {"items": [["绝对值补偿", "覆盖并发更新,丢 45%"], ["相对增量补偿", "不受先后顺序影响"], ["原则", "补偿尽量写成可交换的增量"]], "hl": ["原则"]}}}, {"note": "中间状态让别人买不到。库存只剩 1 件,saga 在 0.1 秒预留这 1 件、0.3 秒时因支付失败释放;60 个买家在 0 到 0.4 秒之间随机到达。买家被拒绝(库存不足)27 次,全部落在预留窗口里,窗口里到达的买家共 27 个;晚于 0.3 秒到的买家买到了。窗口里被拒的买家,本来在补偿之后是卖得出去的——丢了单。这是“预留 / 冻结可见”的代价,TCC 里也一样(第 6 篇)。", "s": {"t": {"lines": ["  60 次试验,买家到达时刻在 0 到 0.4 秒之间均匀随机;预留窗口是 0.1 到 0.3 秒", "  买家被拒绝(库存不足)的有 27 次;其中到达时刻落在预留窗口里的 27 次;到达时落在窗口里的买家共 27 个", "  被拒绝的买家全部落在预留窗口里", "  窗口里到达的买家被拒了,可是 0.2 秒后 saga 补偿把这 1 件放回去了:这些订单本来是卖得出去的(丢单)。晚于 0.3 秒到的买家买到了"], "cur": [], "mark": [], "done": []}, "mark": [1], "done": [2], "b": {"items": [["窗口里到达的买家", 27, "27"], ["其中被拒绝", 27, "27"]], "max": 30, "cur": [0], "mark": [1], "done": []}, "kv": {"items": [["预留窗口", "0.1 s ~ 0.3 s"], ["窗口里到达", "27 个买家全被拒"], ["0.3 s 之后", "补偿完成,买得到"]], "hl": ["预留窗口"]}}}, {"note": "对策:语义锁。把“正在被 saga 处理”的金额写进 pending 列:扣款时 balance -= 800、pending += 800;补偿时 balance += 800、pending -= 800;读者判断总资产时用 balance + pending。同样的 30 个 saga:审批服务读了 1006 次,其中 505 次读到了 saga 进行中的状态(pending > 0),错误拒绝 0 次。另一类“等待型”读者看到 pending > 0 就等到 saga 收尾再决定:等了 30 次,每次平均 102 ms、最长 106 ms,换来的是永远只看到已收尾的状态。读者要主动理解 pending,这是对策的代价。", "s": {"t": {"lines": ["  同样的 30 个 saga:读 balance + pending 的审批服务读了 1006 次,其中 505 次读到了 saga 进行中的状态(pending > 0),错误拒绝 0 次", "  “等待型”读者(看到 pending > 0 就等到 saga 收尾再决定):等待了 30 次,每次平均等 102 ms,最长 106 ms;等待换来的是它永远只看到已收尾的状态"], "cur": [], "mark": [], "done": []}, "mark": [0], "done": [1], "b": {"items": [["读到 saga 进行中状态的次数", 505, "505"], ["其中错误拒绝", 0, "0"], ["等待型读者平均等待 ms", 102, "102"]], "max": 520, "cur": [0], "mark": [2], "done": [1]}, "kv": {"items": [["balance + pending", "505 次中间状态,0 次误判"], ["等待型读者", "平均等 102 ms,看到的都是收尾后的状态"], ["代价", "读者要理解 pending"]], "hl": ["代价"]}}}, {"note": "三种做法放在一起。无防护(读 balance、绝对值补偿):审批被错误拒绝 506 次,丢失的更新 90 次。只改补偿、用相对增量:错误拒绝仍是 506 次(读者还是读到了中间状态),丢失的更新降到 0。相对增量加语义锁(pending 列):错误拒绝 0、丢失的更新 0。Saga 没有隔离性,要靠这些应用层的办法逐个补回来;每一种办法都是对具体读写的约束,没有一个通用的开关。", "s": {"t": {"lines": ["  做法                    | 审批被错误拒绝(第一节的 saga 窗口,次) | 丢失的更新(第二节,200 次里)", "  ----------------------+-------------------------+------------------", "  无防护:读 balance + 绝对值补偿 | 506                     | 90               ", "  只改补偿:相对增量             | 506                     | 0                ", "  相对增量 + 语义锁(pending 列) | 0                       | 0                ", "  (第一列的数字是第一节“只读 balance”的错误拒绝次数,第三行是第四节读 balance + pending 的结果;丢失更新数第一行来自写法 A,后两行来自写法 B)"], "cur": [], "mark": [], "done": []}, "mark": [2], "done": [4], "b": {"items": [["无防护:错误拒绝", 506, "506"], ["相对增量:错误拒绝", 506, "506"], ["语义锁:错误拒绝", 0, "0"], ["无防护:丢失更新", 90, "90"]], "max": 520, "cur": [], "mark": [0, 1, 3], "done": [2]}, "kv": {"items": [["相对增量", "解决丢失更新(90 → 0)"], ["语义锁", "解决脏读误判(506 → 0)"], ["没有通用办法", "每种读写要单独设计"]], "hl": ["没有通用办法"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / MySQL 26.7.0 与 PostgreSQL 16.15(Homebrew,每个实验自己 initdb、自己起实例,端口 9150 以上,只监听 127.0.0.1)/ Python 3.14.8 + PyMySQL 1.2.3 + psycopg 3.3.6 / Redis 8.10.2 / Kafka 4.3.1 / RabbitMQ 4.3.6 / etcd 3.7.2(按各篇注明用到哪些);不连任何外部服务,不碰本机已有的数据库实例;故障用 kill -9 进程、让连接断开或在代码里的指定位置抛异常来制造;计时用 time.perf_counter,数字每次运行会有小幅抖动。本篇用一个 MySQL 26.7.0 实例的 bank 库,Saga 的每个步骤是 autocommit 的单条语句,窗口用真实 sleep(100 ms / 20 ms / 200 ms),读者和竞争更新是独立线程;随机到达时刻和利息写入时刻用固定随机种子</li><li>没有验证:真实 Saga 框架(Seata Saga、Temporal 等)对隔离性提供了什么;可交换更新在复杂业务(多字段约束、取消订单要退多种东西)里是否都能做到;“重读值”和“版本检查”这类对策(没有实验);数字里的 50% 取决于我设的窗口与间隔(各 100 ms),不是普遍比例</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="transaction-outbox-write.html">
+    <div>
+      <div class="t1">下一篇 · 分布式事务 11</div>
+      <div class="t2">Outbox 模式:本地事务写事件</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>分布式事务 · Saga 的隔离性缺失:脏读与补偿冲突 · 实验记录 · 2026-10-17</footer>
+</body>
+</html>

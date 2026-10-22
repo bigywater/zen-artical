@@ -28,9 +28,10 @@ class Coord:
             self.say(f'  [协调者] 在“{here}”被 kill -9'); sys.stdout.flush()
             os.kill(os.getpid(), signal.SIGKILL)
 
-    def run(self, xid, work, crash=None, hold=0.0, fail_on=None):
+    def run(self, xid, work, crash=None, hold=0.0, fail_on=None, conns=None, hook=None, log_first=True):
         """work: {rm 名: [SQL...]};hold: 全部 prepare 完到发 COMMIT PREPARED 之间故意等多久(模拟慢协调者 / 慢网络)。返回 'COMMIT' 或 'ABORT'。"""
-        conns = {n: pgconn(p) for n, p in self.ports.items() if n in work}
+        own = conns is None
+        conns = conns or {n: pgconn(p) for n, p in self.ports.items() if n in work}
         prepared = []
         self.crash('开始之前', crash)
         try:
@@ -40,7 +41,9 @@ class Coord:
                 if fail_on == n: raise RuntimeError(f'{n} 投了反对票(模拟)')
                 c.execute(f"prepare transaction '{xid}'"); prepared.append(n)
                 self.say(f'  [协调者] {n}: PREPARE TRANSACTION \'{xid}\' -> 投 YES')
-                self.crash('第一个参与者 prepare 之后', crash if len(prepared) == 1 else None) if len(prepared) == 1 else None
+                if len(prepared) == 1:
+                    self.crash('第一个参与者 prepare 之后', crash)
+                    if hook: hook()
         except Exception as e:
             self.say(f'  [协调者] 阶段一失败:{e}')
             for n in work:
@@ -50,13 +53,17 @@ class Coord:
                 except Exception as e2: self.say(f'  [协调者] {n} 回滚出错:{e2}')
             self.log_decision(xid, 'ABORT'); return 'ABORT'
         self.crash('全部 prepare 之后、写决定日志之前', crash)
-        self.log_decision(xid, 'COMMIT'); self.say('  [协调者] 决定日志已落盘:COMMIT')
+        if log_first:
+            self.log_decision(xid, 'COMMIT'); self.say('  [协调者] 决定日志已落盘:COMMIT')
         self.crash('决定日志落盘之后、发出第一个 COMMIT PREPARED 之前', crash)
         if hold: time.sleep(hold)
         for i, n in enumerate(work):
             conns[n].execute(f"commit prepared '{xid}'"); self.say(f'  [协调者] {n}: COMMIT PREPARED \'{xid}\' -> OK')
             if i == 0 and len(work) > 1: self.crash('第一个 COMMIT PREPARED 之后、第二个之前', crash)
-        for c in conns.values(): c.close()
+            if i == 0 and not log_first:
+                self.log_decision(xid, 'COMMIT'); self.say('  [协调者] (错误顺序)决定日志现在才落盘:COMMIT')
+        if own:
+            for c in conns.values(): c.close()
         return 'COMMIT'
 
     def prepared(self):
@@ -80,8 +87,9 @@ class Coord:
 
 
 if __name__ == '__main__':
-    log, xid, crash = sys.argv[1], sys.argv[2], sys.argv[3]
-    ports = dict(a.split('=') for a in sys.argv[4:]); ports = {k: int(v) for k, v in ports.items()}
+    CRASHES = {'0': '开始之前', '1': '第一个参与者 prepare 之后', '2': '全部 prepare 之后、写决定日志之前', '3': '决定日志落盘之后、发出第一个 COMMIT PREPARED 之前', '4': '第一个 COMMIT PREPARED 之后、第二个之前'}
+    log, xid, crash, order = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]   # order:'ok' 先写日志(正确),'bad' 先发 COMMIT PREPARED 再写日志
+    ports = dict(a.split('=') for a in sys.argv[5:]); ports = {k: int(v) for k, v in ports.items()}
     co = Coord(ports, log)
     work = {'订单库': ["insert into orders values(1, 'CREATED')"], '库存库': ["update stock set qty = qty - 1 where sku='sku-1'"]}
-    print(co.run(xid, work, crash=None if crash == '-' else crash))
+    print(co.run(xid, work, crash=CRASHES.get(crash), log_first=(order == 'ok')))

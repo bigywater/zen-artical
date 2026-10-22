@@ -1,0 +1,18 @@
+from lib import *
+S = SS('v62')
+steps = [
+    step("跨线程。在一个 span(parent)里让另一个线程创建子 span。(a)threading.Thread:另起新 trace(根 span)。(b)ThreadPoolExecutor.submit:另起新 trace。(c)submit(contextvars.copy_context().run, f):同一个 trace,父 span 是调用方。(d)线程里先 attach 调用方保存下来的上下文:同一个 trace,父 span 是调用方。新线程的 contextvars 是空的,线程池和 threading.Thread 都不会把调用方的上下文带过去。", t=tl(S(1)), mark=lidx(S(1), '(a)threading', '(b)ThreadPool'), done=lidx(S(1), '(c)submit', '(d)线程里'), b=bars([['threading.Thread:同 trace', 0, '否'], ['ThreadPoolExecutor:同 trace', 0, '否'], ['copy_context().run:同 trace', 1, '是'], ['attach 保存的上下文:同 trace', 1, '是']], 1, mark=[0, 1], done=[2, 3]), kv=KV([['threading.Thread', '另起新 trace'], ['ThreadPoolExecutor.submit', '另起新 trace'], ['copy_context().run / attach', '同一个 trace']], ['threading.Thread'])),
+    step("跨协程。在一个协程的 span 里:create_task、gather(两个协程)、asyncio.to_thread、loop.call_soon、事件循环线程里的 call_soon_threadsafe,子 span 都在同一个 trace、父 span 是调用方。loop.run_in_executor:另起新 trace;run_in_executor 配合 copy_context().run:同一个 trace。另一个线程里 call_soon_threadsafe:另起新 trace。", t=tl(S(2)), mark=lidx(S(2), 'loop.run_in_executor', '另一个线程里'), done=lidx(S(2), 'create_task', 'gather', 'to_thread', 'loop.call_soon', '事件循环线程里', 'copy_context().run'), b=bars([['同 trace 的做法', 6, '6 / 8'], ['另起新 trace 的做法', 2, '2 / 8']], 8, done=[0], mark=[1]), kv=KV([['create_task / gather / to_thread', '复制调用方的上下文'], ['run_in_executor', '不复制,另起新 trace'], ['从别的线程 call_soon_threadsafe', '拿到那个线程的(空)上下文']], ['run_in_executor'])),
+    step("跨消息队列(RabbitMQ)。(a)消息头不带 traceparent:消费者 span 是新 trace 的根。(b)带 traceparent,消费者 1 s 后处理:消费者 span 是生产者 span 的子 span,同一个 trace;生产者 span 在 0.09 ms 时就结束了,消费者 span 在它结束之后 1014 ms 才开始。(c)3 个不同 trace 的生产者各发一条,消费者批量处理这 3 条:批量 span 自己是新 trace 的根,带 3 个 span link,分别指向对应的生产者 span,3 个生产者的 trace_id 互不相同,批量 span 的 trace_id 与它们都不同。", t=tl(S(3)), mark=lidx(S(3), '(c)3 条消息'), done=lidx(S(3), '(a)消息头', '(b)带 traceparent'), b=bars([['(b)消费者晚于生产者结束 ms', 1014, '1014'], ['(c)批量 span 的 link 数', 3, '3'], ['(c)批量 span 的 trace 数', 1, '1(新 trace)']], 1014, done=[0], mark=[1, 2]), kv=KV([['不带 traceparent', '消费者是新 trace 的根'], ['带 traceparent', '作为生产者 span 的子 span,哪怕晚了 1014 ms'], ['批量处理', '3 个 link,批量 span 在自己的 trace 里']], ['批量处理'])),
+]
+A = mkartv('v62', 62, '微服务,可观测性,链路追踪,OpenTelemetry,上下文传播,span link,真实验证,动画演示',
+    '实测上下文传播:Python 里 threading.Thread 和 ThreadPoolExecutor 都会丢上下文(子 span 另起新 trace),run_in_executor 同样;create_task、gather、to_thread 不丢;RabbitMQ 消息头带 traceparent 时消费者 span 是生产者的子 span(晚了 1014 ms 也一样),批量处理 3 条消息用 3 个 span link。',
+    '线程池、协程、消息队列里 span 的父子关系怎么保持?哪些 Python 写法会悄悄丢掉上下文?消息晚消费了,span 还连得上吗?一次处理多条消息的 span 该用 link 还是 parent?这篇用 OpenTelemetry Python SDK 和 RabbitMQ 逐项试出来。',
+    [('2 种 / 4 种', '线程里创建子 span 的四种做法里,会丢掉上下文的有几种(threading.Thread、ThreadPoolExecutor)'), ('1014 ms', '消息带 traceparent 时,消费者 span 比生产者 span 结束时间晚开始的时长,仍然是生产者 span 的子 span'), ('3 个 link', '批量处理 3 条来自不同 trace 的消息时,批量 span 的 link 个数(它自己在新 trace 里)')],
+    [('跨线程', '<p>新线程的 contextvars 是空的,线程池不带调用方的上下文;要用 copy_context().run 或 attach。</p>'),
+     ('跨协程', '<p>create_task、gather、to_thread 会复制上下文;run_in_executor 和别的线程里的 call_soon_threadsafe 不会。</p>'),
+     ('跨消息队列', '<p>消息头带 traceparent 就能让消费者 span 成为生产者的子 span,不管晚了多久;一次处理多条消息用 link。</p>')],
+    steps,
+    [ENV_V + '。OpenTelemetry Python SDK 1.45.1,Python 3.14(contextvars 的行为是这个版本的);RabbitMQ 是自己起的单节点(pika 1.4.4);每种做法各测 1 次;“另起新 trace”是用内存导出器里 span 的 trace_id 与父 span 对比得出的',
+     '没有验证:Python 其他版本里 asyncio 和线程池的上下文行为(例如 3.14 的 free-threaded 构建、concurrent.futures 的后续版本);自动插桩库对线程池和 pika 的封装;Kafka、RocketMQ 等其他消息系统的头;Java 的 ThreadLocal / 虚拟线程、Go 的 context 显式传递;消息批量消费时 link 在各个追踪后端里的展示方式'],
+    '上下文传播')

@@ -5,7 +5,7 @@ import json, os
 from tech.models import Series, Article
 TP = 'tools/articles/'
 PREFIX = {'go': 'go-', 'docker': 'docker-', 'k8s': 'k8s-', 'git': 'git-', 'gin': 'gin-', 'crawler': 'crawler-', 'codec': 'codec-', 'mongo': 'mongo-',
-          'scrapy': 'scrapy-', 'grpc': 'grpc-', 'redis': 'redis-', 'zookeeper': 'zookeeper-', 'django': 'django-', 'flask': 'flask-', 'java': 'java-', 'rust': 'rust-', 'rabbitmq': 'rabbitmq-', 'network': 'network-', 'transaction': 'transaction-'}
+          'scrapy': 'scrapy-', 'grpc': 'grpc-', 'redis': 'redis-', 'zookeeper': 'zookeeper-', 'django': 'django-', 'flask': 'flask-', 'java': 'java-', 'rust': 'rust-', 'rabbitmq': 'rabbitmq-', 'network': 'network-', 'transaction': 'transaction-', 'microservice': 'microservice-', 'spring': 'spring-'}
 def urls_of(k):
     d = json.load(open(TP + k + '_topics.json'))
     return {PREFIX[k] + v['slug'] + '.html' for v in d.values()}, len(d)

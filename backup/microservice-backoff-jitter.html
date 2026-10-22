@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>指数退避与抖动:四种抖动算法的重试时间分布</title>
+<meta name="description" content="实测四种重试退避算法:200 个 client 同时被拒,无抖动的指数退避一波一波地同时到,完成时间中位数 19.25 s;Full / Equal / Decorrelated Jitter 把请求总数降到 1066 / 1034 / 822(固定间隔 2667);base 与 cap 的取舍。">
+<link rel="canonical" href="https://bigywater.tech/microservice-backoff-jitter.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="指数退避与抖动:四种抖动算法的重试时间分布">
+<meta property="og:description" content="实测四种重试退避算法:200 个 client 同时被拒,无抖动的指数退避一波一波地同时到,完成时间中位数 19.25 s;Full / Equal / Decorrelated Jitter 把请求总数降到 1066 / 1034 / 822(固定间隔 2667);base 与 cap 的取舍。">
+<meta property="og:url" content="https://bigywater.tech/microservice-backoff-jitter.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="指数退避与抖动:四种抖动算法的重试时间分布">
+<meta name="twitter:description" content="实测四种重试退避算法:200 个 client 同时被拒,无抖动的指数退避一波一波地同时到,完成时间中位数 19.25 s;Full / Equal / Decorrelated Jitter 把请求总数降到 1066 / 1034 / 822(固定间隔 2667);base 与 cap 的取舍。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">2800</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">70</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">97</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">56</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">78</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">114</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">111</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">88</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#8A6D12; --series-c-soft:#F3EBCB;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#D9B94A; --series-c-soft:#332B0B;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#D9B94A; --series-c-soft:#332B0B;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>微服务 · 3</div>
+  <h1>指数退避与抖动:四种抖动算法的重试时间分布</h1>
+  <p>重试为什么要加抖动?AWS 提出的 Full、Equal、Decorrelated 三种抖动,等待时间的分布有什么不同?在容量有限的服务面前,200 个 client 一起重试会怎样?这篇用本机的小服务把它们量出来。</p>
+  <div class="hero-fact">
+<div><div class="num">67.39 s</div><div class="lbl">无抖动指数退避时,200 个 client 里最后一个成功的时间(固定间隔 3.02 s,Decorrelated 3.48 s)</div></div><div><div class="num">2667 → 822</div><div class="lbl">服务端收到的请求总数:固定间隔 对 Decorrelated Jitter</div></div><div><div class="num">544</div><div class="lbl">base 只有 20 ms 时,Full Jitter 最忙的 100 ms 窗口收到的请求数(base 100 ms 是 315)</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="microservice-retry-amplification.html">重试的放大效应:多层各重试三次是多少次请求(含网关重试加服务重试)</a></div>
+<section>
+  <h2>四种算法的等待分布</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  算法                  | n=0           | n=1           | n=2            | n=3            | n=4              | n=5              | n=6             
+  --------------------+---------------+---------------+----------------+----------------+------------------+------------------+-----------------
+  固定间隔                | 100 (100~100) | 100 (100~100) | 100 (100~100)  | 100 (100~100)  | 100 (100~100)    | 100 (100~100)    | 100 (100~100)   
+  指数退避(无抖动)           | 100 (100~100) | 200 (200~200) | 400 (400~400)  | 800 (800~800)  | 1600 (1600~1600) | 3200 (3200~3200) | 3200 (3200~3200)
+  Full Jitter         | 50 (5~95)     | 100 (10~190)  | 199 (20~380)   | 402 (40~761)   | 795 (78~1513)    | 1597 (154~3034)  | 1601 (164~3031) 
+  Equal Jitter        | 75 (53~97)    | 150 (105~195) | 300 (210~390)  | 601 (420~781)  | 1197 (839~1556)  | 2399 (1677~3117) | 2400 (1682~3116)
+  Decorrelated Jitter | 200 (110~290) | 350 (122~694) | 572 (133~1419) | 891 (143~2686) | 1191 (154~3200)  | 1426 (163~3200)  | 1592 (177~3200) 
+  括号里是 5%~95% 分位。无抖动时每个 client 的等待完全相同(区间宽度为 0);Full Jitter 的下限是 0,所以有的 client 几乎立刻重试;Equal Jitter 的下限是一半;Decorrelated 依赖上一次的等待</pre></div>
+  <p>无抖动时所有 client 的等待完全相同;Full 的下限接近 0,Equal 的下限是一半,Decorrelated 依赖上一次的等待。</p>
+</section>
+<section>
+  <h2>同时被拒的 200 个 client</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  算法                  | 轮数 | 服务端收到的请求总数(中位数,括号是范围) | 平均每个 client 试几次 | 最忙的 100 ms 窗口收到 | 完成时间中位数                | p99                    | 最后一个完成                
+  --------------------+----+-----------------------+-----------------+-----------------+------------------------+------------------------+-----------------------
+  固定间隔                | 1  | 2667                  | 13.3            | 200             | 1.29 s                 | 3.01 s                 | 3.02 s                
+  指数退避(无抖动)           | 1  | 2314                  | 11.6            | 200             | 19.25 s                | 64.22 s                | 67.39 s               
+  Full Jitter         | 3  | 1066 (1065~1069)      | 5.3 (5.3~5.3)   | 317 (305~320)   | 1.08 s (1.06 s~1.10 s) | 4.19 s (4.18 s~4.24 s) | 4.99 s (4.49 s~5.00 s)
+  Equal Jitter        | 3  | 1034 (1024~1038)      | 5.2 (5.1~5.2)   | 228 (214~240)   | 1.30 s (1.30 s~1.32 s) | 5.38 s (5.35 s~5.42 s) | 5.67 s (5.50 s~5.81 s)
+  Decorrelated Jitter | 3  | 822 (797~825)         | 4.1 (4.0~4.1)   | 200 (200~200)   | 1.06 s (1.05 s~1.08 s) | 2.99 s (2.69 s~3.37 s) | 3.48 s (3.13 s~4.69 s)
+  服务端每个 100 ms 窗口收到的请求数(从 0 开始的前 20 个窗口,取第一轮):
+  算法                  | 0   | 1   | 2   | 3   | 4   | 5   | 6   | 7   | 8   | 9   | 10  | 11  | 12  | 13 | 14 | 15 | 16 | 17 | 18 | 19
+  --------------------+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+----+----+----+----+----+----+---
+  固定间隔                | 200 | 200 | 200 | 200 | 191 | 133 | 134 | 141 | 143 | 133 | 118 | 115 | 111 | 99 | 87 | 75 | 66 | 58 | 47 | 16
+  指数退避(无抖动)           | 200 | 200 | 0   | 200 | 0   | 0   | 0   | 129 | 59  | 0   | 0   | 0   | 0   | 0  | 0  | 94 | 82 | 0  | 0  | 0 
+  Full Jitter         | 317 | 203 | 125 | 68  | 69  | 54  | 37  | 26  | 24  | 20  | 22  | 19  | 11  | 6  | 7  | 3  | 5  | 5  | 3  | 8 
+  Equal Jitter        | 228 | 173 | 156 | 43  | 33  | 94  | 60  | 5   | 1   | 9   | 37  | 40  | 31  | 28 | 2  | 0  | 0  | 0  | 2  | 7 
+  Decorrelated Jitter | 200 | 46  | 105 | 85  | 52  | 53  | 42  | 35  | 34  | 30  | 26  | 20  | 16  | 15 | 8  | 10 | 7  | 7  | 5  | 3 </pre></div>
+  <p>无抖动的指数退避让请求一波一波地同时到,容量有限时一波只能放过几个;加抖动后请求数降到不到固定间隔的一半。</p>
+</section>
+<section>
+  <h2>base 与 cap</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  参数                        | 服务端收到的请求总数 | 最忙的 100 ms 窗口收到 | 完成时间中位数 | 最后一个完成
+  --------------------------+------------+-----------------+---------+-------
+  base 20 ms / cap 3200 ms  | 1499       | 544             | 1.05 s  | 4.78 s
+  base 100 ms / cap 3200 ms | 1074       | 315             | 1.09 s  | 4.56 s
+  base 400 ms / cap 3200 ms | 729        | 234             | 1.05 s  | 5.17 s
+  base 100 ms / cap 400 ms  | 1380       | 322             | 1.00 s  | 1.97 s
+  base 100 ms / cap 800 ms  | 1117       | 334             | 1.02 s  | 2.50 s
+  (连接类错误 0 次;不是超时,应为 0)</pre></div>
+  <p>base 太小退避没拉开;cap 小则最后一个更早完成,代价是请求更多。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">指数退避与抖动</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "b", "kind": "bars", "label": "数字对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "先看四种算法每次重试前等多久。base = 100 ms,cap = 3200 ms,每个算法抽 20000 条序列。固定间隔:每次都是 100 ms。无抖动的指数退避:100、200、400、800、1600、3200、3200 ms,所有 client 的等待完全相同(5%~95% 区间宽度为 0)。Full Jitter:平均 50、100、199、402、795、1597、1601 ms,n=3 时 5%~95% 分位是 40~761 ms,下限接近 0。Equal Jitter:平均 75、150、300、601、1197、2399、2400 ms,n=3 时 420~781 ms,下限是一半。Decorrelated Jitter:平均 200、350、572、891、1191、1426、1592 ms,n=3 时 143~2686 ms,每次依赖上一次的等待。抖动算法的平均值有的是无抖动的一半(Full),有的更大(Decorrelated 起步 200 ms),区别是 client 之间的间隔被拉开。", "s": {"t": {"lines": ["  算法                  | n=0           | n=1           | n=2            | n=3            | n=4              | n=5              | n=6             ", "  --------------------+---------------+---------------+----------------+----------------+------------------+------------------+-----------------", "  固定间隔                | 100 (100~100) | 100 (100~100) | 100 (100~100)  | 100 (100~100)  | 100 (100~100)    | 100 (100~100)    | 100 (100~100)   ", "  指数退避(无抖动)           | 100 (100~100) | 200 (200~200) | 400 (400~400)  | 800 (800~800)  | 1600 (1600~1600) | 3200 (3200~3200) | 3200 (3200~3200)", "  Full Jitter         | 50 (5~95)     | 100 (10~190)  | 199 (20~380)   | 402 (40~761)   | 795 (78~1513)    | 1597 (154~3034)  | 1601 (164~3031) ", "  Equal Jitter        | 75 (53~97)    | 150 (105~195) | 300 (210~390)  | 601 (420~781)  | 1197 (839~1556)  | 2399 (1677~3117) | 2400 (1682~3116)", "  Decorrelated Jitter | 200 (110~290) | 350 (122~694) | 572 (133~1419) | 891 (143~2686) | 1191 (154~3200)  | 1426 (163~3200)  | 1592 (177~3200) ", "  括号里是 5%~95% 分位。无抖动时每个 client 的等待完全相同(区间宽度为 0);Full Jitter 的下限是 0,所以有的 client 几乎立刻重试;Equal Jitter 的下限是一半;Decorrelated 依赖上一次的等待"], "cur": [], "mark": [], "done": []}, "mark": [4, 5, 6, 7], "done": [2, 3], "b": {"items": [["Full n=3 平均 ms", 402, "402(40~761)"], ["Equal n=3 平均 ms", 601, "601(420~781)"], ["Decorrelated n=3 平均 ms", 891, "891(143~2686)"], ["无抖动 n=3 ms", 800, "800(宽度 0)"]], "max": 900, "cur": [], "mark": [0, 1, 2], "done": [3]}, "kv": {"items": [["无抖动", "所有 client 同一时刻重试"], ["Full Jitter", "下限接近 0,区间最宽之一"], ["Equal Jitter", "下限是 t/2"], ["Decorrelated", "每次依赖上一次的等待"]], "hl": ["无抖动"]}}}, {"note": "再看 200 个 client 同时被拒时服务端的到达情况。服务最多同时处理 4 个请求、每个 20 ms,前 300 ms 整个服务不可用。固定间隔:服务端共收到 2667 次请求,每个 100 ms 窗口最多 200 个,完成时间中位数 1.29 s,最后一个 3.02 s。无抖动的指数退避:窗口里的请求是 200、200、0、200、0、0、0、129、59……一波一波地同时到,2314 次请求,完成时间中位数 19.25 s,p99 64.22 s,最后一个 67.39 s。Full Jitter(3 轮):约 1066 次请求,平均每个 client 试 5.3 次,最忙的窗口 317(第 0 个窗口里有一部分是很快的重试),最后一个 4.99 s。Equal Jitter:1034 次,最忙窗口 228,最后一个 5.67 s。Decorrelated Jitter:822 次,平均试 4.1 次,最忙窗口 200,最后一个 3.48 s。无抖动的重试在容量有限时反复同时到达,一波只能放过几个;加抖动后请求数降到不到固定间隔的一半。", "s": {"t": {"lines": ["  算法                  | 轮数 | 服务端收到的请求总数(中位数,括号是范围) | 平均每个 client 试几次 | 最忙的 100 ms 窗口收到 | 完成时间中位数                | p99                    | 最后一个完成                ", "  --------------------+----+-----------------------+-----------------+-----------------+------------------------+------------------------+-----------------------", "  固定间隔                | 1  | 2667                  | 13.3            | 200             | 1.29 s                 | 3.01 s                 | 3.02 s                ", "  指数退避(无抖动)           | 1  | 2314                  | 11.6            | 200             | 19.25 s                | 64.22 s                | 67.39 s               ", "  Full Jitter         | 3  | 1066 (1065~1069)      | 5.3 (5.3~5.3)   | 317 (305~320)   | 1.08 s (1.06 s~1.10 s) | 4.19 s (4.18 s~4.24 s) | 4.99 s (4.49 s~5.00 s)", "  Equal Jitter        | 3  | 1034 (1024~1038)      | 5.2 (5.1~5.2)   | 228 (214~240)   | 1.30 s (1.30 s~1.32 s) | 5.38 s (5.35 s~5.42 s) | 5.67 s (5.50 s~5.81 s)", "  Decorrelated Jitter | 3  | 822 (797~825)         | 4.1 (4.0~4.1)   | 200 (200~200)   | 1.06 s (1.05 s~1.08 s) | 2.99 s (2.69 s~3.37 s) | 3.48 s (3.13 s~4.69 s)", "  服务端每个 100 ms 窗口收到的请求数(从 0 开始的前 20 个窗口,取第一轮):", "  算法                  | 0   | 1   | 2   | 3   | 4   | 5   | 6   | 7   | 8   | 9   | 10  | 11  | 12  | 13 | 14 | 15 | 16 | 17 | 18 | 19", "  --------------------+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+----+----+----+----+----+----+---", "  固定间隔                | 200 | 200 | 200 | 200 | 191 | 133 | 134 | 141 | 143 | 133 | 118 | 115 | 111 | 99 | 87 | 75 | 66 | 58 | 47 | 16", "  指数退避(无抖动)           | 200 | 200 | 0   | 200 | 0   | 0   | 0   | 129 | 59  | 0   | 0   | 0   | 0   | 0  | 0  | 94 | 82 | 0  | 0  | 0 ", "  Full Jitter         | 317 | 203 | 125 | 68  | 69  | 54  | 37  | 26  | 24  | 20  | 22  | 19  | 11  | 6  | 7  | 3  | 5  | 5  | 3  | 8 ", "  Equal Jitter        | 228 | 173 | 156 | 43  | 33  | 94  | 60  | 5   | 1   | 9   | 37  | 40  | 31  | 28 | 2  | 0  | 0  | 0  | 2  | 7 ", "  Decorrelated Jitter | 200 | 46  | 105 | 85  | 52  | 53  | 42  | 35  | 34  | 30  | 26  | 20  | 16  | 15 | 8  | 10 | 7  | 7  | 5  | 3 "], "cur": [], "mark": [], "done": []}, "mark": [3, 11], "done": [2, 4, 5, 6, 10, 12, 13, 14], "b": {"items": [["固定间隔 请求总数", 2667, "2667"], ["无抖动指数 请求总数", 2314, "2314"], ["Full 请求总数", 1066, "1066"], ["Equal 请求总数", 1034, "1034"], ["Decorrelated 请求总数", 822, "822"]], "max": 2667, "cur": [0], "mark": [1], "done": [2, 3, 4]}, "kv": {"items": [["无抖动指数退避", "完成时间中位数 19.25 s,最后 67.39 s"], ["Full / Equal / Decorrelated", "请求数约 1066 / 1034 / 822"], ["固定间隔", "2667 次请求,窗口最多 200"]], "hl": ["无抖动指数退避"]}}}, {"note": "最后看 base 和 cap 的影响(Full Jitter,同样的 200 个 client,每个配置一轮)。base 20 ms / cap 3200 ms:服务端收到 1499 次请求,最忙窗口 544,最后一个 4.78 s。base 100 ms / cap 3200 ms:1074 次,315,4.56 s。base 400 ms / cap 3200 ms:729 次,234,5.17 s。base 100 ms / cap 400 ms:1380 次,322,1.97 s。base 100 ms / cap 800 ms:1117 次,334,2.50 s。base 太小,退避没有拉开,请求总数和峰值都高;cap 小,最后一个 client 完成得更早,代价是请求总数更多;base 大请求少,但最后一个 client 完成得更晚。每个配置只跑了一轮,小差别不能当结论。", "s": {"t": {"lines": ["  参数                        | 服务端收到的请求总数 | 最忙的 100 ms 窗口收到 | 完成时间中位数 | 最后一个完成", "  --------------------------+------------+-----------------+---------+-------", "  base 20 ms / cap 3200 ms  | 1499       | 544             | 1.05 s  | 4.78 s", "  base 100 ms / cap 3200 ms | 1074       | 315             | 1.09 s  | 4.56 s", "  base 400 ms / cap 3200 ms | 729        | 234             | 1.05 s  | 5.17 s", "  base 100 ms / cap 400 ms  | 1380       | 322             | 1.00 s  | 1.97 s", "  base 100 ms / cap 800 ms  | 1117       | 334             | 1.02 s  | 2.50 s", "  (连接类错误 0 次;不是超时,应为 0)"], "cur": [], "mark": [], "done": []}, "mark": [2], "done": [3, 4, 5, 6], "b": {"items": [["base 20 / cap 3200 请求", 1499, "1499"], ["base 100 / cap 3200 请求", 1074, "1074"], ["base 400 / cap 3200 请求", 729, "729"], ["base 100 / cap 400 请求", 1380, "1380"]], "max": 1499, "cur": [1], "mark": [0], "done": [2, 3]}, "kv": {"items": [["base 20 ms", "1499 次请求,窗口峰值 544"], ["base 400 ms", "729 次请求,最后一个 5.17 s"], ["cap 400 ms", "最后一个 1.97 s,请求 1380"]], "hl": ["base 20 ms"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / Python 3.14.8 / Go / nginx / Envoy / etcd / Consul / Nacos / OpenTelemetry / Prometheus(按各篇注明用到哪些及版本);所有服务都是本机自己起的进程,端口 9150 以上,只监听 127.0.0.1,不连任何外部服务,不碰本机已有的实例;故障用 kill -9 进程、让连接断开或在代码里注入延迟与错误来制造;计时用 time.perf_counter,数字每次运行会有小幅抖动。本篇的服务是 Python 3.14 http.server(线程化)在本进程里起的,最多同时处理 4 个请求、每个 20 ms,忙时立刻回 503;200 个 client 是 200 个线程,先各自建好 keep-alive 连接再用屏障同时发出第一个请求(否则 200 个连接同时握手会超出内核的 accept 队列,出现与重试算法无关的 reset);第二节的抖动算法各跑 3 轮,固定间隔与无抖动指数退避各跑 1 轮;实验里连接类错误 0 次</li><li>没有验证:更多 client(几千个)的情形——Python 线程撑不住;真实网络的延迟;服务端是排队而不是立刻拒绝时的表现;重试带 jitter 以后与重试预算、熔断一起用的效果(见后面的篇目);Equal Jitter 的 p99 比 Full 差(5.38 s 对 4.19 s)的原因没有单独分析</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="microservice-retry-budget.html">
+    <div>
+      <div class="t1">下一篇 · 微服务 4</div>
+      <div class="t2">重试预算:限制重试占总请求的比例</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>微服务 · 指数退避与抖动:四种抖动算法的重试时间分布 · 实验记录 · 2026-10-18</footer>
+</body>
+</html>

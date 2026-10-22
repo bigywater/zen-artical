@@ -1,0 +1,20 @@
+from lib import *
+S = SS('x5')
+steps = [
+    step("三种注入方式。构造器注入、@Autowired setter、@Autowired 字段在容器里都拿到了 Dep(d 非 null)。脱离容器直接 new:new Setter() 得到 d=null,new Field() 也是 d=null,不会报错,只是空着;Ctor 没有无参构造器,必须把 Dep 传进去才能 new,不会出现“忘了注入”。", t=tl(S(1)), mark=lidx(S(1), '脱离容器直接 new'), done=lidx(S(1), '容器里:构造器注入'), b=bars([['容器里三种方式 d 非 null', 3, '3 种'], ['脱离容器 new Setter() 的 d', 0, 'null'], ['脱离容器 new Field() 的 d', 0, 'null']], 3, done=[0], mark=[1, 2]), kv=KV([['构造器', '必须传参才能 new'], ['setter', 'new 出来是 null'], ['字段', 'new 出来是 null,也没有 setter 可调'], ['容器里', '三种都能注入']], ['构造器'])),
+    step("同一个类型有两个候选(alipay、wechat 都是 Pay),按类型注入一个 Pay。(a)什么提示都没有:NoUniqueBeanDefinitionException:expected single matching bean but found 2: alipay,wechat。(b)参数名等于 Bean 名(需要 -parameters)得到 alipay。(c)@Qualifier(\"wechat\") 得到 wechat。(d)List<Pay> 和 Map<String,Pay> 拿到全部两个。(e)wechat 标 @Primary 得到 wechat。(f)两个都是 @Primary:NoUniqueBeanDefinitionException:more than one 'primary' bean found。(g)@Order(2) 的 alipay、@Order(1) 的 wechat:List<Pay> 是 [wechat, alipay],Map 的键序仍是 [alipay, wechat]。(h)@Priority(1) 的 alipay 与 @Priority(5) 的 wechat,按类型注入单个得到 alipay。", t=tl(S(2)), mark=lidx(S(2), 'NoHint → NoUnique', 'TwoPrimary → NoUnique'), done=lidx(S(2), '参数名 alipay', '@Qualifier("wechat")', 'List<Pay> → [alipay, wechat]', '@Primary(wechat 标了)', 'List<Pay> → [wechat, alipay]', '@Priority(1)'), b=bars([['两个候选,无提示', 0, '失败(NoUnique)'], ['参数名 / @Qualifier / @Primary / @Priority', 4, '4 种办法成功'], ['两个 @Primary', 0, '失败(NoUnique)'], ['List 的 @Order 排序', 1, '[wechat, alipay]']], 4, mark=[0, 2], done=[1], cur=[3]), kv=KV([['无提示', 'NoUniqueBeanDefinitionException'], ['能选出一个的', '参数名、@Qualifier、@Primary、@Priority'], ['两个 @Primary', '仍然冲突'], ['@Order', '只影响 List 的顺序,不影响 Map 的键序']], ['能选出一个的'])),
+    step("没有候选时。(a)构造器参数 Pay,没有任何 Pay Bean:NoSuchBeanDefinitionException:expected at least 1 bean which qualifies as autowire candidate。(b)参数 List<Pay>,没有任何 Pay:没有报错,拿到 size=0 的空列表。(c)Optional<Pay> 是 isPresent=false,ObjectProvider.getIfAvailable 返回 null,@Autowired(required = false) 的字段是 null。", t=tl(S(3)), mark=lidx(S(3), 'NeedsPay → NoSuchBean'), done=lidx(S(3), 'List<Pay> 没有候选', 'Optional<Pay> → isPresent=false', '字段 p=null'), b=bars([['单个 Pay 无候选', 0, '失败(NoSuchBean)'], ['List<Pay> 无候选', 1, '成功,size=0'], ['Optional / ObjectProvider / required=false', 3, '3 种成功']], 3, mark=[0], done=[1, 2]), kv=KV([['单个必需依赖', '没有候选就失败'], ['集合', '没有候选是空集合,不报错'], ['可选写法', 'Optional、ObjectProvider、required=false'], ['风险', '漏配的 Bean 在集合里无声消失']], ['集合'])),
+    step("泛型作为限定。两个 Repo 的实现:UserRepo 是 Repo<String>,IntRepo 是 Repo<Integer>。按 Repo<Integer> 注入拿到 Integer 仓库,按 Repo<String> 注入拿到 String 仓库,两个都不需要 @Qualifier,泛型参数就是候选条件。", t=tl(S(4)), mark=lidx(S(4), 'Repo<Integer> → Integer 仓库'), b=bars([['Repo<Integer> 候选数', 1, '1'], ['Repo<String> 候选数', 1, '1']], 2, done=[0, 1]), kv=KV([['Repo<Integer>', 'Integer 仓库'], ['Repo<String>', 'String 仓库'], ['需要 @Qualifier 吗', '不需要'], ['条件', '泛型参数参与匹配']], ['需要 @Qualifier 吗'])),
+]
+A = mkartx('x5', 5, 'Spring,依赖注入,Autowired,Qualifier,Primary,真实验证,动画演示',
+    '实测依赖注入的写法与候选解析:构造器、setter、字段三种方式 new 出来的差别;两个候选时 NoUniqueBeanDefinitionException,参数名、@Qualifier、@Primary、@Priority 各自能解决;两个 @Primary 仍冲突;@Order 只影响 List 的顺序;没有候选时单个依赖失败、List 是空的;泛型参数参与匹配。',
+    '@Autowired 到底按什么找 Bean?两个同类型的 Bean 怎么选?构造器注入、setter 注入、字段注入有什么不同?没有候选时会怎样?这篇在 Spring Framework 7.0.9 上把各种写法和候选解析的结果逐个跑出来。',
+    [('4 种', '能在两个同类型候选里选出一个的办法:参数名、@Qualifier、@Primary、@Priority'), ('size=0', '参数是 List<Pay> 而没有任何 Pay Bean 时,拿到的列表大小(不报错)'), ('null', '脱离容器直接 new 一个字段注入的类时,字段的值')],
+    [('三种注入方式', '<p>构造器注入强制传参,setter 与字段注入 new 出来是 null;容器里三种都能注入。</p>'),
+     ('多个候选', '<p>按类型找到多个时失败,参数名、@Qualifier、@Primary、@Priority 能选出一个,两个 @Primary 仍冲突。</p>'),
+     ('没有候选', '<p>必需的单个依赖直接失败,集合依赖是空集合,可选依赖可以写成 Optional、ObjectProvider 或 required=false。</p>'),
+     ('泛型', '<p>泛型参数参与候选匹配,不需要 @Qualifier。</p>')],
+    steps,
+    [ENV_X + '。用不带 Boot 的 Spring Framework 7.0.9;javac 加了 -parameters;不加这个参数时按参数名匹配 Bean 名的结果,这篇没有验证',
+     '没有验证:字段注入下按字段名匹配;@Resource 与 @Inject 的解析顺序;@Qualifier 作为自定义注解;循环依赖(见下一篇);@Autowired 在 Boot 的组件扫描下的行为;Kotlin 或 Lombok 生成的构造器'],
+    '依赖注入与候选解析')

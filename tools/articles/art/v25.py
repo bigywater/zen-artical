@@ -1,0 +1,20 @@
+from lib import *
+S = SS('v25')
+steps = [
+    step("握手要不要配 Upgrade。四种配置连 WebSocket 上游(websockets 17.2)。(a) 只有 proxy_pass:握手被拒,HTTP 426(Upgrade Required)。(b) 只转发 Upgrade 头、Connection 保持默认:同样 HTTP 426。(c) 完整写法(proxy_http_version 1.1、Upgrade $http_upgrade、Connection \"upgrade\"):握手成功(101),200 个来回的往返中位数 0.18 ms、p99 0.41 ms。(d) 直连上游:101,中位数 0.06 ms、p99 0.09 ms。穿过 nginx 之后每个来回多了约 0.12 ms,握手要同时转发 Upgrade 和 Connection: upgrade 两个头。", t=tl(S(1)), mark=lidx(S(1), '(a)', '(b)'), done=lidx(S(1), '(c)', '(d)'), b=bars([['(a) 只有 proxy_pass', 426, 'HTTP 426'], ['(b) 只转发 Upgrade', 426, 'HTTP 426'], ['(c) 完整写法:往返中位数 ms', 0.18, '0.18 ms'], ['(d) 直连:往返中位数 ms', 0.06, '0.06 ms']], 426, mark=[0, 1], done=[2, 3]), kv=KV([['(a) / (b)', '握手被拒,HTTP 426'], ['(c) 完整写法', '101,往返中位数 0.18 ms'], ['(d) 直连', '0.06 ms']], ['(c) 完整写法'])),
+    step("空闲超时。proxy_read_timeout = 2 s(默认 60 s)。(a) 不发任何消息:2.0 s 时被关闭,关闭码 1006。(b) client 每 0.5 s 发一个 ping:7 秒内一直保持。(c) 每 1.5 s 一个 ping:7 秒内一直保持。(d) 每 2.5 s 一个 ping:2.0 s 时被关闭,1006(第一个 ping 在 2.5 s,来不及)。proxy_read_timeout 管的是两次从上游读到数据之间的间隔;ping 到上游、pong 回来才算读到数据,所以心跳间隔要比它短。", t=tl(S(2)), mark=lidx(S(2), '(a)', '(d)'), done=lidx(S(2), '(b)', '(c)'), b=bars([['(a) 不发:被关闭 s', 2.0, '2.0'], ['(b) ping 0.5 s:保持', 7, '7 秒内保持'], ['(c) ping 1.5 s:保持', 7, '7 秒内保持'], ['(d) ping 2.5 s:被关闭 s', 2.0, '2.0']], 7, mark=[0, 3], done=[1, 2]), kv=KV([['proxy_read_timeout 2 s', '心跳 0.5 s 和 1.5 s 保持,2.5 s 断开'], ['关闭码', '1006(连接异常断开)']], ['proxy_read_timeout 2 s'])),
+    step("SSE 里 client 断开之后上游多久才发现。上游每 0.2 s 写一个事件,client 在 1 s 时关闭连接。直连上游:0.02 s 就发现写失败。经过 nginx(默认):0.23 s。经过 nginx + proxy_ignore_client_abort on:0.44 s。数据在流动时 nginx 往已关闭的 client 连接写会立刻失败,然后关闭上游连接,所以差别只是一两个事件的间隔;ignore_client_abort 多拖了约一个事件(0.2 s)。", t=tl(S(3)), mark=lidx(S(3), 'ignore_client_abort'), done=lidx(S(3), '直连上游', '经过 nginx(默认)'), b=bars([['直连:发现用了 s', 0.02, '0.02'], ['nginx 默认:发现用了 s', 0.23, '0.23'], ['nginx + ignore_client_abort:发现用了 s', 0.44, '0.44']], 0.5, done=[0, 1], mark=[2]), kv=KV([['直连', '0.02 s'], ['经过 nginx(默认)', '0.23 s'], ['+ proxy_ignore_client_abort on', '0.44 s']], ['+ proxy_ignore_client_abort on'])),
+    step("长连接占用的连接数。worker_connections = 64,每个 WebSocket 经过 nginx 要占两条(client 一条、上游一条)。同时建立 45 个 WebSocket 并保持:经过 nginx 只有 31 个成功握手并保持,14 个失败(ConnectionClosedError 11 个、InvalidMessage 3 个),error.log 里有 worker_connections are not enough;直连上游 45 个全部成功。每个长连接在网关上占两条连接,网关的连接数上限就是长连接数上限的两倍。", t=tl(S(4)), mark=lidx(S(4), '经过 nginx'), done=lidx(S(4), '直连上游'), b=bars([['经过 nginx:成功保持', 31, '31 / 45'], ['经过 nginx:失败', 14, '14'], ['直连:成功保持', 45, '45 / 45']], 45, mark=[1], cur=[0], done=[2]), kv=KV([['worker_connections 64', '只能保持 31 个 WebSocket'], ['每个长连接', '占网关两条连接']], ['worker_connections 64'])),
+]
+A = mkartv('v25', 25, '微服务,网关,nginx,WebSocket,SSE,长连接,真实验证,动画演示',
+    '实测长连接穿过 nginx:不配 Upgrade 与 Connection 头握手被拒(HTTP 426),完整配置后往返 0.18 ms(直连 0.06 ms);proxy_read_timeout 2 s 时心跳 1.5 s 保持、2.5 s 断开;worker_connections 64 时 45 个 WebSocket 只能保持 31 个。',
+    'WebSocket 和 SSE 穿过 nginx 要配什么?空闲多久会被断开?client 断开后上游多久发现?长连接会占掉多少网关连接?这篇用 websockets 17.2 和 nginx 1.31.6 逐项量出来。',
+    [('HTTP 426', '只有 proxy_pass(或只转发 Upgrade 头)时,WebSocket 握手得到的状态;完整写法才是 101'), ('2.0 s 与 7 s', 'proxy_read_timeout 2 s 时,心跳间隔 2.5 s 的连接 2.0 s 就断了;0.5 s 和 1.5 s 的在 7 秒内一直保持'), ('31 / 45', 'worker_connections = 64 时,同时能保持的 WebSocket 数(每个占网关两条连接),直连上游是 45 / 45')],
+    [('握手', '<p>要同时转发 Upgrade 和 Connection: upgrade,并用 HTTP/1.1;否则上游拒绝。</p>'),
+     ('空闲超时', '<p>proxy_read_timeout 管两次读到数据的间隔,心跳间隔要比它短。</p>'),
+     ('SSE 的断开', '<p>client 断开后,数据在流动时上游一两个事件内就会发现,与 ignore_client_abort 的差别约一个事件。</p>'),
+     ('占用的连接', '<p>每个长连接在网关上占两条连接。</p>')],
+    steps,
+    [ENV_V + '。nginx 是 Homebrew 的 1.31.6;WebSocket 服务与 client 是 websockets 17.2 的同步 API(装在 ttmp_venv 里);SSE 上游是原始 TCP 服务;第四节把 worker_connections 改成 64;各个场景只测了一次(第二节的心跳间隔只取了 4 个值)',
+     '没有验证:HTTP/2 上的 WebSocket(RFC 8441);WebSocket 的压缩扩展(permessage-deflate)穿过 nginx;连接升级之后的 proxy_send_timeout;大量 SSE 连接时 nginx 的内存;proxy_ignore_client_abort 在上游长时间不发数据时的表现(这里的上游每 0.2 s 都在写)'],
+    'WebSocket 与 SSE 穿过网关')

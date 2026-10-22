@@ -1,0 +1,533 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>SSE 与流式响应</title>
+<meta name="description" content="实测 Spring MVC 的 SSE 与流式响应:SseEmitter 的线格式(id、event、data、retry、注释心跳)和逐事件到达;StreamingResponseBody 里的 flush() 被 nonFlushing 包装而无效,小块数据要到请求结束才一起到,块足够大才逐块到达;客户端断开后服务端要等下一次写失败才发现(多发 2 个事件),超时不精确;开启 gzip 压缩后事件仍逐块到达。">
+<link rel="canonical" href="https://bigywater.tech/spring-sse-streaming.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="SSE 与流式响应">
+<meta property="og:description" content="实测 Spring MVC 的 SSE 与流式响应:SseEmitter 的线格式(id、event、data、retry、注释心跳)和逐事件到达;StreamingResponseBody 里的 flush() 被 nonFlushing 包装而无效,小块数据要到请求结束才一起到,块足够大才逐块到达;客户端断开后服务端要等下一次写失败才发现(多发 2 个事件),超时不精确;开启 gzip 压缩后事件仍逐块到达。">
+<meta property="og:url" content="https://bigywater.tech/spring-sse-streaming.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="SSE 与流式响应">
+<meta name="twitter:description" content="实测 Spring MVC 的 SSE 与流式响应:SseEmitter 的线格式(id、event、data、retry、注释心跳)和逐事件到达;StreamingResponseBody 里的 flush() 被 nonFlushing 包装而无效,小块数据要到请求结束才一起到,块足够大才逐块到达;客户端断开后服务端要等下一次写失败才发现(多发 2 个事件),超时不精确;开启 gzip 压缩后事件仍逐块到达。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">3005</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">70</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">97</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">56</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">78</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">114</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">111</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">88</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#3E8E2C; --series-c-soft:#DDEFD6;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#7FD068; --series-c-soft:#12290C;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#7FD068; --series-c-soft:#12290C;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Spring · 49</div>
+  <h1>SSE 与流式响应</h1>
+  <p>用 SseEmitter 推送要注意什么?为什么我在 StreamingResponseBody 里 flush 了客户端还是收不到?客户端断开后服务端什么时候知道?超时多准?压缩会不会让流式推送变成最后一起到?这篇在 Spring Boot 4.0.8 上用逐行计时的客户端实测,并读了 spring-web 7.0.9 的源码确认 flush 为什么无效。</p>
+  <div class="hero-fact">
+<div><div class="num">925 ms</div><div class="lbl">StreamingResponseBody 里每块 flush,小块数据的第一块还是到了这么晚才到客户端(直接写 servlet 流是 36 ms)</div></div><div><div class="num">2 个</div><div class="lbl">客户端断开之后,服务端多发出的事件个数(tick-3 成功、tick-4 才失败)</div></div><div><div class="num">1975 ms</div><div class="lbl">设定 1000 ms 的 SseEmitter 超时,onTimeout 实际触发的时间</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="spring-async-request.html">异步请求:Callable 与 DeferredResult</a></div>
+<section>
+  <h2>SseEmitter</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  客户端看到的(行 = 一行文本,空行是事件分隔):
+       响应头到达  49 200 {'Content-Type': 'text/event-stream', 'Transfer-Encoding': 'chunked'}
+       49 ms  id:1
+       49 ms  event:greet
+       49 ms  data:hello
+       49 ms  data:world
+       49 ms  retry:3000
+       49 ms
+      353 ms  :heartbeat
+      353 ms
+      701 ms  id:2
+      701 ms  data:{"k":"v"}
+      701 ms
+     1022 ms  (流结束)
+  服务端事件:
+       40 ms  控制器方法在 http-nio-9601-exec-2 返回 SseEmitter;Last-Event-ID=41
+       43 ms  已发送事件 1(线程 producer)
+      353 ms  已发送注释
+      701 ms  已发送事件 2(对象 → JSON)
+     1012 ms  complete()</pre></div>
+  <p>线格式很简单:id、event、data、retry 和以冒号开头的注释;事件逐个到达。</p>
+</section>
+<section>
+  <h2>StreamingResponseBody</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  对照:Controller 里直接写 HttpServletResponse 并 flush:
+       响应头到达  36 200 {'Content-Type': 'text/plain', 'Transfer-Encoding': 'chunked'}
+       36 ms  chunk-1
+      339 ms  chunk-2
+      650 ms  chunk-3
+      954 ms  (流结束)
+    (服务端)    36 ms  raw 写出 chunk-1 并 flush
+    (服务端)   339 ms  raw 写出 chunk-2 并 flush
+    (服务端)   649 ms  raw 写出 chunk-3 并 flush
+  直接返回 StreamingResponseBody(不包 ResponseEntity),每块 flush:
+       响应头到达  928 200 {'Transfer-Encoding': 'chunked'}
+      928 ms  chunk-1
+      928 ms  chunk-2
+      928 ms  chunk-3
+      932 ms  (流结束)
+    (服务端)     6 ms  direct 写出 chunk-1 并 flush
+    (服务端)   316 ms  direct 写出 chunk-2 并 flush
+    (服务端)   627 ms  direct 写出 chunk-3 并 flush
+  ResponseEntity&lt;StreamingResponseBody&gt;,每块 20 KB 并 flush:
+       响应头到达  6 200 {'Content-Type': 'text/plain', 'Transfer-Encoding': 'chunked'}
+        6 ms  chunk-1
+      310 ms  xxxxxxxxxxxxxxxxxxxx…(共 20000 个字符)
+      311 ms  chunk-2
+      618 ms  xxxxxxxxxxxxxxxxxxxx…(共 20000 个字符)
+      618 ms  chunk-3
+      927 ms  xxxxxxxxxxxxxxxxxxxx…(共 20000 个字符)
+      931 ms  (流结束)
+    (服务端)     6 ms  big 写出 chunk-1(20 KB)并 flush
+    (服务端)   310 ms  big 写出 chunk-2(20 KB)并 flush
+    (服务端)   618 ms  big 写出 chunk-3(20 KB)并 flush
+  ResponseEntity&lt;StreamingResponseBody&gt;,每块 flush:
+       响应头到达  924 200 {'Content-Type': 'text/plain', 'Transfer-Encoding': 'chunked'}
+      925 ms  chunk-1
+      925 ms  chunk-2
+      925 ms  chunk-3
+      927 ms  (流结束)
+    (服务端)     5 ms  控制器方法在 http-nio-9602-exec-10
+    (服务端)     7 ms  StreamingResponseBody 在 task-3 开始写
+    (服务端)     7 ms  写出 chunk-1 并 flush
+    (服务端)   310 ms  写出 chunk-2 并 flush
+    (服务端)   612 ms  写出 chunk-3 并 flush
+  StreamingResponseBody,不 flush:
+       响应头到达  931 200 {'Content-Type': 'text/plain', 'Transfer-Encoding': 'chunked'}
+      931 ms  chunk-1
+      931 ms  chunk-2
+      931 ms  chunk-3
+      931 ms  (流结束)
+    (服务端)     7 ms  写出 chunk-1(没有 flush)
+    (服务端)   317 ms  写出 chunk-2(没有 flush)
+    (服务端)   626 ms  写出 chunk-3(没有 flush)
+  对照:普通 String 返回(处理 900ms 后一次性返回):
+       响应头到达  927 200 {'Content-Type': 'text/plain;charset=UTF-8', 'Content-Length': '24'}
+      927 ms  chunk-1
+      927 ms  chunk-2
+      927 ms  chunk-3
+      927 ms  (流结束)</pre></div>
+  <p>流的 flush() 被包装成什么都不做,小块数据攒到结束才发;要逐块实时发,用 SseEmitter。</p>
+</section>
+<section>
+  <h2>断开</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  客户端:
+       响应头到达  55 200 {'Content-Type': 'text/event-stream', 'Transfer-Encoding': 'chunked'}
+       55 ms  id:1
+       55 ms  data:tick-1
+       55 ms
+      252 ms  id:2
+      252 ms  data:tick-2
+      252 ms  (客户端读到第 2 个数据后主动关闭连接)
+  服务端(客户端关闭连接后继续观察):
+       49 ms  发送 tick-1 成功
+      253 ms  发送 tick-2 成功
+      464 ms  发送 tick-3 成功
+      674 ms  发送 tick-4 失败:AsyncRequestNotUsableException
+      674 ms  onError 回调:AsyncRequestNotUsableException(线程 http-nio-9603-exec-3)
+      680 ms  onCompletion 回调(线程 http-nio-9603-exec-3)</pre></div>
+  <p>服务端靠写失败发现客户端断开,不写就不知道。</p>
+</section>
+<section>
+  <h2>超时</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  客户端:
+       响应头到达  40 200 {'Content-Type': 'text/event-stream', 'Transfer-Encoding': 'chunked'}
+       40 ms  data:only-one
+       40 ms
+     1986 ms  (流结束)
+  服务端:
+     1975 ms  onTimeout 回调(线程 http-nio-9604-exec-2)
+     1986 ms  onCompletion 回调</pre></div>
+  <p>亚秒级超时不精确。</p>
+</section>
+<section>
+  <h2>压缩</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  不带 Accept-Encoding:
+      响应头到达 44 ms,Content-Encoding=None
+      44 ms 收到 51 字节
+      345 ms 收到 12 字节
+      689 ms 收到 21 字节
+      1011 ms 流结束
+  Accept-Encoding: gzip:
+      响应头到达 5 ms,Content-Encoding=gzip
+      5 ms 收到 10 字节
+      5 ms 收到 53 字节
+      313 ms 收到 17 字节
+      624 ms 收到 23 字节
+      935 ms 收到 10 字节
+      935 ms 流结束</pre></div>
+  <p>开压缩后事件仍逐块到达,但要注意测量方式。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">SSE 与流式响应</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "b", "kind": "bars", "label": "数字对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "SseEmitter。控制器方法在 Tomcat 线程 exec-2 上返回 SseEmitter,事件是另一个线程 producer 发的。响应头 Content-Type: text/event-stream、Transfer-Encoding: chunked,49 ms 就到了。第 1 个事件在线上是 id:1、event:greet、data:hello、data:world(含换行的数据拆成两行 data)、retry:3000,最后一个空行结束事件;353 ms 到达的是一条注释 :heartbeat(以冒号开头,可当心跳);701 ms 的事件 2 把 Map 序列化成 data:{\"k\":\"v\"};1022 ms 流结束。客户端发来的 Last-Event-ID: 41 被服务端读到了,但框架不会替你续传,要自己按这个 id 补发。", "s": {"t": {"lines": ["  客户端看到的(行 = 一行文本,空行是事件分隔):", "       响应头到达  49 200 {'Content-Type': 'text/event-stream', 'Transfer-Encoding': 'chunked'}", "       49 ms  id:1", "       49 ms  event:greet", "       49 ms  data:hello", "       49 ms  data:world", "       49 ms  retry:3000", "       49 ms", "      353 ms  :heartbeat", "      353 ms", "      701 ms  id:2", "      701 ms  data:{\"k\":\"v\"}", "      701 ms", "     1022 ms  (流结束)", "  服务端事件:", "       40 ms  控制器方法在 http-nio-9601-exec-2 返回 SseEmitter;Last-Event-ID=41", "       43 ms  已发送事件 1(线程 producer)", "      353 ms  已发送注释", "      701 ms  已发送事件 2(对象 → JSON)", "     1012 ms  complete()"], "cur": [], "mark": [8, 15], "done": [2, 4, 11, 13]}, "b": {"items": [["第 1 个事件到达 ms", 49, "49"], ["心跳注释到达 ms", 353, "353"], ["事件 2 到达 ms", 701, "701"], ["流结束 ms", 1022, "1022"]], "max": 1022, "cur": [3], "mark": [1], "done": [0, 2]}, "kv": {"items": [["响应头", "text/event-stream + chunked"], ["多行数据", "每行一个 data:"], ["心跳", "以冒号开头的注释行"], ["Last-Event-ID", "服务端读得到,续传要自己做"]], "hl": ["Last-Event-ID"]}}}, {"note": "StreamingResponseBody。对照:Controller 里直接写 HttpServletResponse 的输出流并 flush,36 ms、339 ms、650 ms 逐块到达。ResponseEntity<StreamingResponseBody> 每写一块就 flush:服务端 7 ms、310 ms、612 ms 写出,客户端却在 924 ms 才收到响应头,三块一起到;直接返回 StreamingResponseBody 同样 928 ms 才有响应头;不 flush 的也是 931 ms。把每块改成 20 KB 并 flush,响应头 6 ms 到,三块分别在 6、311、618 ms 到达。原因看源码:spring-web 7.0.9 的 ServletServerHttpResponse.getBody() 在 flushEnabled 为 false 时返回 StreamUtils.nonFlushing(...) 包装的流,交给 StreamingResponseBody 的流 flush() 不做任何事,小块数据要等 Tomcat 的缓冲写满或者请求结束才发出去。", "s": {"t": {"lines": ["  对照:Controller 里直接写 HttpServletResponse 并 flush:", "       响应头到达  36 200 {'Content-Type': 'text/plain', 'Transfer-Encoding': 'chunked'}", "       36 ms  chunk-1", "      339 ms  chunk-2", "      650 ms  chunk-3", "      954 ms  (流结束)", "    (服务端)    36 ms  raw 写出 chunk-1 并 flush", "    (服务端)   339 ms  raw 写出 chunk-2 并 flush", "    (服务端)   649 ms  raw 写出 chunk-3 并 flush", "  直接返回 StreamingResponseBody(不包 ResponseEntity),每块 flush:", "       响应头到达  928 200 {'Transfer-Encoding': 'chunked'}", "      928 ms  chunk-1", "      928 ms  chunk-2", "      928 ms  chunk-3", "      932 ms  (流结束)", "    (服务端)     6 ms  direct 写出 chunk-1 并 flush", "    (服务端)   316 ms  direct 写出 chunk-2 并 flush", "    (服务端)   627 ms  direct 写出 chunk-3 并 flush", "  ResponseEntity<StreamingResponseBody>,每块 20 KB 并 flush:", "       响应头到达  6 200 {'Content-Type': 'text/plain', 'Transfer-Encoding': 'chunked'}", "        6 ms  chunk-1", "      310 ms  xxxxxxxxxxxxxxxxxxxx…(共 20000 个字符)", "      311 ms  chunk-2", "      618 ms  xxxxxxxxxxxxxxxxxxxx…(共 20000 个字符)", "      618 ms  chunk-3", "      927 ms  xxxxxxxxxxxxxxxxxxxx…(共 20000 个字符)", "      931 ms  (流结束)", "    (服务端)     6 ms  big 写出 chunk-1(20 KB)并 flush", "    (服务端)   310 ms  big 写出 chunk-2(20 KB)并 flush", "    (服务端)   618 ms  big 写出 chunk-3(20 KB)并 flush", "  ResponseEntity<StreamingResponseBody>,每块 flush:", "       响应头到达  924 200 {'Content-Type': 'text/plain', 'Transfer-Encoding': 'chunked'}", "      925 ms  chunk-1", "      925 ms  chunk-2", "      925 ms  chunk-3", "      927 ms  (流结束)", "    (服务端)     5 ms  控制器方法在 http-nio-9602-exec-10", "    (服务端)     7 ms  StreamingResponseBody 在 task-3 开始写", "    (服务端)     7 ms  写出 chunk-1 并 flush", "    (服务端)   310 ms  写出 chunk-2 并 flush", "    (服务端)   612 ms  写出 chunk-3 并 flush", "  StreamingResponseBody,不 flush:", "       响应头到达  931 200 {'Content-Type': 'text/plain', 'Transfer-Encoding': 'chunked'}", "      931 ms  chunk-1", "      931 ms  chunk-2", "      931 ms  chunk-3", "      931 ms  (流结束)", "    (服务端)     7 ms  写出 chunk-1(没有 flush)", "    (服务端)   317 ms  写出 chunk-2(没有 flush)", "    (服务端)   626 ms  写出 chunk-3(没有 flush)", "  对照:普通 String 返回(处理 900ms 后一次性返回):", "       响应头到达  927 200 {'Content-Type': 'text/plain;charset=UTF-8', 'Content-Length': '24'}", "      927 ms  chunk-1", "      927 ms  chunk-2", "      927 ms  chunk-3", "      927 ms  (流结束)"], "cur": [], "mark": [9, 30], "done": [0, 18]}, "b": {"items": [["直接写 servlet 流:第 1 块到达 ms", 36, "36"], ["StreamingResponseBody 小块:第 1 块到达 ms", 925, "925"], ["StreamingResponseBody 每块 20 KB:第 1 块到达 ms", 6, "6"]], "max": 925, "cur": [], "mark": [1], "done": [0, 2]}, "kv": {"items": [["StreamingResponseBody 里的 flush()", "不起作用(流被 nonFlushing 包装)"], ["小块数据", "攒到缓冲写满或结束才发"], ["逐块实时发送", "用 SseEmitter / ResponseBodyEmitter,或块足够大"], ["源码依据", "spring-web 7.0.9 ServletServerHttpResponse.getBody"]], "hl": ["StreamingResponseBody 里的 flush()"]}}}, {"note": "客户端中途断开。服务端每 200 ms 发一个 tick,客户端读到第 2 个数据(约 252 ms)就关闭连接。服务端的 tick-2 在 253 ms 发送成功,客户端已经关了;tick-3 在 464 ms 仍然发送成功,没有报错;tick-4 在 674 ms 才失败,抛 AsyncRequestNotUsableException;随后 onError 回调(同一毫秒)和 onCompletion 回调依次执行。服务端是靠写失败才知道对方走了,不是靠连接关闭事件,中间多发了 2 个事件(tick-3 成功、tick-4 失败那次)。事件越稀疏,发现越晚。", "s": {"t": {"lines": ["  客户端:", "       响应头到达  55 200 {'Content-Type': 'text/event-stream', 'Transfer-Encoding': 'chunked'}", "       55 ms  id:1", "       55 ms  data:tick-1", "       55 ms", "      252 ms  id:2", "      252 ms  data:tick-2", "      252 ms  (客户端读到第 2 个数据后主动关闭连接)", "  服务端(客户端关闭连接后继续观察):", "       49 ms  发送 tick-1 成功", "      253 ms  发送 tick-2 成功", "      464 ms  发送 tick-3 成功", "      674 ms  发送 tick-4 失败:AsyncRequestNotUsableException", "      674 ms  onError 回调:AsyncRequestNotUsableException(线程 http-nio-9603-exec-3)", "      680 ms  onCompletion 回调(线程 http-nio-9603-exec-3)"], "cur": [], "mark": [11, 12], "done": [7, 13, 14]}, "b": {"items": [["客户端关闭连接 ms", 252, "252"], ["tick-3 仍写成功 ms", 464, "464"], ["tick-4 才写失败 ms", 674, "674"], ["onCompletion 回调 ms", 680, "680"]], "max": 680, "cur": [0], "mark": [1, 2], "done": [3]}, "kv": {"items": [["发现断开", "要等下一次写失败"], ["异常类型", "AsyncRequestNotUsableException"], ["回调", "onError 然后 onCompletion"], ["风险", "不写就一直不知道,后台任务照跑"]], "hl": ["发现断开"]}}}, {"note": "SseEmitter 的超时。new SseEmitter(1000L),发出一个事件后不再发。客户端等了 1986 ms 才看到流结束,服务端 onTimeout 回调在 1975 ms,随后 onCompletion;设定的是 1000 ms,实际是将近 2 倍。和上一篇测到的现象一致:超时不是按毫秒精确触发的。", "s": {"t": {"lines": ["  客户端:", "       响应头到达  40 200 {'Content-Type': 'text/event-stream', 'Transfer-Encoding': 'chunked'}", "       40 ms  data:only-one", "       40 ms", "     1986 ms  (流结束)", "  服务端:", "     1975 ms  onTimeout 回调(线程 http-nio-9604-exec-2)", "     1986 ms  onCompletion 回调"], "cur": [], "mark": [4], "done": [6, 7]}, "b": {"items": [["设定超时 ms", 1000, "1000"], ["onTimeout 实际触发 ms", 1975, "1975"], ["流结束 ms", 1986, "1986"]], "max": 1986, "cur": [0], "mark": [1, 2], "done": []}, "kv": {"items": [["设定", "1000 ms"], ["实际", "约 1975 ms 才 onTimeout"], ["回调顺序", "onTimeout → onCompletion"], ["结论", "亚秒级超时不精确"]], "hl": ["结论"]}}}, {"note": "压缩。server.compression.enabled=true,mime-types 加上 text/event-stream。不带 Accept-Encoding:响应头 44 ms,数据块 345 ms、689 ms 到达。带 Accept-Encoding: gzip:响应头 5 ms,Content-Encoding: gzip,数据块在 5 ms(10 字节 gzip 头与 53 字节)、313 ms、624 ms、935 ms 逐块到,没有攒到最后。压缩没有让 SSE 失去实时性,数据块仍然在事件发出的时刻到达客户端。注意:我第一次用按行读取,gzip 二进制里没有换行,看起来像是全部一起到,换成按数据块读之后才看对,测的方式要对。", "s": {"t": {"lines": ["  不带 Accept-Encoding:", "      响应头到达 44 ms,Content-Encoding=None", "      44 ms 收到 51 字节", "      345 ms 收到 12 字节", "      689 ms 收到 21 字节", "      1011 ms 流结束", "  Accept-Encoding: gzip:", "      响应头到达 5 ms,Content-Encoding=gzip", "      5 ms 收到 10 字节", "      5 ms 收到 53 字节", "      313 ms 收到 17 字节", "      624 ms 收到 23 字节", "      935 ms 收到 10 字节", "      935 ms 流结束"], "cur": [], "mark": [7], "done": [3, 10, 11]}, "b": {"items": [["gzip:第 2 个数据块到达 ms", 313, "313"], ["gzip:第 3 个数据块到达 ms", 624, "624"], ["gzip:流结束 ms", 935, "935"]], "max": 935, "cur": [2], "mark": [], "done": [0, 1]}, "kv": {"items": [["压缩 text/event-stream", "这里手动把它加进了 mime-types"], ["开启后", "数据块仍然逐个到达"], ["代价", "每个数据块都带压缩开销,事件很小时不划算"], ["测量陷阱", "按行读压缩流会误判成全部同时到"]], "hl": ["测量陷阱"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / OpenJDK 21.0.12(Homebrew) / Spring Boot 4.0.8(Spring Framework 7.0.9、Tomcat 11.0.24) / Spring Cloud 2025.1.3;用 javac 编译、java 直接运行,依赖由 Maven 从 Maven Central 解析;数字每次运行会有小幅抖动。用 Spring Boot 4.0.8 的 SpringApplication(spring-boot-starter-webmvc,内嵌 Tomcat 11.0.24);客户端是 Python http.client 逐行或逐数据块读取并记录到达时间,服务端事件时间由应用自己打印(两边是同一台机器的同一时钟);flush 无效的原因来自对 spring-web 7.0.9 源码 ServletServerHttpResponse.getBody() 的阅读</li><li>没有验证:text/event-stream 在没有手动配置 mime-types 时会不会被压缩;反向代理(nginx 等)对 SSE 的缓冲(proxy_buffering);浏览器 EventSource 的自动重连行为;ResponseBodyEmitter 的非 SSE 用法;ServerSentEvent 与 Flux 的 WebFlux 写法(见第 55 篇起);HTTP/2 下的行为;大量并发 SSE 连接对线程和内存的占用;StreamingResponseBody 的 flush 无效是否在别的 Spring 版本中不同</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="spring-cors.html">
+    <div>
+      <div class="t1">下一篇 · SPRING 50</div>
+      <div class="t2">CORS:预检请求与配置的三个位置</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Spring · SSE 与流式响应 · 实验记录 · 2026-10-19</footer>
+</body>
+</html>

@@ -1,0 +1,434 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>CSRF:令牌怎么生成与校验</title>
+<meta name="description" content="实测 Spring Security 7 的 CSRF:默认令牌每次取到的值不同(96 字符的掩码)但都能通过校验;POST、DELETE 不带令牌 403,GET、HEAD、OPTIONS 放行;登录后旧令牌作废;Cookie 方案下把 36 字符的 cookie 值原样放进请求头会被默认处理器拒绝,换成明文处理器才通过;ignoringRequestMatchers 只放行指定路径。">
+<link rel="canonical" href="https://bigywater.tech/spring-csrf.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="CSRF:令牌怎么生成与校验">
+<meta property="og:description" content="实测 Spring Security 7 的 CSRF:默认令牌每次取到的值不同(96 字符的掩码)但都能通过校验;POST、DELETE 不带令牌 403,GET、HEAD、OPTIONS 放行;登录后旧令牌作废;Cookie 方案下把 36 字符的 cookie 值原样放进请求头会被默认处理器拒绝,换成明文处理器才通过;ignoringRequestMatchers 只放行指定路径。">
+<meta property="og:url" content="https://bigywater.tech/spring-csrf.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="CSRF:令牌怎么生成与校验">
+<meta name="twitter:description" content="实测 Spring Security 7 的 CSRF:默认令牌每次取到的值不同(96 字符的掩码)但都能通过校验;POST、DELETE 不带令牌 403,GET、HEAD、OPTIONS 放行;登录后旧令牌作废;Cookie 方案下把 36 字符的 cookie 值原样放进请求头会被默认处理器拒绝,换成明文处理器才通过;ignoringRequestMatchers 只放行指定路径。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">3005</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">70</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">97</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">56</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">78</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">114</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">111</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">88</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#3E8E2C; --series-c-soft:#DDEFD6;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#7FD068; --series-c-soft:#12290C;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#7FD068; --series-c-soft:#12290C;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>Spring · 106</div>
+  <h1>CSRF:令牌怎么生成与校验</h1>
+  <p>CSRF 令牌每次刷新都不一样为什么还能通过校验?哪些请求方法需要令牌?单页应用读 cookie 再放进请求头为什么会 403?登录之后旧页面的令牌还有效吗?这篇在 Spring Boot 4.0.8、Spring Security 7 上逐个实测。</p>
+  <div class="hero-fact">
+<div><div class="num">96 字符,每次不同</div><div class="lbl">默认令牌的长度,同一个会话里连续取两次得到不同的值,都能通过校验</div></div><div><div class="num">403 vs 200</div><div class="lbl">Cookie 方案下把 cookie 里的原始令牌放进请求头:默认处理器 403,明文处理器 200</div></div><div><div class="num">登录后作废</div><div class="lbl">登录之前拿到的令牌在登录之后 POST 会 403</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="spring-security-context-session.html">Session 与 SecurityContextRepository:登录态存在哪里</a></div>
+<section>
+  <h2>默认令牌</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  令牌的请求头名 = X-CSRF-TOKEN,请求参数名 = _csrf
+  同一个会话里连续取两次令牌:第 1 次 bBaOabKGfpXpHWoxAVZOEfgaqcm2YKB25W3hJJHSPtw1YXZkXXe2WNHlT6zEKVsHN3t6JJt4hKjUUphbgQiEFangXO8BAhcC(长度 96);第 2 次 8D9OUiYnsRzgawct71MfSU-Dlm8t4ZrbHtKzCnMlsjwNqPnjwV52Y0VEgCXNXzYb2X4rfCzhuw5P06L2erfWO0sX0A85y5iF(长度 96);两次相同:False
+  各种带法 POST /post:
+    不带令牌 → (403, '{"timestamp":"2026-10-20T04:15:56.910Z","status":403,"error":"Forbidden","path":"/post"}')
+    用请求头 X-CSRF-TOKEN 带第 1 次的令牌 → (200, 'posted')
+    用请求头带第 2 次的令牌(同一会话里另一个掩码) → (200, 'posted')
+    用请求头带一个随便写的令牌 → (403, '{"timestamp":"2026-10-20T04:15:56.925Z","status":403,"error":"Forbidden","path":"/post"}')
+    用表单参数 _csrf 带令牌 → (200, 'posted')
+  不同的 HTTP 方法(不带令牌):GET /who → 200;POST /post → 403;DELETE /item → 403;HEAD /who → 200;OPTIONS /who → 200</pre></div>
+  <p>每次取到的值不同但都有效;POST、DELETE 等需要令牌,GET、HEAD、OPTIONS 不需要。</p>
+</section>
+<section>
+  <h2>登录之后</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  登录页里的令牌 ZFkMvKn5xGXZ…(登录用的);登录成功 → HTTP 302
+  登录之后用登录页那个旧令牌 POST /post → (403, '{"timestamp":"2026-10-20T04:15:58.648Z","status":403,"error":"Forbidden","path":"/post"}')
+  登录之后取到新令牌再 POST /post → (200, 'posted')</pre></div>
+  <p>登录会换掉令牌,登录前缓存的旧令牌作废。</p>
+</section>
+<section>
+  <h2>Cookie 方案</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  CookieCsrfTokenRepository.withHttpOnlyFalse() + 默认的请求处理器:Cookie XSRF-TOKEN = befb7652-11b…(长度 36);/csrf 接口给出的令牌长度 96
+    把 Cookie 里的值原样放进 X-XSRF-TOKEN 请求头 POST /post → (403, '{"timestamp":"2026-10-20T04:16:00.330Z","status":403,"error":"Forbidden","path":"/post"}')
+    用 /csrf 接口给出的令牌放进 X-XSRF-TOKEN 请求头 → (200, 'posted')
+  CookieCsrfTokenRepository.withHttpOnlyFalse() + CsrfTokenRequestAttributeHandler(明文):Cookie XSRF-TOKEN = c7311397-f98…(长度 36);/csrf 接口给出的令牌长度 36
+    把 Cookie 里的值原样放进 X-XSRF-TOKEN 请求头 POST /post → (200, 'posted')
+    用 /csrf 接口给出的令牌放进 X-XSRF-TOKEN 请求头 → (200, 'posted')</pre></div>
+  <p>cookie 里是原始令牌,默认处理器不认,要换成明文处理器或用 SPA 专用处理器。</p>
+</section>
+<section>
+  <h2>放行与关闭</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  csrf.ignoringRequestMatchers("/api/**"):POST /api/post 不带令牌 → (200, 'api posted');POST /post 不带令牌 → (403, '{"timestamp":"2026-10-20T04:16:03.719Z","status":403,"error":"Forbidden","path":"/post"}')
+  csrf.disable():POST /post 不带令牌 → (200, 'posted')</pre></div>
+  <p>ignoringRequestMatchers 按路径放行;disable 全部关闭。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">CSRF</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "b", "kind": "bars", "label": "数字对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "默认配置下的 CSRF 令牌(表单登录之后)。令牌的请求头名是 X-CSRF-TOKEN,请求参数名是 _csrf。同一个会话里连续取两次令牌,拿到两个不同的值(长度都是 96 个字符,形如 bBaOabKG…)——默认的请求处理器每次都给令牌加不同的掩码。两个不同的值都能通过校验:POST /post 用请求头带第 1 次的令牌是 200 posted,带第 2 次的令牌也是 200,用表单参数 _csrf 带令牌同样 200;不带令牌是 403(Forbidden),随便写一个 abc 也是 403。HTTP 方法:GET、HEAD、OPTIONS 不带令牌都是 200;POST 和 DELETE 不带令牌都是 403。", "s": {"t": {"lines": ["  令牌的请求头名 = X-CSRF-TOKEN,请求参数名 = _csrf", "  同一个会话里连续取两次令牌:第 1 次 bBaOabKGfpXpHWoxAVZOEfgaqcm2YKB25W3hJJHSPtw1YXZkXXe2WNHlT6zEKVsHN3t6JJt4hKjUUphbgQiEFangXO8BAhcC(长度 96);第 2 次 8D9OUiYnsRzgawct71MfSU-Dlm8t4ZrbHtKzCnMlsjwNqPnjwV52Y0VEgCXNXzYb2X4rfCzhuw5P06L2erfWO0sX0A85y5iF(长度 96);两次相同:False", "  各种带法 POST /post:", "    不带令牌 → (403, '{\"timestamp\":\"2026-10-20T04:15:56.910Z\",\"status\":403,\"error\":\"Forbidden\",\"path\":\"/post\"}')", "    用请求头 X-CSRF-TOKEN 带第 1 次的令牌 → (200, 'posted')", "    用请求头带第 2 次的令牌(同一会话里另一个掩码) → (200, 'posted')", "    用请求头带一个随便写的令牌 → (403, '{\"timestamp\":\"2026-10-20T04:15:56.925Z\",\"status\":403,\"error\":\"Forbidden\",\"path\":\"/post\"}')", "    用表单参数 _csrf 带令牌 → (200, 'posted')", "  不同的 HTTP 方法(不带令牌):GET /who → 200;POST /post → 403;DELETE /item → 403;HEAD /who → 200;OPTIONS /who → 200"], "cur": [], "mark": [1, 3, 6, 8], "done": [4, 5, 7, 8]}, "b": {"items": [["令牌长度(字符)", 96, "96"], ["两次取到的令牌是否相同(1=相同)", 0, "不同"], ["不带令牌的 POST 状态码", 403, "403"], ["带令牌的 POST 状态码", 200, "200"]], "max": 403, "cur": [], "mark": [1, 2], "done": [0, 3]}, "kv": {"items": [["令牌", "每次取到的值不同(掩码),都能通过校验"], ["需要令牌", "POST、DELETE 等会改状态的方法"], ["不需要", "GET、HEAD、OPTIONS"], ["带法", "请求头 X-CSRF-TOKEN 或表单参数 _csrf"]], "hl": ["令牌"]}}}, {"note": "登录之前取到的令牌,登录之后还能用吗。登录页里的令牌 ZFkMvKn5…是用来登录的,POST /login 成功(HTTP 302)。登录之后再用登录页那个旧令牌 POST /post:403;重新取一个令牌再 POST /post:200。登录会让服务端换掉令牌(同时 session id 也变了),页面上登录前缓存的令牌在登录后都作废,表单页放着不刷新、登录后再提交就会 403。", "s": {"t": {"lines": ["  登录页里的令牌 ZFkMvKn5xGXZ…(登录用的);登录成功 → HTTP 302", "  登录之后用登录页那个旧令牌 POST /post → (403, '{\"timestamp\":\"2026-10-20T04:15:58.648Z\",\"status\":403,\"error\":\"Forbidden\",\"path\":\"/post\"}')", "  登录之后取到新令牌再 POST /post → (200, 'posted')"], "cur": [], "mark": [1], "done": [0, 2]}, "b": {"items": [["登录后用登录页旧令牌:状态码", 403, "403"], ["登录后用新令牌:状态码", 200, "200"]], "max": 403, "cur": [], "mark": [0], "done": [1]}, "kv": {"items": [["登录之后", "令牌被换掉,登录前拿到的旧令牌作废"], ["旧令牌 POST", "403"], ["新令牌 POST", "200"], ["症状", "表单页放着,登录后再提交就 403"]], "hl": ["登录之后"]}}}, {"note": "单页应用常用的 CookieCsrfTokenRepository.withHttpOnlyFalse()。配上默认的请求处理器:Cookie XSRF-TOKEN 的值是 36 个字符的原始令牌,而 /csrf 接口给出的令牌是 96 个字符的掩码版本。把 Cookie 里的值原样放进 X-XSRF-TOKEN 请求头 POST /post:403(前端 JS 读 cookie 再发回去的标准做法被拒绝了);放 /csrf 接口给的掩码令牌:200。换成 CsrfTokenRequestAttributeHandler(明文处理器):Cookie 的值是 36 个字符,/csrf 给的也是 36 个字符;Cookie 里的值原样放进请求头:200,放 /csrf 的令牌:200。所以前端按「读 cookie 再放进请求头」的惯例时,服务端要配成明文处理器(据我所知官方文档给 SPA 的是专门的 SpaCsrfTokenRequestHandler,本篇没有测它,用的是明文处理器)。", "s": {"t": {"lines": ["  CookieCsrfTokenRepository.withHttpOnlyFalse() + 默认的请求处理器:Cookie XSRF-TOKEN = befb7652-11b…(长度 36);/csrf 接口给出的令牌长度 96", "    把 Cookie 里的值原样放进 X-XSRF-TOKEN 请求头 POST /post → (403, '{\"timestamp\":\"2026-10-20T04:16:00.330Z\",\"status\":403,\"error\":\"Forbidden\",\"path\":\"/post\"}')", "    用 /csrf 接口给出的令牌放进 X-XSRF-TOKEN 请求头 → (200, 'posted')", "  CookieCsrfTokenRepository.withHttpOnlyFalse() + CsrfTokenRequestAttributeHandler(明文):Cookie XSRF-TOKEN = c7311397-f98…(长度 36);/csrf 接口给出的令牌长度 36", "    把 Cookie 里的值原样放进 X-XSRF-TOKEN 请求头 POST /post → (200, 'posted')", "    用 /csrf 接口给出的令牌放进 X-XSRF-TOKEN 请求头 → (200, 'posted')"], "cur": [], "mark": [1], "done": [3]}, "b": {"items": [["Cookie 里令牌长度(默认处理器)", 36, "36"], ["/csrf 接口给的令牌长度(默认处理器)", 96, "96"], ["默认处理器:cookie 值放进请求头的状态码", 403, "403"], ["明文处理器:cookie 值放进请求头的状态码", 200, "200"]], "max": 403, "cur": [], "mark": [2], "done": [0, 1, 3]}, "kv": {"items": [["Cookie 方案", "XSRF-TOKEN 的值是 36 字符原始令牌"], ["默认处理器", "期待掩码令牌,cookie 原值 → 403"], ["明文处理器", "cookie 原值 → 200"], ["要求", "前端读 cookie 回传时,服务端配明文处理器"]], "hl": ["默认处理器"]}}}, {"note": "放行与关闭。csrf.ignoringRequestMatchers(\"/api/**\"):POST /api/post 不带令牌是 200 api posted,同一个应用里 POST /post 不带令牌仍是 403。csrf.disable():POST /post 不带令牌 200。只有真正无状态的 API(不靠 cookie 登录态)才适合放行或关闭,否则就把保护整个拿掉了。", "s": {"t": {"lines": ["  csrf.ignoringRequestMatchers(\"/api/**\"):POST /api/post 不带令牌 → (200, 'api posted');POST /post 不带令牌 → (403, '{\"timestamp\":\"2026-10-20T04:16:03.719Z\",\"status\":403,\"error\":\"Forbidden\",\"path\":\"/post\"}')", "  csrf.disable():POST /post 不带令牌 → (200, 'posted')"], "cur": [], "mark": [1], "done": [0]}, "b": {"items": [["被放行的 /api/post(无令牌)状态码", 200, "200"], ["没放行的 /post(无令牌)状态码", 403, "403"], ["csrf.disable() 后 /post(无令牌)状态码", 200, "200"]], "max": 403, "cur": [], "mark": [1, 2], "done": [0]}, "kv": {"items": [["ignoringRequestMatchers", "只放行指定路径"], ["其他路径", "仍然要令牌"], ["csrf.disable()", "全部放行"], ["适用", "不用 cookie 登录态的无状态 API"]], "hl": ["ignoringRequestMatchers"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / OpenJDK 21.0.12(Homebrew) / Spring Boot 4.0.8(Spring Framework 7.0.9、Tomcat 11.0.24) / Spring Cloud 2025.1.3;用 javac 编译、java 直接运行,依赖由 Maven 从 Maven Central 解析;数字每次运行会有小幅抖动(Spring Security 7)。用户 alice / pw,表单登录;客户端是 Python http.client,手动带 Cookie;令牌从登录页 HTML 中解析,或由我写的 /csrf 接口(返回当前请求的 CsrfToken)取得;不同的 SecurityFilterChain 由 -Dx106.cfg 切换</li><li>没有验证:BREACH 攻击的具体防护原理(只观察到令牌每次不同);SameSite cookie 对 CSRF 的补充作用;SpaCsrfTokenRequestHandler 本身(用的是明文处理器);多页面、多标签同时使用时的令牌表现;Origin / Referer 校验;WebFlux 里的 CSRF;第 107 篇会讲 CORS 与 Security 的交互</li></ul>
+  </div>
+</section>
+<section>
+  <a class="next-post" href="spring-cors-security.html">
+    <div>
+      <div class="t1">下一篇 · SPRING 107</div>
+      <div class="t2">CORS 与 Security:预检为什么被 401 拦下</div>
+    </div>
+    <span aria-hidden="true">→</span>
+  </a>
+</section>
+</div>
+<footer>Spring · CSRF:令牌怎么生成与校验 · 实验记录 · 2026-10-20</footer>
+</body>
+</html>

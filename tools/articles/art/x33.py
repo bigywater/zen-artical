@@ -1,0 +1,18 @@
+from lib import *
+S = SS('x33')
+steps = [
+    step("JDBC 一侧。readOnly = true 的方法执行时,那个连接上依次出现:SET SESSION TRANSACTION READ ONLY、SET autocommit=0、select、COMMIT、SET autocommit=1、SET SESSION TRANSACTION READ WRITE——只读标记是靠会话级的 SET 语句设置并在最后恢复的。在 readOnly 方法里用 JdbcTemplate 写:失败,TransientDataAccessResourceException,原因是 SQLException:Connection is read-only. Queries leading to data modification are not allowed.(这是驱动在客户端挡掉的),表里 balance 仍是 100。默认的 readOnly = false 里同样的写成功,balance 变成 500。", t=tl(S(1)), mark=lidx(S(1), 'readOnly = true 里用 JdbcTemplate 写'), done=lidx(S(1), 'SET SESSION TRANSACTION READ ONLY', 'SET SESSION TRANSACTION READ WRITE', 'readOnly = false(默认)里用 JdbcTemplate 写'), b=bars([['readOnly 事务里连接上的语句数', 6, '6'], ['readOnly 里写:表里 balance', 100, '100(写失败)'], ['读写事务里写:表里 balance', 500, '500']], 500, cur=[0], mark=[1], done=[2]), kv=KV([['开始时', 'SET SESSION TRANSACTION READ ONLY'], ['结束时', 'SET SESSION TRANSACTION READ WRITE'], ['里面写', 'SQLException: Connection is read-only'], ['谁挡的', 'Connector/J 在客户端挡掉']], ['谁挡的'])),
+    step("JPA / Hibernate 一侧。readOnly = true 里修改受管实体 a.balance = 777:事务结束后表里 balance 还是 100,那次的 SQL 里没有 UPDATE。readOnly = false 里做同样的修改:表里 balance 变成 777,SQL 里有 UPDATE。在 readOnly = true 里修改后手动调用 em.flush():调用成功,没有报错,表里 balance 仍是 100——修改被悄悄丢掉,不会报错。Hibernate 在只读事务里把会话设成了手动刷新并且不对实体做脏检查。", t=tl(S(2)), mark=lidx(S(2), 'readOnly = true:修改受管实体', 'em.flush()'), done=lidx(S(2), 'readOnly = false:同样的修改'), b=bars([['readOnly = true:修改后表里 balance', 100, '100(没写)'], ['readOnly = false:修改后表里 balance', 777, '777'], ['readOnly = true 里手动 flush 后 balance', 100, '100(没报错)']], 777, mark=[0, 2], done=[1]), kv=KV([['readOnly = true', '实体修改不会被刷到数据库'], ['SQL', '没有 UPDATE'], ['手动 em.flush()', '成功,但仍然没写'], ['风险', '写操作被静默丢弃,没有任何异常']], ['风险'])),
+    step("加入外层事务。外层是读写事务,调用 readOnly = true 的内层方法(REQUIRED,加入外层事务,通过代理调用):内层的写成功了,表里 balance = 321——内层的 readOnly 被外层事务覆盖,没有效果。单独调用 readOnly = true 的方法,isCurrentTransactionReadOnly 是 true。readOnly 是事务整体的属性,只在事务刚开始时由最外层决定。", t=tl(S(3)), mark=lidx(S(3), '表里 balance = 321'), done=lidx(S(3), '单独调用 readOnly = true'), b=bars([['内层 readOnly=true 写成功后 balance', 321, '321(写成功了)'], ['单独调用时事务是只读', 1, 'true']], 321, mark=[0], done=[1]), kv=KV([['内层 readOnly = true', '加入读写事务后无效'], ['谁决定', '最外层开启事务的方法'], ['单独调用', '事务是只读的'], ['含义', 'readOnly 写在被别人调用的方法上不可靠']], ['谁决定'])),
+]
+A = mkartx('x33', 33, 'Spring,事务,readOnly,Hibernate,flush,真实验证,动画演示',
+    '实测 readOnly = true 的效果:JDBC 一侧靠 SET SESSION TRANSACTION READ ONLY 开始、READ WRITE 结束,里面用 JdbcTemplate 写会被驱动在客户端拒绝;Hibernate 一侧实体修改不再刷到数据库(没有 UPDATE,手动 em.flush() 也不报错,修改悄悄丢掉);加入外层读写事务时内层的 readOnly 无效。',
+    '@Transactional(readOnly = true) 只是个提示吗?MySQL 那边到底收到了什么?Hibernate 里改了实体会怎样?内层方法标 readOnly 有用吗?这篇在 Spring Framework 7.0.9、Hibernate 和 MySQL 26.7.0 上逐项验证。',
+    [('6 条', 'readOnly = true 的方法在连接上留下的语句数(以 SET SESSION TRANSACTION READ ONLY 开始、READ WRITE 结束)'), ('100 与 777', '同样修改实体,readOnly = true 与 readOnly = false 事务结束后表里的 balance'), ('321', '外层读写事务里调用 readOnly = true 的内层方法后表里的 balance(内层写成功了)')],
+    [('JDBC 一侧', '<p>readOnly 对应会话级的 READ ONLY / READ WRITE 切换,驱动在客户端拒绝写入。</p>'),
+     ('Hibernate 一侧', '<p>只读事务里实体修改不会被刷新,手动 flush 也不报错。</p>'),
+     ('加入外层事务', '<p>内层的 readOnly 对已有的读写事务无效。</p>')],
+    steps,
+    [ENV_X + '。用不带 Boot 的 Spring Framework 7.0.9 + JpaTransactionManager + Hibernate(Boot 4.0.8 的 BOM 带来的版本)+ HikariCP + 自己起的 MySQL 26.7.0 + mysql-connector-j 9.7.0;general_log 开在这个实例上(输出到表)',
+     '没有验证:Hibernate 的读写分离或只读副本路由(见后面的 Data 篇);readOnly 对 JDBC 连接池只读连接的影响;MySQL 的 START TRANSACTION READ ONLY 与 SET SESSION 的区别;PostgreSQL 等其它数据库的 readOnly 行为;readOnly 事务的性能收益(没有测量)'],
+    'readOnly 的真实效果')

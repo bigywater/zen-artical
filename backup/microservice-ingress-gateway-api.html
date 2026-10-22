@@ -1,0 +1,435 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/icons/favicon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<title>Ingress 与 Gateway API</title>
+<meta name="description" content="实测 Ingress 和 Gateway API(Traefik v3.7.15,同一个数据面):Ingress 只能按 host 和 path 选一个后端,同一路径写两条规则全部去了同一个后端;HTTPRoute 的权重(90/10 得到 450/50)和请求头匹配是规范字段;跨命名空间要过 allowedRoutes 和 ReferenceGrant;HTTPRoute 状态会说明错在哪,Ingress 不会;两种写法的生效都在 0.3 s 内。">
+<link rel="canonical" href="https://bigywater.tech/microservice-ingress-gateway-api.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Ingress 与 Gateway API">
+<meta property="og:description" content="实测 Ingress 和 Gateway API(Traefik v3.7.15,同一个数据面):Ingress 只能按 host 和 path 选一个后端,同一路径写两条规则全部去了同一个后端;HTTPRoute 的权重(90/10 得到 450/50)和请求头匹配是规范字段;跨命名空间要过 allowedRoutes 和 ReferenceGrant;HTTPRoute 状态会说明错在哪,Ingress 不会;两种写法的生效都在 0.3 s 内。">
+<meta property="og:url" content="https://bigywater.tech/microservice-ingress-gateway-api.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="bigywater.tech">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Ingress 与 Gateway API">
+<meta name="twitter:description" content="实测 Ingress 和 Gateway API(Traefik v3.7.15,同一个数据面):Ingress 只能按 host 和 path 选一个后端,同一路径写两条规则全部去了同一个后端;HTTPRoute 的权重(90/10 得到 450/50)和请求头匹配是规范字段;跨命名空间要过 allowedRoutes 和 ReferenceGrant;HTTPRoute 状态会说明错在哪,Ingress 不会;两种写法的生效都在 0.3 s 内。">
+<link rel="stylesheet" href="/assets/css/md3-shell.css">
+<link rel="stylesheet" href="/assets/css/md3-article.css">
+</head>
+<body>
+<input type="checkbox" id="md3-drawer-toggle" class="md3-drawer-toggle-input">
+<div class="md3-topbar">
+  <label for="md3-drawer-toggle" class="md3-menu-btn" aria-label="打开导航菜单">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </label>
+  <a class="md3-topbar-brand" href="/">bigywater.dev</a>
+</div>
+<label for="md3-drawer-toggle" class="md3-scrim" aria-hidden="true"></label>
+<nav class="md3-drawer" aria-label="站点导航">
+  <a class="md3-drawer-brand" href="/" aria-label="bigywater.dev 首页">
+    <span class="md3-drawer-mark">B</span>
+    <span class="md3-drawer-title">bigywater.dev</span>
+  </a>
+  <div class="md3-drawer-list">
+    <a class="md3-drawer-item" href="/">
+      <span class="md3-drawer-dot" style="--dot:var(--md-on-surface-variant)"></span>
+      <span class="md3-drawer-label">全部文章</span>
+      <span class="md3-drawer-count">2894</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=algo" style="--item-c:#4A6FA5">
+      <span class="md3-drawer-dot" style="--dot:#4A6FA5"></span>
+      <span class="md3-drawer-label">算法与数据结构</span>
+      <span class="md3-drawer-count">148</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=clickhouse" style="--item-c:#E8A33D">
+      <span class="md3-drawer-dot" style="--dot:#E8A33D"></span>
+      <span class="md3-drawer-label">ClickHouse 内部原理</span>
+      <span class="md3-drawer-count">90</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=crawler" style="--item-c:#6B8E23">
+      <span class="md3-drawer-dot" style="--dot:#6B8E23"></span>
+      <span class="md3-drawer-label">爬虫工程</span>
+      <span class="md3-drawer-count">70</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=django" style="--item-c:#0C4B33">
+      <span class="md3-drawer-dot" style="--dot:#0C4B33"></span>
+      <span class="md3-drawer-label">Django</span>
+      <span class="md3-drawer-count">136</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=docker" style="--item-c:#2496ED">
+      <span class="md3-drawer-dot" style="--dot:#2496ED"></span>
+      <span class="md3-drawer-label">Docker 容器原理</span>
+      <span class="md3-drawer-count">97</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=es" style="--item-c:#2C6E49">
+      <span class="md3-drawer-dot" style="--dot:#2C6E49"></span>
+      <span class="md3-drawer-label">Elasticsearch</span>
+      <span class="md3-drawer-count">168</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=gin" style="--item-c:#C23B6B">
+      <span class="md3-drawer-dot" style="--dot:#C23B6B"></span>
+      <span class="md3-drawer-label">Gin 框架内部原理</span>
+      <span class="md3-drawer-count">56</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=git" style="--item-c:#8B3FA0">
+      <span class="md3-drawer-dot" style="--dot:#8B3FA0"></span>
+      <span class="md3-drawer-label">Git 内部原理</span>
+      <span class="md3-drawer-count">78</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=go" style="--item-c:#00ADD8">
+      <span class="md3-drawer-dot" style="--dot:#00ADD8"></span>
+      <span class="md3-drawer-label">Go 内部原理</span>
+      <span class="md3-drawer-count">114</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=java" style="--item-c:#E76F00">
+      <span class="md3-drawer-dot" style="--dot:#E76F00"></span>
+      <span class="md3-drawer-label">Java 内部原理</span>
+      <span class="md3-drawer-count">434</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=k8s" style="--item-c:#5D4A9C">
+      <span class="md3-drawer-dot" style="--dot:#5D4A9C"></span>
+      <span class="md3-drawer-label">Kubernetes</span>
+      <span class="md3-drawer-count">111</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=kafka" style="--item-c:#2F6F8F">
+      <span class="md3-drawer-dot" style="--dot:#2F6F8F"></span>
+      <span class="md3-drawer-label">Kafka 内部原理</span>
+      <span class="md3-drawer-count">80</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mongo" style="--item-c:#1C7C74">
+      <span class="md3-drawer-dot" style="--dot:#1C7C74"></span>
+      <span class="md3-drawer-label">MongoDB</span>
+      <span class="md3-drawer-count">88</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=mysql" style="--item-c:#C9820E">
+      <span class="md3-drawer-dot" style="--dot:#C9820E"></span>
+      <span class="md3-drawer-label">MySQL / InnoDB</span>
+      <span class="md3-drawer-count">122</span>
+    </a>
+    <a class="md3-drawer-item active" href="/?series=python" style="--item-c:#306998">
+      <span class="md3-drawer-dot" style="--dot:#306998"></span>
+      <span class="md3-drawer-label">Python</span>
+      <span class="md3-drawer-count">117</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=zookeeper" style="--item-c:#7A5B2E">
+      <span class="md3-drawer-dot" style="--dot:#7A5B2E"></span>
+      <span class="md3-drawer-label">ZooKeeper 内部原理</span>
+      <span class="md3-drawer-count">110</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=rust" style="--item-c:#B7410E">
+      <span class="md3-drawer-dot" style="--dot:#B7410E"></span>
+      <span class="md3-drawer-label">Rust 内部机制</span>
+      <span class="md3-drawer-count">170</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=flask" style="--item-c:#4A5568">
+      <span class="md3-drawer-dot" style="--dot:#4A5568"></span>
+      <span class="md3-drawer-label">Flask 内部机制</span>
+      <span class="md3-drawer-count">190</span>
+    </a>
+    <a class="md3-drawer-item" href="/?series=redis" style="--item-c:#C6302B">
+      <span class="md3-drawer-dot" style="--dot:#C6302B"></span>
+      <span class="md3-drawer-label">Redis</span>
+      <span class="md3-drawer-count">133</span>
+    </a>
+  </div>
+  <div class="md3-drawer-footer">数据均来自本机实验与源码验证</div>
+</nav>
+<style>
+:root{
+  --bg:#FAF6F1; --paper:#FFFFFF; --ink:#211C16; --ink-dim:#6E6255; --line:#E9E0D3;
+  --series-c:#8A6D12; --series-c-soft:#F3EBCB;
+  --mem-c:#2F6FB0; --mem-c-soft:#E4EEF9;
+  --ok-c:#2C6E49; --ok-c-soft:#E1EEE6;
+  --code-bg:#241E14; --code-ink:#F0E9DC;
+  --shadow: 0 1px 2px rgba(35,25,10,.06), 0 8px 24px -12px rgba(35,25,10,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+    --series-c:#D9B94A; --series-c-soft:#332B0B;
+    --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+    --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+    --code-bg:#14100A; --code-ink:#E6DCC8;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#181209; --paper:#241D13; --ink:#F0E9DC; --ink-dim:#B3A692; --line:#3A3020;
+  --series-c:#D9B94A; --series-c-soft:#332B0B;
+  --mem-c:#6FA8E0; --mem-c-soft:#1E3350;
+  --ok-c:#5FBF95; --ok-c-soft:#1B3327;
+  --code-bg:#14100A; --code-ink:#E6DCC8;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg); color:var(--ink); margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+.wrap{max-width:920px; margin:0 auto; padding:0 24px 100px;}
+a{color:var(--series-c);}
+
+.hero{padding:72px 24px 40px;}
+.hero-inner{max-width:920px; margin:0 auto;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--series-c); display:flex; align-items:center; gap:8px; margin-bottom:18px;}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--series-c);}
+h1{font-size:2.2rem; line-height:1.28; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;}
+.hero p{font-size:1.08rem; color:var(--ink-dim); max-width:700px; margin:0 0 14px;}
+.hero-fact{margin-top:28px; display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--paper); box-shadow:var(--shadow); flex-wrap:wrap;}
+.hero-fact>div{flex:1; min-width:150px; padding:16px 18px; border-right:1px solid var(--line);}
+.hero-fact>div:last-child{border-right:none;}
+.hero-fact .num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:1.2rem; font-weight:600; color:var(--series-c); font-variant-numeric:tabular-nums;}
+.hero-fact .lbl{font-size:.8rem; color:var(--ink-dim); margin-top:4px;}
+
+section{padding:44px 24px;}
+h2{font-size:1.5rem; margin:0 0 6px; letter-spacing:-.01em;}
+.h2-sub{color:var(--ink-dim); font-size:.95rem; margin:0 0 26px;}
+p{margin:0 0 16px;}
+
+blockquote.src{margin:20px 0; padding:16px 18px; background:var(--code-bg); color:var(--code-ink); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85rem; line-height:1.7; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+blockquote.src .path{color:#D9C7A3; font-size:.75rem; margin-bottom:10px; display:block;}
+
+.callout{border-left:3px solid var(--series-c); background:var(--series-c-soft); border-radius:0 10px 10px 0; padding:14px 18px; margin:20px 0; font-size:.95rem;}
+.callout.b{border-color:var(--mem-c); background:var(--mem-c-soft);}
+
+.term{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:18px 20px; margin:16px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.8rem; line-height:1.65; overflow-x:auto; white-space:pre-wrap; word-break:break-word;}
+.term .real-tag{display:block; width:max-content; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; background:var(--series-c-soft); color:var(--series-c); padding:2px 7px; border-radius:5px; margin:0 0 10px;}
+.term .cmd{color:#E8CFA3;}
+.term .ok{color:#7DD0A0;}
+.term .bad{color:#E88;}
+
+table{width:100%; border-collapse:collapse; margin:20px 0; font-size:.9rem;}
+table.mono td, table.mono th{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums;}
+th{text-align:left; color:var(--ink-dim); font-weight:500; font-size:.8rem; padding:8px 12px; border-bottom:1px solid var(--line);}
+td{padding:9px 12px; border-bottom:1px solid var(--line);}
+tr:last-child td{border-bottom:none;}
+
+.refs{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-top:20px;}
+.refs h3{margin:0 0 10px; font-size:1rem;}
+.refs ul{margin:0; padding-left:20px; font-size:.88rem; color:var(--ink-dim);}
+.refs li{margin-bottom:8px;}
+
+.prev-post{font-size:.88rem; margin-bottom:24px; color:var(--ink-dim);}
+.prev-post a{color:var(--series-c); font-weight:600;}
+.next-post{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--series-c); color:#fff; border-radius:14px; padding:22px 24px; margin-top:16px; text-decoration:none;}
+.next-post .t1{font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; opacity:.85; margin-bottom:6px;}
+.next-post .t2{font-size:1.08rem; font-weight:700;}
+
+footer{padding:40px 24px 60px; text-align:center; color:var(--ink-dim); font-size:.85rem;}
+:root{--mark-c:#C9820E; --mark-soft:#FBF0D9;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mark-c:#E5A82E; --mark-soft:#3A2914;}}
+:root[data-theme="dark"]{--mark-c:#E5A82E; --mark-soft:#3A2914;}
+.demo{margin:22px 0; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:var(--shadow); overflow:hidden;}
+.demo-head{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600;}
+.demo-panels{padding:10px 18px 4px;}
+.demo-panel{margin:12px 0 18px;}
+.demo-panel .plabel{font-size:.78rem; color:var(--ink-dim); margin-bottom:8px; letter-spacing:.02em;}
+.cells{display:flex; flex-wrap:wrap; gap:6px;}
+.cellcol{display:flex; flex-direction:column; align-items:center; min-width:38px;}
+.cell{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92rem; background:var(--paper); transition:background .15s,border-color .15s;}
+.cidx{font-size:.68rem; color:var(--ink-dim); margin-top:3px; font-family:ui-monospace,Menlo,monospace;}
+.cptr{font-size:.72rem; color:var(--series-c); font-weight:700; min-height:1em; font-family:ui-monospace,Menlo,monospace;}
+.cell.cur,.chip.cur,.kvitem.cur,.mcell.cur,.slot.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.cell.done,.chip.done,.mcell.done,.slot.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.cell.mark,.chip.mark,.mcell.mark,.slot.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.cell.dim,.chip.dim,.mcell.dim{opacity:.4;}
+.kv{display:flex; flex-wrap:wrap; gap:8px;}
+.kv .empty{color:var(--ink-dim); font-size:.85rem;}
+.kvitem{display:flex; align-items:center; gap:6px; padding:6px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.kvitem .arrow{color:var(--ink-dim);}
+.mgrid{border-collapse:separate; border-spacing:4px; margin:0; width:auto;}
+.mgrid td{padding:0; border:none;}
+.mcell{min-width:36px; height:36px; padding:0 6px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain{display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px;}
+.chainitem{display:flex; flex-direction:column; align-items:center;}
+.chip{min-width:38px; height:38px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--line); border-radius:19px; font-family:ui-monospace,Menlo,monospace; font-size:.9rem; background:var(--paper);}
+.chain .ar{align-self:center; color:var(--ink-dim); padding:0 2px; margin-top:-16px;}
+.chain .nullc{align-self:center; color:var(--ink-dim); font-family:ui-monospace,Menlo,monospace; font-size:.8rem; margin-top:-16px;}
+.stack{display:flex; flex-direction:column-reverse; gap:4px; width:max-content; min-width:120px;}
+.slot{padding:6px 12px; border:1.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:.88rem; background:var(--paper);}
+.ptext{font-family:ui-monospace,Menlo,monospace; font-size:.92rem; color:var(--ink);}
+.treesvg{max-width:100%; height:auto;}
+.treesvg circle{fill:var(--paper); stroke:var(--line); stroke-width:1.5;}
+.treesvg circle.cur{fill:var(--mem-c-soft); stroke:var(--mem-c);}
+.treesvg circle.done{fill:var(--ok-c-soft); stroke:var(--ok-c);}
+.treesvg circle.mark{fill:var(--mark-soft); stroke:var(--mark-c);}
+.treesvg text{fill:var(--ink); font-size:12px; text-anchor:middle; dominant-baseline:central; font-family:ui-monospace,Menlo,monospace;}
+.treesvg line{stroke:var(--line); stroke-width:1.5;}
+.demo-note{margin:6px 18px 10px; padding:10px 14px; background:var(--bg); border-radius:8px; font-size:.92rem; min-height:2.6em;}
+.demo-ctl{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px;}
+.demo-ctl button{appearance:none; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:8px; padding:7px 14px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+.demo-ctl button:hover{border-color:var(--series-c); color:var(--series-c);}
+.demo-ctl button:disabled{opacity:.4; cursor:default;}
+.demo-count{margin-left:auto; color:var(--ink-dim); font-size:.82rem; font-family:ui-monospace,Menlo,monospace;}
+.demo-legend{display:flex; flex-wrap:wrap; gap:14px; padding:0 18px 10px; font-size:.78rem; color:var(--ink-dim);}
+.demo-legend i{display:inline-block; width:12px; height:12px; border-radius:3px; border:1.5px solid var(--line); vertical-align:-2px; margin-right:5px;}
+.demo-legend i.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.demo-legend i.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.demo-legend i.mark{background:var(--mark-soft); border-color:var(--mark-c);}
+.demo-log{margin:0; padding:10px 18px 14px; border-top:1px solid var(--line); max-height:190px; overflow:auto; font-size:.82rem; color:var(--ink-dim); list-style:none; counter-reset:s;}
+.demo-log li{padding:3px 6px; border-radius:6px; cursor:pointer; counter-increment:s;}
+.demo-log li::before{content:counter(s) ". "; color:var(--ink-dim); opacity:.7;}
+.demo-log li.on{background:var(--series-c-soft); color:var(--ink);}
+
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background:var(--series-c-soft); padding:1px 6px; border-radius:5px;}
+.flow{display:flex; flex-wrap:wrap; align-items:stretch; gap:6px;}
+.fnode{min-width:84px; padding:8px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--paper); text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; transition:background .15s,border-color .15s;}
+.fnode .sub{display:block; margin-top:3px; font-size:.68rem; color:var(--ink-dim); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+.fnode.cur{background:var(--mem-c-soft); border-color:var(--mem-c);}
+.fnode.done{background:var(--ok-c-soft); border-color:var(--ok-c);}
+.fnode.mark{background:var(--mark-soft); border-color:var(--mark-c); font-weight:700;}
+.fnode.dim{opacity:.4;}
+.flow .far{align-self:center; color:var(--ink-dim);}
+.bars{display:flex; flex-direction:column; gap:7px;}
+.brow{display:flex; align-items:center; gap:10px; font-family:ui-monospace,Menlo,monospace; font-size:.82rem;}
+.brow .bl{width:150px; flex:none; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.brow .bt{flex:1; height:16px; background:var(--bg); border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+.brow .bf{height:100%; background:var(--series-c); transition:width .25s;}
+.brow.cur .bf{background:var(--mem-c);} .brow.mark .bf{background:var(--mark-c);} .brow.done .bf{background:var(--ok-c);}
+.brow .bv{width:92px; flex:none; text-align:right; font-variant-numeric:tabular-nums;}
+.tlines{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:10px 14px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+.tlines .tl.cur{background:rgba(111,168,224,.28); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.mark{background:rgba(229,168,46,.30); border-radius:4px; display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl{display:block; margin:0 -6px; padding:0 6px;}
+.tlines .tl.dim{opacity:.45;}
+.chips{display:flex; flex-wrap:wrap; gap:6px;}
+.chipx{padding:5px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--paper); font-family:ui-monospace,Menlo,monospace; font-size:.85rem; text-align:center;}
+.chipx .sub{display:block; font-size:.66rem; color:var(--ink-dim);}
+.chipx.cur{background:var(--mem-c-soft); border-color:var(--mem-c);} .chipx.done{background:var(--ok-c-soft); border-color:var(--ok-c);} .chipx.mark{background:var(--mark-soft); border-color:var(--mark-c);} .chipx.dim{opacity:.4;}
+</style>
+<div class="hero"><div class="hero-inner">
+  <div class="eyebrow"><span class="dot"></span>微服务 · 94</div>
+  <h1>Ingress 与 Gateway API</h1>
+  <p>Ingress 和 Gateway API 到底差在哪?流量比例、请求头匹配能不能直接写在规范里?谁能把路由挂到网关上?配置写错了 kubectl 能告诉你什么?这篇用 kind 集群里同一个 Traefik 同时跑 Ingress 和 Gateway API 两种写法,逐项量出来。</p>
+  <div class="hero-fact">
+<div><div class="num">450 / 50</div><div class="lbl">HTTPRoute 权重 90 对 10 时,500 个请求里 v1 与 v2 各得多少(规范字段,不是注解)</div></div><div><div class="num">404 / 500</div><div class="lbl">同样是指向不存在的 Service:Ingress 请求得 404 且 status 没有信息,HTTPRoute 请求得 500 且有 BackendNotFound</div></div><div><div class="num">< 0.3 s</div><div class="lbl">Ingress 与 HTTPRoute 切流量从 kubectl apply 到客户端看到新后端的时间(含 kubectl 进程)</div></div>
+</div>
+</div></div>
+<div class="wrap">
+<div class="prev-post">← 上一篇 <a href="microservice-mesh-vs-app-resilience.html">服务网格里的弹性策略与应用内的区别,没有 mesh 时在应用里做同样的事</a></div>
+<section>
+  <h2>Ingress 的边界</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  (a)GET /a:200:v1 × 200;GET /b:200:v2 × 200
+  (b)两条 path 都是 / 的规则(先写 app-v1,后写 app-v2):GET /:200:v2 × 200
+  (c)kubectl explain ingress.spec.rules.http.paths 列出的字段:['backend', 'path', 'pathType']
+  (c)kubectl explain ingress.spec.rules 列出的字段:['host', 'http']
+  Ingress 的规则只有 host、path、pathType 和一个后端 Service;每条路径只指一个后端,没有权重、请求头匹配这些字段;两条同样的 path 时流量不会按比例分,全部去了同一个后端(上面 (b) 的结果),想要流量比例或按请求头分流,只能用具体控制器自己的注解或自定义资源,换一个控制器就要重写</pre></div>
+  <p>规则只有 host、path、pathType 和一个后端 Service,没有权重和请求头匹配;按比例分流要靠控制器的注解或自定义资源。</p>
+</section>
+<section>
+  <h2>HTTPRoute</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  (a)app-v1 权重 90、app-v2 权重 10:200:v1 × 450, 200:v2 × 50
+  (b)权重 50 对 50:200:v1 × 250, 200:v2 × 250
+  (c)权重 0 对 100:200:v2 × 500
+  (d)带 x-canary: 1:200:v2 × 200;不带:200:v1 × 200
+  权重和请求头匹配是 HTTPRoute 规范里的字段,不是某个控制器的注解;这个实现按权重轮转,500 个请求的分配是精确的比例(不是随机抽样)</pre></div>
+  <p>权重和请求头匹配是规范里的字段,这个实现按精确的比例分配。</p>
+</section>
+<section>
+  <h2>跨命名空间</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  (a)from: Same:路由状态 Accepted=False(NotAllowedByListeners), ResolvedRefs=True(ResolvedRefs);GET other.local:404 × 100
+  (b)from: All:路由状态 Accepted=True(Accepted), ResolvedRefs=True(ResolvedRefs);GET other.local:200:v3 × 100
+  (c)后端是另一个命名空间的 Service,没有 ReferenceGrant:路由状态 Accepted=True(Accepted), ResolvedRefs=False(RefNotPermitted);GET other.local:500 × 100
+  (d)加上 ReferenceGrant:路由状态 Accepted=True(Accepted), ResolvedRefs=True(ResolvedRefs);GET other.local:200:v1 × 100
+  Gateway API 把 “谁拥有网关” 和 “谁写路由” 分开,并且在规范里规定了越界时怎么办:路由要经过监听器的 allowedRoutes 才能挂上去,引用别的命名空间的 Service 要对方用 ReferenceGrant 授权;Ingress 没有这一层,任何命名空间的 Ingress 都能挂到同一个控制器上</pre></div>
+  <p>路由要经过监听器的 allowedRoutes 才能挂上去,引用别的命名空间的 Service 要对方用 ReferenceGrant 授权,规范规定了越界时的行为。</p>
+</section>
+<section>
+  <h2>错误可见性</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  (a)Ingress 指向不存在的 Service:status = {"loadBalancer": {}};GET /:404 × 100
+  (b)HTTPRoute 指向不存在的 Service:路由状态 Accepted=True(Accepted), ResolvedRefs=False(BackendNotFound);GET /:500 × 100
+  (b)ResolvedRefs 的 message:Cannot load HTTPBackendRef v94/no-such-svc: getting service: service "no-such-svc" not found
+  Ingress 的 status 里只有负载均衡器地址,规则写错了从 kubectl 看不出来(得去看控制器日志);HTTPRoute 的 status.parents[*].conditions 是规范规定的,控制器必须写 Accepted / ResolvedRefs,指向不存在的后端会有明确的原因</pre></div>
+  <p>HTTPRoute 的状态条件会写明 BackendNotFound、RefNotPermitted 这类原因;Ingress 的 status 里只有地址。</p>
+</section>
+<section>
+  <h2>生效速度</h2>
+  
+  <div class="term"><span class="real-tag">实测 · 本机执行输出</span>
+<pre class="code">  Ingress:从 kubectl apply 开始(含 kubectl 进程本身的启动和请求 API 的时间)到客户端第一次看到 v2,中位数 0.11 s(5 次:0.17, 0.10, 0.12, 0.11, 0.08)
+  HTTPRoute:从 kubectl apply 开始(含 kubectl 进程本身的启动和请求 API 的时间)到客户端第一次看到 v2,中位数 0.22 s(5 次:0.12, 0.22, 0.16, 0.28, 0.27)
+  两种写法最终都是控制器监听 API 对象的变化再更新数据面,生效的时间取决于控制器,不取决于 API 本身;这是同一个实现(Traefik)里两种写法的数字,换一个控制器会不同
+说明(哪些是测到的,哪些没有测)
+  全部是一个实现(Traefik v3.7.15)在 kind 集群里的结果;每个场景只跑了一次(传播延迟 5 次);没有测:TLS 终止与证书(Gateway 的 certificateRefs、Ingress 的 tls)、其它控制器(ingress-nginx、Envoy Gateway、Istio)对 Ingress 注解和 Gateway API 特性的支持差异、GRPCRoute / TCPRoute 与实验通道的特性、多个 Gateway 的共享、真实云负载均衡器后面的行为(kind 里没有 LoadBalancer),以及 Traefik 对权重分配是否在所有版本里都是精确比例</pre></div>
+  <p>两种写法都在 0.3 s 以内生效,差别在测量误差内。</p>
+</section>
+<section>
+  <h2>分步演示</h2>
+  
+  <div class="demo" id="demo"><div class="demo-head">Ingress 与 Gateway API</div><div class="demo-panels"></div><div class="demo-note"></div><div class="demo-legend"><span><i class="cur"></i>本步的对象</span></div><div class="demo-ctl"><button type="button" data-a="reset">重置</button><button type="button" data-a="prev">上一步</button><button type="button" data-a="play">播放</button><button type="button" data-a="next">下一步</button><span class="demo-count"></span></div><ol class="demo-log"></ol></div><script>(function(){
+const D = {"panels": [{"id": "t", "kind": "term", "label": "编译与运行输出"}, {"id": "b", "kind": "bars", "label": "数字对比"}, {"id": "kv", "kind": "kv", "label": "要点"}], "steps": [{"note": "Ingress 能表达什么(Traefik v3.7.15 的 Ingress provider,kind 集群,客户端在集群里)。host shop.local:/a 路由到 app-v1,/b 路由到 app-v2:各请求 200 个,/a 全部返回 v1,/b 全部返回 v2。想让 / 的流量按比例分给两个 Service,只能写两条 path 都是 / 的规则:先写 app-v1,后写 app-v2,请求 200 个全部返回 v2,没有按比例分。kubectl explain 列出的字段:paths 下只有 backend、path、pathType,rules 下只有 host 和 http。没有权重、没有请求头匹配,这类需求只能用具体控制器的注解或自定义资源。", "s": {"t": {"lines": ["  (a)GET /a:200:v1 × 200;GET /b:200:v2 × 200", "  (b)两条 path 都是 / 的规则(先写 app-v1,后写 app-v2):GET /:200:v2 × 200", "  (c)kubectl explain ingress.spec.rules.http.paths 列出的字段:['backend', 'path', 'pathType']", "  (c)kubectl explain ingress.spec.rules 列出的字段:['host', 'http']", "  Ingress 的规则只有 host、path、pathType 和一个后端 Service;每条路径只指一个后端,没有权重、请求头匹配这些字段;两条同样的 path 时流量不会按比例分,全部去了同一个后端(上面 (b) 的结果),想要流量比例或按请求头分流,只能用具体控制器自己的注解或自定义资源,换一个控制器就要重写"], "cur": [], "mark": [], "done": []}, "mark": [1, 2], "done": [0], "b": {"items": [["/a 返回 v1(共 200)", 200, "200"], ["/b 返回 v2(共 200)", 200, "200"], ["两条 / 规则:返回 v2(共 200)", 200, "200(没有分流)"], ["两条 / 规则:返回 v1", 0, "0"]], "max": 200, "cur": [], "mark": [2, 3], "done": [0, 1]}, "kv": {"items": [["按路径分", "可以"], ["按比例分", "没有这个字段"], ["按请求头分", "没有这个字段"], ["同一路径写两条", "全部去了同一个后端"]], "hl": ["按比例分"]}}}, {"note": "Gateway API 的 HTTPRoute(同一个 Traefik,Gateway 监听 8000)。权重 90 对 10:500 个请求 v1 得 450、v2 得 50。改成 50 对 50:各 250。改成 0 对 100:500 个全是 v2。请求头匹配(带 x-canary: 1 的请求去 app-v2,其它去 app-v1):带头 200 个全是 v2,不带头 200 个全是 v1。权重和请求头匹配是 HTTPRoute 规范里的字段,不是某个控制器的注解;这个实现的分配是精确的比例,不是随机抽样。", "s": {"t": {"lines": ["  (a)app-v1 权重 90、app-v2 权重 10:200:v1 × 450, 200:v2 × 50", "  (b)权重 50 对 50:200:v1 × 250, 200:v2 × 250", "  (c)权重 0 对 100:200:v2 × 500", "  (d)带 x-canary: 1:200:v2 × 200;不带:200:v1 × 200", "  权重和请求头匹配是 HTTPRoute 规范里的字段,不是某个控制器的注解;这个实现按权重轮转,500 个请求的分配是精确的比例(不是随机抽样)"], "cur": [], "mark": [], "done": []}, "mark": [1, 2], "done": [0, 3], "b": {"items": [["90/10:v2 得到", 50, "50(共 500)"], ["50/50:v2 得到", 250, "250(共 500)"], ["0/100:v2 得到", 500, "500(共 500)"], ["带 x-canary 头:v2 得到", 200, "200(共 200)"]], "max": 500, "cur": [1], "mark": [2], "done": [0, 3]}, "kv": {"items": [["权重 90 对 10", "v1 450 / v2 50"], ["权重 50 对 50", "250 / 250"], ["权重 0 对 100", "全部 v2"], ["请求头匹配", "带头全 v2,不带头全 v1"]], "hl": ["权重 90 对 10"]}}}, {"note": "谁能把路由挂到谁的网关上。Gateway 在命名空间 v94,监听器 allowedRoutes 先是 from: Same;命名空间 v94b 里的 HTTPRoute 指向它。(a)from: Same:路由状态 Accepted=False(NotAllowedByListeners),请求 other.local 得到 404 × 100。(b)改成 from: All:Accepted=True,200 返回 v3 × 100。(c)路由再引用 v94 里的 Service,没有 ReferenceGrant:ResolvedRefs=False(RefNotPermitted),请求得到 500 × 100。(d)在 v94 里加 ReferenceGrant:ResolvedRefs=True,200 返回 v1 × 100。这两层授权是规范规定的,Ingress 没有。", "s": {"t": {"lines": ["  (a)from: Same:路由状态 Accepted=False(NotAllowedByListeners), ResolvedRefs=True(ResolvedRefs);GET other.local:404 × 100", "  (b)from: All:路由状态 Accepted=True(Accepted), ResolvedRefs=True(ResolvedRefs);GET other.local:200:v3 × 100", "  (c)后端是另一个命名空间的 Service,没有 ReferenceGrant:路由状态 Accepted=True(Accepted), ResolvedRefs=False(RefNotPermitted);GET other.local:500 × 100", "  (d)加上 ReferenceGrant:路由状态 Accepted=True(Accepted), ResolvedRefs=True(ResolvedRefs);GET other.local:200:v1 × 100", "  Gateway API 把 “谁拥有网关” 和 “谁写路由” 分开,并且在规范里规定了越界时怎么办:路由要经过监听器的 allowedRoutes 才能挂上去,引用别的命名空间的 Service 要对方用 ReferenceGrant 授权;Ingress 没有这一层,任何命名空间的 Ingress 都能挂到同一个控制器上"], "cur": [], "mark": [], "done": []}, "mark": [0, 2], "done": [1, 3], "b": {"items": [["(a)Same:请求成功数", 0, "0(404 × 100)"], ["(b)All:请求成功数", 100, "100"], ["(c)缺 ReferenceGrant:请求成功数", 0, "0(500 × 100)"], ["(d)有 ReferenceGrant:请求成功数", 100, "100"]], "max": 100, "cur": [], "mark": [0, 2], "done": [1, 3]}, "kv": {"items": [["Same", "NotAllowedByListeners → 404"], ["All", "Accepted → 200"], ["缺 ReferenceGrant", "RefNotPermitted → 500"], ["有 ReferenceGrant", "ResolvedRefs → 200"]], "hl": ["缺 ReferenceGrant"]}}}, {"note": "配置错了,从 kubectl 能看到什么。(a)Ingress 指向不存在的 Service:status 只有 {\"loadBalancer\": {}},请求得到 404 × 100,kubectl 看不出哪里错了。(b)HTTPRoute 的 backendRef 指向不存在的 Service:Accepted=True,ResolvedRefs=False(BackendNotFound),message 是 Cannot load HTTPBackendRef v94/no-such-svc: getting service: service \"no-such-svc\" not found,请求得到 500 × 100。HTTPRoute 的状态条件是规范规定的,控制器必须写;Ingress 的 status 里只有负载均衡器地址。", "s": {"t": {"lines": ["  (a)Ingress 指向不存在的 Service:status = {\"loadBalancer\": {}};GET /:404 × 100", "  (b)HTTPRoute 指向不存在的 Service:路由状态 Accepted=True(Accepted), ResolvedRefs=False(BackendNotFound);GET /:500 × 100", "  (b)ResolvedRefs 的 message:Cannot load HTTPBackendRef v94/no-such-svc: getting service: service \"no-such-svc\" not found", "  Ingress 的 status 里只有负载均衡器地址,规则写错了从 kubectl 看不出来(得去看控制器日志);HTTPRoute 的 status.parents[*].conditions 是规范规定的,控制器必须写 Accepted / ResolvedRefs,指向不存在的后端会有明确的原因"], "cur": [], "mark": [], "done": []}, "mark": [0], "done": [1, 2], "b": {"items": [["(a)Ingress:status 里的错误信息条数", 0, "0"], ["(b)HTTPRoute:ResolvedRefs=False 的条数", 1, "1(BackendNotFound)"], ["(a)请求返回 404", 100, "100"], ["(b)请求返回 500", 100, "100"]], "max": 100, "cur": [2, 3], "mark": [0], "done": [1]}, "kv": {"items": [["Ingress", "status: loadBalancer 空,404"], ["HTTPRoute", "ResolvedRefs=False(BackendNotFound),500"], ["谁告诉你错在哪", "HTTPRoute 的 status 条件"], ["Ingress", "得去看控制器日志"]], "hl": ["谁告诉你错在哪"]}}}, {"note": "改一次配置要多久生效:把流量从 app-v1 全部切到 app-v2,客户端每 20 ms 请求一次,从宿主机 kubectl apply 开始算(含 kubectl 进程本身),各 5 次。Ingress 改后端 Service:中位数 0.11 s(0.08 到 0.17 s)。HTTPRoute 改权重 100/0 到 0/100:中位数 0.22 s(0.12 到 0.28 s)。两者都在 0.3 s 以内,时钟对表的误差在 0.1 s 量级,所以不能说哪一种更快。两种写法最终都是同一个控制器监听对象再更新数据面,换控制器数字会不同。", "s": {"t": {"lines": ["  Ingress:从 kubectl apply 开始(含 kubectl 进程本身的启动和请求 API 的时间)到客户端第一次看到 v2,中位数 0.11 s(5 次:0.17, 0.10, 0.12, 0.11, 0.08)", "  HTTPRoute:从 kubectl apply 开始(含 kubectl 进程本身的启动和请求 API 的时间)到客户端第一次看到 v2,中位数 0.22 s(5 次:0.12, 0.22, 0.16, 0.28, 0.27)", "  两种写法最终都是控制器监听 API 对象的变化再更新数据面,生效的时间取决于控制器,不取决于 API 本身;这是同一个实现(Traefik)里两种写法的数字,换一个控制器会不同", "说明(哪些是测到的,哪些没有测)", "  全部是一个实现(Traefik v3.7.15)在 kind 集群里的结果;每个场景只跑了一次(传播延迟 5 次);没有测:TLS 终止与证书(Gateway 的 certificateRefs、Ingress 的 tls)、其它控制器(ingress-nginx、Envoy Gateway、Istio)对 Ingress 注解和 Gateway API 特性的支持差异、GRPCRoute / TCPRoute 与实验通道的特性、多个 Gateway 的共享、真实云负载均衡器后面的行为(kind 里没有 LoadBalancer),以及 Traefik 对权重分配是否在所有版本里都是精确比例"], "cur": [], "mark": [], "done": []}, "mark": [1], "done": [0], "b": {"items": [["Ingress 中位数 ms", 110, "110"], ["HTTPRoute 中位数 ms", 220, "220"]], "max": 300, "cur": [0, 1], "mark": [], "done": []}, "kv": {"items": [["Ingress", "中位数 0.11 s"], ["HTTPRoute", "中位数 0.22 s"], ["测量误差", "0.1 s 量级,差别不可信"], ["结论", "都在 0.3 s 以内"]], "hl": ["结论"]}}}]};
+const root = document.getElementById('demo');
+const panelsEl = root.querySelector('.demo-panels'), noteEl = root.querySelector('.demo-note'),
+      cnt = root.querySelector('.demo-count'), logEl = root.querySelector('.demo-log');
+const bReset = root.querySelector('[data-a=reset]'), bPrev = root.querySelector('[data-a=prev]'),
+      bPlay = root.querySelector('[data-a=play]'), bNext = root.querySelector('[data-a=next]');
+let idx = 0, timer = null;
+function h(t, c, x){ const e = document.createElement(t); if(c) e.className = c; if(x != null) e.textContent = x; return e; }
+function cls(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function ptrs(s, i){ return Object.entries(s.ptr||{}).filter(e => e[1] === i).map(e => e[0]).join(','); }
+function rCells(s){ const w = h('div','cells'); s.values.forEach((v,i)=>{ const c = h('div','cellcol'); c.appendChild(h('div','cell'+cls(s,i), v)); c.appendChild(h('div','cidx', i)); c.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(c); }); return w; }
+function rKV(s){ const w = h('div','kv'); if(!s.items.length) w.appendChild(h('span','empty','（空）')); s.items.forEach(([k,v])=>{ const it = h('div','kvitem'+(s.hl.includes(k)?' cur':'')); it.appendChild(h('span','',k)); it.appendChild(h('span','arrow','→')); it.appendChild(h('span','',v)); w.appendChild(it); }); return w; }
+function inSet(list, r, c){ return (list||[]).some(p => p[0]===r && p[1]===c); }
+function rMatrix(s){ const t = h('table','mgrid'); s.values.forEach((row,r)=>{ const tr = document.createElement('tr'); row.forEach((v,c)=>{ const td = document.createElement('td'); const k = inSet(s.cur,r,c)?' cur':inSet(s.mark,r,c)?' mark':inSet(s.done,r,c)?' done':inSet(s.dim,r,c)?' dim':''; td.appendChild(h('div','mcell'+k, v)); tr.appendChild(td); }); t.appendChild(tr); }); return t; }
+function rChain(s){ const w = h('div','chain'); s.values.forEach((v,i)=>{ const it = h('div','chainitem'); it.appendChild(h('div','chip'+cls(s,i), v)); it.appendChild(h('div','cptr', ptrs(s,i))); w.appendChild(it); if(i < s.values.length-1) w.appendChild(h('span','ar','→')); }); w.appendChild(h('span','ar','→')); w.appendChild(h('span','nullc','null')); return w; }
+function rStack(s){ const w = h('div','stack'); if(!s.items.length) w.appendChild(h('div','empty','（空）')); s.items.forEach((v,i)=>w.appendChild(h('div','slot'+(s.hl===i?' cur':''), v))); return w; }
+function rText(s){ return h('div','ptext', s.text); }
+function rTree(s){
+  const n = s.values.length, ns = 'http://www.w3.org/2000/svg';
+  if(n === 0){ const svg = document.createElementNS(ns,'svg'); svg.setAttribute('viewBox','0 0 320 60'); svg.setAttribute('class','treesvg'); svg.setAttribute('width',320); return svg; }
+  const depth = Math.floor(Math.log2(n)) + 1, W = Math.max(320, Math.pow(2, depth-1) * 46), H = 30 + depth * 54;
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class','treesvg'); svg.setAttribute('width', W);
+  const pos = i => { const d = Math.floor(Math.log2(i+1)), p = i - (Math.pow(2,d)-1); return [(p+0.5)/Math.pow(2,d)*W, 26 + d*54]; };
+  s.values.forEach((v,i)=>{ if(v===null || i===0) return; const par = (i-1)>>1; if(s.values[par]===null) return; const [x1,y1]=pos(par), [x2,y2]=pos(i); const l = document.createElementNS(ns,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); svg.appendChild(l); });
+  s.values.forEach((v,i)=>{ if(v===null) return; const [x,y]=pos(i); const c = document.createElementNS(ns,'circle'); c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',16); c.setAttribute('class', cls(s,i).trim()); svg.appendChild(c); const t = document.createElementNS(ns,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.textContent = v; svg.appendChild(t); });
+  return svg;
+}
+function kc(s, i){ return (s.cur||[]).includes(i) ? ' cur' : (s.mark||[]).includes(i) ? ' mark' : (s.done||[]).includes(i) ? ' done' : (s.dim||[]).includes(i) ? ' dim' : ''; }
+function rFlow(s){ const w = h('div','flow'); s.nodes.forEach((n,i)=>{ const b = h('div','fnode'+kc(s,i), n[0]); if(n[1]) b.appendChild(h('span','sub',n[1])); w.appendChild(b); if(i < s.nodes.length-1 && !s.noarrow) w.appendChild(h('span','far','→')); }); return w; }
+function rBars(s){ const w = h('div','bars'); const mx = s.max || Math.max.apply(null, s.items.map(x=>x[1]).concat([1])); s.items.forEach((it,i)=>{ const r = h('div','brow'+kc(s,i)); r.appendChild(h('span','bl',it[0])); const t = h('div','bt'); const f = h('div','bf'); f.style.width = Math.max(0.5, it[1]/mx*100)+'%'; t.appendChild(f); r.appendChild(t); r.appendChild(h('span','bv', it[2]!=null ? it[2] : String(it[1]))); w.appendChild(r); }); return w; }
+function rTerm(s){ const w = h('div','tlines'); s.lines.forEach((l,i)=>{ w.appendChild(h('span','tl'+kc(s,i), l)); }); return w; }
+function rChips(s){ const w = h('div','chips'); s.values.forEach((v,i)=>{ const c = h('div','chipx'+kc(s,i), Array.isArray(v)?v[0]:v); if(Array.isArray(v)&&v[1]) c.appendChild(h('span','sub',v[1])); w.appendChild(c); }); return w; }
+const R = {cells:rCells, kv:rKV, matrix:rMatrix, chain:rChain, stack:rStack, text:rText, tree:rTree, flow:rFlow, bars:rBars, term:rTerm, chips:rChips};
+D.panels.forEach(p => { const box = h('div','demo-panel'); box.appendChild(h('div','plabel', p.label)); const body = h('div'); body.dataset.p = p.id; box.appendChild(body); panelsEl.appendChild(box); });
+D.steps.forEach((st,i)=>{ const li = h('li','', st.note); li.onclick = () => go(i); logEl.appendChild(li); });
+function go(i){
+  idx = Math.max(0, Math.min(D.steps.length-1, i));
+  const st = D.steps[idx];
+  D.panels.forEach(p => { const body = panelsEl.querySelector('[data-p="'+p.id+'"]'); body.innerHTML = ''; body.parentNode.style.display = st.s[p.id] ? '' : 'none'; if(st.s[p.id]) body.appendChild(R[p.kind](st.s[p.id])); });
+  noteEl.textContent = st.note;
+  cnt.textContent = '步骤 ' + (idx+1) + ' / ' + D.steps.length;
+  [...logEl.children].forEach((li,k)=>li.classList.toggle('on', k===idx));
+  const on = logEl.children[idx]; if(on && on.scrollIntoView) logEl.scrollTop = on.offsetTop - logEl.offsetTop - 40;
+  bPrev.disabled = bReset.disabled = idx === 0; bNext.disabled = idx === D.steps.length-1;
+}
+function stop(){ if(timer){ clearInterval(timer); timer = null; bPlay.textContent = '播放'; } }
+bReset.onclick = () => { stop(); go(0); };
+bPrev.onclick = () => { stop(); go(idx-1); };
+bNext.onclick = () => { stop(); go(idx+1); };
+bPlay.onclick = () => { if(timer){ stop(); return; } if(idx === D.steps.length-1) go(0); bPlay.textContent = '暂停'; timer = setInterval(() => { if(idx >= D.steps.length-1){ stop(); return; } go(idx+1); }, 1600); };
+go(0);
+})();</script>
+</section>
+<section>
+  <div class="refs">
+    <h3>本文用到的工具与边界</h3>
+    <ul><li>本机 macOS 27 arm64 / Python 3.14.8 / Go / nginx / Envoy / etcd / Consul / Nacos / OpenTelemetry / Prometheus(按各篇注明用到哪些及版本);所有服务都是本机自己起的进程,端口 9150 以上,只监听 127.0.0.1,不连任何外部服务,不碰本机已有的实例;故障用 kill -9 进程、让连接断开或在代码里注入延迟与错误来制造;计时用 time.perf_counter,数字每次运行会有小幅抖动。kind 集群,Gateway API 标准通道 CRD v1.6.3,Traefik v3.7.15(同时开启 Ingress 与 Gateway API 两个 provider,同一个数据面);后端是 busybox httpd;客户端是集群里的 Pod;全部是这一个实现的结果,其它控制器(ingress-nginx、Envoy Gateway、Istio)的注解和对 Gateway API 特性的支持程度不同;每个场景只跑了一次,传播延迟是 5 次,从宿主机 kubectl apply 开始算,时钟差用 kubectl exec 对表估计,误差在 0.1 s 量级;开发时在另一次运行里,同一个 host 和 path 在两个命名空间里各有一条 HTTPRoute,Traefik 只让先创建的那条生效(日志里有 does not create router 的警告),这个行为没有单独做成实验</li><li>没有验证:TLS 终止与证书(Gateway 的 certificateRefs、Ingress 的 tls);ingress-nginx 等其它控制器(我记得 ingress-nginx 项目已经宣布停止维护,没有核实,也没有测);GRPCRoute、TCPRoute 与实验通道的特性;多个 Gateway 共享一个入口;云上负载均衡器后面的行为(kind 里没有 LoadBalancer);Traefik 对权重分配是否在所有版本里都是精确比例;大规模路由(上千条)下的生效时间</li></ul>
+  </div>
+</section>
+</div>
+<footer>微服务 · Ingress 与 Gateway API · 实验记录 · 2026-10-19</footer>
+</body>
+</html>

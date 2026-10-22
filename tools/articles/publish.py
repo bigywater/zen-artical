@@ -29,8 +29,8 @@ else:
 
 built = []
 for tok in args:
-    n = int(tok.lstrip('rdazufjgcknlmpeshqwt'))
-    p = HERE / 'art' / (f'{tok[0]}{n}.py' if tok[0] in 'rdzufjgcknlmpeshqwt' else f'a{n}.py')
+    n = int(tok.lstrip('rdazufjgcknlmpeshqwtvx'))
+    p = HERE / 'art' / (f'{tok[0]}{n}.py' if tok[0] in 'rdzufjgcknlmpeshqwtvx' else f'a{n}.py')
     spec = importlib.util.spec_from_file_location(f'a{tok}', p); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
     url, title, page = lib.render(m.A, counts)
     (HERE / 'html' / url).write_text(page)
@@ -49,5 +49,5 @@ if save:
             s = Series.objects.get(key=A.get('series', 'python'))
             tags = A.get('tags', 'Python,标准库,真实验证,动画演示')
             obj, created = Article.objects.update_or_create(url=url, defaults=dict(
-                title=title, series=s, tags=tags, date=lib.DATE, description=A['desc'], content_html=page))
+                title=title, series=s, tags=tags, date=lib.DATES.get(url, lib.DATE), description=A['desc'], content_html=page))
             print('saved', url, 'created' if created else 'updated')

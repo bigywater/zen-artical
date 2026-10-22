@@ -1,0 +1,18 @@
+from lib import *
+S = SS('v21')
+steps = [
+    step("三个超时分别在什么时候触发,都设成 1 s。(1) 连接:上游地址是 192.0.2.1(保留的文档地址,SYN 发出去没有回应):client 拿到 504,等了 1.01 s,error.log 写 upstream timed out (60: Operation timed out) while connecting to upstream。(2) 发送:POST 30 MB,上游 accept 之后从不读:504,1.04 s(含 client 把 30 MB 交给 nginx 的时间),error.log 写 while sending request to upstream。(3) 读取:上游收完请求后一声不吭:504,1.00 s,error.log 写 while reading response header from upstream。三个超时触发时都回 504,区别在 error.log 里的位置。", t=tl(S(1)), mark=lidx(S(1), '(2) 发送'), done=lidx(S(1), '(1) 连接', '(3) 读取'), b=bars([['(1) 连接 等了 s', 1.01, '1.01'], ['(2) 发送 等了 s', 1.04, '1.04'], ['(3) 读取 等了 s', 1.00, '1.00']], 1.1, done=[0, 2], mark=[1]), kv=KV([['连接超时', 'while connecting to upstream'], ['发送超时', 'while sending request to upstream'], ['读取超时', 'while reading response header from upstream']], ['发送超时'])),
+    step("读取超时是两次读之间的间隔,proxy_read_timeout = 1 s。(a) 上游先沉默 1.5 s 再回完整响应:client 拿到 504(响应体是 nginx 的 167 字节错误页),等了 1.01 s。(b) 上游马上发响应头,然后每 0.4 s 发 1 个字节,共 8 个字节:状态码 200,8 个字节收齐,整个请求花了 3.25 s,读取超时一次也没触发(每次读之间最多隔 0.4 s)。(c) 上游发响应头和 4 个字节,停 1.5 s:响应头已经交给 client 了,nginx 没法再改状态码,只能断开连接,client 的读取抛出 IncompleteRead,等了 1.00 s,error.log 写 while reading upstream。", t=tl(S(2)), mark=lidx(S(2), '(c)'), done=lidx(S(2), '(a)', '(b)'), b=bars([['(a) 沉默 1.5 s:等了 s', 1.01, '1.01(504)'], ['(b) 每 0.4 s 一个字节:等了 s', 3.25, '3.25(200,没超时)'], ['(c) 中途停 1.5 s:等了 s', 1.00, '1.00(IncompleteRead)']], 3.3, done=[0], cur=[1], mark=[2]), kv=KV([['(a)', '504,1.01 s'], ['(b)', '200,3.25 s,读取超时没触发'], ['(c)', '头已发出,只能断开,client 收到残缺响应体']], ['(c)'])),
+    step("超时和重试叠加。两个上游都先沉默 1.5 s 再回,proxy_read_timeout = 1 s,两个 server 都写了 max_fails=0。默认配置:GET 在第一个上游等满 1 s 之后换第二个上游,又等满 1 s,504 共 2.01 s;POST 请求已经发给上游,默认不重试,504 共 1.00 s。proxy_next_upstream_tries 1:GET 1.00 s。proxy_next_upstream_timeout 1500ms:GET 仍是 2.01 s(第二次尝试在 1.0 s 开始,窗口还没过,它又跑满 1 s)。proxy_next_upstream_timeout 800ms:GET 1.00 s(1.0 s 已经超出窗口,不再换上游)。next_upstream_timeout 限制的是还允许换上游重试的时间窗,不是总时长。", t=tl(S(3)), mark=lidx(S(3), 'next_upstream_timeout 1500ms'), done=lidx(S(3), '默认', 'tries 1', '800ms'), b=bars([['默认 GET 等了 s', 2.01, '2.01'], ['tries 1 GET 等了 s', 1.00, '1.00'], ['timeout 1500ms GET 等了 s', 2.01, '2.01(没封住)'], ['timeout 800ms GET 等了 s', 1.00, '1.00']], 2.1, done=[1, 3], mark=[2], cur=[0]), kv=KV([['默认 GET', '2.01 s(两个上游各等 1 s)'], ['默认 POST', '1.00 s,不重试'], ['next_upstream_timeout 1500ms', 'GET 2.01 s,窗口没过']], ['next_upstream_timeout 1500ms'])),
+]
+A = mkartv('v21', 21, '微服务,网关,nginx,超时,proxy_read_timeout,真实验证,动画演示',
+    '实测 nginx 的 proxy_connect/send/read_timeout 各自在什么时候触发(都是约 1 s 504,error.log 位置不同);读取超时是两次读之间的间隔,每 0.4 s 滴一个字节的响应 3.25 s 也不超时;GET 两个上游各等满 1 s 共 2.01 s,next_upstream_timeout 限制的是重试窗口而不是总时长。',
+    'nginx 的连接、发送、读取三个超时到底各管什么?一个一点一点滴出来的响应会不会超时?超时遇上重试,client 要等多久?这篇用原始 socket 扮演各种坏上游把它们量出来。',
+    [('3.25 s', '上游每 0.4 s 发 1 个字节、读取超时 1 s 时,整个响应的耗时;读取超时一次也没有触发'), ('2.01 s', '两个上游都沉默时,GET 在默认配置下的等待时间(两个读取超时之和);POST 只等 1.00 s'), ('1.00 s', 'proxy_next_upstream_timeout 800ms 时 GET 的等待时间;设成 1500ms 时还是 2.01 s')],
+    [('三个超时', '<p>连接、发送、读取分别在不同阶段触发,都回 504,区别在 error.log 里。</p>'),
+     ('读取超时的含义', '<p>是两次读之间的间隔,不是总时长;响应头发出后上游卡住,nginx 只能断开连接。</p>'),
+     ('超时与重试', '<p>GET 会在下一个上游再等满一个超时;next_upstream_timeout 限制的是还能重试的窗口。</p>')],
+    steps,
+    [ENV_V + '。nginx 是 Homebrew 的 1.31.6;“上游”是我写的原始 TCP 服务(各种坏行为);连接超时用的是 192.0.2.1:80(保留的文档地址,SYN 发出后没有任何回应,数据包会离开本机);发送超时用的是 SO_RCVBUF 4096 且从不读取的上游,POST 30 MB;第三节两个 server 都写了 max_fails=0。每个场景只测了一次',
+     '没有验证:proxy_send_timeout 在 proxy_request_buffering off(流式转发请求体)时的行为;HTTP/2 上游、keepalive 上游下超时的差别;client_header_timeout、client_body_timeout、send_timeout 等面向 client 一侧的超时;上游返回 502 与 504 的更多触发条件'],
+    '超时三件套')

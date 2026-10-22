@@ -1,0 +1,20 @@
+from lib import *
+S = SS('v41')
+steps = [
+    step("申请的 TTL 和 key 实际消失的时间。每个 TTL 申请 10 次,key 挂在 lease 上,之后不续约。申请 1 s:etcd 回的 TTL 是 2 s(有下限),key 消失用了 2.06 到 2.52 s,中位数 2.49 s。申请 2 s:回 2 s,2.48 到 2.52 s。申请 3 s:3.47 到 3.51 s,中位数 3.49 s。申请 5 s:5.47 到 5.52 s,中位数 5.49 s。key 比 TTL 多存在约半秒,看起来是 leader 周期性检查到期的 lease(检查周期约 0.5 s,从数据推测,没有读源码)。", t=tl(S(1)), mark=lidx(S(1), '1 s  '), done=lidx(S(1), '2 s  ', '3 s  ', '5 s  '), b=bars([['申请 1 s → etcd 回', 2, '2 s'], ['申请 2 s:消失用了 s', 2.49, '2.49'], ['申请 3 s:消失用了 s', 3.49, '3.49'], ['申请 5 s:消失用了 s', 5.49, '5.49']], 5.6, mark=[0], done=[1, 2, 3]), kv=KV([['TTL 下限', '申请 1 s 得到 2 s'], ['key 消失', 'TTL + 约 0.5 s'], ['5 s 的 lease', '中位数 5.49 s']], ['TTL 下限'])),
+    step("keepalive。TTL 5 s,共观察 14 秒。(a) 每 1.7 s 续约:key 一直存在,8 次续约全部成功,响应里的 TTL 是 5(剩余时间被重置为完整的 TTL)。(b) 每 4.5 s 续约:一直存在,3 次全部成功。(c) 每 5.5 s 续约(比 TTL 还长):key 在 5.4 s 时消失,2 次续约都没有成功(响应里没有大于 0 的 TTL)。续约间隔小于 TTL 才能保住租约;lease 过期之后客户端必须重新申请 lease、重新写 key。", t=tl(S(2)), mark=lidx(S(2), '(c)'), done=lidx(S(2), '(a)', '(b)'), b=bars([['(a) 1.7 s:续约成功', 8, '8 / 8'], ['(b) 4.5 s:续约成功', 3, '3 / 3'], ['(c) 5.5 s:续约成功', 0, '0 / 2'], ['(c) key 消失的时刻 s', 5.4, '5.4']], 8, done=[0, 1], mark=[2, 3]), kv=KV([['续约间隔 < TTL', 'key 一直在,TTL 重置为 5'], ['续约间隔 > TTL', 'key 在 5.4 s 消失,续约失败']], ['续约间隔 > TTL'])),
+    step("一个 lease 挂很多 key。一个 lease 上挂 N 个 key 再 revoke:N = 100 用时 12.2 ms,N = 1000 用时 14.0 ms,N = 10000 用时 25.5 ms,之后剩余的 key 都是 0。对照:每个 key 一个 lease,逐个 revoke:100 个 lease 共 1069 ms,1000 个 lease 共 10012 ms(每个约 10 ms)。revoke 一次请求就把挂在这个 lease 上的所有 key 删光,用时随 key 数增长得很慢;一个进程要注册多个 key 时,共用一个 lease 比每个 key 一个 lease 省得多。", t=tl(S(3)), mark=lidx(S(3), '1000 个 lease', '10000'), done=lidx(S(3), '100 ', '1000 '), b=bars([['1 个 lease 挂 10000 个 key:revoke ms', 25.5, '25.5'], ['1 个 lease 挂 1000 个 key:revoke ms', 14.0, '14.0'], ['1000 个 lease 逐个 revoke:ms', 10012, '10012'], ['100 个 lease 逐个 revoke:ms', 1069, '1069']], 10100, done=[0, 1], mark=[2], cur=[3]), kv=KV([['1 个 lease × 10000 个 key', 'revoke 25.5 ms'], ['1000 个 lease × 1 个 key', '共 10012 ms(每个约 10 ms)']], ['1 个 lease × 10000 个 key'])),
+    step("leader 切换对 lease 的影响。3 节点 etcd,申请 TTL 10 s 的 lease(挂一个 key),过 6 s(timetolive 回报剩余 3 s)杀掉 leader。新 leader 在 7.5 s 选出;新 leader 上 timetolive 回报的剩余时间是 10 s,不是原来的约 3 s;key 实际在申请后 18.7 s 才消失,而原定 10 s 到期。leader 切换之后新 leader 上的 lease 剩余时间被重置成了完整的 TTL(我的理解是剩余时间只保存在 leader 内存里,换 leader 就重新计时;没有读源码验证,只看到了结果)。", t=tl(S(4)), mark=lidx(S(4), '6.0 s'), done=lidx(S(4), '6.0 s'), b=bars([['杀 leader 前剩余 s', 3, '3'], ['新 leader 上剩余 s', 10, '10(完整 TTL)'], ['原定到期 s', 10, '10'], ['key 实际消失 s', 18.7, '18.7']], 19, done=[0, 2], mark=[1, 3]), kv=KV([['杀 leader 前', '剩余 3 s'], ['新 leader 上', '剩余 10 s(重置)'], ['key 实际消失', '申请后 18.7 s(原定 10 s)']], ['新 leader 上'])),
+]
+A = mkartv('v41', 41, '微服务,注册中心,etcd,lease,keepalive,真实验证,动画演示',
+    '实测 etcd 3.7.2 的 lease:申请 1 s 得到 2 s(有下限),key 比 TTL 多存在约 0.5 s 才消失;续约间隔小于 TTL 才能保住租约;一个 lease 挂 10000 个 key,revoke 25.5 ms,逐个 lease revoke 每个约 10 ms;杀掉 leader 后新 leader 把 lease 剩余时间重置成完整的 TTL(原定 10 s 的 key 18.7 s 才消失)。',
+    'etcd 的租约 TTL 是怎么生效的?keepalive 要多频繁?一个 lease 挂很多 key 有什么好处?leader 切换时租约会怎样?这篇用单节点和三节点的 etcd 3.7.2 把它们量出来。',
+    [('2.49 s', '申请 TTL 1 s 时 etcd 实际给了 2 s,key 消失的中位数时间;TTL 5 s 的是 5.49 s(比 TTL 多约 0.5 s)'), ('25.5 ms 对 10012 ms', '一个 lease 挂 10000 个 key 的 revoke 用时,与 1000 个 lease 逐个 revoke 的总用时'), ('18.7 s', 'TTL 10 s 的 lease 在 6 s 时杀掉 leader,key 实际消失的时刻(原定 10 s)')],
+    [('TTL 与到期', '<p>etcd 对 TTL 有下限,key 在 TTL 之后再过约半秒才消失。</p>'),
+     ('keepalive', '<p>续约间隔小于 TTL 才能保住租约;过期之后要重新申请。</p>'),
+     ('一个 lease 多个 key', '<p>revoke 一次删光所有挂着的 key,比每个 key 一个 lease 省得多。</p>'),
+     ('leader 切换', '<p>新 leader 把 lease 剩余时间重置为完整的 TTL。</p>')],
+    steps,
+    [ENV_V + '。etcd 3.7.2(Homebrew),单节点和 3 节点都是自己起的进程,通过 HTTP/JSON 网关 /v3/lease/*、/v3/kv/* 操作(etcdt.py);“key 消失”是用 serializable 读每 20 ms 轮询得到的;关于 TTL 下限、检查周期、leader 切换后重置剩余时间的机制是我根据数据做的解释,没有读 etcd 源码;每种配置的次数见各节',
+     '没有验证:lease checkpoint 功能(checkpoint-interval)对 leader 切换后剩余时间的影响;--experimental-enable-lease-checkpoint;etcd 集群更大时的 lease 开销;etcd 客户端库(clientv3)的 KeepAlive 流与重试;网络分区时 lease 的行为'],
+    'etcd lease')

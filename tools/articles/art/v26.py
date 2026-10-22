@@ -1,0 +1,18 @@
+from lib import *
+S = SS('v26')
+steps = [
+    step("X-Forwarded-For 怎么写。client(127.0.0.1)带伪造的 X-Forwarded-For: 6.6.6.6,后端看到什么。默认(不写 proxy_set_header):6.6.6.6(伪造的原样转发),没带时没有该头。$proxy_add_x_forwarded_for(追加):6.6.6.6, 127.0.0.1(最左边仍是伪造的),没带时是 127.0.0.1。$remote_addr(覆盖):127.0.0.1,不管 client 带不带。置空:后端没有这个头。直接面对公网的最外层网关应该覆盖成 $remote_addr,不要相信 client 自己带的 XFF。", t=tl(S(1)), mark=lidx(S(1), '默认', '$proxy_add'), done=lidx(S(1), '$remote_addr', '置空'), b=bars([['默认:伪造的 XFF 到后端', 1, '6.6.6.6'], ['追加:最左边', 1, '6.6.6.6, 127.0.0.1'], ['覆盖:后端看到', 1, '127.0.0.1'], ['置空:后端看到', 0, '(没有)']], 1, mark=[0, 1], done=[2, 3]), kv=KV([['默认', '伪造的 6.6.6.6 照单全收'], ['$proxy_add_x_forwarded_for', '6.6.6.6, 127.0.0.1'], ['$remote_addr', '127.0.0.1(覆盖)']], ['$remote_addr'])),
+    step("两层网关用 realip 还原真实 IP。client 来源地址是 ::1,带伪造的 XFF: 6.6.6.6;L1 监听两个地址、用 $proxy_add_x_forwarded_for 转给 L2(L2 看到的对端是 127.0.0.1);L2 用 real_ip_header X-Forwarded-For、real_ip_recursive on。L2 只信 127.0.0.1(L1):经过 L1 还原出 ::1(XFF 是 6.6.6.6, ::1,从右往左跳过受信任的 127.0.0.1 后第一个不受信任的就是 ::1),直连 L2 也是 ::1(对端 ::1 不受信任,XFF 被忽略)。L2 信 127.0.0.1 和 ::1:经过 L1 和直连都还原出 6.6.6.6,被冒充。L2 信所有人(0.0.0.0/0 与 ::/0):同样两条路都是 6.6.6.6。", t=tl(S(2)), mark=lidx(S(2), '信 127.0.0.1 和 ::1', '信所有人'), done=lidx(S(2), '只信 127.0.0.1'), b=bars([['只信 L1:经过 L1 还原', 1, '::1(正确)'], ['只信 L1:直连 L2 还原', 1, '::1(正确)'], ['信 ::1:经过 L1 还原', 1, '6.6.6.6(被冒充)'], ['信所有人:直连 L2 还原', 1, '6.6.6.6(被冒充)']], 1, done=[0, 1], mark=[2, 3]), kv=KV([['只信 L1 的地址', '真实 IP 是 ::1'], ['信任范围包含 client', '伪造的 6.6.6.6 被当成真实 IP'], ['real_ip_recursive on', '从右往左跳过受信任的地址']], ['信任范围包含 client'])),
+    step("Host 头。server_name 是 shop.test,请求三种:Host: Shop.Test:8443、Host: shop.test、HTTP/1.0 完全不带 Host。(a) 默认:后端三种都看到 u(upstream 组名)。(b) $host:shop.test、shop.test、shop.test(小写、去掉端口,没带 Host 时取 server_name)。(c) $http_host:Shop.Test:8443(原样)、shop.test、u(没带 Host 时值为空,proxy_set_header 对空值不发送,退回默认的 u)。(d) $host:$server_port:三种都是 shop.test:9165(端口是 nginx 自己监听的端口,不是 client 写的 8443)。", t=tl(S(3)), mark=lidx(S(3), '(c)', '(d)'), done=lidx(S(3), '(a)', '(b)'), b=bars([['(a) 默认', 1, 'u'], ['(b) $host', 1, 'shop.test'], ['(c) $http_host(带端口大小写)', 1, 'Shop.Test:8443'], ['(d) $host:$server_port', 1, 'shop.test:9165']], 1, done=[0, 1], mark=[2, 3]), kv=KV([['$host', '小写、无端口,没 Host 取 server_name'], ['$http_host', '原样;没带 Host 时为空,退回 u'], ['$host:$server_port', 'nginx 自己的端口']], ['$http_host'])),
+]
+A = mkartv('v26', 26, '微服务,网关,nginx,X-Forwarded-For,真实IP,realip,Host,真实验证,动画演示',
+    '实测网关改写请求头:默认原样转发伪造的 X-Forwarded-For,$remote_addr 才能覆盖;两层网关 realip 只信 L1 时还原出真实来源 ::1,信任范围包含 client 时被伪造的 6.6.6.6 冒充;Host 在 $host、$http_host、默认(u)下后端看到的值各不相同。',
+    'X-Forwarded-For 该追加还是覆盖?多层网关怎么还原真实 IP,信任范围放多大?Host 头用 $host 还是 $http_host?这篇用两个环回地址(127.0.0.1 与 ::1)模拟不同来源,把它们逐项量出来。',
+    [('6.6.6.6', '默认配置下,client 伪造的 X-Forwarded-For 原样到了后端;用 $remote_addr 覆盖后才是 127.0.0.1'), ('::1 对 6.6.6.6', 'L2 只信 L1 的地址与信任范围包含 client 时,还原出的真实 IP(client 真实来源是 ::1,伪造值是 6.6.6.6)'), ('u / shop.test / Shop.Test:8443', 'Host: Shop.Test:8443 的请求,默认、$host、$http_host 下后端看到的 Host')],
+    [('X-Forwarded-For', '<p>默认原样转发 client 带的值;追加保留伪造值在最左边;最外层网关应该覆盖。</p>'),
+     ('realip 的信任', '<p>只信上一跳网关的地址,client 伪造的 XFF 才会被忽略;信任范围包含 client 就会被冒充。</p>'),
+     ('Host', '<p>$host、$http_host 和默认值给后端的 Host 不一样,没带 Host 的请求尤其不同。</p>')],
+    steps,
+    [ENV_V + '。nginx 是 Homebrew 的 1.31.6;本机只有 127.0.0.1 和 ::1 两个环回地址,“不同来源”用这两个地址区分(L1 到 L2 用 127.0.0.1,client 用 ::1);后端是本进程里回显请求头的 Python 服务;Host 实验里 server_name 是 shop.test,端口是 nginx 随机选的',
+     '没有验证:真实公网 IP 与 CDN 的 X-Forwarded-For 链;Forwarded 头(RFC 7239);PROXY protocol;X-Forwarded-Proto / X-Forwarded-Port 的写法;realip 与 limit_req 等模块的先后关系(realip 在 post-read 阶段改 $remote_addr)'],
+    '请求头的改写')

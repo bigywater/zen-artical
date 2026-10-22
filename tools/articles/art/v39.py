@@ -1,0 +1,18 @@
+from lib import *
+S = SS('v39')
+steps = [
+    step("reload 时在途的请求。client 发一个要 3 s 的请求,0.5 s 后 reload。默认:在途请求返回 200,用了 3.01 s;reload 之后 0.3 s 有 2 个 worker(其中 1 个在 shutting down),新请求(新连接)1 ms 就成功;旧 worker 在 reload 之后 2.5 s 退出(等 3 s 的请求做完)。worker_shutdown_timeout 1s:在途请求在 1.63 s 失败(reload 后 1 s 旧 worker 强行关闭连接),新请求同样 1 ms 成功,旧 worker 在 reload 之后 1.2 s 退出。reload 不会打断在途请求;设了 worker_shutdown_timeout 之后到点会被强行结束。", t=tl(S(1)), mark=lidx(S(1), 'worker_shutdown_timeout 1s'), done=lidx(S(1), '默认'), b=bars([['默认:在途请求', 3.01, '200 · 3.01 s'], ['shutdown_timeout 1s:在途请求', 1.63, 'error · 1.63 s'], ['默认:旧 worker 退出用了 s', 2.5, '2.5'], ['shutdown_timeout 1s:旧 worker 退出用了 s', 1.2, '1.2']], 3.1, done=[0, 2], mark=[1, 3]), kv=KV([['默认', '在途请求 200,旧 worker 2.5 s 后退出'], ['worker_shutdown_timeout 1s', '在途请求 1.63 s 失败'], ['新连接', '都立刻由新 worker 处理(1 ms)']], ['worker_shutdown_timeout 1s'])),
+    step("长连接让旧 worker 堆积。上游是一直不结束的流;3 轮,每轮先开 2 条长连接再 reload,隔 1 s 数 worker。默认:2(1) → 3(2) → 4(3),也就是 1 个新 worker 加 1、2、3 个 shutting down 的旧 worker;3 轮之后再等 2.5 s 仍是 4(3),6 条长连接全部活着;关掉所有 client 之后 1 s 变回 1(0)。worker_shutdown_timeout 2s:2(1) → 2(1) → 2(1),3 轮之后再等 2.5 s 变成 1(0),6 条长连接全被断开(0 / 6)。不设超时,旧 worker 随发布次数堆积,直到 client 自己断开;设了超时,到点强行断开。", t=tl(S(2)), mark=lidx(S(2), '默认'), done=lidx(S(2), 'worker_shutdown_timeout 2s'), b=bars([['默认:第 3 轮 reload 后 worker 数', 4, '4(3 个旧)'], ['默认:再过 2.5 s 活着的长连接', 6, '6 / 6'], ['timeout 2s:再过 2.5 s worker 数', 1, '1(0 个旧)'], ['timeout 2s:再过 2.5 s 活着的长连接', 0, '0 / 6']], 6, mark=[0, 1], done=[2, 3]), kv=KV([['默认', '每次发布多留一个旧 worker,直到长连接断开'], ['worker_shutdown_timeout 2s', '到点强行断开,旧 worker 退出']], ['默认'])),
+    step("reload / quit / stop。client 发一个要 2 s 的请求,0.5 s 后对 nginx 做操作,同时每 100 ms 发一个新的快速请求(新连接),观察 3 s。reload:在途请求 200、2.01 s,之后的新请求 28 个全部 200。quit(优雅退出):在途请求 200、2.01 s,之后的新请求 28 个全部失败(error)——quit 时 master 立刻关闭监听端口,不再接新连接。stop(快速退出):在途请求失败(0.53 s),新请求 29 个全部失败。发布时要先把流量摘走再 quit;reload 的监听端口不关,新连接不会被拒。", t=tl(S(3)), mark=lidx(S(3), 'quit', 'stop'), done=lidx(S(3), 'reload  '), b=bars([['reload:新请求成功', 28, '28 / 28'], ['quit:新请求成功', 0, '0 / 28(全部 error)'], ['stop:新请求成功', 0, '0 / 29'], ['quit:在途请求', 2.01, '200 · 2.01 s']], 29, done=[0, 3], mark=[1, 2]), kv=KV([['reload', '在途 200,新请求全成功'], ['quit', '在途 200,新请求全被拒'], ['stop', '在途失败,新请求全被拒']], ['quit'])),
+]
+A = mkartv('v39', 39, '微服务,网关,nginx,reload,优雅退出,worker_shutdown_timeout,真实验证,动画演示',
+    '实测 nginx 发布时的排空:reload 不打断 3 s 的在途请求(旧 worker 2.5 s 后退出),设 worker_shutdown_timeout 1s 则 1.63 s 失败;长连接让旧 worker 随 reload 次数堆积(4(3)),设了超时才退出;quit 时新连接全被拒,reload 不会。',
+    'nginx reload 时旧 worker 怎么退出?长连接会让旧 worker 堆积吗?worker_shutdown_timeout 起什么作用?reload、quit、stop 对在途请求和新连接分别意味着什么?这篇用 nginx 1.31.6 逐项量出来。',
+    [('3.01 s 对 1.63 s', 'reload 时在途的 3 s 请求:默认完成,worker_shutdown_timeout 1s 则在 1.63 s 被中断'), ('4(3)', '每轮带 2 条长连接 reload 3 次后的 worker 数(1 个新 worker 加 3 个 shutting down 的旧 worker);设 worker_shutdown_timeout 2s 后回到 1(0)'), ('28 / 28 对 0 / 28', 'reload 与 quit 之后 3 秒内新连接请求成功的数量(quit 立刻关闭监听端口)')],
+    [('reload 与在途请求', '<p>旧 worker 把手上的请求处理完再退出;worker_shutdown_timeout 到点强行结束。</p>'),
+     ('长连接与旧 worker', '<p>只要还有长连接,旧 worker 就不退出;每次发布多一个。</p>'),
+     ('reload、quit、stop', '<p>reload 不关监听端口;quit 关监听端口但等在途请求;stop 立刻结束。</p>')],
+    steps,
+    [ENV_V + '。nginx 是 Homebrew 的 1.31.6(worker_processes 1);上游是本进程里的 Python 服务或原始 TCP 服务;worker 数用 ps 看 master 的子进程(旧 worker 的进程标题含 “shutting down”);“长连接是否还活着”按 client 能否在 1 s 内继续收到事件、还是读到 EOF 判断。我最初的判断是“能读到数据就活着”,会把缓冲区里剩下的旧数据误当成活着,所以改成排空缓冲后再看;所有数字都是单次测量',
+     '没有验证:多个 worker 进程(worker_processes > 1)时的行为;reuseport 监听;nginx -s reload 失败(配置错误)时旧 worker 保持服务;SIGUSR2 热升级二进制;容器里 PID 1 对信号的处理(见 k8s 系列的 preStop 篇)'],
+    '优雅摘流与配置热加载')
